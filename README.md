@@ -3,7 +3,9 @@
 # hana【花】
 A simple, light, and performant X11 window manager. 🪷
 
-<sub>*\<screenshot\>*</sub>
+![](https://raw.githubusercontent.com/akai-hana/assets/main/flower-banner.png)
+
+<sub>*\<i WILL replace this with a WM screenshot when i get it to a point where im happy with it\>*</sub>
 
 </div>
 
