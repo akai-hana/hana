@@ -9,8 +9,9 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    // Config files are small, 4KB is plenty
-    const content = try file.readToEndAlloc(allocator, 4096);
+    // Get actual file size and allocate exactly that amount
+    const file_size = (try file.stat()).size;
+    const content = try file.readToEndAlloc(allocator, file_size);
     defer allocator.free(content);
 
     // Parse TOML (simple implementation)
