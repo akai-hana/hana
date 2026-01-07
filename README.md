@@ -9,8 +9,12 @@ A simple, light, and performant X11 window manager. 🪷
 
 ---
 
-## Installation
+# Installation
 <sup>_this project isn't even a 10th of the way finished, but in here I'll write an installation guide, once the time comes_</sup>
+
+---
+
+# About 花
 
 ## Why hana?
 
@@ -81,7 +85,7 @@ But it's just...
 
 Just...
 
-Just, imagine the "perfect" WM... _But then, well, there's no perfect WM, so that's subjective..._ So then, **YOU** imagine **MY** perfect WM according to **MY** priorities. 
+Just, imagine the "perfect" WM... _But then, well, there's no perfect WM, so that's subjective..._ So then, **YOU** imagine **YOUR** perfect WM according to **YOUR** priorities... That's hana for me.
 
 ## Status rn
 
