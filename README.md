@@ -112,11 +112,13 @@ But it works! After so much time investigating and trying things only to be met 
 💡 Moving/resizing windows  
 💡 Workspaces  
 💡 Status bar  
-💡 Move config to a more coherent dir
-💡 Move Zig's binary output to a UNIX-compatible bin dir (yet to figure out)
+💡 Move config to a more coherent dir  
+💡 Move Zig's binary output to a UNIX-compatible bin dir (yet to figure out)  FINITIONS #
+
 ... Pretty much everything else.
 
 ---
+FINITIONS #
 
 <div align="center">
 
