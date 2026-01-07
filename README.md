@@ -7,6 +7,8 @@ A simple, light, and performant X11 window manager. 🪷
 
 </div>
 
+---
+
 ## Installation
 <sup>_this project isn't even a 10th of the way finished, but in here I'll write an installation guide, once the time comes_</sup>
 
