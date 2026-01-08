@@ -1,38 +1,9 @@
-# Hana Window Manager Configuration
-# This file uses TOML format: https://toml.io
+# hana configuration
+# Minimal TOML parser - supports [sections], integers, colors, strings
 
-# Border width in pixels (integer)
+# Sections are optional, but they help sort settings and make things prettier
+[appearance]
 border_width = 4
-
-# Border color (supports multiple formats)
-# String formats: "#RRGGBB", "0xRRGGBB", or "RRGGBB"
-border_color = "#ff0000"
-
-# Alternative integer format (0xRRGGBB):
-# border_color = 0xff0000
-
-# You can also use comments inline
-# border_width = 2  # Thinner borders
-
-# Full TOML features are now supported:
-# - Tables and nested tables
-# - Arrays
-# - Different data types (strings, integers, floats, booleans, dates)
-# - Multi-line strings
-# - Inline tables
-# - And more!
-
-# Example of future config options (not yet implemented):
-# [keybindings]
-# mod = "Mod4"  # Super/Windows key
-# terminal = "Mod4+Return"
-# close_window = "Mod4+Shift+q"
-
-# [appearance]
-# gap_size = 10
-# outer_gaps = 5
-# smart_gaps = true
-
-# [workspaces]
-# count = 9
-# names = ["1:term", "2:web", "3:code", "4:chat", "5", "6", "7", "8", "9"]
+border_color = #ff0000     # Supports #RRGGBB
+# border_color = 0xff0000  # Also supports 0xRRGGBB
+# border_color = ff0000    # Or plain RRGGBB

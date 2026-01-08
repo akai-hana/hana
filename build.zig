@@ -4,7 +4,7 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     // SELECTIONS
-    const target   = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // ARTIFACTS
@@ -22,10 +22,17 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("defs", defs_module);
 
+    // TOML parser module (no external dependencies!)
+    const toml_module = b.addModule("toml", .{
+        .root_source_file = b.path("src/core/toml.zig"),
+    });
+    exe.root_module.addImport("toml", toml_module);
+
     const config_module = b.addModule("config", .{
         .root_source_file = b.path("src/core/config.zig"),
     });
     config_module.addImport("defs", defs_module);
+    config_module.addImport("toml", toml_module); // Config can now use TOML
     exe.root_module.addImport("config", config_module);
 
     const error_module = b.addModule("error", .{
@@ -134,7 +141,7 @@ fn autoRegisterModulesRecursive(
                 \\
                 \\Please rename one of these files to avoid conflicts.
                 \\
-                , .{ module_name, existing_path, full_path });
+            , .{ module_name, existing_path, full_path });
             return error.ModuleNameCollision;
         }
 
