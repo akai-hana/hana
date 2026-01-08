@@ -4,7 +4,7 @@ const defs           = @import("defs");
 const error_handling = @import("error");
 const Config         = defs.Config;
 
-// Default values (single source of truth)
+// Default values
 const DEFAULT_BORDER_WIDTH: u32 = 4;
 const DEFAULT_BORDER_COLOR: u32 = 0xff0000;
 
