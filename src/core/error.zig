@@ -4,9 +4,8 @@ const std = @import("std");
 const defs = @import("defs");
 const Config = defs.Config;
 
-const xcb = @cImport({
-    @cInclude("xcb/xcb.h");
-});
+// Use xcb from defs to avoid type conflicts
+const xcb = defs.xcb;
 
 /// Loads config with fallback to defaults and user-friendly error messages
 pub fn loadConfigOrDefault(

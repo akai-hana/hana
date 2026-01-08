@@ -9,17 +9,27 @@ const DEFAULT_BORDER_WIDTH: u32 = 4;
 const DEFAULT_BORDER_COLOR: u32 = 0xff0000;
 
 pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
+    // Create Io instance for filesystem operations
+    var io_threaded: std.Io.Threaded = .init_single_threaded;
+    const io = io_threaded.io();
+    
     // Try to open config file first
-    const file = std.fs.cwd().openFile(path, .{}) catch {
+    const cwd = std.Io.Dir.cwd();
+    const file = cwd.openFile(io, path, .{}) catch {
         // Config doesn't exist, use all defaults
         return getDefaultConfig();
     };
-    defer file.close();
+    defer file.close(io);
 
-    // Config exists, try to parse it
-    const file_size = (try file.stat()).size;
-    const content = try file.readToEndAlloc(allocator, file_size);
-    defer allocator.free(content);
+    // Read file content
+    var read_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(io, &read_buf);
+    
+    var content_buffer = std.Io.Writer.Allocating.init(allocator);
+    defer content_buffer.deinit();
+    
+    _ = try file_reader.interface.streamRemaining(&content_buffer.writer);
+    const content = content_buffer.written();
 
     // Track parsed values (null means not yet set)
     var border_width: ?u32 = null;

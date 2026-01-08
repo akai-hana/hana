@@ -9,10 +9,8 @@ const defs = @import("defs");
 const window_module = @import("window");
 const input_module = @import("input");
 
-const xcb = @cImport({
-    @cInclude("xcb/xcb.h");
-});
-
+// Use xcb from defs to avoid type conflicts
+const xcb = defs.xcb;
 const WM = defs.WM;
 
 pub fn main() !void {
@@ -22,7 +20,7 @@ pub fn main() !void {
 
     // 1. Connect to X11
     const conn = try error_handling.connectToX11();
-    defer xcb.xcb_disconnect(conn);
+    defer xcb.xcb_disconnect(@ptrCast(conn));
 
     // 2. Get screen
     const screen = try error_handling.getX11Screen(conn);
@@ -68,7 +66,7 @@ pub fn main() !void {
     defer {
         var iter = event_dispatch.valueIterator();
         while (iter.next()) |list| {
-            list.deinit();
+            list.deinit(allocator);
         }
         event_dispatch.deinit();
     }
@@ -77,9 +75,9 @@ pub fn main() !void {
         for (module.events) |event_type| {
             const entry = try event_dispatch.getOrPut(event_type);
             if (!entry.found_existing) {
-                entry.value_ptr.* = std.ArrayList(*defs.Module).init(allocator);
+                entry.value_ptr.* = std.ArrayList(*defs.Module){};
             }
-            try entry.value_ptr.append(module);
+            try entry.value_ptr.append(allocator, module);
         }
     }
 

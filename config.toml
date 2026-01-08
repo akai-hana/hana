@@ -1,0 +1,9 @@
+# hana configuration
+# Minimal TOML parser - supports [sections], integers, colors, strings
+
+# Sections are optional, but they help sort settings and make things prettier
+[appearance]
+border_width = 4
+border_color = #ff0000     # Supports #RRGGBB
+# border_color = 0xff0000  # Also supports 0xRRGGBB
+# border_color = ff0000    # Or plain RRGGBB
