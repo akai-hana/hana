@@ -4,16 +4,21 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     // SELECTIONS
-    const target = b.standardTargetOptions(.{});
+    const target   = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // Create root module first
+    const root_module = b.createModule(.{
+        .root_source_file = b.path("src/core/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
 
     // ARTIFACTS
     const exe = b.addExecutable(.{
         .name = "hana",
-        .root_source_file = b.path("src/core/main.zig"),
-
-        .target = target,
-        .optimize = optimize,
+        .root_module = root_module,
     });
 
     // Core modules (manual registration - stable names, critical if missing)
@@ -32,7 +37,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/core/config.zig"),
     });
     config_module.addImport("defs", defs_module);
-    config_module.addImport("toml", toml_module); // Config can now use TOML
+    config_module.addImport("toml", toml_module);  // Config can now use TOML
     exe.root_module.addImport("config", config_module);
 
     const error_module = b.addModule("error", .{
@@ -49,14 +54,13 @@ pub fn build(b: *std.Build) void {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    autoRegisterModules(b, exe, defs_module, "src", arena_allocator) catch |err| {
+    autoRegisterModules(b, exe.root_module, defs_module, "src", arena_allocator) catch |err| {
         std.debug.print("Fatal: Failed to auto-register modules: {}\n", .{err});
         std.process.exit(1);
     };
 
     // LINKING
-    exe.linkLibC();
-    exe.linkSystemLibrary("xcb");
+    exe.root_module.linkSystemLibrary("xcb", .{});
 
     // INSTALL
     b.installArtifact(exe);
@@ -77,7 +81,7 @@ pub fn build(b: *std.Build) void {
 // Module auto-detection and registration logic
 fn autoRegisterModules(
     b: *std.Build,
-    exe: *std.Build.Step.Compile,
+    root_module: *std.Build.Module,
     defs_module: *std.Build.Module,
     dir_path: []const u8,
     allocator: std.mem.Allocator,
@@ -86,26 +90,30 @@ fn autoRegisterModules(
     var registered_modules = std.StringHashMap([]const u8).init(allocator);
     defer registered_modules.deinit();
 
-    try autoRegisterModulesRecursive(b, exe, defs_module, dir_path, allocator, &registered_modules);
+    try autoRegisterModulesRecursive(b, root_module, defs_module, dir_path, allocator, &registered_modules);
 }
 
 fn autoRegisterModulesRecursive(
     b: *std.Build,
-    exe: *std.Build.Step.Compile,
+    root_module: *std.Build.Module,
     defs_module: *std.Build.Module,
     dir_path: []const u8,
     allocator: std.mem.Allocator,
     registered_modules: *std.StringHashMap([]const u8),
 ) !void {
+    // Create Io instance for filesystem operations (single-threaded is fine for build script)
+    var io_threaded: std.Io.Threaded = .init_single_threaded;
+    const io = io_threaded.io();
+
     // Critical error: Can't open directory
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+    var dir = b.build_root.handle.openDir(io, dir_path, .{ .iterate = true }) catch |err| {
         std.debug.print("Critical: Cannot open directory '{s}': {}\n", .{ dir_path, err });
         return err;
     };
-    defer dir.close();
+    defer dir.close(io);
 
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         // Skip src/core/ directory entirely (core modules are manually registered)
         const is_src_core = std.mem.eql(u8, dir_path, "src") and
             entry.kind == .directory and
@@ -114,9 +122,9 @@ fn autoRegisterModulesRecursive(
 
         // Handle subdirectories recursively
         if (entry.kind == .directory) {
-            var path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
             const subdir_path = try std.fmt.bufPrint(&path_buffer, "{s}/{s}", .{ dir_path, entry.name });
-            try autoRegisterModulesRecursive(b, exe, defs_module, subdir_path, allocator, registered_modules);
+            try autoRegisterModulesRecursive(b, root_module, defs_module, subdir_path, allocator, registered_modules);
             continue;
         }
 
@@ -128,7 +136,7 @@ fn autoRegisterModulesRecursive(
         const module_name = std.fs.path.stem(entry.name);
 
         // Build full path using stack buffer (memory-efficient)
-        var path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
         const full_path = try std.fmt.bufPrint(&path_buffer, "{s}/{s}", .{ dir_path, entry.name });
 
         // Check for name collision
@@ -141,7 +149,7 @@ fn autoRegisterModulesRecursive(
                 \\
                 \\Please rename one of these files to avoid conflicts.
                 \\
-            , .{ module_name, existing_path, full_path });
+                , .{ module_name, existing_path, full_path });
             return error.ModuleNameCollision;
         }
 
@@ -150,7 +158,7 @@ fn autoRegisterModulesRecursive(
             .root_source_file = b.path(full_path),
         });
         module.addImport("defs", defs_module);
-        exe.root_module.addImport(module_name, module);
+        root_module.addImport(module_name, module);
 
         // Track this module name (store path for collision error messages)
         try registered_modules.put(module_name, try allocator.dupe(u8, full_path));

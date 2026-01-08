@@ -1,6 +1,8 @@
 // Core type definitions
 const std = @import("std");
-const xcb = @cImport({
+
+// Centralized XCB import - all modules must use this
+pub const xcb = @cImport({
     @cInclude("xcb/xcb.h");
 });
 

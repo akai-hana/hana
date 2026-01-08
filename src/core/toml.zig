@@ -365,7 +365,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
                 return ParseError.DuplicateKey;
             }
 
-            var section = Section.init(allocator, section_name);
+            const section = Section.init(allocator, section_name);
             try doc.sections.put(section_name, section);
             current_section = doc.sections.getPtr(section_name).?;
 

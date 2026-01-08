@@ -8,9 +8,8 @@
 const std = @import("std");
 const defs = @import("defs");
 
-const xcb = @cImport({
-    @cInclude("xcb/xcb.h");
-});
+// Use xcb from defs to avoid type conflicts
+const xcb = defs.xcb;
 
 const WM = defs.WM;
 const Module = defs.Module;
