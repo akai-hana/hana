@@ -34,17 +34,20 @@ fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
             handleMapRequest(ev, wm);
         },
         xcb.XCB_DESTROY_NOTIFY => {
-            std.debug.print("[window] Window destroyed\n", .{});
-            // TODO: Future cleanup logic here
+            const ev = @as(*xcb.xcb_destroy_notify_event_t, @alignCast(@ptrCast(event)));
+            handleDestroyNotify(ev);
         },
         else => {},
     }
 }
 
-fn handleMapRequest(event: *xcb.xcb_map_request_event_t, wm: *WM) void {
+fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const window = event.window;
 
     std.debug.print("[window] Map request for window {}\n", .{window});
+
+    // Configure border width and color, then map window
+    // Note: We issue all commands before flushing (batched for efficiency)
 
     // Set border width
     const border_mask = xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH;
@@ -58,6 +61,13 @@ fn handleMapRequest(event: *xcb.xcb_map_request_event_t, wm: *WM) void {
 
     // Map the window (make it visible)
     _ = xcb.xcb_map_window(wm.conn, window);
+
+    // All commands are batched - main loop will flush
+}
+
+fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t) void {
+    std.debug.print("[window] Window {} destroyed\n", .{event.window});
+    // TODO: Future cleanup logic here (remove from window list, etc.)
 }
 
 pub fn createModule() Module {

@@ -1,11 +1,10 @@
 // Main WM code loop
-
 const std = @import("std");
 
 // core/
 const config = @import("config");
+const error_handling = @import("error");
 const defs = @import("defs");
-
 // modules/
 const window_module = @import("window");
 const input_module = @import("input");
@@ -15,14 +14,6 @@ const xcb = @cImport({
 });
 
 const WM = defs.WM;
-const Config = defs.Config;
-
-fn defaultConfig() Config {
-    return Config{
-        .border_width = 2,
-        .border_color = 0xff0000,
-    };
-}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -30,77 +21,70 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // 1. Connect to X11
-    const conn = xcb.xcb_connect(null, null) orelse {
-        std.debug.print("Failed to connect to X11 display server (null connection)\n", .{});
-        return error.X11ConnectionFailed;
-    };
-    if (xcb.xcb_connection_has_error(conn) != 0) {
-        std.debug.print("Failed to connect to X11 display server (connection error)\n", .{});
-        return error.X11ConnectionFailed;
-    }
+    const conn = try error_handling.connectToX11();
     defer xcb.xcb_disconnect(conn);
 
     // 2. Get screen
-    const setup = xcb.xcb_get_setup(conn);
-    const screen_iter = xcb.xcb_setup_roots_iterator(setup);
-    const screen = screen_iter.data;
-    if (screen == null) {
-        std.debug.print("Failed to get X11 screen\n", .{});
-        return error.X11ScreenFailed;
-    }
+    const screen = try error_handling.getX11Screen(conn);
     const root = screen.*.root;
 
     // 3. Try to become window manager
-    const mask = xcb.XCB_CW_EVENT_MASK;
-    const values = [_]u32{
-        xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
-            xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
-            xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY |
-            xcb.XCB_EVENT_MASK_PROPERTY_CHANGE |
-            xcb.XCB_EVENT_MASK_KEY_PRESS |
-            xcb.XCB_EVENT_MASK_KEY_RELEASE |
-            xcb.XCB_EVENT_MASK_BUTTON_PRESS |
-            xcb.XCB_EVENT_MASK_BUTTON_RELEASE,
-        };
+    const event_mask = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
+        xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
+        xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY |
+        xcb.XCB_EVENT_MASK_PROPERTY_CHANGE |
+        xcb.XCB_EVENT_MASK_KEY_PRESS |
+        xcb.XCB_EVENT_MASK_KEY_RELEASE |
+        xcb.XCB_EVENT_MASK_BUTTON_PRESS |
+        xcb.XCB_EVENT_MASK_BUTTON_RELEASE;
 
-    const cookie = xcb.xcb_change_window_attributes_checked(conn, root, mask, &values);
-    const err = xcb.xcb_request_check(conn, cookie);
-    if (err != null) {
-        std.debug.print("Another window manager is already running\n", .{});
-        return error.AnotherWMRunning;
-    }
-
+    try error_handling.becomeWindowManager(conn, root, event_mask);
     std.debug.print("hana window manager started\n", .{});
 
     // 4. Load config
-    const user_config = config.loadConfig(allocator, "config.toml") catch blk: {
-        std.debug.print("Failed to load config, using defaults\n", .{});
-        break :blk defaultConfig();
-    };
+    const user_config = try config.loadConfig(allocator, "config.toml");
 
     // 5. Initialize WM
     var wm = WM{
         .conn = conn,
         .screen = screen,
-        .root = root,
         .config = user_config,
         .allocator = allocator,
+        .root = root,
     };
 
     // 6. Initialize modules
-    var modules = std.ArrayList(defs.Module).init(allocator);
-    defer modules.deinit();
+    var modules = [_]defs.Module{
+        window_module.createModule(),
+        input_module.createModule(),
+    };
 
-    try modules.append(window_module.createModule());
-    try modules.append(input_module.createModule());
-
-    for (modules.items) |*module| {
-        module.init(&wm);
+    for (&modules) |*module| {
+        module.init_fn(&wm);
     }
 
-    // 7. Main event loop
-    _ = xcb.xcb_flush(conn);
+    // 7. Build event dispatch lookup table (O(1) event routing)
+    var event_dispatch = std.AutoHashMap(u8, std.ArrayList(*defs.Module)).init(allocator);
+    defer {
+        var iter = event_dispatch.valueIterator();
+        while (iter.next()) |list| {
+            list.deinit();
+        }
+        event_dispatch.deinit();
+    }
 
+    for (&modules) |*module| {
+        for (module.events) |event_type| {
+            const entry = try event_dispatch.getOrPut(event_type);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = std.ArrayList(*defs.Module).init(allocator);
+            }
+            try entry.value_ptr.append(module);
+        }
+    }
+
+    // 8. Main event loop
+    _ = xcb.xcb_flush(conn);
     while (true) {
         const event = xcb.xcb_wait_for_event(conn);
         if (event == null) break;
@@ -109,19 +93,11 @@ pub fn main() !void {
         const event_type = @as(*u8, @ptrCast(event)).*;
         const response_type = event_type & ~defs.X11_SYNTHETIC_EVENT_FLAG;
 
-        // Dispatch to modules (optimized: only call modules that handle this event)
-        for (modules.items) |*module| {
-            // Check if this module handles this event type
-            var handles = false;
-            for (module.events) |ev| {
-                if (ev == response_type) {
-                    handles = true;
-                    break;
-                }
+        // O(1) dispatch - only call modules that handle this event
+        if (event_dispatch.get(response_type)) |module_list| {
+            for (module_list.items) |module| {
+                module.handle_fn(event_type, event, &wm);
             }
-            if (!handles) continue;
-
-            module.handleEvent(event_type, event, &wm);
         }
 
         _ = xcb.xcb_flush(conn);

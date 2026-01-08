@@ -4,13 +4,14 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     // SELECTIONS
-    const target = b.standardTargetOptions(.{});
+    const target   = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // ARTIFACTS
     const exe = b.addExecutable(.{
         .name = "hana",
         .root_source_file = b.path("src/core/main.zig"),
+
         .target = target,
         .optimize = optimize,
     });
@@ -26,6 +27,15 @@ pub fn build(b: *std.Build) void {
     });
     config_module.addImport("defs", defs_module);
     exe.root_module.addImport("config", config_module);
+
+    const error_module = b.addModule("error", .{
+        .root_source_file = b.path("src/core/error.zig"),
+    });
+    error_module.addImport("defs", defs_module);
+    exe.root_module.addImport("error", error_module);
+
+    // Add error module to config (config depends on error)
+    config_module.addImport("error", error_module);
 
     // Auto-register all user modules (everything in src/ except src/core/)
     var arena = std.heap.ArenaAllocator.init(b.allocator);
@@ -138,7 +148,6 @@ fn autoRegisterModulesRecursive(
         // Track this module name (store path for collision error messages)
         try registered_modules.put(module_name, try allocator.dupe(u8, full_path));
 
-        std.debug.print("Module auto-registering:\n", .{});
         std.debug.print("Registered module: {s} ({s})\n", .{ module_name, full_path });
     }
 }

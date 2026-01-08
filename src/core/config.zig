@@ -1,75 +1,118 @@
 // Config parser
+const std            = @import("std");
+const defs           = @import("defs");
+const error_handling = @import("error");
+const Config         = defs.Config;
 
-const std = @import("std");
-const defs = @import("defs");
-const Config = defs.Config;
+// Default values (single source of truth)
+const DEFAULT_BORDER_WIDTH: u32 = 4;
+const DEFAULT_BORDER_COLOR: u32 = 0xff0000;
 
 pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
-    // Read config file
-    const file = try std.fs.cwd().openFile(path, .{});
+    // Try to open config file first
+    const file = std.fs.cwd().openFile(path, .{}) catch {
+        // Config doesn't exist, use all defaults
+        return getDefaultConfig();
+    };
     defer file.close();
 
-    // Get actual file size and allocate exactly that amount
+    // Config exists, try to parse it
     const file_size = (try file.stat()).size;
     const content = try file.readToEndAlloc(allocator, file_size);
     defer allocator.free(content);
 
-    // Parse TOML (simple implementation)
-    var parsed_config = Config{
-        .border_width = 2,
-        .border_color = 0xff0000,
-    };
+    // Track parsed values (null means not yet set)
+    var border_width: ?u32 = null;
+    var border_color: ?u32 = null;
 
+    // Parse TOML
     var lines = std.mem.splitScalar(u8, content, '\n');
     var line_number: usize = 0;
     while (lines.next()) |line| {
         line_number += 1;
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0 or trimmed[0] == '#') continue;
 
-        if (std.mem.indexOf(u8, trimmed, "=")) |eq_pos| {
-            const key = std.mem.trim(u8, trimmed[0..eq_pos], " \t");
-            const value = std.mem.trim(u8, trimmed[eq_pos + 1 ..], " \t");
+        // Strip inline comments
+        const line_without_comment = if (std.mem.indexOfScalar(u8, line, '#')) |comment_pos|
+            line[0..comment_pos]
+            else
+                line;
 
-            // Handle empty values
-            if (value.len == 0) {
-                std.debug.print("Warning (line {}): Empty value for '{s}', using default\n", .{ line_number, key });
-                continue;
-            }
+            const trimmed = std.mem.trim(u8, line_without_comment, " \t\r");
+            if (trimmed.len == 0) continue;
 
-            if (std.mem.eql(u8, key, "border_width")) {
-                const width = std.fmt.parseInt(u32, value, 10) catch |err| {
-                    std.debug.print("Warning (line {}): Invalid border_width '{s}' ({}), using default\n", .{ line_number, value, err });
+            if (std.mem.indexOf(u8, trimmed, "=")) |eq_pos| {
+                const key = std.mem.trim(u8, trimmed[0..eq_pos], " \t");
+                var value = std.mem.trim(u8, trimmed[eq_pos + 1 ..], " \t");
+
+                // Strip quotes from value if present
+                if (value.len >= 2 and 
+                    ((value[0] == '"' and value[value.len - 1] == '"') or
+                     (value[0] == '\'' and value[value.len - 1] == '\''))) {
+                    value = value[1..value.len - 1];
+                }
+
+                // Handle empty values
+                if (value.len == 0) {
+                    error_handling.warnEmptyValue(line_number, key);
                     continue;
-                };
-                // Validate: no zero borders
-                if (width == 0) {
-                    std.debug.print("Warning (line {}): border_width cannot be 0, using default\n", .{line_number});
-                } else {
-                    parsed_config.border_width = width;
                 }
-            } else if (std.mem.eql(u8, key, "border_color")) {
-                // Parse hex color (0xRRGGBB)
-                const color = if (std.mem.startsWith(u8, value, "0x"))
-                    std.fmt.parseInt(u32, value[2..], 16) catch |err| blk: {
-                        std.debug.print("Warning (line {}): Invalid border_color '{s}' ({}), using default\n", .{ line_number, value, err });
-                        break :blk null;
-                    }
-                else
-                    std.fmt.parseInt(u32, value, 16) catch |err| blk: {
-                        std.debug.print("Warning (line {}): Invalid border_color '{s}' ({}), using default\n", .{ line_number, value, err });
-                        break :blk null;
-                    };
 
-                if (color) |c| {
-                    parsed_config.border_color = c;
+                if (std.mem.eql(u8, key, "border_width")) {
+                    border_width = parseBorderWidth(line_number, value);
+                } else if (std.mem.eql(u8, key, "border_color")) {
+                    border_color = parseBorderColor(line_number, value);
+                } else {
+                    error_handling.warnUnknownConfigKey(line_number, key);
                 }
-            } else {
-                // Unknown config key - warn about potential typo
-                std.debug.print("Warning (line {}): Unknown config key '{s}' (ignored)\n", .{ line_number, key });
             }
-        }
     }
 
-    return parsed_config;
+    // Return config with parsed values or defaults for any missing/invalid values
+    return Config{
+        .border_width = border_width orelse DEFAULT_BORDER_WIDTH,
+        .border_color = border_color orelse DEFAULT_BORDER_COLOR,
+    };
+}
+
+/// Returns default configuration
+fn getDefaultConfig() Config {
+    return Config{
+        .border_width = DEFAULT_BORDER_WIDTH,
+        .border_color = DEFAULT_BORDER_COLOR,
+    };
+}
+
+/// Parse border_width value with validation
+fn parseBorderWidth(line_number: usize, value: []const u8) ?u32 {
+    const width = std.fmt.parseInt(u32, value, 10) catch |err| {
+        error_handling.warnInvalidBorderWidth(line_number, value, err);
+        return null;
+    };
+
+    // Validate: no negative borders
+    if (width < 0) {
+        error_handling.warnNegativeBorderWidth(line_number);
+        return null;
+    }
+
+    return width;
+}
+
+/// Parse border_color value (supports #RRGGBB, 0xRRGGBB, and RRGGBB formats)
+fn parseBorderColor(line_number: usize, value: []const u8) ?u32 {
+    // Strip prefix if present (both # and 0x)
+    const hex_value = if (value.len == 0)
+        value
+    else switch (value[0]) {
+        '#' => value[1..],
+        '0' => if (value.len > 1 and value[1] == 'x') value[2..] else value,
+        else => value,
+    };
+    
+    const color = std.fmt.parseInt(u32, hex_value, 16) catch |err| {
+        error_handling.warnInvalidBorderColor(line_number, value, err);
+        return null;
+    };
+    
+    return color;
 }
