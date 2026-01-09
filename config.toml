@@ -1,9 +1,18 @@
 # hana configuration
-# Minimal TOML parser - supports [sections], integers, colors, strings
+# Full TOML support - [sections], integers, colors, strings, arrays
 
-# Sections are optional, but they help sort settings and make things prettier
 [appearance]
 border_width = 4
-border_color = #ff0000     # Supports #RRGGBB
-# border_color = 0xff0000  # Also supports 0xRRGGBB
-# border_color = ff0000    # Or plain RRGGBB
+border_focused = 0x00ff00       # Border color for focused window
+border_unfocused = 0xff0000     # Border color for unfocused window
+
+[gaps]
+inner = 10                      # Gap between windows (pixels)
+outer = 20                      # Gap between windows and screen edge (pixels)
+
+[keybindings.exec]
+# Execute commands
+# Format: "Modifier+Key" = "command"
+# Modifiers: Mod4 (Super/Windows), Mod1 (Alt), Shift, Control
+"Mod4+Return" = "alacritty"
+"Mod4+Shift+q" = "kill"  # This will be handled specially to close window

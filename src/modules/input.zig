@@ -3,6 +3,10 @@
 const std = @import("std");
 const defs = @import("defs");
 
+const c = @cImport({
+    @cInclude("unistd.h");
+});
+
 // Use xcb from defs to avoid type conflicts
 const xcb = defs.xcb;
 
@@ -22,13 +26,13 @@ fn init(_: *WM) void {
     std.debug.print("[input] Module initialized\n", .{});
 }
 
-fn handleEvent(event_type: u8, event: *anyopaque, _: *WM) void {
+fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
     const response_type = event_type & ~defs.X11_SYNTHETIC_EVENT_FLAG;
 
     switch (response_type) {
         xcb.XCB_KEY_PRESS => {
             const ev = @as(*const xcb.xcb_key_press_event_t, @alignCast(@ptrCast(event)));
-            handleKeyPress(ev);
+            handleKeyPress(ev, wm);
         },
 
         xcb.XCB_KEY_RELEASE => {
@@ -55,13 +59,55 @@ fn handleEvent(event_type: u8, event: *anyopaque, _: *WM) void {
     }
 }
 
-fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) void {
+fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const keycode = event.detail;
-    const modifiers = event.state;
+    const modifiers: u16 = @intCast(event.state);
 
-    std.debug.print("[input] Key press: keycode={} modifiers=0x{x}\n", .{ keycode, modifiers });
+    // Check if this matches any keybinding
+    for (wm.config.keybindings.items) |keybind| {
+        if (keybind.matches(modifiers, keycode)) {
+            std.debug.print("[input] Keybinding matched: mod=0x{x} key={}\n", .{ modifiers, keycode });
+            executeAction(&keybind.action, wm) catch |err| {
+                std.debug.print("[input] Failed to execute action: {}\n", .{err});
+            };
+            return;
+        }
+    }
 
-    // TODO: Map keycodes to actions (keybind system)
+    std.debug.print("[input] Unbound key press: keycode={} modifiers=0x{x}\n", .{ keycode, modifiers });
+}
+
+fn executeAction(action: *const defs.Action, wm: *WM) !void {
+    switch (action.*) {
+        .exec => |cmd| {
+            std.debug.print("[input] Executing command: {s}\n", .{cmd});
+
+            // Fork and exec
+            const pid = c.fork();
+            if (pid == 0) {
+                // Child process
+                const cmd_z = try wm.allocator.dupeZ(u8, cmd);
+                defer wm.allocator.free(cmd_z);
+
+                const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z.ptr, null };
+                _ = c.execvp("/bin/sh", @ptrCast(&argv));
+                std.process.exit(1);
+            }
+        },
+        .close_window => {
+            if (wm.focused_window) |win_id| {
+                std.debug.print("[input] Closing window {}\n", .{win_id});
+                _ = xcb.xcb_destroy_window(wm.conn, win_id);
+            }
+        },
+        .reload_config => {
+            std.debug.print("[input] Reload config action triggered\n", .{});
+            // Signal will be handled in main loop
+        },
+        .focus_next, .focus_prev => {
+            std.debug.print("[input] Focus navigation not yet implemented\n", .{});
+        },
+    }
 }
 
 fn handleKeyRelease(event: *const xcb.xcb_key_release_event_t) void {
@@ -110,7 +156,7 @@ fn handleMotion(event: *const xcb.xcb_motion_notify_event_t) void {
 pub fn createModule() Module {
     return Module{
         .name = "input",
-        .events = &HANDLED_EVENTS,
+        .event_types = &HANDLED_EVENTS,
         .init_fn = init,
         .handle_fn = handleEvent,
     };
