@@ -10,9 +10,10 @@ pub fn build(b: *std.Build) void {
     // Create root module first
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/core/main.zig"),
+
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
+        .link_libc = true, //
     });
 
     // ARTIFACTS
@@ -21,39 +22,42 @@ pub fn build(b: *std.Build) void {
         .root_module = root_module,
     });
 
-    // Core modules (manual registration - stable names, critical if missing)
+    // Core modules
+
+    // Definitions
     const defs_module = b.addModule("defs", .{
         .root_source_file = b.path("src/core/defs.zig"),
     });
     exe.root_module.addImport("defs", defs_module);
 
-    // TOML parser module (no external dependencies!)
-    const toml_module = b.addModule("toml", .{
-        .root_source_file = b.path("src/core/toml.zig"),
-    });
-    exe.root_module.addImport("toml", toml_module);
-
-    const config_module = b.addModule("config", .{
-        .root_source_file = b.path("src/core/config.zig"),
-    });
-    config_module.addImport("defs", defs_module);
-    config_module.addImport("toml", toml_module);  // Config can now use TOML
-    exe.root_module.addImport("config", config_module);
-
+    // Error handling
     const error_module = b.addModule("error", .{
         .root_source_file = b.path("src/core/error.zig"),
     });
     error_module.addImport("defs", defs_module);
     exe.root_module.addImport("error", error_module);
 
-    // Add error module to config (config depends on error)
-    config_module.addImport("error", error_module);
+    // Custom TOML parser
+    const toml_module = b.addModule("toml", .{
+        .root_source_file = b.path("src/core/toml.zig"),
+    });
+    exe.root_module.addImport("toml", toml_module);
 
-    // Auto-register all user modules (everything in src/ except src/core/)
+    // Config parser
+    const config_module = b.addModule("config", .{
+        .root_source_file = b.path("src/core/config.zig"),
+    });
+    config_module.addImport("error", error_module);
+    config_module.addImport("defs", defs_module);
+    config_module.addImport("toml", toml_module);
+    exe.root_module.addImport("config", config_module);
+
+    // Auto-register all user modules (everything in src/ except src/core/, which must be added manually)
     var arena = std.heap.ArenaAllocator.init(b.allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
+    // 
     autoRegisterModules(b, exe.root_module, defs_module, "src", arena_allocator) catch |err| {
         std.debug.print("Fatal: Failed to auto-register modules: {}\n", .{err});
         std.process.exit(1);
