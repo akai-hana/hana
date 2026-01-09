@@ -1,13 +1,14 @@
 // Minimal TOML parser for hana
-// Supports: [sections], key=value, integers, hex colors, strings, comments
+// Supports: [sections], key=value, integers, hex colors, strings, arrays, comments, escape sequences
 
 const std = @import("std");
 
-/// Represents a parsed value (integer, string, or color)
+/// Represents a parsed value (integer, string, array, or color)
 pub const Value = union(enum) {
     integer: i64,
     string: []const u8,
-    color: u32,  // stored as 0xRRGGBB
+    array: std.ArrayList(Value),
+    color: u32, // stored as 0xRRGGBB
 
     pub fn asInt(self: Value) ?i64 {
         return switch (self) {
@@ -28,6 +29,26 @@ pub const Value = union(enum) {
             .color => |c| c,
             else => null,
         };
+    }
+
+    pub fn asArray(self: Value) ?[]const Value {
+        return switch (self) {
+            .array => |arr| arr.items,
+            else => null,
+        };
+    }
+
+    pub fn deinit(self: *Value, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .string => |s| allocator.free(s),
+            .array => |*arr| {
+                for (arr.items) |*item| {
+                    item.deinit(allocator);
+                }
+                arr.deinit(allocator);
+            },
+            else => {},
+        }
     }
 };
 
@@ -87,8 +108,20 @@ pub const Document = struct {
     }
 
     pub fn deinit(self: *Document) void {
+        {
+            var iter = self.root.pairs.valueIterator();
+            while (iter.next()) |val| {
+                var mutable_val = val.*;
+                mutable_val.deinit(self.allocator);
+            }
+        }
         var iter = self.sections.valueIterator();
         while (iter.next()) |section| {
+            var val_iter = section.pairs.valueIterator();
+            while (val_iter.next()) |val| {
+                var mutable_val = val.*;
+                mutable_val.deinit(self.allocator);
+            }
             section.deinit();
         }
         self.sections.deinit();
@@ -175,7 +208,7 @@ const Parser = struct {
     }
 
     /// Parse a section header: [section_name]
-    fn parseSection(self: *Parser) ![]const u8 {
+    fn parseSection(self: *Parser) ParseError![]const u8 {
         _ = self.consume(); // consume '['
         self.skipWhitespace();
 
@@ -206,7 +239,7 @@ const Parser = struct {
     }
 
     /// Parse a key (identifier before '=')
-    fn parseKey(self: *Parser) ![]const u8 {
+    fn parseKey(self: *Parser) ParseError![]const u8 {
         const start = self.pos;
         while (self.peek()) |c| {
             if (c == '=' or c == ' ' or c == '\t' or c == '\n') break;
@@ -222,10 +255,41 @@ const Parser = struct {
         return try self.allocator.dupe(u8, key);
     }
 
-    /// Parse a quoted string value
-    fn parseString(self: *Parser) ![]const u8 {
+    /// Parse a quoted string value with escape sequences
+    fn parseString(self: *Parser, allocator: std.mem.Allocator) ParseError![]const u8 {
         const quote = self.consume().?; // consume opening quote
         const start = self.pos;
+
+        // Check if string contains escape sequences
+        var has_escapes = false;
+        var temp_pos = self.pos;
+        while (temp_pos < self.content.len) {
+            if (self.content[temp_pos] == '\\') {
+                has_escapes = true;
+                break;
+            }
+            if (self.content[temp_pos] == quote) break;
+            temp_pos += 1;
+        }
+
+        if (!has_escapes) {
+            // Fast path: no escapes, just copy
+            while (self.peek()) |c| {
+                if (c == quote) break;
+                if (c == '\n') {
+                    std.debug.print("Error (line {}): Unterminated string\n", .{self.line});
+                    return ParseError.InvalidValue;
+                }
+                _ = self.consume();
+            }
+            const value = self.content[start..self.pos];
+            _ = self.consume(); // consume closing quote
+            return try allocator.dupe(u8, value);
+        }
+
+        // Slow path: handle escape sequences
+        var result: std.ArrayList(u8) = .{};
+        errdefer result.deinit(allocator);
 
         while (self.peek()) |c| {
             if (c == quote) break;
@@ -233,36 +297,89 @@ const Parser = struct {
                 std.debug.print("Error (line {}): Unterminated string\n", .{self.line});
                 return ParseError.InvalidValue;
             }
-            _ = self.consume();
+
+            if (c == '\\') {
+                _ = self.consume(); // consume backslash
+                const next = self.consume() orelse {
+                    std.debug.print("Error (line {}): Escape at end of string\n", .{self.line});
+                    return ParseError.InvalidValue;
+                };
+
+                const escaped: u8 = switch (next) {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    '\\' => '\\',
+                    '"' => '"',
+                    '\'' => '\'',
+                    else => {
+                        std.debug.print("Error (line {}): Unknown escape sequence '\\{c}'\n", .{ self.line, next });
+                        return ParseError.InvalidValue;
+                    },
+                };
+                try result.append(allocator, escaped);
+            } else {
+                try result.append(allocator, c);
+                _ = self.consume();
+            }
         }
 
-        const value = self.content[start..self.pos];
         _ = self.consume(); // consume closing quote
-
-        return try self.allocator.dupe(u8, value);
+        return result.toOwnedSlice(allocator);
     }
 
     /// Parse a hex color value (supports #RRGGBB, 0xRRGGBB, RRGGBB)
-    fn parseColor(self: *Parser, value: []const u8) !u32 {
+    fn parseColor(self: *Parser, value: []const u8) ParseError!u32 {
         // Strip prefix if present
         const hex_value = if (value.len == 0)
             value
-            else switch (value[0]) {
-                '#' => value[1..],
-                '0' => if (value.len > 1 and value[1] == 'x') value[2..] else value,
-                else => value,
-            };
+        else switch (value[0]) {
+            '#' => value[1..],
+            '0' => if (value.len > 1 and value[1] == 'x') value[2..] else value,
+            else => value,
+        };
 
-            const color = std.fmt.parseInt(u32, hex_value, 16) catch {
-                std.debug.print("Error (line {}): Invalid color format '{}s'\n", .{ self.line, value });
-                return ParseError.InvalidColor;
-            };
+        const color = std.fmt.parseInt(u32, hex_value, 16) catch {
+            std.debug.print("Error (line {}): Invalid color format '{s}'\n", .{ self.line, value });
+            return ParseError.InvalidColor;
+        };
 
-            return color;
+        return color;
     }
 
-    /// Parse a value (string, integer, or color)
-    fn parseValue(self: *Parser) !Value {
+    /// Parse array value: ["item1", "item2", 123]
+    fn parseArray(self: *Parser, allocator: std.mem.Allocator) ParseError!std.ArrayList(Value) {
+        _ = self.consume(); // consume '['
+
+        var array: std.ArrayList(Value) = .{};
+        errdefer {
+            for (array.items) |*item| {
+                item.deinit(allocator);
+            }
+            array.deinit(allocator);
+        }
+
+        while (true) {
+            self.skipWhitespace();
+            if (self.peek() == ']') {
+                _ = self.consume();
+                break;
+            }
+
+            const value = try self.parseValue(allocator);
+            try array.append(allocator, value);
+
+            self.skipWhitespace();
+            if (self.peek() == ',') {
+                _ = self.consume();
+            }
+        }
+
+        return array;
+    }
+
+    /// Parse a value (string, integer, array, or color)
+    fn parseValue(self: *Parser, allocator: std.mem.Allocator) ParseError!Value {
         self.skipWhitespace();
 
         const c = self.peek() orelse {
@@ -270,9 +387,15 @@ const Parser = struct {
             return ParseError.InvalidValue;
         };
 
+        // Array value
+        if (c == '[') {
+            const arr = try self.parseArray(allocator);
+            return Value{ .array = arr };
+        }
+
         // String value
         if (c == '"' or c == '\'') {
-            const str = try self.parseString();
+            const str = try self.parseString(allocator);
             return Value{ .string = str };
         }
 
@@ -308,7 +431,7 @@ const Parser = struct {
 
         // Try parsing as integer
         const int = std.fmt.parseInt(i64, raw, 10) catch {
-            std.debug.print("Error (line {}): Invalid value '{}s'\n", .{ self.line, raw });
+            std.debug.print("Error (line {}): Invalid value '{s}'\n", .{ self.line, raw });
             return ParseError.InvalidValue;
         };
 
@@ -316,16 +439,16 @@ const Parser = struct {
     }
 
     /// Parse a key-value pair
-    fn parseKeyValue(self: *Parser) !struct { []const u8, Value } {
+    fn parseKeyValue(self: *Parser, allocator: std.mem.Allocator) ParseError!struct { []const u8, Value } {
         const key = try self.parseKey();
         self.skipWhitespace();
 
         if (self.consume() != '=') {
-            std.debug.print("Error (line {}): Expected '=' after key '{}s'\n", .{ self.line, key });
+            std.debug.print("Error (line {}): Expected '=' after key '{s}'\n", .{ self.line, key });
             return ParseError.InvalidSyntax;
         }
 
-        const value = try self.parseValue();
+        const value = try self.parseValue(allocator);
         return .{ key, value };
     }
 };
@@ -361,7 +484,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
 
             // Check for duplicate section
             if (doc.sections.contains(section_name)) {
-                std.debug.print("Error (line {}): Duplicate section '{}s'\n", .{ parser.line, section_name });
+                std.debug.print("Error (line {}): Duplicate section '{s}'\n", .{ parser.line, section_name });
                 return ParseError.DuplicateKey;
             }
 
@@ -375,13 +498,13 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
         }
 
         // Parse key-value pair
-        const kv = try parser.parseKeyValue();
+        const kv = try parser.parseKeyValue(allocator);
         const key = kv[0];
         const value = kv[1];
 
         // Check for duplicate key in current section
         if (current_section.pairs.contains(key)) {
-            std.debug.print("Error (line {}): Duplicate key '{}s' in section '{}s'\n", .{ parser.line, key, current_section.name });
+            std.debug.print("Error (line {}): Duplicate key '{s}' in section '{s}'\n", .{ parser.line, key, current_section.name });
             return ParseError.DuplicateKey;
         }
 

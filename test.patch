@@ -1,0 +1,661 @@
+diff --git a/config.toml b/config.toml
+--- a/config.toml
++++ b/config.toml
+@@ -1,8 +1,22 @@
+ # hana configuration
+-# Minimal TOML parser - supports [sections], integers, colors, strings
++# Full TOML support - [sections], integers, colors, strings, arrays
+ 
+-# Sections are optional, but they help sort settings and make things prettier
+ [appearance]
+ border_width = 4
+-border_color = #ff0000     # Supports #RRGGBB
+-# border_color = 0xff0000  # Also supports 0xRRGGBB
+-# border_color = ff0000    # Or plain RRGGBB
++border_focused = 0x00ff00       # Border color for focused window
++border_unfocused = 0xff0000     # Border color for unfocused window
++
++[gaps]
++inner = 10                      # Gap between windows (pixels)
++outer = 20                      # Gap between windows and screen edge (pixels)
++
++[keybindings]
++# Format: "Modifier+Key"
++# Modifiers: Mod4 (Super/Windows), Mod1 (Alt), Shift, Control
++terminal = ["Mod4+Return"]
++close_window = ["Mod4+Shift+q"]
++reload_config = ["Mod4+Shift+r"]
++
++[keybindings.exec]
++# Execute commands
++"Mod4+Return" = "alacritty"
+diff --git a/src/core/config.zig b/src/core/config.zig
+--- a/src/core/config.zig
++++ b/src/core/config.zig
+@@ -1,16 +1,26 @@
+ // Config parser
+ 
+ const std            = @import("std");
+-
+ const defs           = @import("defs");
+ const Config         = defs.Config;
+ const error_handling = @import("error");
++const toml           = @import("toml");
+ 
+ /// Default values
+-// u12 -> 4096 bits, enough to cover an entire 4k screen with a single window border.
+-// _why would you want that?_ No idea! I just don't want to underestimate the amount of bits.
+ const DEFAULT_BORDER_WIDTH: u12 = 4;
+-// Will bump to u32 for an alpha channel once we support transparency
+-const DEFAULT_BORDER_COLOR: u24 = 0xff0000;
++const DEFAULT_BORDER_FOCUSED: u24 = 0x00ff00;
++const DEFAULT_BORDER_UNFOCUSED: u24 = 0xff0000;
++const DEFAULT_GAP_INNER: u16 = 10;
++const DEFAULT_GAP_OUTER: u16 = 20;
++
++/// Validation errors
++pub const ValidationError = error{
++    BorderWidthZero,
++    BorderWidthTooLarge,
++    InvalidColorRange,
++    GapTooLarge,
++    InvalidKeybinding,
++    DuplicateKeybinding,
++};
+ 
+ // config.toml loading logic
+ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
+@@ -31,93 +41,269 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
+     // Get file size for exact allocation
+     const stat = try file.stat(io);
+     const file_size = stat.size;
+ 
+-    // Read file contents with exact allocation
++    // Read file contents
+     var read_buf: [4096]u8 = undefined;
+     var file_reader = file.reader(io, &read_buf);
+ 
+     var content_buffer = std.Io.Writer.Allocating.init(allocator);
+     defer content_buffer.deinit();
+ 
+     _ = try file_reader.interface.streamRemaining(&content_buffer.writer);
+     const content = content_buffer.written();
++    defer allocator.free(content);
+ 
+     // Sanity check: ensure we didn't exceed expected size significantly
+     if (content.len > file_size + 1024) {
+         return error.ConfigFileSizeMismatch;
+     }
+ 
+-    // Track parsed values (null means not yet set)
+-    var border_width: ?u12 = null;
+-    var border_color: ?u24 = null;
+-
+-    // Track which keys we've seen to detect duplicates
+-    var seen_border_width = false;
+-    var seen_border_color = false;
+-
+-    // Parse TOML
+-    var lines = std.mem.splitScalar(u8, content, '\n');
+-    var line_number: usize = 0;
+-    while (lines.next()) |line| {
+-        line_number += 1;
+-
+-        // Strip inline comments
+-        const line_without_comment = if (std.mem.indexOfScalar(u8, line, '#')) |comment_pos|
+-            line[0..comment_pos]
+-        else
+-            line;
+-
+-        const trimmed = std.mem.trim(u8, line_without_comment, " \t\r");
+-        if (trimmed.len == 0) continue;
+-
+-        // Parse key=value pairs
+-        if (std.mem.indexOf(u8, trimmed, "=")) |eq_pos| {
+-            const key = std.mem.trim(u8, trimmed[0..eq_pos], " \t");
+-            var value = std.mem.trim(u8, trimmed[eq_pos + 1 ..], " \t");
+-
+-            // Strip quotes from value if present
+-            if (value.len >= 2 and
+-                ((value[0] == '"' and value[value.len - 1] == '"') or
+-                 (value[0] == '\'' and value[value.len - 1] == '\''))) {
+-                value = value[1..value.len - 1];
+-            }
+-
+-            // Handle empty values
+-            if (value.len == 0) {
+-                error_handling.warnEmptyValue(line_number, key);
+-                continue;
+-            }
+-
+-            // Match key and parse value
+-            if (std.mem.eql(u8, key, "border_width")) {
+-                if (seen_border_width) {
+-                    error_handling.warnDuplicateKey(line_number, key);
+-                }
+-                seen_border_width = true;
+-                border_width = parseBorderWidth(line_number, value);
+-            } else if (std.mem.eql(u8, key, "border_color")) {
+-                if (seen_border_color) {
+-                    error_handling.warnDuplicateKey(line_number, key);
+-                }
+-                seen_border_color = true;
+-                border_color = parseBorderColor(line_number, value);
++    // Parse TOML document
++    var doc = try toml.parse(allocator, content);
++    defer doc.deinit();
++
++    // Extract configuration values
++    var config_obj = Config{
++        .border_width = DEFAULT_BORDER_WIDTH,
++        .border_focused = DEFAULT_BORDER_FOCUSED,
++        .border_unfocused = DEFAULT_BORDER_UNFOCUSED,
++        .gap_inner = DEFAULT_GAP_INNER,
++        .gap_outer = DEFAULT_GAP_OUTER,
++        .keybindings = std.ArrayList(defs.Keybind).init(allocator),
++    };
++
++    // Parse [appearance] section
++    if (doc.getSection("appearance")) |appearance| {
++        if (appearance.getInt("border_width")) |width| {
++            if (width >= 0 and width <= 4096) {
++                config_obj.border_width = @intCast(width);
+             } else {
+-                error_handling.warnUnknownConfigKey(line_number, key);
++                std.debug.print("Warning: border_width out of range (0-4096), using default\n", .{});
+             }
+         }
++
++        if (appearance.getColor("border_focused")) |color| {
++            if (color <= 0xFFFFFF) {
++                config_obj.border_focused = @intCast(color);
++            } else {
++                std.debug.print("Warning: border_focused out of RGB range, using default\n", .{});
++            }
++        }
++
++        if (appearance.getColor("border_unfocused")) |color| {
++            if (color <= 0xFFFFFF) {
++                config_obj.border_unfocused = @intCast(color);
++            } else {
++                std.debug.print("Warning: border_unfocused out of RGB range, using default\n", .{});
++            }
++        }
+     }
+ 
+-    // Return config with parsed values or defaults for any missing/invalid values
+-    return Config{
+-        .border_width = border_width orelse DEFAULT_BORDER_WIDTH,
+-        .border_color = border_color orelse DEFAULT_BORDER_COLOR,
++    // Parse [gaps] section
++    if (doc.getSection("gaps")) |gaps| {
++        if (gaps.getInt("inner")) |inner| {
++            if (inner >= 0 and inner <= 1000) {
++                config_obj.gap_inner = @intCast(inner);
++            } else {
++                std.debug.print("Warning: gap_inner out of range (0-1000), using default\n", .{});
++            }
++        }
++
++        if (gaps.getInt("outer")) |outer| {
++            if (outer >= 0 and outer <= 1000) {
++                config_obj.gap_outer = @intCast(outer);
++            } else {
++                std.debug.print("Warning: gap_outer out of range (0-1000), using default\n", .{});
++            }
++        }
++    }
++
++    // Parse [keybindings.exec] section for command execution bindings
++    if (doc.getSection("keybindings.exec")) |exec_section| {
++        var iter = exec_section.pairs.iterator();
++        while (iter.next()) |entry| {
++            const binding_str = entry.key_ptr.*;
++            const command = entry.value_ptr.*.asString() orelse continue;
++
++            if (parseKeybindString(binding_str)) |keybind_parts| {
++                const keybind = defs.Keybind{
++                    .modifiers = keybind_parts.modifiers,
++                    .keycode = keybind_parts.keycode,
++                    .action = .{ .exec = try allocator.dupe(u8, command) },
++                };
++                try config_obj.keybindings.append(keybind);
++            } else |_| {
++                std.debug.print("Warning: Invalid keybinding format: {s}\n", .{binding_str});
++            }
++        }
++    }
++
++    // Validate configuration
++    try validateConfig(&config_obj);
++
++    return config_obj;
++}
++
++/// Parse keybinding string like "Mod4+Return" into modifiers and keycode
++fn parseKeybindString(str: []const u8) !struct { modifiers: u16, keycode: u8 } {
++    var modifiers: u16 = 0;
++    var parts = std.mem.splitScalar(u8, str, '+');
++    var keycode: u8 = 0;
++
++    while (parts.next()) |part| {
++        const trimmed = std.mem.trim(u8, part, " \t");
++        
++        if (std.mem.eql(u8, trimmed, "Mod4")) {
++            modifiers |= defs.MOD_SUPER;
++        } else if (std.mem.eql(u8, trimmed, "Mod1")) {
++            modifiers |= defs.MOD_ALT;
++        } else if (std.mem.eql(u8, trimmed, "Shift")) {
++            modifiers |= defs.MOD_SHIFT;
++        } else if (std.mem.eql(u8, trimmed, "Control")) {
++            modifiers |= defs.MOD_CONTROL;
++        } else {
++            // This should be the key name - convert to keycode
++            keycode = try keyNameToKeycode(trimmed);
++        }
++    }
++
++    if (keycode == 0) {
++        return error.NoKeycodeFound;
++    }
++
++    return .{ .modifiers = modifiers, .keycode = keycode };
++}
++
++/// Convert key name to X11 keycode (simplified mapping)
++fn keyNameToKeycode(name: []const u8) !u8 {
++    // TODO: Load from X11 keysym database for complete mapping
++    if (std.mem.eql(u8, name, "Return")) return 36;
++    if (std.mem.eql(u8, name, "q")) return 24;
++    if (std.mem.eql(u8, name, "r")) return 27;
++    
++    return error.UnknownKeyName;
++}
++
++/// Validate configuration values
++pub fn validateConfig(config: *const Config) !void {
++    if (config.border_width == 0) {
++        return ValidationError.BorderWidthZero;
++    }
++    if (config.border_width > 4096) {
++        return ValidationError.BorderWidthTooLarge;
++    }
++    if (config.border_focused > 0xFFFFFF or config.border_unfocused > 0xFFFFFF) {
++        return ValidationError.InvalidColorRange;
++    }
++    if (config.gap_inner > 1000 or config.gap_outer > 1000) {
++        return ValidationError.GapTooLarge;
++    }
++
++    // Check for duplicate keybindings
++    for (config.keybindings.items, 0..) |kb1, i| {
++        for (config.keybindings.items[i+1..]) |kb2| {
++            if (kb1.modifiers == kb2.modifiers and kb1.keycode == kb2.keycode) {
++                return ValidationError.DuplicateKeybinding;
++            }
++        }
+     }
+ }
+ 
+ // Returns default configuration
+ fn getDefaultConfig() Config {
+     return Config{
+         .border_width = DEFAULT_BORDER_WIDTH,
+-        .border_color = DEFAULT_BORDER_COLOR,
++        .border_focused = DEFAULT_BORDER_FOCUSED,
++        .border_unfocused = DEFAULT_BORDER_UNFOCUSED,
++        .gap_inner = DEFAULT_GAP_INNER,
++        .gap_outer = DEFAULT_GAP_OUTER,
++        .keybindings = std.ArrayList(defs.Keybind).init(std.heap.page_allocator),
+     };
+ }
+-
+-// Parse border_width value with validation
+-fn parseBorderWidth(line_number: usize, value: []const u8) ?u12 {
+-    const width = std.fmt.parseInt(u12, value, 10) catch |err| {
+-        error_handling.warnInvalidBorderWidth(line_number, value, err);
+-        return null;
+-    };
+-
+-    return width;
+-}
+-
+-// Parse border_color value (supports #RRGGBB, 0xRRGGBB, and RRGGBB formats)
+-fn parseBorderColor(line_number: usize, value: []const u8) ?u24 {
+-    // Strip prefix if present (both # and 0x)
+-    const hex_value = if (value.len == 0)
+-        value
+-    else switch (value[0]) {
+-        '#' => value[1..],
+-        '0' => if (value.len > 1 and value[1] == 'x') value[2..] else value,
+-        else => value,
+-    };
+-
+-    const color = std.fmt.parseInt(u32, hex_value, 16) catch |err| {
+-        error_handling.warnInvalidBorderColor(line_number, value, err);
+-        return null;
+-    };
+-
+-    // Validate that color fits in 24-bit RGB range
+-    if (color > 0xFFFFFF) {
+-        error_handling.warnColorOutOfRange(line_number, value);
+-        return null;
+-    };
+-
+-    return @intCast(color);
+-}
+diff --git a/src/core/defs.zig b/src/core/defs.zig
+--- a/src/core/defs.zig
++++ b/src/core/defs.zig
+@@ -8,18 +8,107 @@ pub const xcb = @cImport({
+ // X11 uses bit 7 to mark synthetic events
+ pub const X11_SYNTHETIC_EVENT_FLAG: u8 = 0x80;
+ 
++// Modifier key masks (from X11)
++pub const MOD_SHIFT: u16 = 1 << 0;
++pub const MOD_CONTROL: u16 = 1 << 2;
++pub const MOD_ALT: u16 = 1 << 3;      // Mod1
++pub const MOD_SUPER: u16 = 1 << 6;     // Mod4
++
++// Keybinding action
++pub const Action = union(enum) {
++    exec: []const u8,           // Execute command
++    close_window: void,         // Close focused window
++    reload_config: void,        // Reload configuration
++    focus_next: void,           // Focus next window
++    focus_prev: void,           // Focus previous window
++
++    pub fn deinit(self: *Action, allocator: std.mem.Allocator) void {
++        switch (self.*) {
++            .exec => |cmd| allocator.free(cmd),
++            else => {},
++        }
++    }
++};
++
++// Keybinding definition
++pub const Keybind = struct {
++    modifiers: u16,
++    keycode: u8,
++    action: Action,
++
++    pub fn matches(self: *const Keybind, modifiers: u16, keycode: u8) bool {
++        return self.modifiers == modifiers and self.keycode == keycode;
++    }
++};
++
+ // Window manager configuration loaded from config.toml
+ pub const Config = struct {
+     border_width: u12,
+-    border_color: u24,
++    border_focused: u24,
++    border_unfocused: u24,
++    gap_inner: u16,
++    gap_outer: u16,
++    keybindings: std.ArrayList(Keybind),
++
++    pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
++        for (self.keybindings.items) |*kb| {
++            kb.action.deinit(allocator);
++        }
++        self.keybindings.deinit();
++    }
++};
++
++// Managed window state
++pub const Window = struct {
++    id: u32,
++    x: i16,
++    y: i16,
++    width: u16,
++    height: u16,
++    is_focused: bool,
++    properties: WindowProperties,
++};
++
++// Window properties from X11
++pub const WindowProperties = struct {
++    name: ?[]const u8 = null,
++    class: ?[]const u8 = null,
++    window_type: WindowType = .normal,
++
++    pub fn deinit(self: *WindowProperties, allocator: std.mem.Allocator) void {
++        if (self.name) |name| allocator.free(name);
++        if (self.class) |class| allocator.free(class);
++    }
++};
++
++// Window type hints from _NET_WM_WINDOW_TYPE
++pub const WindowType = enum {
++    normal,
++    dialog,
++    dock,
++    toolbar,
++    menu,
++    splash,
++    utility,
+ };
+ 
+ // Window manager state and resources
+ pub const WM = struct {
+     allocator: std.mem.Allocator,
+     conn: *xcb.xcb_connection_t,
+     screen: *xcb.xcb_screen_t,
+     root: u32,
+     config: Config,
++    windows: std.ArrayList(Window),
++    focused_window: ?u32 = null,
++
++    pub fn deinit(self: *WM) void {
++        for (self.windows.items) |*win| {
++            win.properties.deinit(self.allocator);
++        }
++        self.windows.deinit();
++        self.config.deinit(self.allocator);
++    }
+ };
+ 
+ // Modular event handler - each module registers events it wants to handle
+@@ -30,4 +119,6 @@ pub const Module = struct {
+     init_fn: *const fn (*WM) void,
+     // Handles events - event_data is a pointer to the XCB event struct (cast as needed)
+     handle_fn: *const fn (u8, *anyopaque, *WM) void,
++    // Optional cleanup function
++    deinit_fn: ?*const fn (*WM) void = null,
+ };
+diff --git a/src/core/main.zig b/src/core/main.zig
+--- a/src/core/main.zig
++++ b/src/core/main.zig
+@@ -13,6 +13,10 @@ const input_module = @import("input");
+ const xcb = defs.xcb;
+ const WM = defs.WM;
+ 
++// Global WM instance for signal handling
++var global_wm: ?*WM = null;
++var should_reload_config: bool = false;
++
+ pub fn main() !void {
+     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+     defer _ = gpa.deinit();
+@@ -43,11 +47,25 @@ pub fn main() !void {
+     // 5. Initialize WM
+     var wm = WM{
+         .allocator = allocator,
+         .conn = conn,
+         .screen = screen,
+         .root = root,
+         .config = user_config,
++        .windows = std.ArrayList(defs.Window).init(allocator),
++        .focused_window = null,
+     };
++    defer wm.deinit();
++
++    // Set global WM for signal handler
++    global_wm = &wm;
++
++    // Setup signal handler for config reload (SIGHUP)
++    const sig_handler = struct {
++        fn handler(_: c_int) callconv(.C) void {
++            should_reload_config = true;
++        }
++    }.handler;
++    _ = std.c.signal(std.c.SIG.HUP, @ptrCast(&sig_handler));
+ 
+     // 6. Initialize modules
+     var modules = [_]defs.Module{
+@@ -55,9 +73,18 @@ pub fn main() !void {
+         input_module.createModule(),
+     };
+ 
++    defer {
++        for (&modules) |*module| {
++            if (module.deinit_fn) |deinit_fn| {
++                deinit_fn(&wm);
++            }
++        }
++    }
++
+     for (&modules) |*module| {
+         module.init_fn(&wm);
+     }
+ 
++    // Grab keybindings
++    try grabKeybindings(&wm);
++
+     // 7. Build event dispatch lookup table (O(1) event routing)
+     var event_dispatch = std.AutoHashMap(u8, std.ArrayList(*defs.Module)).init(allocator);
+@@ -76,6 +103,11 @@ pub fn main() !void {
+     }
+ 
+     // 8. Main event loop
+     _ = xcb.xcb_flush(conn);
+     while (true) {
++        // Check for config reload signal
++        if (should_reload_config) {
++            try reloadConfig(&wm);
++            should_reload_config = false;
++        }
++
+         const event = xcb.xcb_wait_for_event(conn);
+         if (event == null) break;
+         defer std.c.free(event);
+@@ -93,4 +125,84 @@ pub fn main() !void {
+ 
+         _ = xcb.xcb_flush(conn);
+     }
+ }
++
++/// Grab all configured keybindings
++fn grabKeybindings(wm: *WM) !void {
++    // Ungrab all keys first
++    _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
++
++    // Grab each configured keybinding
++    for (wm.config.keybindings.items) |keybind| {
++        const cookie = xcb.xcb_grab_key_checked(
++            wm.conn,
++            0, // don't use owner_events
++            wm.root,
++            @intCast(keybind.modifiers),
++            keybind.keycode,
++            xcb.XCB_GRAB_MODE_ASYNC,
++            xcb.XCB_GRAB_MODE_ASYNC,
++        );
++
++        if (xcb.xcb_request_check(wm.conn, cookie)) |err| {
++            std.debug.print("Warning: Failed to grab key (mod={x} key={}): error code {}\n", 
++                .{ keybind.modifiers, keybind.keycode, err.*.error_code });
++            std.c.free(err);
++        }
++    }
++
++    std.debug.print("Grabbed {} keybindings\n", .{wm.config.keybindings.items.len});
++}
++
++/// Reload configuration file and reapply settings
++fn reloadConfig(wm: *WM) !void {
++    std.debug.print("Reloading configuration...\n", .{});
++
++    // Load new config
++    const new_config = config.loadConfig(wm.allocator, "config.toml") catch |err| {
++        std.debug.print("Failed to reload config: {}\n", .{err});
++        return;
++    };
++
++    // Clean up old config
++    wm.config.deinit(wm.allocator);
++
++    // Apply new config
++    wm.config = new_config;
++
++    // Regrab keybindings
++    try grabKeybindings(wm);
++
++    // Reapply borders to existing windows
++    for (wm.windows.items) |win| {
++        const is_focused = if (wm.focused_window) |fid| fid == win.id else false;
++        const border_color = if (is_focused) wm.config.border_focused else wm.config.border_unfocused;
++        try applyWindowBorder(wm, win.id, border_color);
++    }
++
++    std.debug.print("Configuration reloaded successfully\n", .{});
++}
++
++/// Apply border to window with error checking
++fn applyWindowBorder(wm: *WM, window: u32, color: u24) !void {
++    const border_mask = xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH;
++    const border_values = [_]u32{wm.config.border_width};
++    const border_cookie = xcb.xcb_configure_window_checked(wm.conn, window, border_mask, &border_values);
++    if (xcb.xcb_request_check(wm.conn, border_cookie)) |err| {
++        std.debug.print("Failed to set border width for window {}: error code {}\n", .{ window, err.*.error_code });
++        std.c.free(err);
++        return error.XCBConfigureFailed;
++    }
++
++    const color_mask = xcb.XCB_CW_BORDER_PIXEL;
++    const color_values = [_]u32{color};
++    const color_cookie = xcb.xcb_change_window_attributes_checked(wm.conn, window, color_mask, &color_values);
++    if (xcb.xcb_request_check(wm.conn, color_cookie)) |err| {
++        std.debug.print("Failed to set border color for window {}: error code {}\n", .{ window, err.*.error_code });
++        std.c.free(err);
++        return error.XCBConfigureFailed;
++    }
++}
+diff --git a/src/core/toml.zig b/src/core/toml.zig
+--- a/src/core/toml.zig
++++ b/src/core/toml.zig
+@@ -7,6 +7,7 @@ const std = @import("std");
+ pub const Value = union(enum) {
+     integer: i64,
+     string: []const u8,
++    array: std.ArrayList(Value),
+     color: u32,  // stored as 0xRRGGBB
+ 
+     pub fn asInt(self: Value) ?i64 {
+@@ -24,6 +25,23 @@ pub const Value = union(enum) {
+     pub fn asColor(self: Value) ?u32 {
+         return switch (self) {
+             .color => |c| c,
++            else => null,
++        };
++    }
++
++    pub fn asArray(self: Value) ?[]const Value {
++        return switch (self) {
++            .array => |arr| arr.items,
++            else => null,
++        };
++    }
++
++    pub fn deinit(self: *Value, allocator: std.mem.Allocator) void {
++        switch (self.*) {
++            .string => |s| allocator.free(s),
++            .array => |*arr| {
++                for (arr.items) |*item| item.deinit(allocator);
++                arr.deinit();
++            },
+             else => {},
+         };
+     }
+@@ -83,6 +101,15 @@ pub const Document = struct {
+     }
