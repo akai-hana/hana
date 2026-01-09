@@ -14,6 +14,24 @@ A simple, light, and performant X11 window manager. 🪷
 # Installation
 <sup>_this project isn't even a 10th of the way finished, but in here I'll write an installation guide, once the time comes_</sup>
 
+<details>
+
+<summary>sketch</summary>
+in here ill write down some stuf i want to include on installation, to not forget meanwhile.
+
+---
+
+Compiling optimized release:
+```sh
+zig build -Doptimize=ReleaseFast
+```
+
+Compiling without optimizing (doesn't remove debug symbols, useful only for development)
+```sh
+zig build -Doptimize=ReleaseFast
+```
+</details>
+
 ---
 
 # About 花
