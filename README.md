@@ -65,7 +65,7 @@ Let me be clear. There's nothing _wrong_ about dwm. It's a perfectly good and fi
   - Config hot-reloading
     > Runtime config instead of recompiling at every minor change (without sacrificing performance on a dynamically interpreted language)
   - Simpler code in general
-    > For this purpose, I ended up choosing Zig as the language instead of C. Initially I had no issues with C, but Zig caught my attention in that it produces simpler, safer code than the equivalent in C. It can even directly importi the C header file without any API bindings, isn't that super cool?! 
+    > For this purpose, I ended up choosing Zig as the language instead of C. Initially I had no issues with C, but Zig caught my attention in that it produces simpler, safer code than the equivalent in C. It can even directly import the C header file without any API bindings, isn't that super cool?! 
 
 + **_Less ugly_** than dwm?
   > One might find dwm's ugliness beautiful, but in that case, I imagine a different kind of beauty that involves:
