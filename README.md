@@ -17,7 +17,7 @@ A simple, light, and performant X11 window manager. 🪷
 <details>
 
 <summary>sketch</summary>
-in here ill write down some stuf i want to include on installation, to not forget meanwhile.
+in here ill write down some stuff i want to include on installation, to not forget meanwhile.
 
 ---
 
