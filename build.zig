@@ -1,172 +1,159 @@
-// Build config for Zig: compile, link, install, run.
+// Build configuration for Hana window manager
+// This file tells Zig how to compile, link, and run the project
 
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    // SELECTIONS
-    const target   = b.standardTargetOptions(.{});
+    // Get compilation options from command line (e.g., -Dtarget=x86_64-linux)
+    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create root module first
+    // Create the root module (entry point of our program)
     const root_module = b.createModule(.{
-        .root_source_file = b.path("src/core/main.zig"),
-
+        .root_source_file = b.path("src/core/main.zig"), // main.zig is where execution starts
         .target = target,
         .optimize = optimize,
-        .link_libc = true, //
+        .link_libc = true, // We need C standard library for system calls
     });
 
-    // ARTIFACTS
+    // Create the executable artifact (the actual binary that will be produced)
     const exe = b.addExecutable(.{
         .name = "hana",
         .root_module = root_module,
     });
+    
+    // Stripping for release builds (reduces binary size by ~50%)
+    // Note: strip API varies by Zig version, so we do it post-install
+    const install = b.addInstallArtifact(exe, .{});
+    
+    // Add strip step for release builds
+    if (optimize != .Debug) {
+        const strip_step = b.addSystemCommand(&[_][]const u8{
+            "strip",
+            "-s",
+            b.getInstallPath(.bin, "hana"),
+        });
+        strip_step.step.dependOn(&install.step);
+        b.getInstallStep().dependOn(&strip_step.step);
+    } else {
+        b.getInstallStep().dependOn(&install.step);
+    }
 
-    // Core modules
-
-    // Definitions
-    const defs_module = b.addModule("defs", .{
-        .root_source_file = b.path("src/core/defs.zig"),
-    });
-    exe.root_module.addImport("defs", defs_module);
-
-    // Error handling
-    const error_module = b.addModule("error", .{
-        .root_source_file = b.path("src/core/error.zig"),
-    });
-    error_module.addImport("defs", defs_module);
-    exe.root_module.addImport("error", error_module);
-
-    // Custom TOML parser
-    const toml_module = b.addModule("toml", .{
-        .root_source_file = b.path("src/core/toml.zig"),
-    });
-    exe.root_module.addImport("toml", toml_module);
-
-    // Config parser
-    const config_module = b.addModule("config", .{
-        .root_source_file = b.path("src/core/config.zig"),
-    });
-    config_module.addImport("error", error_module);
-    config_module.addImport("defs", defs_module);
-    config_module.addImport("toml", toml_module);
-    exe.root_module.addImport("config", config_module);
-
-    // Auto-register all user modules (everything in src/ except src/core/, which must be added manually)
+    // Set up temporary memory allocator for build-time operations
+    // Arena allocator is perfect for build scripts: fast allocation, single free at the end
     var arena = std.heap.ArenaAllocator.init(b.allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
+    defer arena.deinit(); // Free all allocated memory when build() exits
+    const allocator = arena.allocator();
 
-    // 
-    autoRegisterModules(b, exe.root_module, defs_module, "src", arena_allocator) catch |err| {
-        std.debug.print("Fatal: Failed to auto-register modules: {}\n", .{err});
+    // HashMap to store all modules (both core and auto-discovered)
+    // Key: module name (e.g., "input"), Value: pointer to the module
+    var all_modules = std.StringHashMap(*std.Build.Module).init(allocator);
+
+    // Register core modules manually (these live in src/core/)
+    // Each tuple is: { "module_name", "path/to/file.zig" }
+    inline for (.{
+        .{ "defs", "src/core/defs.zig" },     // Type definitions and constants
+        .{ "error", "src/core/error.zig" },   // Error handling utilities
+        .{ "toml", "src/core/toml.zig" },     // TOML parser
+        .{ "config", "src/core/config.zig" }, // Configuration loader
+    }) |mod| {
+        const module = b.addModule(mod[0], .{ .root_source_file = b.path(mod[1]) });
+        all_modules.put(mod[0], module) catch unreachable; // Store in our collection
+    }
+
+    // Auto-discover and register all modules in src/ (except src/core/)
+    // This finds all .zig files and creates modules for them automatically
+    discoverModules(b, "src", allocator, &all_modules) catch |err| {
+        std.debug.print("Fatal: Failed to discover modules: {}\n", .{err});
         std.process.exit(1);
     };
 
-    // LINKING
-    exe.root_module.linkSystemLibrary("xcb", .{});
+    // Connect all modules to each other (full mesh)
+    // After this, any module can @import() any other module
+    connectAllModules(root_module, &all_modules);
 
-    // INSTALL
-    b.installArtifact(exe);
+    // Link against system libraries we need
+    exe.root_module.linkSystemLibrary("xcb", .{}); // X11 XCB library for window management
 
-    // RUN
-    const run_hana = b.addRunArtifact(exe);
-    run_hana.step.dependOn(b.getInstallStep());
-
-    // Forward CLI args (commented for now, may be useful later)
-    // if (b.args) |args| {
-    //     run_hana.addArgs(args);
-    // }
-
+    // Create the "run" step (so we can use `zig build run`)
     const run_step = b.step("run", "Run hana");
-    run_step.dependOn(&run_hana.step);
+    const run_cmd = b.addRunArtifact(exe); // Command to run our executable
+    run_cmd.step.dependOn(b.getInstallStep()); // Make sure it's built first
+    run_step.dependOn(&run_cmd.step);
 }
 
-// Module auto-detection and registration logic
-fn autoRegisterModules(
-    b: *std.Build,
-    root_module: *std.Build.Module,
-    defs_module: *std.Build.Module,
-    dir_path: []const u8,
-    allocator: std.mem.Allocator,
-) !void {
-    // Track registered module names to detect collisions
-    var registered_modules = std.StringHashMap([]const u8).init(allocator);
-    defer registered_modules.deinit();
-
-    try autoRegisterModulesRecursive(b, root_module, defs_module, dir_path, allocator, &registered_modules);
+// Connect all modules to each other in a full mesh
+// Each module gets the ability to import every other module
+fn connectAllModules(root: *std.Build.Module, modules: *std.StringHashMap(*std.Build.Module)) void {
+    var iter = modules.iterator();
+    while (iter.next()) |entry| {
+        // For each module, give it imports to all other modules
+        var import_iter = modules.iterator();
+        while (import_iter.next()) |import| {
+            // Skip self-import (a module can't import itself)
+            if (!std.mem.eql(u8, entry.key_ptr.*, import.key_ptr.*)) {
+                entry.value_ptr.*.addImport(import.key_ptr.*, import.value_ptr.*);
+            }
+        }
+        // Also add each module to the root so main.zig can import them
+        root.addImport(entry.key_ptr.*, entry.value_ptr.*);
+    }
 }
 
-fn autoRegisterModulesRecursive(
+// Recursively scan directories for .zig files and register them as modules
+fn discoverModules(
     b: *std.Build,
-    root_module: *std.Build.Module,
-    defs_module: *std.Build.Module,
-    dir_path: []const u8,
+    dir_path: []const u8, // Directory to scan (e.g., "src")
     allocator: std.mem.Allocator,
-    registered_modules: *std.StringHashMap([]const u8),
+    all_modules: *std.StringHashMap(*std.Build.Module),
 ) !void {
-    // Create Io instance for filesystem operations (single-threaded is fine for build script)
+    // Create I/O interface for file system operations
     var io_threaded: std.Io.Threaded = .init_single_threaded;
     const io = io_threaded.io();
 
-    // Critical error: Can't open directory
+    // Open the directory for iteration
     var dir = b.build_root.handle.openDir(io, dir_path, .{ .iterate = true }) catch |err| {
-        std.debug.print("Critical: Cannot open directory '{s}': {}\n", .{ dir_path, err });
+        std.debug.print("Cannot open directory '{s}': {}\n", .{ dir_path, err });
         return err;
     };
-    defer dir.close(io);
+    defer dir.close(io); // Always close directory handles when done
 
+    // Iterate through all entries in the directory
     var iter = dir.iterate();
     while (try iter.next(io)) |entry| {
-        // Skip src/core/ directory entirely (core modules are manually registered)
-        const is_src_core = std.mem.eql(u8, dir_path, "src") and
-            entry.kind == .directory and
-            std.mem.eql(u8, entry.name, "core");
-        if (is_src_core) continue;
+        // Skip src/core/ since we register those modules manually
+        if (std.mem.eql(u8, dir_path, "src") and entry.kind == .directory and 
+            std.mem.eql(u8, entry.name, "core")) continue;
 
-        // Handle subdirectories recursively
+        // If we found a subdirectory, scan it recursively
         if (entry.kind == .directory) {
-            var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-            const subdir_path = try std.fmt.bufPrint(&path_buffer, "{s}/{s}", .{ dir_path, entry.name });
-            try autoRegisterModulesRecursive(b, root_module, defs_module, subdir_path, allocator, registered_modules);
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
+            const subdir = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ dir_path, entry.name });
+            try discoverModules(b, subdir, allocator, all_modules);
             continue;
         }
 
-        // Only process .zig files
-        if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+        // Only process .zig files (skip other file types)
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".zig")) continue;
 
-        // Extract module name (filename without .zig extension)
-        const module_name = std.fs.path.stem(entry.name);
+        // Extract module name from filename (e.g., "input.zig" -> "input")
+        const name = std.fs.path.stem(entry.name);
+        
+        // Build full path to the file
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ dir_path, entry.name });
 
-        // Build full path using stack buffer (memory-efficient)
-        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const full_path = try std.fmt.bufPrint(&path_buffer, "{s}/{s}", .{ dir_path, entry.name });
-
-        // Check for name collision
-        if (registered_modules.get(module_name)) |existing_path| {
-            std.debug.print(
-                \\
-                \\Error: Module name collision detected: '{s}'
-                \\  Existing: {s}
-                \\  New:      {s}
-                \\
-                \\Please rename one of these files to avoid conflicts.
-                \\
-                , .{ module_name, existing_path, full_path });
+        // Check for name collisions (two files with the same name in different directories)
+        if (all_modules.contains(name)) {
+            std.debug.print("Error: Module name collision: '{s}' at {s}\n", .{ name, path });
             return error.ModuleNameCollision;
         }
 
-        // Register module
-        const module = b.createModule(.{
-            .root_source_file = b.path(full_path),
-        });
-        module.addImport("defs", defs_module);
-        root_module.addImport(module_name, module);
-
-        // Track this module name (store path for collision error messages)
-        try registered_modules.put(module_name, try allocator.dupe(u8, full_path));
-
-        std.debug.print("Registered module: {s} ({s})\n", .{ module_name, full_path });
+        // Create the module and add it to our collection
+        const module = b.createModule(.{ .root_source_file = b.path(path) });
+        try all_modules.put(try allocator.dupe(u8, name), module);
+        
+        // Optionally print for debugging (comment out for faster builds)
+        // std.debug.print("Registered: {s} ({s})\n", .{ name, path });
     }
 }

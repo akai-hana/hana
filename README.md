@@ -136,7 +136,6 @@ But it works! After so much time investigating and trying things only to be met 
 ... Pretty much everything else.
 
 ---
-FINITIONS #
 
 <div align="center">
 

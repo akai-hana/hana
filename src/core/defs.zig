@@ -1,5 +1,4 @@
 // Core type definitions
-
 const std = @import("std");
 
 // Centralized XCB import - all modules must use this
@@ -9,6 +8,11 @@ pub const xcb = @cImport({
 
 // X11 uses bit 7 to mark synthetic events
 pub const X11_SYNTHETIC_EVENT_FLAG: u8 = 0x80;
+
+// Default no-op deinit for modules that don't need cleanup
+pub fn defaultModuleDeinit(_: *WM) void {
+    // No cleanup needed
+}
 
 // Modifier key masks (from X11)
 pub const MOD_SHIFT: u16 = 1 << 0;
@@ -38,8 +42,14 @@ pub const Keybind = struct {
     keycode: u8,
     action: Action,
 
-    pub fn matches(self: *const Keybind, modifiers: u16, keycode: u8) bool {
+    /// Check if this keybinding matches given modifiers and keycode
+    pub inline fn matches(self: *const Keybind, modifiers: u16, keycode: u8) bool {
         return self.modifiers == modifiers and self.keycode == keycode;
+    }
+
+    /// Generate a hash key for fast HashMap lookups (if needed)
+    pub inline fn hash(self: *const Keybind) u64 {
+        return (@as(u64, self.modifiers) << 8) | self.keycode;
     }
 };
 
@@ -79,11 +89,6 @@ pub const Window = struct {
 
 // Window manager configuration loaded from config.toml
 pub const Config = struct {
-    border_width: u12,
-    border_focused: u24,
-    border_unfocused: u24,
-    gap_inner: u16,
-    gap_outer: u16,
     keybindings: std.ArrayList(Keybind),
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
@@ -101,15 +106,43 @@ pub const WM = struct {
     screen: *xcb.xcb_screen_t,
     root: u32,
     config: Config,
-    windows: std.ArrayList(Window),
+    // Changed to HashMap for O(1) window lookups by ID
+    windows: std.AutoHashMap(u32, Window),
     focused_window: ?u32 = null,
 
     pub fn deinit(self: *WM) void {
-        for (self.windows.items) |*win| {
+        // Clean up window properties
+        var iter = self.windows.valueIterator();
+        while (iter.next()) |win| {
+            var mutable_win = win.*;
+            mutable_win.properties.deinit(self.allocator);
+        }
+        self.windows.deinit();
+        self.config.deinit(self.allocator);
+    }
+
+    /// Get window by ID - O(1) lookup
+    pub inline fn getWindow(self: *WM, window_id: u32) ?*Window {
+        return self.windows.getPtr(window_id);
+    }
+
+    /// Add or update window - O(1) insertion
+    pub inline fn putWindow(self: *WM, window: Window) !void {
+        try self.windows.put(window.id, window);
+    }
+
+    /// Remove window - O(1) deletion
+    pub inline fn removeWindow(self: *WM, window_id: u32) void {
+        if (self.windows.fetchRemove(window_id)) |kv| {
+            var win = kv.value;
             win.properties.deinit(self.allocator);
         }
-        self.windows.deinit(self.allocator);
-        self.config.deinit(self.allocator);
+    }
+
+    /// Get focused window
+    pub inline fn getFocusedWindow(self: *WM) ?*Window {
+        const id = self.focused_window orelse return null;
+        return self.getWindow(id);
     }
 };
 
