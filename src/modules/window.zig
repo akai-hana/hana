@@ -64,6 +64,12 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
 
     std.debug.print("[window] Map request for window {x}\n", .{window});
 
+    // Check if window already exists - if so, skip remapping
+    if (wm.windows.contains(window)) {
+        std.debug.print("[window] Window {x} already mapped, ignoring duplicate request\n", .{window});
+        return;
+    }
+
     // Query window geometry
     const geom_cookie = xcb.xcb_get_geometry(wm.conn, window);
     const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
@@ -73,7 +79,7 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
         .id = window,
         .x = if (geom_reply) |g| g.*.x else 0,
         .y = if (geom_reply) |g| g.*.y else 0,
-        .width = 2560, // Minimal default, will be set by ConfigureRequest
+        .width = 2560,
         .height = 1600,
         .is_focused = false,
         .properties = .{},
