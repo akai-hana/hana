@@ -39,17 +39,23 @@ pub const Action = union(enum) {
 // Keybinding definition
 pub const Keybind = struct {
     modifiers: u16,
-    keycode: u8,
+    keysym: u32,      // Changed from keycode: u8
+    keycode: ?u8 = null,  // Cached keycode for X11 grabbing (populated at runtime)
     action: Action,
 
-    /// Check if this keybinding matches given modifiers and keycode
-    pub inline fn matches(self: *const Keybind, modifiers: u16, keycode: u8) bool {
+    /// Check if this keybinding matches given modifiers and keysym
+    pub inline fn matches(self: *const Keybind, modifiers: u16, keysym: u32) bool {
+        return self.modifiers == modifiers and self.keysym == keysym;
+    }
+
+    /// Check if this keybinding matches given modifiers and keycode (for X11 events)
+    pub inline fn matchesKeycode(self: *const Keybind, modifiers: u16, keycode: u8) bool {
         return self.modifiers == modifiers and self.keycode == keycode;
     }
 
     /// Generate a hash key for fast HashMap lookups (if needed)
     pub inline fn hash(self: *const Keybind) u64 {
-        return (@as(u64, self.modifiers) << 8) | self.keycode;
+        return (@as(u64, self.modifiers) << 32) | self.keysym;
     }
 };
 
@@ -109,6 +115,8 @@ pub const WM = struct {
     // Changed to HashMap for O(1) window lookups by ID
     windows: std.AutoHashMap(u32, Window),
     focused_window: ?u32 = null,
+    // XKB state for keyboard handling
+    xkb_state: ?*anyopaque = null,  // Will be *xkbcommon.XkbState
 
     pub fn deinit(self: *WM) void {
         // Clean up window properties
@@ -119,6 +127,14 @@ pub const WM = struct {
         }
         self.windows.deinit();
         self.config.deinit(self.allocator);
+        
+        // Clean up XKB state
+        if (self.xkb_state) |state| {
+            const xkbcommon = @import("xkbcommon");
+            const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(state));
+            xkb_ptr.deinit();
+            self.allocator.destroy(xkb_ptr);
+        }
     }
 
     /// Get window by ID - O(1) lookup

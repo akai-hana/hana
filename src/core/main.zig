@@ -7,6 +7,7 @@ const builtin = @import("builtin");
 const config = @import("config");
 const error_handling = @import("error");
 const defs = @import("defs");
+const xkbcommon = @import("xkbcommon");
 // modules/
 const window_module = @import("window");
 const input_module = @import("input");
@@ -66,11 +67,6 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) !void
 }
 
 pub fn main() !void {
-    // Arena allocator for startup - fastest for initialization
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const startup_allocator = arena.allocator();
-
     // Connect to X11
     const conn = try error_handling.connectToX11();
     defer xcb.xcb_disconnect(@ptrCast(conn));
@@ -86,19 +82,33 @@ pub fn main() !void {
         std.debug.print("[cursor] About to call root cursor...\n", .{});
     }
     // Set up cursor so it's visible
-    try setupRootCursor(conn, screen);  // <-- ADD THIS LINE
+    try setupRootCursor(conn, screen);
 
     if (builtin.mode == .Debug) {
         std.debug.print("hana window manager started\n", .{});
     }
 
-    // Load config using startup allocator
-    const user_config = try config.loadConfig(startup_allocator, "config.toml");
-
-    // GPA for runtime allocations only
+    // GPA for runtime allocations
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    // Initialize XKB state (needed for keysym<->keycode conversion)
+    const xkb_state_ptr = try allocator.create(xkbcommon.XkbState);
+    errdefer allocator.destroy(xkb_state_ptr);
+    xkb_state_ptr.* = try xkbcommon.XkbState.init(conn);
+    errdefer xkb_state_ptr.deinit();
+
+    // Load config using the GPA allocator (not startup_allocator!)
+    var user_config = try config.loadConfig(allocator, "config.toml");
+
+    // Resolve keysyms to keycodes for all keybindings
+    for (user_config.keybindings.items) |*keybind| {
+        keybind.keycode = xkb_state_ptr.keysymToKeycode(keybind.keysym);
+        if (keybind.keycode == null) {
+            std.log.warn("Could not find keycode for keysym {x}", .{keybind.keysym});
+        }
+    }
 
     // Initialize WM with HashMap for O(1) window lookups
     var wm = WM{
@@ -109,6 +119,7 @@ pub fn main() !void {
         .config = user_config,
         .windows = std.AutoHashMap(u32, defs.Window).init(allocator),
         .focused_window = null,
+        .xkb_state = xkb_state_ptr,
     };
     defer wm.deinit();
 
@@ -221,14 +232,22 @@ fn grabKeybindings(wm: *WM) !void {
     // Single ungrab call
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
 
+    var grabbed: usize = 0;
+
     // Grab each keybinding
     for (wm.config.keybindings.items) |keybind| {
+        // Skip if we couldn't resolve keycode
+        const keycode = keybind.keycode orelse {
+            std.log.warn("Skipping keybinding with unresolved keycode (keysym={x})", .{keybind.keysym});
+            continue;
+        };
+
         const cookie = xcb.xcb_grab_key_checked(
             wm.conn,
             0,
             wm.root,
             @intCast(keybind.modifiers),
-            keybind.keycode,
+            keycode,
             xcb.XCB_GRAB_MODE_ASYNC,
             xcb.XCB_GRAB_MODE_ASYNC,
         );
@@ -237,14 +256,16 @@ fn grabKeybindings(wm: *WM) !void {
         if (xcb.xcb_request_check(wm.conn, cookie)) |err| {
             if (builtin.mode == .Debug) {
                 std.debug.print("Warning: Failed to grab key (mod={x} key={}): error code {}\n", 
-                    .{ keybind.modifiers, keybind.keycode, err.*.error_code });
+                    .{ keybind.modifiers, keycode, err.*.error_code });
             }
             std.c.free(err);
+        } else {
+            grabbed += 1;
         }
     }
 
     if (builtin.mode == .Debug) {
-        std.debug.print("Grabbed {} keybindings\n", .{wm.config.keybindings.items.len});
+        std.debug.print("Grabbed {} keybindings\n", .{grabbed});
     }
 }
 
@@ -254,12 +275,23 @@ fn handleConfigReload(wm: *WM) !void {
         std.debug.print("Reloading configuration...\n", .{});
     }
 
-    const new_config = config.loadConfig(wm.allocator, "config.toml") catch |err| {
+    var new_config = config.loadConfig(wm.allocator, "config.toml") catch |err| {
         if (builtin.mode == .Debug) {
             std.debug.print("Config reload failed: {}\n", .{err});
         }
         return err;
     };
+
+    // Get XKB state for keycode resolution
+    const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
+
+    // Resolve keysyms to keycodes for all new keybindings
+    for (new_config.keybindings.items) |*keybind| {
+        keybind.keycode = xkb_ptr.keysymToKeycode(keybind.keysym);
+        if (keybind.keycode == null) {
+            std.log.warn("Could not find keycode for keysym {x}", .{keybind.keysym});
+        }
+    }
 
     wm.config.deinit(wm.allocator);
     wm.config = new_config;

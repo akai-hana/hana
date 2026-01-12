@@ -7,6 +7,7 @@
 const std  = @import("std");
 const defs = @import("defs");
 const toml = @import("toml");
+const xkb  = @import("xkbcommon");
 
 const Config = defs.Config;
 
@@ -14,6 +15,7 @@ const Config = defs.Config;
 pub const ValidationError = error{ // TODO: move to error.zig
     InvalidKeybinding,   // Keybinding string couldn't be parsed
     DuplicateKeybinding, // Same key combo defined twice
+    XkbInitFailed,       // Failed to initialize xkbcommon
 };
 
 // MAPPING
@@ -121,7 +123,7 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const toml.Document, con
             continue;
         };
         
-        // Parse the keybinding string into modifiers and keycode
+        // Parse the keybinding string into modifiers and keysym
         const keybind_parts = parseKeybindString(binding_str) catch |err| {
             std.log.warn("Invalid keybinding '{s}': {}", .{binding_str, err});
             continue;
@@ -130,7 +132,7 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const toml.Document, con
         // Create the keybind struct
         const keybind = defs.Keybind{
             .modifiers = keybind_parts.modifiers,
-            .keycode = keybind_parts.keycode,
+            .keysym = keybind_parts.keysym,  // Now using keysym instead of keycode
             .action = .{ .exec = try allocator.dupe(u8, command) }, // Copy command string
         };
         
@@ -140,10 +142,10 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const toml.Document, con
 }
 
 /// Parse a keybinding string like "Mod4+Shift+Return" into parts
-/// Returns the modifier flags and the actual keycode
-fn parseKeybindString(str: []const u8) !struct { modifiers: u16, keycode: u8 } {
+/// Returns the modifier flags and the keysym
+fn parseKeybindString(str: []const u8) !struct { modifiers: u16, keysym: u32 } {
     var modifiers: u16 = 0;      // Bitfield of modifier flags
-    var keycode: ?u8 = null;     // The actual key (only one allowed)
+    var keysym: ?u32 = null;     // The actual key (only one allowed)
     
     // Split by '+' character (e.g., "Mod4+Shift+Return" -> ["Mod4", "Shift", "Return"])
     var parts = std.mem.splitScalar(u8, str, '+');
@@ -156,64 +158,44 @@ fn parseKeybindString(str: []const u8) !struct { modifiers: u16, keycode: u8 } {
         } else {
             // This is the actual key being pressed
             // Only one key is allowed per binding
-            if (keycode != null) {
+            if (keysym != null) {
                 return error.MultipleKeysInBinding;
             }
-            keycode = try keyNameToKeycode(trimmed);
+            keysym = try keyNameToKeysym(trimmed);
         }
     }
     
     return .{ 
         .modifiers = modifiers, 
-        .keycode = keycode orelse return error.NoKeycodeFound,
+        .keysym = keysym orelse return error.NoKeysymFound,
     };
 }
 
-/// Convert key name (like "Return", "a", "F1") to X11 keycode
-/// This is a static mapping - a real implementation might use xkbcommon
-fn keyNameToKeycode(name: []const u8) !u8 {
-    // Convert to lowercase for case-insensitive matching
-    var buf: [32]u8 = undefined;
-    if (name.len > buf.len) return error.KeyNameTooLong;
+/// Convert key name (like "Return", "a", "F1") to xkb keysym using xkbcommon
+/// This properly handles all key names that xkbcommon supports
+fn keyNameToKeysym(name: []const u8) !u32 {
+    // xkb_keysym_from_name expects a null-terminated string
+    // We need to create a temporary buffer for this
+    var buf: [64]u8 = undefined;
+    if (name.len >= buf.len) return error.KeyNameTooLong;
     
-    const lower = std.ascii.lowerString(&buf, name);
+    @memcpy(buf[0..name.len], name);
+    buf[name.len] = 0;  // Null terminate
     
-    // Static map of key names to X11 keycodes
-    // These are standard X11 keycode values
-    const key_map = std.StaticStringMap(u8).initComptime(.{
-        // Letters (a-z)
-        .{ "a", 38 }, .{ "b", 56 }, .{ "c", 54 }, .{ "d", 40 },
-        .{ "e", 26 }, .{ "f", 41 }, .{ "g", 42 }, .{ "h", 43 },
-        .{ "i", 31 }, .{ "j", 44 }, .{ "k", 45 }, .{ "l", 46 },
-        .{ "m", 58 }, .{ "n", 57 }, .{ "o", 32 }, .{ "p", 33 },
-        .{ "q", 24 }, .{ "r", 27 }, .{ "s", 39 }, .{ "t", 28 },
-        .{ "u", 30 }, .{ "v", 55 }, .{ "w", 25 }, .{ "x", 53 },
-        .{ "y", 29 }, .{ "z", 52 },
-        
-        // Numbers (0-9)
-        .{ "0", 19 }, .{ "1", 10 }, .{ "2", 11 }, .{ "3", 12 },
-        .{ "4", 13 }, .{ "5", 14 }, .{ "6", 15 }, .{ "7", 16 },
-        .{ "8", 17 }, .{ "9", 18 },
-        
-        // Special keys with common alternative names
-        .{ "return", 36 }, .{ "enter", 36 },   // Enter/Return key
-        .{ "escape", 9 }, .{ "esc", 9 },       // Escape key
-        .{ "tab", 23 },                        // Tab key
-        .{ "backspace", 22 },                  // Backspace key
-        .{ "space", 65 },                      // Space bar
-        
-        // Function keys (F1-F12)
-        .{ "f1", 67 }, .{ "f2", 68 }, .{ "f3", 69 }, .{ "f4", 70 },
-        .{ "f5", 71 }, .{ "f6", 72 }, .{ "f7", 73 }, .{ "f8", 74 },
-        .{ "f9", 75 }, .{ "f10", 76 }, .{ "f11", 95 }, .{ "f12", 96 },
-        
-        // Arrow keys
-        .{ "left", 113 }, .{ "right", 114 },
-        .{ "up", 111 }, .{ "down", 116 },
-    });
+    // Convert to keysym using xkbcommon
+    // XKB_KEYSYM_CASE_INSENSITIVE flag allows "return", "Return", "RETURN"
+    const keysym = xkb.xkb_keysym_from_name(
+        @as([*:0]const u8, @ptrCast(&buf)),
+        xkb.XKB_KEYSYM_CASE_INSENSITIVE
+    );
     
-    // Look up the keycode, return error if key name is unknown
-    return key_map.get(lower) orelse return error.UnknownKeyName;
+    // XKB_KEY_NoSymbol (0) means the key name wasn't recognized
+    if (keysym == xkb.XKB_KEY_NoSymbol) {
+        std.log.warn("Unknown key name: {s}", .{name});
+        return error.UnknownKeyName;
+    }
+    
+    return keysym;
 }
 
 /// Validate the entire configuration for consistency and safety
@@ -222,12 +204,12 @@ pub fn validateConfig(allocator: std.mem.Allocator, config: *const Config) !void
     // Nothing to validate if we have 0 or 1 keybindings
     if (config.keybindings.items.len < 2) return;
     
-    // Sort keybindings by (modifiers, keycode) for O(n log n) duplicate detection
+    // Sort keybindings by (modifiers, keysym) for O(n log n) duplicate detection
     // This is faster than HashMap for small configs due to better cache locality
     const Context = struct {
         pub fn lessThan(_: @This(), a: defs.Keybind, b: defs.Keybind) bool {
             if (a.modifiers != b.modifiers) return a.modifiers < b.modifiers;
-            return a.keycode < b.keycode;
+            return a.keysym < b.keysym;
         }
     };
     
@@ -238,8 +220,8 @@ pub fn validateConfig(allocator: std.mem.Allocator, config: *const Config) !void
     
     // Check for adjacent duplicates (O(n) after sort)
     for (sorted[0..sorted.len-1], sorted[1..]) |a, b| {
-        if (a.modifiers == b.modifiers and a.keycode == b.keycode) {
-            std.log.err("Duplicate keybinding found: mod={x} key={d}", .{a.modifiers, a.keycode});
+        if (a.modifiers == b.modifiers and a.keysym == b.keysym) {
+            std.log.err("Duplicate keybinding found: mod={x} keysym={d}", .{a.modifiers, a.keysym});
             return ValidationError.DuplicateKeybinding;
         }
     }

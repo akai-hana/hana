@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const defs = @import("defs");
+const xkbcommon = @import("xkbcommon");
 
 const c = @cImport({
     @cInclude("unistd.h");
@@ -65,10 +66,15 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const keycode = event.detail;
     const modifiers: u16 = @intCast(event.state);
 
+    // Get XKB state and convert keycode to keysym
+    const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
+    const keysym = xkb_ptr.keycodeToKeysym(keycode);
+
     // Check if this matches any keybinding
     for (wm.config.keybindings.items) |keybind| {
-        if (keybind.matches(modifiers, keycode)) {
-            std.debug.print("[input] Keybinding matched: mod=0x{x} key={}\n", .{ modifiers, keycode });
+        if (keybind.matches(modifiers, keysym)) {
+            std.debug.print("[input] Keybinding matched: mod=0x{x} keysym=0x{x} (keycode={})\n", 
+                .{ modifiers, keysym, keycode });
             executeAction(&keybind.action, wm) catch |err| {
                 std.debug.print("[input] Failed to execute action: {}\n", .{err});
             };
@@ -76,7 +82,8 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
         }
     }
 
-    std.debug.print("[input] Unbound key press: keycode={} modifiers=0x{x}\n", .{ keycode, modifiers });
+    std.debug.print("[input] Unbound key press: keycode={} keysym=0x{x} modifiers=0x{x}\n", 
+        .{ keycode, keysym, modifiers });
 }
 
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
