@@ -1,28 +1,36 @@
 // Configuration parser for Hana window manager
 // Reads TOML config files and converts them into our internal Config struct
 
-const std = @import("std");
+// INITIALIZATION
+
+// Imports
+const std  = @import("std");
 const defs = @import("defs");
 const toml = @import("toml");
 
 const Config = defs.Config;
 
-/// Errors that can occur when validating configuration
-pub const ValidationError = error{
-    InvalidKeybinding,     // Keybinding string couldn't be parsed
-    DuplicateKeybinding,   // Same key combo defined twice
+/// Config validation error handling
+pub const ValidationError = error{ // TODO: move to error.zig
+    InvalidKeybinding,   // Keybinding string couldn't be parsed
+    DuplicateKeybinding, // Same key combo defined twice
 };
 
-/// Map of modifier key names to their internal bitflag values
-/// Supports multiple names for the same modifier (e.g., both "Ctrl" and "Control")
+// MAPPING
+
+/// Modkey name to bitflag values mapping
 const MODIFIER_MAP = std.StaticStringMap(u16).initComptime(.{
-    .{ "Mod4", defs.MOD_SUPER },      // Windows/Super key
+    // Super
+    .{ "Mod4", defs.MOD_SUPER },
     .{ "Super", defs.MOD_SUPER },
-    .{ "Mod1", defs.MOD_ALT },        // Alt key
+    // Alt
+    .{ "Mod1", defs.MOD_ALT },
     .{ "Alt", defs.MOD_ALT },
-    .{ "Shift", defs.MOD_SHIFT },     // Shift key
-    .{ "Control", defs.MOD_CONTROL }, // Control key
+    // Ctrl
     .{ "Ctrl", defs.MOD_CONTROL },
+    .{ "Control", defs.MOD_CONTROL }, 
+    // Shift
+    .{ "Shift", defs.MOD_SHIFT },
 });
 
 /// Get XDG-compliant config file path
@@ -30,7 +38,7 @@ const MODIFIER_MAP = std.StaticStringMap(u16).initComptime(.{
 /// Caller must free the returned string
 pub fn getConfigPath(allocator: std.mem.Allocator) ![]const u8 {
     // Get home directory from environment (use current dir as fallback)
-    const home = std.posix.getenv("HOME") orelse ".";
+    const home = std.posix.getenv("HOME") orelse "."; // TODO: inform user when using fallback
     
     // Check if user has custom XDG_CONFIG_HOME, otherwise use ~/.config
     const config_home = std.posix.getenv("XDG_CONFIG_HOME") orelse
@@ -57,7 +65,7 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !Config {
 pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     // Try to read the config file
     const content = readConfigFile(allocator, path) catch |err| switch (err) {
-        // If file doesn't exist, that's fine - just use all defaults
+        // If file doesn't exist, fallback to defaults
         error.FileNotFound => {
             std.log.info("Config file not found, using defaults", .{});
             return getDefaultConfig();
@@ -67,11 +75,12 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     };
     defer allocator.free(content); // Free the file content when we're done
 
-    // Parse TOML syntax - any syntax errors will return an error
+    // Parse TOML syntax for any syntax errors 
     var doc = try toml.parse(allocator, content);
     defer doc.deinit(); // Clean up the parsed document
 
     // Start with default config, then override with values from file
+    // TODO: Invert this process; start with values from file and override only those that failed to be set with the values of the default config
     var config = getDefaultConfig();
     
     // Parse keybindings section
@@ -90,21 +99,21 @@ fn readConfigFile(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
     defer threaded.deinit();
     const io = threaded.io();
     
-    // Read entire file with 10MB safety limit (config files should be tiny)
-    const max_size = 10 * 1024 * 1024; // 10MB
+    // Read entire file with 10MB safety limit
+    const max_size = 10 * 1024 * 1024; // = 10MB
     return try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, @enumFromInt(max_size));
 }
 
-/// Parse the [keybindings.exec] section
+/// Parse the [Keybindings] section
 /// Converts strings like "Mod4+Return = alacritty" into executable keybindings
 fn parseKeybindings(allocator: std.mem.Allocator, doc: *const toml.Document, config: *Config) !void {
-    // If there's no [keybindings.exec] section, no keybindings will be set
-    const exec_section = doc.getSection("keybindings.exec") orelse return;
+    // If there's no [Keybindings] section, no keybindings will be set
+    const exec_section = doc.getSection("Keybindings") orelse return;
     
     // Iterate through all key = value pairs in the section
     var iter = exec_section.pairs.iterator();
     while (iter.next()) |entry| {
-        const binding_str = entry.key_ptr.*;    // e.g., "Mod4+Return"
+        const binding_str = entry.key_ptr.*; // e.g., "Mod4+Return"
         
         // Value must be a string (the command to execute)
         const command = entry.value_ptr.*.asString() orelse {
