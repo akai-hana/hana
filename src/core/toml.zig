@@ -114,27 +114,39 @@ pub const Document = struct {
     }
 
     pub fn deinit(self: *Document) void {
-        // Clean up root section values
+        // Clean up root section
         {
-            var iter = self.root.pairs.valueIterator();
-            while (iter.next()) |val| {
-                var mutable_val = val.*;
+            var iter = self.root.pairs.iterator();
+            while (iter.next()) |entry| {
+                // Free the key
+                self.allocator.free(entry.key_ptr.*);
+                // Free the value
+                var mutable_val = entry.value_ptr.*;
                 mutable_val.deinit(self.allocator);
             }
+            self.root.pairs.deinit();
         }
         
-        // Clean up sections
-        var iter = self.sections.valueIterator();
-        while (iter.next()) |section| {
-            var val_iter = section.pairs.valueIterator();
-            while (val_iter.next()) |val| {
-                var mutable_val = val.*;
+        // Clean up all sections
+        var section_iter = self.sections.iterator();
+        while (section_iter.next()) |section_entry| {
+            // Free the section name
+            self.allocator.free(section_entry.key_ptr.*);
+            
+            // Free all key-value pairs in this section
+            var pair_iter = section_entry.value_ptr.pairs.iterator();
+            while (pair_iter.next()) |entry| {
+                // Free the key
+                self.allocator.free(entry.key_ptr.*);
+                // Free the value
+                var mutable_val = entry.value_ptr.*;
                 mutable_val.deinit(self.allocator);
             }
-            section.deinit();
+            
+            section_entry.value_ptr.pairs.deinit();
         }
+        
         self.sections.deinit();
-        self.root.deinit();
     }
 
     /// Hot path: inline for zero overhead
