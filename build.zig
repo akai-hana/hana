@@ -50,13 +50,14 @@ pub fn build(b: *std.Build) void {
     var all_modules = std.StringHashMap(*std.Build.Module).init(allocator);
 
     // Register core modules manually (these live in src/core/)
-    // Each tuple is: { "module_name", "path/to/file.zig" }
+    // Each tuple is: { " module_name", "path/to/file.zig" }
     inline for (.{
-        .{ "defs", "src/core/defs.zig" },     // Type definitions and constants
-        .{ "error", "src/core/error.zig" },   // Error handling utilities
-        .{ "toml", "src/core/toml.zig" },     // TOML parser
-        .{ "config", "src/core/config.zig" }, // Configuration loader
-    }) |mod| {
+        .{ "defs",      "src/core/defs.zig"       }, // Type definitions and constants
+        .{ "error",     "src/core/error.zig"      }, // Error handling utilities
+        .{ "toml",      "src/core/toml.zig"       }, // TOML parser
+        .{ "config",    "src/core/config.zig"     }, // Configuration loader
+        .{ "xkbcommon", "src/core/xkbcommon.zig"  },
+    })     |mod|        {
         const module = b.addModule(mod[0], .{ .root_source_file = b.path(mod[1]) });
         all_modules.put(mod[0], module) catch unreachable; // Store in our collection
     }
@@ -73,7 +74,11 @@ pub fn build(b: *std.Build) void {
     connectAllModules(root_module, &all_modules);
 
     // Link against system libraries we need
-    exe.root_module.linkSystemLibrary("xcb", .{}); // X11 XCB library for window management
+    // X11 XCB (window management)
+    exe.root_module.linkSystemLibrary("xcb", .{});
+    // xkbcommon (keyboard handling)
+    exe.root_module.linkSystemLibrary("xkbcommon", .{});
+exe.root_module.linkSystemLibrary("xkbcommon-x11", .{});
 
     // Create the "run" step (so we can use `zig build run`)
     const run_step = b.step("run", "Run hana");

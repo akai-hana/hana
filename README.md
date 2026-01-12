@@ -21,6 +21,9 @@ in here ill write down some stuff i want to include on installation, to not forg
 
 ---
 
+Dependencies:
+- xkbcommon (keyboard input handling library)
+
 Compiling optimized release:
 ```sh
 zig build -Doptimize=ReleaseFast
