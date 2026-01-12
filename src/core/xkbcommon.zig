@@ -93,7 +93,9 @@ pub const XkbState = struct {
     /// Find first keycode that produces the given keysym
     /// Returns null if no keycode produces this keysym
     pub fn keysymToKeycode(self: *XkbState, keysym: u32) ?u8 {
-        // XKB keycodes start at 8 and typically go up to 255
+        // Could build a lookup table at init time, but costs memory
+        // Current linear search is fine for 255 keys max
+        
         const min_keycode: u8 = 8;
         const max_keycode: u8 = 255;
         
@@ -101,10 +103,11 @@ pub const XkbState = struct {
         while (keycode <= max_keycode) : (keycode += 1) {
             const sym = xkb.xkb_state_key_get_one_sym(self.state, keycode);
             if (sym == keysym) {
+                @branchHint(.likely); // Found it
                 return keycode;
             }
         }
         
-        return null;
+        return null;   
     }
 };

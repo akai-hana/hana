@@ -190,10 +190,11 @@ const Parser = struct {
         const len = self.content.len;
         while (self.pos < len) {
             const c = self.content[self.pos];
-            // Branch-free: uses bit operations when possible
             if (c == ' ' or c == '\t' or c == '\r') {
+                @branchHint(.likely); // Usually whitespace
                 self.pos += 1;
             } else {
+                @branchHint(.unlikely);
                 break;
             }
         }
@@ -520,6 +521,8 @@ const Parser = struct {
 
 /// Parse TOML content - main entry point
 pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
+    @setEvalBranchQuota(100000); // Allow more compile-time evaluation
+
     var doc = Document.init(allocator);
     errdefer doc.deinit();
 

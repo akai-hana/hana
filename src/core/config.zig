@@ -111,6 +111,9 @@ fn readConfigFile(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 fn parseKeybindings(allocator: std.mem.Allocator, doc: *const toml.Document, config: *Config) !void {
     // If there's no [Keybindings] section, no keybindings will be set
     const exec_section = doc.getSection("Keybindings") orelse return;
+
+    // Pre-allocate keybinrevent Arraylist from reallocating as it grows
+    try config.keybindings.ensureTotalCapacity(allocator, exec_section.pairs.count());
     
     // Iterate through all key = value pairs in the section
     var iter = exec_section.pairs.iterator();

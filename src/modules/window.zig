@@ -1,20 +1,15 @@
 // Window management
-// This is the minimum code needed to make windows appear inside the WM.
-
-// It handles the following events:
-// - When an app wants to create a window (`MAP_REQUEST`)
-// - When a window is closed (`DESTROY_NOTIFY`)
-// - When mouse enters a window (`ENTER_NOTIFY`)
-// - When a window gains focus (`FOCUS_IN`)
+// Handles window lifecycle: creation, configuration, destruction, focus
 
 const std = @import("std");
 const defs = @import("defs");
-
-// Use xcb from defs to avoid type conflicts
+const builtin = @import("builtin");
 const xcb = defs.xcb;
-
 const WM = defs.WM;
 const Module = defs.Module;
+
+// Toggle debug logging
+const ENABLE_WINDOW_DEBUG = false;
 
 // Events this module handles
 pub const EVENT_TYPES = [_]u8{
@@ -25,8 +20,18 @@ pub const EVENT_TYPES = [_]u8{
     xcb.XCB_FOCUS_IN,
 };
 
-pub fn init(_: *WM) void {
-    std.debug.print("[window] Module initialized\n", .{});
+// Cached atoms (initialized at startup)
+var cached_wm_name_atom: u32 = 0;
+var cached_wm_class_atom: u32 = 0;
+
+pub fn init(wm: *WM) void {
+    // Cache commonly-used atoms to avoid repeated X11 round trips
+    cached_wm_name_atom = getAtom(wm, "WM_NAME");
+    cached_wm_class_atom = getAtom(wm, "WM_CLASS");
+    
+    if (builtin.mode == .Debug) {
+        std.debug.print("[window] Module initialized\n", .{});
+    }
 }
 
 pub const deinit = defs.defaultModuleDeinit;
@@ -62,15 +67,19 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const window = event.window;
 
-    std.debug.print("[window] Map request for window {x}\n", .{window});
+    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+        std.debug.print("[window] Map request for window {x}\n", .{window});
+    }
 
-    // Check if window already exists - if so, skip remapping
+    // Skip if window already mapped
     if (wm.windows.contains(window)) {
-        std.debug.print("[window] Window {x} already mapped, ignoring duplicate request\n", .{window});
+        if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+            std.debug.print("[window] Window {x} already mapped\n", .{window});
+        }
         return;
     }
 
-    // Query window geometry
+    // Query window geometry asynchronously
     const geom_cookie = xcb.xcb_get_geometry(wm.conn, window);
     const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
     defer if (geom_reply != null) std.c.free(geom_reply);
@@ -79,22 +88,22 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
         .id = window,
         .x = if (geom_reply) |g| g.*.x else 0,
         .y = if (geom_reply) |g| g.*.y else 0,
-        .width = 2560,
-        .height = 1600,
+        .width = @intCast(wm.screen.*.width_in_pixels),  // Use actual screen size
+        .height = @intCast(wm.screen.*.height_in_pixels),
         .is_focused = false,
         .properties = .{},
     };
 
-    // Query window properties
+    // Query window properties (async, no flush needed)
     win.properties = queryWindowProperties(wm, window) catch .{};
 
-    // Add to window HashMap O(1) insertion
+    // Add to window HashMap
     wm.putWindow(win) catch |err| {
-        std.debug.print("[window] Failed to track window: {}\n", .{err});
+        std.log.err("Failed to track window: {}", .{err});
+        return;
     };
 
-    // Give the window its initial geometry BEFORE mapping
-    // This ensures it knows its size before doing any pointer grabs
+    // Configure window geometry before mapping
     const init_values = [_]u32{
         @intCast(win.x),
         @intCast(win.y),
@@ -112,23 +121,26 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
         &init_values
     );
 
-    // Map the window (make it visible)
+    // Map the window
     _ = xcb.xcb_map_window(wm.conn, window);
+    
+    // Flush only once for the entire map operation
     _ = xcb.xcb_flush(wm.conn);
 
-    std.debug.print("[window] Mapped window with initial geometry: {}x{} at ({},{})\n",
-    .{win.width, win.height, win.x, win.y});
+    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+        std.debug.print("[window] Mapped window: {}x{} at ({},{})\n",
+            .{win.width, win.height, win.x, win.y});
+    }
 }
 
 fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const window = event.window;
 
-    // Override the application's request with our own geometry
-    // Force fullscreen for now (you'll add tiling logic later)
+    // Use screen dimensions instead of hardcoded values
     const forced_x: i16 = 0;
     const forced_y: i16 = 0;
-    const forced_width: u16 = 2560;
-    const forced_height: u16 = 1600;
+    const forced_width: u16 = @intCast(wm.screen.*.width_in_pixels);
+    const forced_height: u16 = @intCast(wm.screen.*.height_in_pixels);
 
     const values = [_]u32{
         @intCast(forced_x),
@@ -138,7 +150,7 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
         0, // border width
     };
 
-    // Apply OUR geometry, not what the app requested
+    // Apply geometry
     _ = xcb.xcb_configure_window(
         wm.conn,
         window,
@@ -148,7 +160,7 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
         &values
     );
 
-    // Update our tracking
+    // Update tracking
     if (wm.windows.getPtr(window)) |win| {
         win.x = forced_x;
         win.y = forced_y;
@@ -156,7 +168,7 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
         win.height = forced_height;
     }
 
-    // Send a synthetic ConfigureNotify with OUR geometry
+    // Send synthetic ConfigureNotify
     var notify_event: xcb.xcb_configure_notify_event_t = undefined;
     notify_event.response_type = xcb.XCB_CONFIGURE_NOTIFY;
     notify_event.event = window;
@@ -177,16 +189,23 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
         @ptrCast(&notify_event)
     );
 
-    _ = xcb.xcb_flush(wm.conn);
+    // CRITICAL FIX: Don't flush here!
+    // Configure requests fire constantly during resizes
+    // Let the main loop flush when appropriate
+    // _ = xcb.xcb_flush(wm.conn);  // REMOVED
 
-    std.debug.print("[window] Configure request for window {x}: forced to {}x{} at ({},{})\n",
-        .{window, forced_width, forced_height, forced_x, forced_y});
+    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+        std.debug.print("[window] Configure: window {x} -> {}x{}\n",
+            .{window, forced_width, forced_height});
+    }
 }
 
 fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
-    std.debug.print("[window] Window {x} destroyed\n", .{event.window});
+    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+        std.debug.print("[window] Window {x} destroyed\n", .{event.window});
+    }
 
-    // Remove from window HashMap - O(1) removal with cleanup
+    // Remove from window HashMap
     wm.removeWindow(event.window);
 
     // Clear focus if this was the focused window
@@ -208,26 +227,43 @@ fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t, wm: *WM) void {
     const window = event.event;
     if (window == wm.root) return;
 
-    std.debug.print("[window] Focus in: {x}\n", .{window});
+    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+        std.debug.print("[window] Focus in: {x}\n", .{window});
+    }
 }
 
 fn focusWindow(wm: *WM, window: u32) void {
-    // Update focused state in all windows - iterate HashMap
-    var iter = wm.windows.valueIterator();
-    while (iter.next()) |win| {
-        win.is_focused = (win.id == window);
+    // Update focus state
+    if (wm.focused_window) |old| {
+        if (wm.windows.getPtr(old)) |old_win| {
+            old_win.is_focused = false;
+        }
+    }
+    
+    if (wm.windows.getPtr(window)) |new_win| {
+        new_win.is_focused = true;
     }
 
     wm.focused_window = window;
-    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, window, xcb.XCB_CURRENT_TIME);
+    _ = xcb.xcb_set_input_focus(
+        wm.conn, 
+        xcb.XCB_INPUT_FOCUS_POINTER_ROOT, 
+        window, 
+        xcb.XCB_CURRENT_TIME
+    );
+    
+    // Flush to ensure focus change is immediate
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 fn queryWindowProperties(wm: *WM, window: u32) !defs.WindowProperties {
     var props = defs.WindowProperties{};
 
-    // Query WM_NAME
-    const name_atom = getAtom(wm, "WM_NAME");
-    const name_cookie = xcb.xcb_get_property(wm.conn, 0, window, name_atom, xcb.XCB_GET_PROPERTY_TYPE_ANY, 0, 1024);
+    // Query WM_NAME (async, using cached atom)
+    const name_cookie = xcb.xcb_get_property(
+        wm.conn, 0, window, cached_wm_name_atom, 
+        xcb.XCB_GET_PROPERTY_TYPE_ANY, 0, 1024
+    );
     const name_reply = xcb.xcb_get_property_reply(wm.conn, name_cookie, null);
     if (name_reply) |reply| {
         defer std.c.free(reply);
@@ -238,9 +274,11 @@ fn queryWindowProperties(wm: *WM, window: u32) !defs.WindowProperties {
         }
     }
 
-    // Query WM_CLASS
-    const class_atom = getAtom(wm, "WM_CLASS");
-    const class_cookie = xcb.xcb_get_property(wm.conn, 0, window, class_atom, xcb.XCB_GET_PROPERTY_TYPE_ANY, 0, 1024);
+    // Query WM_CLASS (async, using cached atom)
+    const class_cookie = xcb.xcb_get_property(
+        wm.conn, 0, window, cached_wm_class_atom, 
+        xcb.XCB_GET_PROPERTY_TYPE_ANY, 0, 1024
+    );
     const class_reply = xcb.xcb_get_property_reply(wm.conn, class_cookie, null);
     if (class_reply) |reply| {
         defer std.c.free(reply);

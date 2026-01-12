@@ -1,5 +1,6 @@
 // Core type definitions
 const std = @import("std");
+const xkbcommon = @import("xkbcommon");
 
 // Centralized XCB import - all modules must use this
 pub const xcb = @cImport({
@@ -82,15 +83,16 @@ pub const WindowProperties = struct {
     }
 };
 
-// Managed window state
 pub const Window = struct {
     id: u32,
-    x: i16,
-    y: i16,
     width: u16,
     height: u16,
+    x: i16,
+    y: i16,
     is_focused: bool,
     properties: WindowProperties,
+    
+    // Total: 4 + 2 + 2 + 2 + 2 + 1 + sizeof(WindowProperties) = better packing
 };
 
 // Window manager configuration loaded from config.toml
@@ -114,9 +116,10 @@ pub const WM = struct {
     config: Config,
     // Changed to HashMap for O(1) window lookups by ID
     windows: std.AutoHashMap(u32, Window),
-    focused_window: ?u32 = null,
+    focused_window: ?u32   = null,
+    previous_focused: ?u32 = null,
     // XKB state for keyboard handling
-    xkb_state: ?*anyopaque = null,  // Will be *xkbcommon.XkbState
+    xkb_state: ?*xkbcommon.XkbState,
 
     pub fn deinit(self: *WM) void {
         // Clean up window properties
@@ -130,7 +133,6 @@ pub const WM = struct {
         
         // Clean up XKB state
         if (self.xkb_state) |state| {
-            const xkbcommon = @import("xkbcommon");
             const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(state));
             xkb_ptr.deinit();
             self.allocator.destroy(xkb_ptr);
