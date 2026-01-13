@@ -1,14 +1,8 @@
-// Input handling - OPTIMIZED FOR MINIMUM LATENCY + MAXIMUM THROUGHPUT
-// Smart batching: group related operations, flush once per user action
+// Input handling - FIXED: Don't intercept client window clicks!
 
-// Imports
 const std            = @import("std");
-
-// core/
 const defs           = @import("defs");
 const xkbcommon      = @import("xkbcommon");
-
-// debug/
 const error_handling = @import("error_handling");
 const logging        = @import("logging");
 
@@ -24,24 +18,24 @@ pub const EVENT_TYPES = [_]u8{
     xcb.XCB_KEY_PRESS,
     xcb.XCB_KEY_RELEASE,
     xcb.XCB_BUTTON_PRESS,
-    xcb.XCB_MOTION_NOTIFY,
 };
 
-// O(1) keybinding lookup using HashMap
-// Key: (modifiers << 32) | keysym
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
 var keybind_initialized = false;
 
 var last_motion_time: u32 = 0;
 
 pub fn init(wm: *WM) void {
-    // Initialize keybinding HashMap for O(1) lookup
     keybind_map = std.AutoHashMap(u64, *const defs.Action).init(wm.allocator);
     buildKeybindMap(wm) catch |err| {
         std.log.err("Failed to build keybind map: {}", .{err});
         return;
     };
     keybind_initialized = true;
+
+    // FIX: Grab modifier+button on root for WM operations
+    // This allows unmodified clicks to go directly to client windows
+    grabMouseBindings(wm);
 
     logging.debugInputModuleInit(keybind_map.count());
 }
@@ -53,7 +47,43 @@ pub fn deinit(_: *WM) void {
     }
 }
 
-// Build HashMap for O(1) keybinding lookup
+// NEW: Grab only modified button presses on root (like TinyWM)
+fn grabMouseBindings(wm: *WM) void {
+    // Example: Alt+Button1 for move, Alt+Button3 for resize
+    // Adjust modifiers to match your needs
+    const mod_mask = xcb.XCB_MOD_MASK_1; // Alt key
+    
+    // Grab Alt+LeftClick for window move
+    _ = xcb.xcb_grab_button(
+        wm.conn,
+        0, // owner_events = false
+        wm.root,
+        xcb.XCB_EVENT_MASK_BUTTON_PRESS | xcb.XCB_EVENT_MASK_BUTTON_RELEASE | xcb.XCB_EVENT_MASK_POINTER_MOTION,
+        xcb.XCB_GRAB_MODE_ASYNC,
+        xcb.XCB_GRAB_MODE_ASYNC,
+        xcb.XCB_NONE,
+        xcb.XCB_NONE,
+        1, // button 1 (left click)
+        @intCast(mod_mask),
+    );
+    
+    // Grab Alt+RightClick for window resize
+    _ = xcb.xcb_grab_button(
+        wm.conn,
+        0,
+        wm.root,
+        xcb.XCB_EVENT_MASK_BUTTON_PRESS | xcb.XCB_EVENT_MASK_BUTTON_RELEASE | xcb.XCB_EVENT_MASK_POINTER_MOTION,
+        xcb.XCB_GRAB_MODE_ASYNC,
+        xcb.XCB_GRAB_MODE_ASYNC,
+        xcb.XCB_NONE,
+        xcb.XCB_NONE,
+        3, // button 3 (right click)
+        @intCast(mod_mask),
+    );
+    
+    _ = xcb.xcb_flush(wm.conn);
+}
+
 fn buildKeybindMap(wm: *WM) !void {
     keybind_map.clearRetainingCapacity();
     
@@ -63,7 +93,6 @@ fn buildKeybindMap(wm: *WM) !void {
     }
 }
 
-// Create unique key for HashMap: (modifiers << 32) | keysym
 inline fn makeKeybindKey(modifiers: u16, keysym: u32) u64 {
     return (@as(u64, modifiers) << 32) | keysym;
 }
@@ -78,17 +107,12 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
         },
 
         xcb.XCB_KEY_RELEASE => {
-            // Key releases rarely need handling - saves CPU
+            // Key releases rarely need handling
         },
 
         xcb.XCB_BUTTON_PRESS => {
             const ev = @as(*const xcb.xcb_button_press_event_t, @alignCast(@ptrCast(event)));
             handleButtonPress(ev, wm);
-        },
-
-        xcb.XCB_MOTION_NOTIFY => {
-            const ev = @as(*const xcb.xcb_motion_notify_event_t, @alignCast(@ptrCast(event)));
-            handleMotion(ev, wm);
         },
 
         else => {},
@@ -98,14 +122,11 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const keycode = event.detail;
     const raw_modifiers: u16 = @intCast(event.state);
-    // Strip NumLock, CapsLock, ScrollLock - only keep relevant modifiers
     const modifiers = raw_modifiers & defs.MOD_MASK_RELEVANT;
 
-    // Get XKB state and convert keycode to keysym
     const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
     const keysym = xkb_ptr.keycodeToKeysym(keycode);
 
-    // OPTIMIZATION: O(1) HashMap lookup instead of O(n) linear scan
     const key = makeKeybindKey(modifiers, keysym);
     
     if (keybind_map.get(key)) |action| {
@@ -124,10 +145,8 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .exec => |cmd| {
             logging.debugExecutingCommand(cmd);
 
-            // OPTIMIZATION: Fork in background, don't wait
             const pid = c.fork();
             if (pid == 0) {
-                // Child process - use setsid to detach from WM process group
                 _ = c.setsid();
                 
                 const cmd_z = try wm.allocator.dupeZ(u8, cmd);
@@ -146,12 +165,11 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             if (wm.focused_window) |win_id| {
                 logging.debugClosingWindow(win_id);
                 _ = xcb.xcb_destroy_window(wm.conn, win_id);
-                _ = xcb.xcb_flush(wm.conn); // Single flush - one user action
+                _ = xcb.xcb_flush(wm.conn);
             }
         },
         .reload_config => {
             logging.debugConfigReloadTriggered();
-            // Rebuild keybind map after reload
             buildKeybindMap(wm) catch |err| {
                 std.log.err("Failed to rebuild keybind map: {}", .{err});
             };
@@ -168,11 +186,19 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
 
     logging.debugMouseButtonClick(button, event.event_x, event.event_y, window);
 
+    // FIX: We only receive modified clicks now (Alt+Button)
+    // These are WM operations, not client clicks
+    
+    if (window == 0) {
+        // Click on root/background - could launch menu, etc.
+        return;
+    }
+
+    // This is a modified click on a client window
+    // Raise and focus the window
     if (window != 0) {
-        // SMART BATCHING: These 3 operations are ONE logical user action (click window)
-        // Queue them all, then flush once = same latency, better throughput
         wm.focused_window = window;
-        
+
         _ = xcb.xcb_set_input_focus(
             wm.conn,
             xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
@@ -188,26 +214,10 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
             &values,
         );
 
-        // Single flush for entire operation - same latency, 3x throughput
         _ = xcb.xcb_flush(wm.conn);
     }
-}
-
-fn handleMotion(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
-    last_motion_time = event.time;
     
-    // TODO: Check if dragging and update window position
-    const is_dragging = false;
-    
-    if (!is_dragging) {
-        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_POINTER, event.time);
-        return;
-    }
-    
-    logging.debugDragMotion(event.root_x, event.root_y);
-    
-    _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_POINTER, event.time);
-    _ = xcb.xcb_flush(wm.conn); // Immediate flush when dragging
+    // Note: No xcb_allow_events needed - we're not grabbing unmodified clicks!
 }
 
 pub fn createModule() Module {

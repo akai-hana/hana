@@ -68,7 +68,6 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
         std.debug.print("[window] Map request for window {x}\n", .{window});
     }
 
-    // Skip if window already mapped
     if (wm.windows.contains(window)) {
         if (builtin.mode == .Debug) {
             std.debug.print("[window] Window {x} already mapped\n", .{window});
@@ -76,7 +75,7 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
         return;
     }
 
-    // Query window geometry asynchronously
+    // Query window geometry
     const geom_cookie = xcb.xcb_get_geometry(wm.conn, window);
     const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
     defer if (geom_reply != null) std.c.free(geom_reply);
@@ -85,43 +84,22 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
         .id = window,
         .x = if (geom_reply) |g| g.*.x else 0,
         .y = if (geom_reply) |g| g.*.y else 0,
-        .width = if (geom_reply) |g| @intCast(g.*.width) else 800,   // <-- FIXED: Use window's size
-        .height = if (geom_reply) |g| @intCast(g.*.height) else 600, // <-- FIXED: Use window's size
+        .width = if (geom_reply) |g| @intCast(g.*.width) else 800,
+        .height = if (geom_reply) |g| @intCast(g.*.height) else 600,
         .is_focused = false,
         .properties = .{},
     };
 
-    // Query window properties (async, no flush needed)
     win.properties = queryWindowProperties(wm, window) catch .{};
 
-    // Add to window HashMap
     wm.putWindow(win) catch |err| {
         std.log.err("Failed to track window: {}", .{err});
         return;
     };
 
-    // Configure window geometry before mapping
-    const init_values = [_]u32{
-        @intCast(win.x),
-        @intCast(win.y),
-        @intCast(win.width),
-        @intCast(win.height),
-        0, // border width
-    };
-
-    _ = xcb.xcb_configure_window(
-        wm.conn,
-        window,
-        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y | 
-        xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
-        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH,
-        &init_values
-    );
-
-    // Map the window
+    // Just map the window - don't force configure!
     _ = xcb.xcb_map_window(wm.conn, window);
-    
-    // Flush only once for the entire map operation
+
     _ = xcb.xcb_flush(wm.conn);
 
     if (builtin.mode == .Debug) {
@@ -133,13 +111,33 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
 fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const window = event.window;
 
-    // Use the REQUESTED values, not forced fullscreen
+    // Get CURRENT window state for fields not in value_mask
+    var current_x: i16 = 0;
+    var current_y: i16 = 0;
+    var current_width: u16 = 800;
+    var current_height: u16 = 600;
+    const current_border: u16 = 0;  // <-- Changed to const
+
+    if (wm.windows.get(window)) |win| {
+        current_x = @intCast(win.x);
+        current_y = @intCast(win.y);
+        current_width = @intCast(win.width);
+        current_height = @intCast(win.height);
+    }
+
+    // Use REQUESTED values if present, otherwise keep CURRENT values
+    const final_x = if (event.value_mask & xcb.XCB_CONFIG_WINDOW_X != 0) event.x else current_x;
+    const final_y = if (event.value_mask & xcb.XCB_CONFIG_WINDOW_Y != 0) event.y else current_y;
+    const final_width = if (event.value_mask & xcb.XCB_CONFIG_WINDOW_WIDTH != 0) event.width else current_width;
+    const final_height = if (event.value_mask & xcb.XCB_CONFIG_WINDOW_HEIGHT != 0) event.height else current_height;
+    const final_border = if (event.value_mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0) event.border_width else current_border;
+
     const values = [_]u32{
-        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_X != 0) @intCast(event.x) else 0,
-        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_Y != 0) @intCast(event.y) else 0,
-        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_WIDTH != 0) @intCast(event.width) else 800,
-        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_HEIGHT != 0) @intCast(event.height) else 600,
-        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0) @intCast(event.border_width) else 0,
+        @intCast(final_x),
+        @intCast(final_y),
+        @intCast(final_width),
+        @intCast(final_height),
+        @intCast(final_border),
     };
 
     _ = xcb.xcb_configure_window(
@@ -149,25 +147,25 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
         &values
     );
 
-    // Update tracking
+    // Update tracking with ACTUAL values
     if (wm.windows.getPtr(window)) |win| {
-        win.x = @intCast(values[0]);
-        win.y = @intCast(values[1]);
-        win.width = @intCast(values[2]);
-        win.height = @intCast(values[3]);
+        win.x = @intCast(final_x);
+        win.y = @intCast(final_y);
+        win.width = @intCast(final_width);
+        win.height = @intCast(final_height);
     }
 
-    // Send accurate ConfigureNotify
+    // Send ConfigureNotify with ACTUAL values
     var notify_event: xcb.xcb_configure_notify_event_t = undefined;
     notify_event.response_type = xcb.XCB_CONFIGURE_NOTIFY;
     notify_event.event = window;
     notify_event.window = window;
     notify_event.above_sibling = xcb.XCB_NONE;
-    notify_event.x = @intCast(values[0]);
-    notify_event.y = @intCast(values[1]);
-    notify_event.width = @intCast(values[2]);
-    notify_event.height = @intCast(values[3]);
-    notify_event.border_width = @intCast(values[4]);
+    notify_event.x = final_x;
+    notify_event.y = final_y;
+    notify_event.width = final_width;
+    notify_event.height = final_height;
+    notify_event.border_width = final_border;
     notify_event.override_redirect = 0;
 
     _ = xcb.xcb_send_event(
@@ -180,7 +178,7 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
 
     if (builtin.mode == .Debug) {
         std.debug.print("[window] Configure: window {x} -> {}x{} at ({},{})\n",
-            .{window, values[2], values[3], values[0], values[1]});
+            .{window, final_width, final_height, final_x, final_y});
     }
 }
 
