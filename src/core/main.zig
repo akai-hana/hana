@@ -4,16 +4,18 @@ const posix   = std.posix;
 const builtin = @import("builtin");
 
 // core/
-const config         = @import("config");
-const error_handling = @import("error");
-const defs           = @import("defs");
-const xkbcommon      = @import("xkbcommon");
-// modules/
-const window_module  = @import("window");
-const input_module   = @import("input");
+const config    = @import("config");
+const error       = @import("error");
+const logging   = @import("logging");
+const defs      = @import("defs");
+const xkbcommon = @import("xkbcommon");
 
 const xcb = defs.xcb;
 const WM  = defs.WM;
+
+// modules/
+const window_module = @import("window");
+const input_module  = @import("input");
 
 // Constants
 const XCB_CURSOR_LEFT_PTR: u16 = 68;
@@ -43,9 +45,9 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) !void
             @intCast(font_name.len),
             font_name.ptr,
         );
-        const err = xcb.xcb_request_check(conn, cookie);
+        const xcb_err = xcb.xcb_request_check(conn, cookie);
         if (err != null) {
-            std.debug.print("[cursor] Failed to open font\n", .{});
+            debug.debugCursorSetupFailed();
             return error.CursorSetupFailed;
         }
     } else {
@@ -110,21 +112,18 @@ fn setupSignalHandler() void {
 
 pub fn main() !void {
     // Connect to X11
-    const conn = try error_handling.connectToX11();
-
+    const conn = try debug.connectToX11();
     defer xcb.xcb_disconnect(@ptrCast(conn));
 
-    const screen = try error_handling.getX11Screen(conn);
+    const screen = try debug.getX11Screen(conn);
     const root = screen.*.root;
 
     // Become window manager
-    try error_handling.becomeWindowManager(conn, root, WM_EVENT_MASK);
+    try debug.becomeWindowManager(conn, root, WM_EVENT_MASK);
     
     try setupRootCursor(conn, screen);
 
-    if (builtin.mode == .Debug) {
-        std.debug.print("hana window manager started\n", .{});
-    }
+    debug.debugWMStarted();
 
     // GPA for runtime allocations
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -282,16 +281,12 @@ fn grabKeybindings(wm: *WM) !void {
     // Single flush
     _ = xcb.xcb_flush(wm.conn);
 
-    if (builtin.mode == .Debug) {
-        std.debug.print("Grabbed {} keybindings\n", .{grabbed});
-    }
+    debug.debugKeybindingsGrabbed(grabbed);
 }
 
 /// Config reload handler
 fn handleConfigReload(wm: *WM) !void {
-    if (builtin.mode == .Debug) {
-        std.debug.print("Reloading configuration...\n", .{});
-    }
+    debug.debugConfigReloading();
 
     var new_config = try config.loadConfig(wm.allocator, "config.toml");
     errdefer new_config.deinit(wm.allocator);
@@ -304,7 +299,5 @@ fn handleConfigReload(wm: *WM) !void {
     
     try grabKeybindings(wm);
 
-    if (builtin.mode == .Debug) {
-        std.debug.print("Configuration reloaded successfully\n", .{});
-    }
+    debug.debugConfigReloaded();
 }

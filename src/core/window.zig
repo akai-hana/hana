@@ -1,12 +1,12 @@
 // Window management
 // Handles window lifecycle: creation, configuration, destruction, focus
 
-const std = @import("std");
-const defs = @import("defs");
+const std     = @import("std");
+const defs    = @import("defs");
 const builtin = @import("builtin");
-const xcb = defs.xcb;
-const WM = defs.WM;
-const Module = defs.Module;
+const xcb     = defs.xcb;
+const WM      = defs.WM;
+const Module  = defs.Module;
 
 // Events this module handles
 pub const EVENT_TYPES = [_]u8{
@@ -18,12 +18,12 @@ pub const EVENT_TYPES = [_]u8{
 };
 
 // Cached atoms (initialized at startup)
-var cached_wm_name_atom: u32 = 0;
+var cached_wm_name_atom: u32  = 0;
 var cached_wm_class_atom: u32 = 0;
 
 pub fn init(wm: *WM) void {
     // Cache commonly-used atoms to avoid repeated X11 round trips
-    cached_wm_name_atom = getAtom(wm, "WM_NAME");
+    cached_wm_name_atom  = getAtom(wm, "WM_NAME");
     cached_wm_class_atom = getAtom(wm, "WM_CLASS");
     
     if (builtin.mode == .Debug) {

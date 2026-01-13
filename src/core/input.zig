@@ -4,7 +4,7 @@
 const std = @import("std");
 const defs = @import("defs");
 const xkbcommon = @import("xkbcommon");
-const builtin = @import("builtin");
+const debug = @import("error");  // Will be renamed to debug.zig
 
 const c = @cImport({
     @cInclude("unistd.h");
@@ -42,10 +42,7 @@ pub fn init(wm: *WM) void {
     };
     keybind_initialized = true;
 
-    if (builtin.mode == .Debug) {
-        std.debug.print("[input] Module initialized with {} keybindings\n", 
-            .{keybind_map.count()});
-    }
+    debug.debugInputModuleInit(keybind_map.count());
 }
 
 pub fn deinit(_: *WM) void {
@@ -116,28 +113,20 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const key = makeKeybindKey(modifiers, keysym);
     
     if (keybind_map.get(key)) |action| {
-        if (builtin.mode == .Debug) {
-            std.debug.print("[input] Keybinding matched: mod=0x{x} keysym=0x{x}\n", 
-                .{ modifiers, keysym });
-        }
+        debug.debugKeybindingMatched(modifiers, keysym);
         executeAction(action, wm) catch |err| {
             std.log.err("Failed to execute keybinding action: {}", .{err});
         };
         return;
     }
 
-    if (builtin.mode == .Debug) {
-        std.debug.print("[input] Unbound key: keycode={} keysym=0x{x} mod=0x{x} (raw=0x{x})\n",
-            .{ keycode, keysym, modifiers, raw_modifiers });
-        }
+    debug.debugUnboundKey(keycode, keysym, modifiers, raw_modifiers);
 }
 
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
         .exec => |cmd| {
-            if (builtin.mode == .Debug) {
-                std.debug.print("[input] Executing: {s}\n", .{cmd});
-            }
+            debug.debugExecutingCommand(cmd);
 
             // OPTIMIZATION: Fork in background, don't wait
             const pid = c.fork();
@@ -159,26 +148,20 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         },
         .close_window => {
             if (wm.focused_window) |win_id| {
-                if (builtin.mode == .Debug) {
-                    std.debug.print("[input] Closing window {}\n", .{win_id});
-                }
+                debug.debugClosingWindow(win_id);
                 _ = xcb.xcb_destroy_window(wm.conn, win_id);
                 _ = xcb.xcb_flush(wm.conn); // Single flush - one user action
             }
         },
         .reload_config => {
-            if (builtin.mode == .Debug) {
-                std.debug.print("[input] Config reload triggered\n", .{});
-            }
+            debug.debugConfigReloadTriggered();
             // Rebuild keybind map after reload
             buildKeybindMap(wm) catch |err| {
                 std.log.err("Failed to rebuild keybind map: {}", .{err});
             };
         },
         .focus_next, .focus_prev => {
-            if (builtin.mode == .Debug) {
-                std.debug.print("[input] Focus navigation not yet implemented\n", .{});
-            }
+            debug.debugFocusNotImplemented();
         },
     }
 }
@@ -187,10 +170,7 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     const button = event.detail;
     const window = event.child;
 
-    if (builtin.mode == .Debug) {
-        std.debug.print("[input] Mouse button {} click at ({}, {}) window={}\n",
-            .{ button, event.event_x, event.event_y, window });
-    }
+    debug.debugMouseButtonClick(button, event.event_x, event.event_y, window);
 
     if (window != 0) {
         // SMART BATCHING: These 3 operations are ONE logical user action (click window)
@@ -223,9 +203,7 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
 }
 
 fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, wm: *WM) void {
-    if (builtin.mode == .Debug) {
-        std.debug.print("[input] Mouse button {} released\n", .{event.detail});
-    }
+    debug.debugMouseButtonRelease(event.detail);
 
     _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_POINTER, event.time);
     
@@ -258,9 +236,7 @@ fn handleMotion(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
         return;
     }
     
-    if (builtin.mode == .Debug) {
-        std.debug.print("[input] Drag motion: ({}, {})\n", .{ event.root_x, event.root_y });
-    }
+    debug.debugDragMotion(event.root_x, event.root_y);
     
     _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_POINTER, event.time);
     _ = xcb.xcb_flush(wm.conn); // Immediate flush when dragging
