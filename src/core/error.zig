@@ -2,7 +2,6 @@
 const std = @import("std");
 const defs = @import("defs");
 const Config = defs.Config;
-// Use xcb from defs to avoid type conflicts
 const xcb = defs.xcb;
 
 // ANSI color codes

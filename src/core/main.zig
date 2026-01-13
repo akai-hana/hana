@@ -1,4 +1,4 @@
-// Main WM event loop - maximum performance, zero overhead
+// Main WM event loop
 const std     = @import("std");
 const posix   = std.posix;
 const builtin = @import("builtin");

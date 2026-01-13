@@ -14,8 +14,6 @@ const xcb = defs.xcb;
 const WM = defs.WM;
 const Module = defs.Module;
 
-const ENABLE_INPUT_DEBUG = true;
-
 pub const EVENT_TYPES = [_]u8{
     xcb.XCB_KEY_PRESS,
     xcb.XCB_KEY_RELEASE,
@@ -34,14 +32,6 @@ var keybind_initialized = false;
 const MOTION_THROTTLE_MS: u32 = 1; // 1ms = 1000Hz support
 
 var last_motion_time: u32 = 0;
-
-// Event queue for micro-batching within same frame
-var pending_events: std.BoundedArray(PendingEvent, 32) = .{};
-
-const PendingEvent = struct {
-    event_type: u8,
-    event_ptr: *anyopaque,
-};
 
 pub fn init(wm: *WM) void {
     // Initialize keybinding HashMap for O(1) lookup
@@ -126,7 +116,7 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const key = makeKeybindKey(modifiers, keysym);
     
     if (keybind_map.get(key)) |action| {
-        if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
+        if (builtin.mode == .Debug) {
             std.debug.print("[input] Keybinding matched: mod=0x{x} keysym=0x{x}\n", 
                 .{ modifiers, keysym });
         }
@@ -136,7 +126,7 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
         return;
     }
 
-    if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         std.debug.print("[input] Unbound key: keycode={} keysym=0x{x} mod=0x{x} (raw=0x{x})\n",
             .{ keycode, keysym, modifiers, raw_modifiers });
         }
@@ -145,7 +135,7 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
         .exec => |cmd| {
-            if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
+            if (builtin.mode == .Debug) {
                 std.debug.print("[input] Executing: {s}\n", .{cmd});
             }
 
@@ -169,7 +159,7 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         },
         .close_window => {
             if (wm.focused_window) |win_id| {
-                if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
+                if (builtin.mode == .Debug) {
                     std.debug.print("[input] Closing window {}\n", .{win_id});
                 }
                 _ = xcb.xcb_destroy_window(wm.conn, win_id);
@@ -186,28 +176,20 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             };
         },
         .focus_next, .focus_prev => {
-            if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
+            if (builtin.mode == .Debug) {
                 std.debug.print("[input] Focus navigation not yet implemented\n", .{});
             }
         },
     }
 }
 
-const BUTTON_NAMES = [_][]const u8{
-    "unknown", "left", "middle", "right", "scroll up", "scroll down"
-};
-
 fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     const button = event.detail;
     const window = event.child;
 
-    if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
-        const button_name = if (button >= 1 and button <= 5)
-            BUTTON_NAMES[button]
-        else
-            BUTTON_NAMES[0];
-        std.debug.print("[input] Mouse {s} click at ({}, {}) window={}\n", 
-            .{ button_name, event.event_x, event.event_y, window });
+    if (builtin.mode == .Debug) {
+        std.debug.print("[input] Mouse button {} click at ({}, {}) window={}\n",
+            .{ button, event.event_x, event.event_y, window });
     }
 
     if (window != 0) {
@@ -241,7 +223,7 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
 }
 
 fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, wm: *WM) void {
-    if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         std.debug.print("[input] Mouse button {} released\n", .{event.detail});
     }
 
@@ -276,7 +258,7 @@ fn handleMotion(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
         return;
     }
     
-    if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         std.debug.print("[input] Drag motion: ({}, {})\n", .{ event.root_x, event.root_y });
     }
     

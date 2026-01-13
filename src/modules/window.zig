@@ -8,9 +8,6 @@ const xcb = defs.xcb;
 const WM = defs.WM;
 const Module = defs.Module;
 
-// Toggle debug logging
-const ENABLE_WINDOW_DEBUG = false;
-
 // Events this module handles
 pub const EVENT_TYPES = [_]u8{
     xcb.XCB_MAP_REQUEST,
@@ -67,13 +64,13 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const window = event.window;
 
-    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         std.debug.print("[window] Map request for window {x}\n", .{window});
     }
 
     // Skip if window already mapped
     if (wm.windows.contains(window)) {
-        if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+        if (builtin.mode == .Debug) {
             std.debug.print("[window] Window {x} already mapped\n", .{window});
         }
         return;
@@ -127,7 +124,7 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     // Flush only once for the entire map operation
     _ = xcb.xcb_flush(wm.conn);
 
-    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         std.debug.print("[window] Mapped window: {}x{} at ({},{})\n",
             .{win.width, win.height, win.x, win.y});
     }
@@ -194,14 +191,14 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
     // Let the main loop flush when appropriate
     // _ = xcb.xcb_flush(wm.conn);  // REMOVED
 
-    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         std.debug.print("[window] Configure: window {x} -> {}x{}\n",
             .{window, forced_width, forced_height});
     }
 }
 
 fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
-    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         std.debug.print("[window] Window {x} destroyed\n", .{event.window});
     }
 
@@ -227,7 +224,7 @@ fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t, wm: *WM) void {
     const window = event.event;
     if (window == wm.root) return;
 
-    if (ENABLE_WINDOW_DEBUG and builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         std.debug.print("[window] Focus in: {x}\n", .{window});
     }
 }
