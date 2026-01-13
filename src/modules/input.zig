@@ -14,7 +14,7 @@ const xcb = defs.xcb;
 const WM = defs.WM;
 const Module = defs.Module;
 
-const ENABLE_INPUT_DEBUG = false;
+const ENABLE_INPUT_DEBUG = true;
 
 pub const EVENT_TYPES = [_]u8{
     xcb.XCB_KEY_PRESS,
@@ -114,7 +114,9 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 
 fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const keycode = event.detail;
-    const modifiers: u16 = @intCast(event.state);
+    const raw_modifiers: u16 = @intCast(event.state);
+    // Strip NumLock, CapsLock, ScrollLock - only keep relevant modifiers
+    const modifiers = raw_modifiers & defs.MOD_MASK_RELEVANT;
 
     // Get XKB state and convert keycode to keysym
     const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
@@ -135,9 +137,9 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     }
 
     if (ENABLE_INPUT_DEBUG and builtin.mode == .Debug) {
-        std.debug.print("[input] Unbound key: keycode={} keysym=0x{x} mod=0x{x}\n", 
-            .{ keycode, keysym, modifiers });
-    }
+        std.debug.print("[input] Unbound key: keycode={} keysym=0x{x} mod=0x{x} (raw=0x{x})\n",
+            .{ keycode, keysym, modifiers, raw_modifiers });
+        }
 }
 
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
