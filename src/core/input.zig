@@ -1,10 +1,16 @@
 // Input handling - OPTIMIZED FOR MINIMUM LATENCY + MAXIMUM THROUGHPUT
 // Smart batching: group related operations, flush once per user action
 
-const std = @import("std");
-const defs = @import("defs");
-const xkbcommon = @import("xkbcommon");
-const debug = @import("error");  // Will be renamed to debug.zig
+// Imports
+const std            = @import("std");
+
+// core/
+const defs           = @import("defs");
+const xkbcommon      = @import("xkbcommon");
+
+// debug/
+const error_handling = @import("error_handling");
+const logging        = @import("logging");
 
 const c = @cImport({
     @cInclude("unistd.h");
@@ -22,14 +28,13 @@ pub const EVENT_TYPES = [_]u8{
     xcb.XCB_MOTION_NOTIFY,
 };
 
-// OPTIMIZATION: O(1) keybinding lookup using HashMap
+// O(1) keybinding lookup using HashMap
 // Key: (modifiers << 32) | keysym
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
 var keybind_initialized = false;
 
-// Motion event throttling - set to 1ms for 1000Hz mice
-// Set to 0 to disable throttling entirely (may generate more CPU load)
-const MOTION_THROTTLE_MS: u32 = 1; // 1ms = 1000Hz support
+// Motion event throttling 
+const MOTION_THROTTLE_MS: u32 = 1; // 1ms -> 1000Hz polling rate mice
 
 var last_motion_time: u32 = 0;
 
@@ -42,7 +47,7 @@ pub fn init(wm: *WM) void {
     };
     keybind_initialized = true;
 
-    debug.debugInputModuleInit(keybind_map.count());
+    logging.debugInputModuleInit(keybind_map.count());
 }
 
 pub fn deinit(_: *WM) void {
@@ -113,20 +118,20 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const key = makeKeybindKey(modifiers, keysym);
     
     if (keybind_map.get(key)) |action| {
-        debug.debugKeybindingMatched(modifiers, keysym);
+        logging.debugKeybindingMatched(modifiers, keysym);
         executeAction(action, wm) catch |err| {
             std.log.err("Failed to execute keybinding action: {}", .{err});
         };
         return;
     }
 
-    debug.debugUnboundKey(keycode, keysym, modifiers, raw_modifiers);
+    logging.debugUnboundKey(keycode, keysym, modifiers, raw_modifiers);
 }
 
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
         .exec => |cmd| {
-            debug.debugExecutingCommand(cmd);
+            logging.debugExecutingCommand(cmd);
 
             // OPTIMIZATION: Fork in background, don't wait
             const pid = c.fork();
@@ -148,20 +153,20 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         },
         .close_window => {
             if (wm.focused_window) |win_id| {
-                debug.debugClosingWindow(win_id);
+                logging.debugClosingWindow(win_id);
                 _ = xcb.xcb_destroy_window(wm.conn, win_id);
                 _ = xcb.xcb_flush(wm.conn); // Single flush - one user action
             }
         },
         .reload_config => {
-            debug.debugConfigReloadTriggered();
+            logging.debugConfigReloadTriggered();
             // Rebuild keybind map after reload
             buildKeybindMap(wm) catch |err| {
                 std.log.err("Failed to rebuild keybind map: {}", .{err});
             };
         },
         .focus_next, .focus_prev => {
-            debug.debugFocusNotImplemented();
+            logging.debugFocusNotImplemented();
         },
     }
 }
@@ -170,7 +175,7 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     const button = event.detail;
     const window = event.child;
 
-    debug.debugMouseButtonClick(button, event.event_x, event.event_y, window);
+    logging.debugMouseButtonClick(button, event.event_x, event.event_y, window);
 
     if (window != 0) {
         // SMART BATCHING: These 3 operations are ONE logical user action (click window)
@@ -203,7 +208,7 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
 }
 
 fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, wm: *WM) void {
-    debug.debugMouseButtonRelease(event.detail);
+    logging.debugMouseButtonRelease(event.detail);
 
     _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_POINTER, event.time);
     
@@ -236,7 +241,7 @@ fn handleMotion(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
         return;
     }
     
-    debug.debugDragMotion(event.root_x, event.root_y);
+    logging.debugDragMotion(event.root_x, event.root_y);
     
     _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_POINTER, event.time);
     _ = xcb.xcb_flush(wm.conn); // Immediate flush when dragging

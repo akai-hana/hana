@@ -1,21 +1,26 @@
-// Main WM event loop
+// Main event loop
+
+// Imports
 const std     = @import("std");
 const posix   = std.posix;
 const builtin = @import("builtin");
 
-// core/
-const config    = @import("config");
-const error       = @import("error");
-const logging   = @import("logging");
-const defs      = @import("defs");
-const xkbcommon = @import("xkbcommon");
+// src/core/
+const config         = @import("config");
+const defs           = @import("defs");
+const xkbcommon      = @import("xkbcommon");
+const window_module = @import("window");
+const input_module  = @import("input");
 
+// src/debug/
+const error_handling = @import("error_handling");
+const logging        = @import("logging");
+
+// Convenience renames inherited from central defs import
 const xcb = defs.xcb;
 const WM  = defs.WM;
 
-// modules/
-const window_module = @import("window");
-const input_module  = @import("input");
+// src/modules/
 
 // Constants
 const XCB_CURSOR_LEFT_PTR: u16 = 68;
@@ -32,7 +37,7 @@ const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
     xcb.XCB_EVENT_MASK_KEY_PRESS |
     xcb.XCB_EVENT_MASK_KEY_RELEASE;
 
-// Cursor setup - simplified and faster
+// Cursor setup
 fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) !void {
     const cursor_font = xcb.xcb_generate_id(conn);
     const font_name = "cursor";
@@ -45,9 +50,9 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) !void
             @intCast(font_name.len),
             font_name.ptr,
         );
-        const xcb_err = xcb.xcb_request_check(conn, cookie);
-        if (err != null) {
-            debug.debugCursorSetupFailed();
+        
+        if (xcb.xcb_request_check(conn, cookie) != null) {
+            logging.debugCursorSetupFailed();
             return error.CursorSetupFailed;
         }
     } else {
@@ -81,7 +86,8 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) !void
     );
 
     _ = xcb.xcb_close_font(conn, cursor_font);
-    // Don't flush here - batch with other operations
+
+    // No flush here; batched with other operations
 }
 
 /// Resolve keysyms to keycodes for all keybindings
@@ -112,18 +118,18 @@ fn setupSignalHandler() void {
 
 pub fn main() !void {
     // Connect to X11
-    const conn = try debug.connectToX11();
+    const conn = try error_handling.connectToX11();
     defer xcb.xcb_disconnect(@ptrCast(conn));
 
-    const screen = try debug.getX11Screen(conn);
+    const screen = try error_handling.getX11Screen(conn);
     const root = screen.*.root;
 
     // Become window manager
-    try debug.becomeWindowManager(conn, root, WM_EVENT_MASK);
+    try error_handling.becomeWindowManager(conn, root, WM_EVENT_MASK);
     
     try setupRootCursor(conn, screen);
 
-    debug.debugWMStarted();
+    logging.debugWMStarted();
 
     // GPA for runtime allocations
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -281,12 +287,12 @@ fn grabKeybindings(wm: *WM) !void {
     // Single flush
     _ = xcb.xcb_flush(wm.conn);
 
-    debug.debugKeybindingsGrabbed(grabbed);
+    logging.debugKeybindingsGrabbed(grabbed);
 }
 
 /// Config reload handler
 fn handleConfigReload(wm: *WM) !void {
-    debug.debugConfigReloading();
+    logging.debugConfigReloading();
 
     var new_config = try config.loadConfig(wm.allocator, "config.toml");
     errdefer new_config.deinit(wm.allocator);
@@ -299,5 +305,5 @@ fn handleConfigReload(wm: *WM) !void {
     
     try grabKeybindings(wm);
 
-    debug.debugConfigReloaded();
+    logging.debugConfigReloaded();
 }
