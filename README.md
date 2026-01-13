@@ -118,23 +118,23 @@ But it works! After so much time investigating and trying things only to be met 
 
 ## What Works Right Now
 
-✅ Windows appear on screen  
-✅ Configurable borders (width + color)  
-✅ XCB async event handling  
-✅ Modular architecture  
-✅ TOML configuration  
-✅ Keyboard and mouse input capture (logged only)
+- Windows appear on screen  
+- Configurable borders (width + color)  
+- XCB async event handling  
+- Modular architecture  
+- TOML configuration  
+- Keyboard and mouse input capture (logged only)
 
 ## Roadmap (things to-do):
 
-💡 Window tiling/layouts  
-💡 Keybindings (no shortcuts yet)  
-💡 Window focus  
-💡 Moving/resizing windows  
-💡 Workspaces  
-💡 Status bar  
-💡 Move config to a more coherent dir  
-💡 Move Zig's binary output to a UNIX-compatible bin dir (yet to figure out)  FINITIONS #
+- Window tiling/layouts  
+- Keybindings (no shortcuts yet)  
+- Window focus  
+- Moving/resizing windows  
+- Workspaces  
+- Status bar  
+- Move config to a more coherent dir  
+- Move Zig's binary output to a UNIX-compatible bin dir (yet to figure out)  FINITIONS #
 
 ... Pretty much everything else.
 
