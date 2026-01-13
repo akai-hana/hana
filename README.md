@@ -82,7 +82,7 @@ Let me be clear. There's nothing _wrong_ about dwm. It's a perfectly good and fi
   
 + **Simpler** than dwm?
   - Clearer file naming and structuring
-    > Nearly all the code in one file (`dwm.c`)? What does `drw.c` do? Why are there two config files (`config.h` / `config.mk`), each one having three different types (`config.<.h/.def.h/.def.h.orig>` / `config<.mk/.mk.orig/.mk.rej`)? What's so transient about `transient.c`? 
+    > Nearly all the code in one file (`dwm.c`)? What does `drw.c` do? Why are there two config files (`config.h` / `config.mk`), each one having three different types (`config.<.h/.def.h/.def.h.orig>` / `config<.mk/.mk.orig/.mk.rej>`)? What's so transient about `transient.c`? 
   - Config hot-reloading
     > Runtime config instead of recompiling at every minor change (without sacrificing performance on a dynamically interpreted language)
   - Simpler code in general
