@@ -85,8 +85,8 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
         .id = window,
         .x = if (geom_reply) |g| g.*.x else 0,
         .y = if (geom_reply) |g| g.*.y else 0,
-        .width = @intCast(wm.screen.*.width_in_pixels),  // Use actual screen size
-        .height = @intCast(wm.screen.*.height_in_pixels),
+        .width = if (geom_reply) |g| @intCast(g.*.width) else 800,   // <-- FIXED: Use window's size
+        .height = if (geom_reply) |g| @intCast(g.*.height) else 600, // <-- FIXED: Use window's size
         .is_focused = false,
         .properties = .{},
     };
@@ -133,49 +133,41 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
 fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const window = event.window;
 
-    // Use screen dimensions instead of hardcoded values
-    const forced_x: i16 = 0;
-    const forced_y: i16 = 0;
-    const forced_width: u16 = @intCast(wm.screen.*.width_in_pixels);
-    const forced_height: u16 = @intCast(wm.screen.*.height_in_pixels);
-
+    // Use the REQUESTED values, not forced fullscreen
     const values = [_]u32{
-        @intCast(forced_x),
-        @intCast(forced_y),
-        @intCast(forced_width),
-        @intCast(forced_height),
-        0, // border width
+        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_X != 0) @intCast(event.x) else 0,
+        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_Y != 0) @intCast(event.y) else 0,
+        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_WIDTH != 0) @intCast(event.width) else 800,
+        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_HEIGHT != 0) @intCast(event.height) else 600,
+        if (event.value_mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0) @intCast(event.border_width) else 0,
     };
 
-    // Apply geometry
     _ = xcb.xcb_configure_window(
         wm.conn,
         window,
-        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
-        xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
-        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH,
+        event.value_mask,
         &values
     );
 
     // Update tracking
     if (wm.windows.getPtr(window)) |win| {
-        win.x = forced_x;
-        win.y = forced_y;
-        win.width = forced_width;
-        win.height = forced_height;
+        win.x = @intCast(values[0]);
+        win.y = @intCast(values[1]);
+        win.width = @intCast(values[2]);
+        win.height = @intCast(values[3]);
     }
 
-    // Send synthetic ConfigureNotify
+    // Send accurate ConfigureNotify
     var notify_event: xcb.xcb_configure_notify_event_t = undefined;
     notify_event.response_type = xcb.XCB_CONFIGURE_NOTIFY;
     notify_event.event = window;
     notify_event.window = window;
     notify_event.above_sibling = xcb.XCB_NONE;
-    notify_event.x = forced_x;
-    notify_event.y = forced_y;
-    notify_event.width = forced_width;
-    notify_event.height = forced_height;
-    notify_event.border_width = 0;
+    notify_event.x = @intCast(values[0]);
+    notify_event.y = @intCast(values[1]);
+    notify_event.width = @intCast(values[2]);
+    notify_event.height = @intCast(values[3]);
+    notify_event.border_width = @intCast(values[4]);
     notify_event.override_redirect = 0;
 
     _ = xcb.xcb_send_event(
@@ -186,14 +178,9 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
         @ptrCast(&notify_event)
     );
 
-    // CRITICAL FIX: Don't flush here!
-    // Configure requests fire constantly during resizes
-    // Let the main loop flush when appropriate
-    // _ = xcb.xcb_flush(wm.conn);  // REMOVED
-
     if (builtin.mode == .Debug) {
-        std.debug.print("[window] Configure: window {x} -> {}x{}\n",
-            .{window, forced_width, forced_height});
+        std.debug.print("[window] Configure: window {x} -> {}x{} at ({},{})\n",
+            .{window, values[2], values[3], values[0], values[1]});
     }
 }
 
@@ -203,7 +190,7 @@ fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) vo
     }
 
     // Remove from window HashMap
-    wm.removeWindow(event.window);
+    _ = wm.windows.remove(event.window);
 
     // Clear focus if this was the focused window
     if (wm.focused_window) |fid| {
