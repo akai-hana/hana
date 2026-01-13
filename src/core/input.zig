@@ -24,7 +24,6 @@ pub const EVENT_TYPES = [_]u8{
     xcb.XCB_KEY_PRESS,
     xcb.XCB_KEY_RELEASE,
     xcb.XCB_BUTTON_PRESS,
-    xcb.XCB_BUTTON_RELEASE,
     xcb.XCB_MOTION_NOTIFY,
 };
 
@@ -32,9 +31,6 @@ pub const EVENT_TYPES = [_]u8{
 // Key: (modifiers << 32) | keysym
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
 var keybind_initialized = false;
-
-// Motion event throttling 
-const MOTION_THROTTLE_MS: u32 = 1; // 1ms -> 1000Hz polling rate mice
 
 var last_motion_time: u32 = 0;
 
@@ -88,11 +84,6 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
         xcb.XCB_BUTTON_PRESS => {
             const ev = @as(*const xcb.xcb_button_press_event_t, @alignCast(@ptrCast(event)));
             handleButtonPress(ev, wm);
-        },
-
-        xcb.XCB_BUTTON_RELEASE => {
-            const ev = @as(*const xcb.xcb_button_release_event_t, @alignCast(@ptrCast(event)));
-            handleButtonRelease(ev, wm);
         },
 
         xcb.XCB_MOTION_NOTIFY => {
@@ -197,40 +188,12 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
             &values,
         );
 
-        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, event.time);
-        
         // Single flush for entire operation - same latency, 3x throughput
         _ = xcb.xcb_flush(wm.conn);
-    } else {
-        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, event.time);
-        // No flush needed - not user-visible
     }
-}
-
-fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, wm: *WM) void {
-    logging.debugMouseButtonRelease(event.detail);
-
-    _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_POINTER, event.time);
-    
-    // OPTIMIZATION: Only flush if we were actually dragging
-    // For now, no drag state, so skip flush entirely
-    // _ = xcb.xcb_flush(wm.conn);
 }
 
 fn handleMotion(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
-    // OPTIMIZATION: Minimal throttling for 1000Hz mice (1ms)
-    // Set MOTION_THROTTLE_MS to 0 to disable entirely
-    const time_delta = if (event.time > last_motion_time) 
-        event.time - last_motion_time 
-    else 
-        0;
-    
-    if (time_delta < MOTION_THROTTLE_MS) {
-        // Too soon - skip this motion event
-        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_POINTER, event.time);
-        return;
-    }
-    
     last_motion_time = event.time;
     
     // TODO: Check if dragging and update window position
