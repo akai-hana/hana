@@ -40,19 +40,18 @@ pub const XkbState = struct {
     /// Initialize XKB for the given X11 connection with retry for startx
     pub fn init(xcb_conn: *anyopaque) !XkbState {
         std.log.info("Initializing XKB...", .{});
-        
-        // Create XKB context
+
         const ctx = xkb.xkb_context_new(xkb.XKB_CONTEXT_NO_FLAGS) orelse {
             std.log.err("Failed to create XKB context", .{});
             return error.XkbContextFailed;
         };
         errdefer xkb.xkb_context_unref(ctx);
 
-        // Setup XKB extension - try multiple times for startx
+        // Setup XKB extension with retry
         var setup_result: i32 = 0;
-        var attempts: u12 = 50; // 50 × 20ms = 1 second max
+        var attempts: u12 = 50;
         std.log.info("Setting up XKB extension (may retry for startx)...", .{});
-        
+
         while (attempts > 0) : (attempts -= 1) {
             setup_result = xkb.xkb_x11_setup_xkb_extension(
                 @ptrCast(xcb_conn),
@@ -67,19 +66,18 @@ pub const XkbState = struct {
             }
 
             if (attempts > 1) {
-                if (attempts == 49) { // First retry
+                if (attempts == 49) {
                     std.log.info("XKB extension not ready, retrying...", .{});
                 }
                 std.posix.nanosleep(0, 20 * std.time.ns_per_ms);
             }
         }
-        
+
         if (setup_result == 0) {
             std.log.err("XKB extension setup failed after all retries", .{});
             return error.XkbSetupFailed;
         }
 
-        // Get the keyboard device ID
         const device_id = xkb.xkb_x11_get_core_keyboard_device_id(@ptrCast(xcb_conn));
         if (device_id == -1) {
             std.log.err("Failed to get keyboard device ID", .{});
@@ -87,20 +85,52 @@ pub const XkbState = struct {
         }
         std.log.info("Keyboard device ID: {}", .{device_id});
 
-        // Create keymap from the X11 keyboard
-        const keymap = xkb.xkb_x11_keymap_new_from_device(
-            ctx,
-            @ptrCast(xcb_conn),
-            device_id,
-            xkb.XKB_KEYMAP_COMPILE_NO_FLAGS
-        ) orelse {
-            std.log.err("Failed to create XKB keymap", .{});
+        // NEW: Retry keymap creation until it's valid
+        var keymap: ?*xkb_keymap = null;
+        attempts = 50;
+        std.log.info("Creating keymap (may retry for startx)...", .{});
+
+        while (attempts > 0) : (attempts -= 1) {
+            keymap = xkb.xkb_x11_keymap_new_from_device(
+                ctx,
+                @ptrCast(xcb_conn),
+                device_id,
+                xkb.XKB_KEYMAP_COMPILE_NO_FLAGS
+            );
+
+            if (keymap) |km| {
+                // Verify keymap is actually usable by checking if it has keys
+                const state_test = xkb.xkb_state_new(km);
+                if (state_test) |st| {
+                    // Test if we can get any keysym (Return key is always present)
+                    const test_sym = xkb.xkb_state_key_get_one_sym(st, 36); // keycode 36 is usually Return
+                    xkb.xkb_state_unref(st);
+
+                    if (test_sym != xkb.XKB_KEY_NoSymbol) {
+                        std.log.info("Keymap created and verified", .{});
+                        break;
+                    }
+                }
+                // Keymap exists but isn't populated yet
+                xkb.xkb_keymap_unref(km);
+                keymap = null;
+            }
+
+            if (attempts > 1) {
+                if (attempts == 49) {
+                    std.log.info("Keymap not ready, retrying...", .{});
+                }
+                std.posix.nanosleep(0, 20 * std.time.ns_per_ms);
+            }
+        }
+
+        const final_keymap = keymap orelse {
+            std.log.err("Failed to create valid keymap after all retries", .{});
             return error.XkbKeymapFailed;
         };
-        errdefer xkb.xkb_keymap_unref(keymap);
+        errdefer xkb.xkb_keymap_unref(final_keymap);
 
-        // Create state tracker
-        const state = xkb.xkb_state_new(keymap) orelse {
+        const state = xkb.xkb_state_new(final_keymap) orelse {
             std.log.err("Failed to create XKB state", .{});
             return error.XkbStateFailed;
         };
@@ -108,7 +138,7 @@ pub const XkbState = struct {
         std.log.info("XKB initialization complete", .{});
         return XkbState{
             .context = ctx,
-            .keymap = keymap,
+            .keymap = final_keymap,
             .state = state,
             .device_id = device_id,
         };
