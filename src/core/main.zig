@@ -1,5 +1,6 @@
 // Main event loop - clean and minimal
 
+// Imports
 const std     = @import("std");
 const posix   = std.posix;
 const builtin = @import("builtin");
@@ -7,14 +8,24 @@ const builtin = @import("builtin");
 const config         = @import("config");
 const defs           = @import("defs");
 const xkbcommon      = @import("xkbcommon");
-const window_module = @import("window");
-const input_module  = @import("input");
+const window         = @import("window");
+const input          = @import("input");
+const tiling         = @import("tiling");
 const error_handling = @import("error_handling");
 const logging        = @import("logging");
 
 const xcb = defs.xcb;
 const WM  = defs.WM;
 
+// Centralized module registration
+// This "converts" the raw files into Module structs automatically
+const modules = [_]defs.Module{
+    defs.generateModule(window),
+    defs.generateModule(input),
+    defs.generateModule(tiling),
+};
+
+// Config
 var should_reload_config: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
@@ -57,7 +68,7 @@ pub fn main() !void {
 
     try error_handling.becomeWindowManager(conn, root, WM_EVENT_MASK);
     setupRootCursor(conn, screen);
-    input_module.setupGrabs(conn, root);
+    input.setupGrabs(conn, root);
     logging.debugWMStarted();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -86,11 +97,14 @@ pub fn main() !void {
 
     setupSignalHandler();
 
-    window_module.init(&wm);
-    input_module.init(&wm);
+    inline for (modules) |m| m.init_fn(&wm);
+    
     defer {
-        window_module.deinit(&wm);
-        input_module.deinit(&wm);
+        comptime var i = modules.len;
+        inline while (i > 0) {
+            i -= 1;
+            if (modules[i].deinit_fn) |deinit| deinit(&wm);
+        }
     }
 
     try grabKeybindings(&wm);
@@ -111,16 +125,12 @@ pub fn main() !void {
 
         const response_type = @as(*u8, @ptrCast(event)).* & 0x7F;
 
-        // Route to appropriate module
-        switch (response_type) {
-            xcb.XCB_KEY_PRESS, xcb.XCB_BUTTON_PRESS,
-            xcb.XCB_MOTION_NOTIFY, xcb.XCB_BUTTON_RELEASE
-                => input_module.handleEvent(@as(*u8, @ptrCast(event)).*, event, &wm),
-
-            xcb.XCB_MAP_REQUEST, xcb.XCB_CONFIGURE_REQUEST, xcb.XCB_DESTROY_NOTIFY
-                => window_module.handleEvent(@as(*u8, @ptrCast(event)).*, event, &wm),
-
-            else => {},
+        // AUTOMATED ROUTING:
+        // This replaces the entire switch (response_type) block
+        inline for (modules) |m| {
+            if (std.mem.indexOfScalar(u8, m.event_types, response_type)) |_| {
+                m.handle_fn(response_type, event, &wm);
+            }
         }
     }
 }

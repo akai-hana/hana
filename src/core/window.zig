@@ -19,8 +19,6 @@ pub fn init(_: *WM) void {
     }
 }
 
-pub const deinit = defs.defaultModuleDeinit;
-
 pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
     switch (event_type & 0x7F) {
         xcb.XCB_MAP_REQUEST => handleMapRequest(@ptrCast(@alignCast(event)), wm),
@@ -61,13 +59,4 @@ fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) vo
 
     _ = wm.windows.remove(event.window);
     if (wm.focused_window == event.window) wm.focused_window = null;
-}
-
-pub fn createModule() Module {
-    return Module{
-        .name = "window",
-        .event_types = &EVENT_TYPES,
-        .init_fn = init,
-        .handle_fn = handleEvent,
-    };
 }

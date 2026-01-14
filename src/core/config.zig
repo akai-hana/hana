@@ -1,6 +1,7 @@
 // Configuration parser for Hana window manager
 
 const std  = @import("std");
+
 const defs = @import("defs");
 const toml = @import("toml");
 const xkb  = @import("xkbcommon");
@@ -14,12 +15,15 @@ pub const ValidationError = error{
 };
 
 const MODIFIER_MAP = std.StaticStringMap(u16).initComptime(.{
-    .{ "Mod4", defs.MOD_SUPER },
     .{ "Super", defs.MOD_SUPER },
-    .{ "Mod1", defs.MOD_ALT },
+    .{ "Mod4", defs.MOD_SUPER },
+
     .{ "Alt", defs.MOD_ALT },
-    .{ "Ctrl", defs.MOD_CONTROL },
+    .{ "Mod1", defs.MOD_ALT },
+
     .{ "Control", defs.MOD_CONTROL },
+    .{ "Ctrl", defs.MOD_CONTROL },
+
     .{ "Shift", defs.MOD_SHIFT },
 });
 
@@ -43,7 +47,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     defer threaded.deinit();
 
     const content = std.Io.Dir.cwd().readFileAlloc(
-        threaded.io(), path, allocator, @enumFromInt(10 * 1024 * 1024)
+        threaded.io(), path, allocator, @enumFromInt(10 * 1024 * 1024) // = 10MB config filesize security limit
     ) catch |err| return switch (err) {
         error.FileNotFound => blk: {
             std.log.info("Config file not found, using defaults", .{});
@@ -121,7 +125,7 @@ fn keyNameToKeysym(name: []const u8) !u32 {
     return keysym;
 }
 
-/// Convert keysyms to keycodes using XKB state (moved from main.zig)
+/// Convert keysyms to keycodes using XKB state
 pub fn resolveKeybindings(keybindings: anytype, xkb_state: *xkb.XkbState) void {
     for (keybindings) |*keybind| {
         keybind.keycode = xkb_state.keysymToKeycode(keybind.keysym);

@@ -1,9 +1,12 @@
 // Input handling - keyboard and mouse events
 
+// INITIALIZATION
+
 const std = @import("std");
 const defs = @import("defs");
 const xkbcommon = @import("xkbcommon");
 const logging = @import("logging");
+const tiling = @import("tiling");
 
 const c = @cImport({
     @cInclude("unistd.h");
@@ -12,6 +15,8 @@ const c = @cImport({
 const xcb = defs.xcb;
 const WM = defs.WM;
 const Module = defs.Module;
+
+// BODY
 
 pub const EVENT_TYPES = [_]u8{
     xcb.XCB_KEY_PRESS,
@@ -23,8 +28,9 @@ pub const EVENT_TYPES = [_]u8{
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
 var keybind_initialized = false;
 
-// TinyWM-style drag state - grouped for clarity
+// Drag state
 const DragState = struct {
+    // Grouped for clarity
     button: u8 = 0,
     subwindow: u32 = 0,
     start_x: i16 = 0,
@@ -72,7 +78,6 @@ fn buildKeybindMap(wm: *WM) !void {
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
     _ = conn;
     _ = root;
-    // Grabs currently disabled for testing
 }
 
 pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
@@ -86,9 +91,9 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 }
 
 fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
-    // TinyWM: raise window on keypress
+    // Raise window on keypress
     if (event.child != 0) {
-        _ = xcb.xcb_configure_window(wm.conn, event.child, 
+        _ = xcb.xcb_configure_window(wm.conn, event.child,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
 
@@ -164,6 +169,7 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
         .exec => |cmd| {
             logging.debugExecutingCommand(cmd);
+            // Crazy shit (I barely understand any of this)
             const pid = c.fork();
             if (pid < 0) {
                 std.log.err("Fork failed for command: {s}", .{cmd});
@@ -187,14 +193,13 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             };
         },
         .focus_next, .focus_prev => logging.debugFocusNotImplemented(),
+        
+        // Tiling actions
+        .toggle_layout => tiling.toggleLayout(wm),
+        .increase_master => tiling.increaseMasterWidth(wm),
+        .decrease_master => tiling.decreaseMasterWidth(wm),
+        .increase_master_count => tiling.increaseMasterCount(wm),
+        .decrease_master_count => tiling.decreaseMasterCount(wm),
+        .toggle_tiling => tiling.toggleTiling(wm),
     }
-}
-
-pub fn createModule() Module {
-    return Module{
-        .name = "input",
-        .event_types = &EVENT_TYPES,
-        .init_fn = init,
-        .handle_fn = handleEvent,
-    };
 }
