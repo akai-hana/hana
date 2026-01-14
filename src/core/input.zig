@@ -13,7 +13,6 @@ const xcb = defs.xcb;
 const WM = defs.WM;
 const Module = defs.Module;
 
-// Handle both keyboard and mouse events
 pub const EVENT_TYPES = [_]u8{
     xcb.XCB_KEY_PRESS,
     xcb.XCB_BUTTON_PRESS,
@@ -24,15 +23,27 @@ pub const EVENT_TYPES = [_]u8{
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
 var keybind_initialized = false;
 
-// TinyWM-style drag state
-var start_button: u8 = 0;
-var start_subwindow: u32 = 0;
-var start_x: i16 = 0;
-var start_y: i16 = 0;
-var attr_x: i16 = 0;
-var attr_y: i16 = 0;
-var attr_width: u16 = 0;
-var attr_height: u16 = 0;
+// TinyWM-style drag state - grouped for clarity
+const DragState = struct {
+    button: u8 = 0,
+    subwindow: u32 = 0,
+    start_x: i16 = 0,
+    start_y: i16 = 0,
+    attr_x: i16 = 0,
+    attr_y: i16 = 0,
+    attr_width: u16 = 0,
+    attr_height: u16 = 0,
+
+    fn isDragging(self: *const DragState) bool {
+        return self.subwindow != 0;
+    }
+
+    fn reset(self: *DragState) void {
+        self.subwindow = 0;
+    }
+};
+
+var drag: DragState = .{};
 
 pub fn init(wm: *WM) void {
     keybind_map = std.AutoHashMap(u64, *const defs.Action).init(wm.allocator);
@@ -53,47 +64,23 @@ pub fn deinit(_: *WM) void {
 
 fn buildKeybindMap(wm: *WM) !void {
     keybind_map.clearRetainingCapacity();
-
     for (wm.config.keybindings.items) |*keybind| {
-        const key = makeKeybindKey(keybind.modifiers, keybind.keysym);
-        try keybind_map.put(key, &keybind.action);
+        try keybind_map.put((@as(u64, keybind.modifiers) << 32) | keybind.keysym, &keybind.action);
     }
 }
 
-inline fn makeKeybindKey(modifiers: u16, keysym: u32) u64 {
-    return (@as(u64, modifiers) << 32) | keysym;
-}
-
-/// Setup TinyWM-style mouse grabs (currently disabled for testing)
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
-    // Don't grab anything - let's test if grabs are the problem
     _ = conn;
     _ = root;
-
-    // If this fixes the jank, then the grabs are interfering
-    // If jank persists, the problem is elsewhere
+    // Grabs currently disabled for testing
 }
 
 pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
-    const response_type = event_type & ~defs.X11_SYNTHETIC_EVENT_FLAG;
-
-    switch (response_type) {
-        xcb.XCB_KEY_PRESS => handleKeyPress(
-            @as(*const xcb.xcb_key_press_event_t, @alignCast(@ptrCast(event))),
-            wm
-        ),
-        xcb.XCB_BUTTON_PRESS => handleButtonPress(
-            @as(*const xcb.xcb_button_press_event_t, @alignCast(@ptrCast(event))),
-            wm
-        ),
-        xcb.XCB_MOTION_NOTIFY => handleMotionNotify(
-            @as(*const xcb.xcb_motion_notify_event_t, @alignCast(@ptrCast(event))),
-            wm
-        ),
-        xcb.XCB_BUTTON_RELEASE => handleButtonRelease(
-            @as(*const xcb.xcb_button_release_event_t, @alignCast(@ptrCast(event))),
-            wm
-        ),
+    switch (event_type & 0x7F) {
+        xcb.XCB_KEY_PRESS => handleKeyPress(@ptrCast(@alignCast(event)), wm),
+        xcb.XCB_BUTTON_PRESS => handleButtonPress(@ptrCast(@alignCast(event)), wm),
+        xcb.XCB_MOTION_NOTIFY => handleMotionNotify(@ptrCast(@alignCast(event)), wm),
+        xcb.XCB_BUTTON_RELEASE => handleButtonRelease(@ptrCast(@alignCast(event))),
         else => {},
     }
 }
@@ -101,31 +88,24 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     // TinyWM: raise window on keypress
     if (event.child != 0) {
-        const values = [_]u32{xcb.XCB_STACK_MODE_ABOVE};
-        _ = xcb.xcb_configure_window(
-            wm.conn, event.child, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &values,
-        );
+        _ = xcb.xcb_configure_window(wm.conn, event.child, 
+            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
 
-    // Handle keybinding
-    const keycode = event.detail;
-    const raw_modifiers: u16 = @intCast(event.state);
-    const modifiers = raw_modifiers & defs.MOD_MASK_RELEVANT;
-
+    // Check for keybinding match
     const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
-    const keysym = xkb_ptr.keycodeToKeysym(keycode);
-
-    const key = makeKeybindKey(modifiers, keysym);
+    const modifiers: u16 = @intCast(event.state & defs.MOD_MASK_RELEVANT);
+    const keysym = xkb_ptr.keycodeToKeysym(event.detail);
+    const key = (@as(u64, modifiers) << 32) | keysym;
 
     if (keybind_map.get(key)) |action| {
         logging.debugKeybindingMatched(modifiers, keysym);
         executeAction(action, wm) catch |err| {
             std.log.err("Failed to execute keybinding action: {}", .{err});
         };
-        return;
+    } else {
+        logging.debugUnboundKey(event.detail, keysym, modifiers, @intCast(event.state));
     }
-
-    logging.debugUnboundKey(keycode, keysym, modifiers, raw_modifiers);
 }
 
 fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
@@ -133,83 +113,72 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
 
     logging.debugMouseButtonClick(event.detail, event.root_x, event.root_y, event.child);
 
-    // TinyWM: Get window geometry and save start position
+    // Get window geometry and save drag state
     const geom_cookie = xcb.xcb_get_geometry(wm.conn, event.child);
-    const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
-    if (geom_reply) |g| {
+    if (xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null)) |g| {
         defer std.c.free(g);
-        attr_x = g.*.x;
-        attr_y = g.*.y;
-        attr_width = g.*.width;
-        attr_height = g.*.height;
+        drag = .{
+            .button = event.detail,
+            .subwindow = event.child,
+            .start_x = event.root_x,
+            .start_y = event.root_y,
+            .attr_x = g.*.x,
+            .attr_y = g.*.y,
+            .attr_width = g.*.width,
+            .attr_height = g.*.height,
+        };
     }
-
-    start_subwindow = event.child;
-    start_button = event.detail;
-    start_x = event.root_x;
-    start_y = event.root_y;
 }
 
 fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
-    if (start_subwindow == 0) return;
+    if (!drag.isDragging()) return;
 
     logging.debugDragMotion(event.root_x, event.root_y);
 
-    // TinyWM: calculate diff and move/resize
-    const xdiff: i32 = @as(i32, event.root_x) - @as(i32, start_x);
-    const ydiff: i32 = @as(i32, event.root_y) - @as(i32, start_y);
+    const dx: i32 = event.root_x - drag.start_x;
+    const dy: i32 = event.root_y - drag.start_y;
+    const is_move = drag.button == 1;
 
-    const new_x = if (start_button == 1) attr_x + @as(i16, @intCast(xdiff)) else attr_x;
-    const new_y = if (start_button == 1) attr_y + @as(i16, @intCast(ydiff)) else attr_y;
-    const new_w = if (start_button == 3) @max(1, @as(i32, attr_width) + xdiff) else attr_width;
-    const new_h = if (start_button == 3) @max(1, @as(i32, attr_height) + ydiff) else attr_height;
+    const geometry = [_]u32{
+        @intCast(if (is_move) drag.attr_x + @as(i16, @intCast(dx)) else drag.attr_x),
+        @intCast(if (is_move) drag.attr_y + @as(i16, @intCast(dy)) else drag.attr_y),
+        @intCast(if (is_move) drag.attr_width else @max(1, drag.attr_width + dx)),
+        @intCast(if (is_move) drag.attr_height else @max(1, drag.attr_height + dy)),
+    };
 
     _ = xcb.xcb_configure_window(
-        wm.conn, start_subwindow,
+        wm.conn, drag.subwindow,
         xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
         xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
-        &[_]u32{
-            @intCast(new_x), @intCast(new_y),
-            @intCast(new_w), @intCast(new_h),
-        },
+        &geometry,
     );
 }
 
-fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, wm: *WM) void {
+fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t) void {
     _ = event;
-    _ = wm;
-    
-    logging.debugMouseButtonRelease(start_button);
-    start_subwindow = 0; // TinyWM: start.subwindow = None
+    logging.debugMouseButtonRelease(drag.button);
+    drag.reset();
 }
 
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
         .exec => |cmd| {
             logging.debugExecutingCommand(cmd);
-
             const pid = c.fork();
-            if (pid == 0) {
+            if (pid < 0) {
+                std.log.err("Fork failed for command: {s}", .{cmd});
+            } else if (pid == 0) {
                 _ = c.setsid();
-
                 const cmd_z = try wm.allocator.dupeZ(u8, cmd);
                 defer wm.allocator.free(cmd_z);
-
-                const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z.ptr, null };
-                _ = c.execvp("/bin/sh", @ptrCast(&argv));
-
-                std.log.err("Failed to exec: {s}", .{cmd});
+                _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z.ptr, null }));
                 std.process.exit(1);
-            } else if (pid < 0) {
-                std.log.err("Fork failed for command: {s}", .{cmd});
             }
         },
-        .close_window => {
-            if (wm.focused_window) |win_id| {
-                logging.debugClosingWindow(win_id);
-                _ = xcb.xcb_destroy_window(wm.conn, win_id);
-                _ = xcb.xcb_flush(wm.conn);
-            }
+        .close_window => if (wm.focused_window) |win_id| {
+            logging.debugClosingWindow(win_id);
+            _ = xcb.xcb_destroy_window(wm.conn, win_id);
+            _ = xcb.xcb_flush(wm.conn);
         },
         .reload_config => {
             logging.debugConfigReloadTriggered();
@@ -217,9 +186,7 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
                 std.log.err("Failed to rebuild keybind map: {}", .{err});
             };
         },
-        .focus_next, .focus_prev => {
-            logging.debugFocusNotImplemented();
-        },
+        .focus_next, .focus_prev => logging.debugFocusNotImplemented(),
     }
 }
 
