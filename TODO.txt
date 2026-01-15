@@ -1,13 +1,14 @@
-pending features
+pending features:
 honor border colors from config (currently broken)
 make mod+h and mod+l resize master by +/-5%
 make mod+d bind kill whatever's the focused window
+if config.toml doesnt exist at current dir, check on ~/.config/hana/config.toml, and then continue with the current logic; if this doesnt exist either, proceed as normal with defaults
 make a defaults config file instead of hard-coding defaults inside .zig files. if fails to read from config.toml, read from this defaults config.
 honor layout setting in config.toml (currently broken)
 honor master count in config.toml (currently broken)
 make mod+tab swap current focused window to master if it's a slave, and to slave if it's a master.
 move input.zig inside a new input directory and separate out the keyboard from mouse code by moving all the mouse logic to a new file mouse.zig
-move files like toml.zig, xkbcommon.zig, tiling_types.zig and similar to a new categorized directory (these are all sort of "libraries" for other files, im unsure how to group them together but i still think it makes logical sense to do so, im unsure about the name to group them with too but im sure theres a good name)
+(give feedback first before implementation; i want to know if this is a good idea, or if it can be modified in any way) move files like toml.zig, xkbcommon.zig, tiling_types.zig and similar to a new categorized directory. the reasoning is that i feel like these files all have something in common, these are all sort of "libraries" for other files, im unsure how to group them together but i still think it makes logical sense to do so, im unsure about the name to group them with too but im sure theres a good name. would this be a good idea? or would it be better to leave as it is now?...
 
 BIG FEATURES (avoid for now)
 code floating.zig, make it also be defined as a layout from config.toml
