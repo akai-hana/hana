@@ -22,7 +22,7 @@ Mod = "Super" # Mod1/Alt, Mod4/Super, Shift
 
 # Commands
 Mod+d = "ghostty"
-Mod+Shift+q = "kill"
+Mod+Shift+d = "kill"
 
 # Tiling
 Mod+t       = "toggle_layout"
