@@ -3,9 +3,9 @@
 const std = @import("std");
 const defs = @import("defs");
 const builtin = @import("builtin");
-const xcb = defs.xcb;
 const WM = defs.WM;
-const TilingState = @import("tiling_types").TilingState;
+const tiling_types = @import("tiling_types");
+const TilingState = tiling_types.TilingState;
 
 pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, screen_h: u16) void {
     const n = windows.len;
@@ -45,18 +45,13 @@ pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, s
 
             x = gap;
             y = gap + (row * row_height);
-            w = if (master_width > 2 * gap + 2 * bw)
-                master_width - 2 * gap - 2 * bw
-            else 1;
+            w = tiling_types.calcWindowDimension(master_width, gap, bw);
 
             // For the last master window, fit exactly to screen bottom
             if (row == m_count - 1) {
-                const available = screen_h - y - gap;
-                h = if (available > 2 * bw) available - 2 * bw else 1;
+                h = tiling_types.calcAvailableSpace(screen_h - y, gap, bw);
             } else {
-                h = if (row_height > 2 * gap + 2 * bw)
-                    row_height - 2 * gap - 2 * bw
-                else 1;
+                h = tiling_types.calcWindowDimension(row_height, gap, bw);
             }
         } else {
             // STACK COLUMN (right side)
@@ -66,40 +61,21 @@ pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, s
 
             x = master_width + gap;
             y = gap + (row * row_height);
-            w = if (stack_width > 2 * gap + 2 * bw)
-                stack_width - 2 * gap - 2 * bw
-            else 1;
+            w = tiling_types.calcWindowDimension(stack_width, gap, bw);
 
             // For the last stack window, fit exactly to screen bottom
             if (stack_idx == s_count - 1) {
-                const available = screen_h - y - gap;
-                h = if (available > 2 * bw) available - 2 * bw else 1;
+                h = tiling_types.calcAvailableSpace(screen_h - y, gap, bw);
             } else {
-                h = if (row_height > 2 * gap + 2 * bw)
-                    row_height - 2 * gap - 2 * bw
-                else 1;
+                h = tiling_types.calcWindowDimension(row_height, gap, bw);
             }
         }
 
-        configureWindow(wm, win, x, y, w, h);
+        tiling_types.configureWindow(wm, win, x, y, w, h);
 
         if (builtin.mode == .Debug) {
             std.debug.print("[master-left] Window {}: x={}, y={}, w={}, h={} (master={})\n",
                 .{idx, x, y, w, h, idx < m_count});
         }
     }
-}
-
-fn configureWindow(wm: *WM, window: u32, x: u16, y: u16, width: u16, height: u16) void {
-    const values = [_]u32{
-        x,
-        y,
-        @max(1, width),
-        @max(1, height),
-    };
-
-    _ = xcb.xcb_configure_window(wm.conn, window,
-        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
-        xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
-        &values);
 }
