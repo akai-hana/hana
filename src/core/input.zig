@@ -108,8 +108,14 @@ fn setWindowFocus(wm: *WM, window: u32) void {
         &[_]u32{xcb.XCB_STACK_MODE_ABOVE}
     );
     
-    // Update WM state
+    // Update WM state and notify tiling module about focus change
+    const old_focus = wm.focused_window;
     wm.focused_window = window;
+    
+    // Manually trigger border color update by calling tiling module
+    if (old_focus != window) {
+        tiling.updateWindowFocus(wm, window);
+    }
     
     _ = xcb.xcb_flush(wm.conn);
 }
@@ -202,6 +208,7 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             }
         },
         .close_window => {
+            std.log.info("[input] Executing close_window action", .{});
             if (wm.focused_window) |win_id| {
                 logging.debugClosingWindow(win_id);
                 _ = xcb.xcb_destroy_window(wm.conn, win_id);
@@ -211,19 +218,41 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             }
         },
         .reload_config => {
+            std.log.info("[input] Executing reload_config action", .{});
             logging.debugConfigReloadTriggered();
             buildKeybindMap(wm) catch |err| {
                 std.log.err("Failed to rebuild keybind map: {}", .{err});
             };
         },
-        .focus_next, .focus_prev => logging.debugFocusNotImplemented(),
+        .focus_next, .focus_prev => {
+            std.log.info("[input] Executing focus navigation action", .{});
+            logging.debugFocusNotImplemented();
+        },
 
         // Tiling actions
-        .toggle_layout => tiling.toggleLayout(wm),
-        .increase_master => tiling.increaseMasterWidth(wm),
-        .decrease_master => tiling.decreaseMasterWidth(wm),
-        .increase_master_count => tiling.increaseMasterCount(wm),
-        .decrease_master_count => tiling.decreaseMasterCount(wm),
-        .toggle_tiling => tiling.toggleTiling(wm),
+        .toggle_layout => {
+            std.log.info("[input] Executing toggle_layout action", .{});
+            tiling.toggleLayout(wm);
+        },
+        .increase_master => {
+            std.log.info("[input] Executing increase_master action", .{});
+            tiling.increaseMasterWidth(wm);
+        },
+        .decrease_master => {
+            std.log.info("[input] Executing decrease_master action", .{});
+            tiling.decreaseMasterWidth(wm);
+        },
+        .increase_master_count => {
+            std.log.info("[input] Executing increase_master_count action", .{});
+            tiling.increaseMasterCount(wm);
+        },
+        .decrease_master_count => {
+            std.log.info("[input] Executing decrease_master_count action", .{});
+            tiling.decreaseMasterCount(wm);
+        },
+        .toggle_tiling => {
+            std.log.info("[input] Executing toggle_tiling action", .{});
+            tiling.toggleTiling(wm);
+        },
     }
 }
