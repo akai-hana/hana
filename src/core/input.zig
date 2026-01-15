@@ -91,13 +91,30 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
     }
 }
 
-fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
-    // Raise window on keypress
-    if (event.child != 0) {
-        _ = xcb.xcb_configure_window(wm.conn, event.child,
-            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
-    }
+fn setWindowFocus(wm: *WM, window: u32) void {
+    // Set X11 input focus
+    _ = xcb.xcb_set_input_focus(
+        wm.conn,
+        xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
+        window,
+        xcb.XCB_CURRENT_TIME
+    );
+    
+    // Raise window to top
+    _ = xcb.xcb_configure_window(
+        wm.conn,
+        window,
+        xcb.XCB_CONFIG_WINDOW_STACK_MODE,
+        &[_]u32{xcb.XCB_STACK_MODE_ABOVE}
+    );
+    
+    // Update WM state
+    wm.focused_window = window;
+    
+    _ = xcb.xcb_flush(wm.conn);
+}
 
+fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     // Check for keybinding match
     const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
     const modifiers: u16 = @intCast(event.state & defs.MOD_MASK_RELEVANT);
@@ -118,6 +135,9 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     if (event.child == 0) return;
 
     logging.debugMouseButtonClick(event.detail, event.root_x, event.root_y, event.child);
+
+    // Set focus to clicked window - THIS IS THE FIX!
+    setWindowFocus(wm, event.child);
 
     // Get window geometry and save drag state
     const geom_cookie = xcb.xcb_get_geometry(wm.conn, event.child);
