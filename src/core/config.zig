@@ -62,6 +62,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
 
     var config = getDefaultConfig();
     try parseKeybindings(allocator, &doc, &config);
+    try parseTiling(&doc, &config);  // Add this line
     try validateConfig(allocator, &config);
 
     return config;
@@ -88,6 +89,55 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const toml.Document, con
             .keysym = parts.keysym,
             .action = .{ .exec = try allocator.dupe(u8, command) },
         });
+    }
+}
+
+fn parseTiling(doc: *const toml.Document, config: *Config) !void {
+    const section = doc.getSection("tiling") orelse {
+        std.log.warn("[config] No [tiling] section found", .{});
+        return;
+    };
+    
+    if (section.getString("layout")) |layout| {
+        config.tiling.layout = layout;
+        std.log.info("[config] Loaded layout: {s}", .{layout});
+    }
+    
+    if (section.getInt("enabled")) |enabled| {
+        config.tiling.enabled = enabled != 0;
+        std.log.info("[config] Loaded enabled: {}", .{enabled != 0});
+    }
+    
+    if (section.getInt("master_count")) |count| {
+        config.tiling.master_count = @intCast(count);
+        std.log.info("[config] Loaded master_count: {}", .{count});
+    }
+    
+    if (section.getInt("master_width_factor")) |factor| {
+        config.tiling.master_width_factor = @as(f32, @floatFromInt(factor)) / 100.0;
+        std.log.info("[config] Loaded master_width_factor: {} ({}%)", .{config.tiling.master_width_factor, factor});
+    } else {
+        std.log.warn("[config] master_width_factor not found or invalid", .{});
+    }
+    
+    if (section.getInt("gaps")) |gaps| {
+        config.tiling.gaps = @intCast(gaps);
+        std.log.info("[config] Loaded gaps: {}", .{gaps});
+    }
+    
+    if (section.getInt("border_width")) |width| {
+        config.tiling.border_width = @intCast(width);
+        std.log.info("[config] Loaded border_width: {}", .{width});
+    }
+    
+    if (section.getColor("border_focused")) |color| {
+        config.tiling.border_focused = color;
+        std.log.info("[config] Loaded border_focused: 0x{x}", .{color});
+    }
+    
+    if (section.getColor("border_normal")) |color| {
+        config.tiling.border_normal = color;
+        std.log.info("[config] Loaded border_normal: 0x{x}", .{color});
     }
 }
 

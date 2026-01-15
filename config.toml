@@ -1,24 +1,19 @@
 # hana configuration
-# Full TOML support - [sections], integers, colors, strings, arrays
 
-[appearance]
-# Color codes admit "#RRGGBB", 0xRRGGBB and RRGGBB.
-# Use what you prefer the most.
-border_focused   = "#00ff00"
-border_unfocused = "#ff0000"
-
-border_width = 4
-
-[gaps]
-inner = 10                      # Gap between windows (pixels)
-outer = 20                      # Gap between windows and screen edge (pixels)
+[tiling]
+enabled = 1  # 1 = true, 0 = false
+layout = "master_left"  # Options: "master_left", "monocle", "grid"
+master_width_factor = 50 # %
+master_count = 1
+gaps = 10
+border_width = 2
+border_focused = "#5294E2"
+border_normal = "#383C4A"
 
 [Keybindings]
 # Execute commands
-# Format: "Modifier+Key" = "command"
-# Modifiers: Mod4 (Super/Windows), Mod1 (Alt), Shift, Control
 Super+Return = "ghostty"
-Mod4+Shift+q = "kill"  # This will be handled specially to close window
+Mod4+Shift+q = "kill"
 
 # Tiling
 Super+t       = "toggle_layout"
