@@ -21,7 +21,7 @@ gaps = 10
 Mod = "Super" # Mod1/Alt, Mod4/Super, Shift
 
 # Commands
-Mod+Return = "ghostty"
+Mod+d = "ghostty"
 Mod+Shift+q = "kill"
 
 # Tiling
