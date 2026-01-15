@@ -60,6 +60,10 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
             const ev: *const xcb.xcb_map_request_event_t = @ptrCast(@alignCast(event));
             handleMapRequest(ev, wm, state);
         },
+        xcb.XCB_CONFIGURE_REQUEST => {
+            const ev: *const xcb.xcb_configure_request_event_t = @ptrCast(@alignCast(event));
+            handleConfigureRequest(ev, wm, state);
+        },
         xcb.XCB_DESTROY_NOTIFY => {
             const ev: *const xcb.xcb_destroy_notify_event_t = @ptrCast(@alignCast(event));
             handleRemoveWindow(ev.window, wm, state);
@@ -104,6 +108,39 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *
             .{event.window, state.tiled_windows.items.len});
     }
 }
+
+fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM, state: *TilingState) void {
+    // Check if this window is tiled
+    var is_tiled = false;
+    for (state.tiled_windows.items) |win| {
+        if (win == event.window) {
+            is_tiled = true;
+            break;
+        }
+    }
+    
+    if (is_tiled) {
+        // For tiled windows, ignore resize requests and re-tile
+        // This prevents applications from resizing themselves
+        if (builtin.mode == .Debug) {
+            std.debug.print("[tiling] Ignoring configure request from tiled window {x}\n", .{event.window});
+        }
+        retile(wm, state);
+    } else {
+        // For non-tiled windows, allow the configuration
+        const values = [_]u32{
+            @as(u32, @intCast(@max(0, event.x))),
+            @as(u32, @intCast(@max(0, event.y))),
+            event.width,
+            event.height,
+        };
+        _ = xcb.xcb_configure_window(wm.conn, event.window,
+            xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
+            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
+            &values);
+    }
+}
+
 fn handleRemoveWindow(window: u32, wm: *WM, state: *TilingState) void {
     // Remove from tiling list
     var found = false;
@@ -186,9 +223,16 @@ fn tileMasterStack(wm: *WM, state: *TilingState, windows: []const u32,
             w = if (master_width > 2 * gap + 2 * bw) 
                 master_width - 2 * gap - 2 * bw 
             else 1;
-            h = if (row_height > 2 * gap + 2 * bw)
-                row_height - 2 * gap - 2 * bw
-            else 1;
+            
+            // For the last master window, calculate height to fit exactly to screen bottom
+            if (row == m_count - 1) {
+                const available = screen_h - y - gap;
+                h = if (available > 2 * bw) available - 2 * bw else 1;
+            } else {
+                h = if (row_height > 2 * gap + 2 * bw)
+                    row_height - 2 * gap - 2 * bw
+                else 1;
+            }
         } else {
             // STACK COLUMN (right side)
             const stack_idx = idx - m_count;
@@ -200,9 +244,21 @@ fn tileMasterStack(wm: *WM, state: *TilingState, windows: []const u32,
             w = if (stack_width > 2 * gap + 2 * bw)
                 stack_width - 2 * gap - 2 * bw
             else 1;
-            h = if (row_height > 2 * gap + 2 * bw)
-                row_height - 2 * gap - 2 * bw
-            else 1;
+            
+            // For the last stack window, calculate height to fit exactly to screen bottom
+            if (stack_idx == s_count - 1) {
+                const available = screen_h - y - gap;
+                h = if (available > 2 * bw) available - 2 * bw else 1;
+                
+                if (builtin.mode == .Debug) {
+                    std.debug.print("[tiling] Last stack window: y={}, screen_h={}, gap={}, bw={}, available={}, h={}, bottom={}\n",
+                        .{y, screen_h, gap, bw, available, h, y + h + 2 * bw});
+                }
+            } else {
+                h = if (row_height > 2 * gap + 2 * bw)
+                    row_height - 2 * gap - 2 * bw
+                else 1;
+            }
         }
 
         configureWindow(wm, win, x, y, w, h);
@@ -326,6 +382,7 @@ pub fn toggleTiling(wm: *WM) void {
 }
 pub const EVENT_TYPES = [_]u8{
     xcb.XCB_MAP_REQUEST,
+    xcb.XCB_CONFIGURE_REQUEST,
     xcb.XCB_DESTROY_NOTIFY,
     xcb.XCB_UNMAP_NOTIFY,
 };
