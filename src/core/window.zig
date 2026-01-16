@@ -1,12 +1,11 @@
 // Window management - absolutely minimal
 
-const std     = @import("std");
-const defs    = @import("defs");
-const builtin = @import("builtin");
-const logging = @import("logging");
-const xcb     = defs.xcb;
-const WM      = defs.WM;
-const Module  = defs.Module;
+const std = @import("std");
+const defs = @import("defs");
+const log = @import("logging");
+const xcb = defs.xcb;
+const WM = defs.WM;
+const Module = defs.Module;
 
 pub const EVENT_TYPES = [_]u8{
     xcb.XCB_MAP_REQUEST,
@@ -15,9 +14,7 @@ pub const EVENT_TYPES = [_]u8{
 };
 
 pub fn init(_: *WM) void {
-    if (builtin.mode == .Debug) {
-        std.debug.print("[window] Module initialized\n", .{});
-    }
+    log.debugWindowModuleInit();
 }
 
 pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
@@ -30,14 +27,14 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 }
 
 fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
-    logging.debugWindowMapRequest(event.window);
+    log.debugWindowMapRequest(event.window);
 
     _ = xcb.xcb_map_window(wm.conn, event.window);
     _ = xcb.xcb_flush(wm.conn);
 }
 
 fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
-    logging.debugWindowConfigure(event.window, event.width, event.height, event.x, event.y);
+    log.debugWindowConfigure(event.window, event.width, event.height, event.x, event.y);
 
     _ = xcb.xcb_configure_window(wm.conn, event.window, event.value_mask, &[_]u32{
         @intCast(event.x),
@@ -49,7 +46,7 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
 }
 
 fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
-    logging.debugWindowDestroyed(event.window);
+    log.debugWindowDestroyed(event.window);
 
     wm.removeWindow(event.window);
     if (wm.focused_window == event.window) wm.focused_window = null;

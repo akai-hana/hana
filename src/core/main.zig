@@ -1,6 +1,5 @@
 // Main event loop - clean and minimal
 
-// Imports
 const std     = @import("std");
 const posix   = std.posix;
 const builtin = @import("builtin");
@@ -12,20 +11,18 @@ const window         = @import("window");
 const input          = @import("input");
 const tiling         = @import("tiling");
 const error_handling = @import("error_handling");
-const logging        = @import("logging");
+const log            = @import("logging");
 
 const xcb = defs.xcb;
 const WM  = defs.WM;
 
 // Centralized module registration
-// This "converts" the raw files into Module structs automatically
 const modules = [_]defs.Module{
     defs.generateModule(window),
     defs.generateModule(input),
     defs.generateModule(tiling),
 };
 
-// Config
 var should_reload_config: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
@@ -69,7 +66,7 @@ pub fn main() !void {
     try error_handling.becomeWindowManager(conn, root, WM_EVENT_MASK);
     setupRootCursor(conn, screen);
     input.setupGrabs(conn, root);
-    logging.debugWMStarted();
+    log.debugWMStarted();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -129,7 +126,7 @@ pub fn main() !void {
 
         if (should_reload_config.swap(false, .acq_rel)) {
             handleConfigReload(&wm) catch |err| {
-                std.log.err("Config reload failed: {}", .{err});
+                log.errorConfigReloadFailed(err);
             };
         }
 
@@ -138,8 +135,7 @@ pub fn main() !void {
 
         const response_type = @as(*u8, @ptrCast(event)).* & 0x7F;
 
-        // AUTOMATED ROUTING:
-        // This replaces the entire switch (response_type) block
+        // Automated routing to modules
         inline for (modules) |m| {
             if (std.mem.indexOfScalar(u8, m.event_types, response_type)) |_| {
                 m.handle_fn(response_type, event, &wm);
@@ -161,11 +157,11 @@ fn grabKeybindings(wm: *WM) !void {
         }
     }
     _ = xcb.xcb_flush(wm.conn);
-    logging.debugKeybindingsGrabbed(wm.config.keybindings.items.len);
+    log.debugKeybindingsGrabbed(wm.config.keybindings.items.len);
 }
 
 fn handleConfigReload(wm: *WM) !void {
-    logging.debugConfigReloading();
+    log.debugConfigReloading();
 
     var new_config = try config.loadConfigDefault(wm.allocator);
     errdefer new_config.deinit(wm.allocator);
@@ -175,5 +171,5 @@ fn handleConfigReload(wm: *WM) !void {
     wm.config = new_config;
 
     try grabKeybindings(wm);
-    logging.debugConfigReloaded();
+    log.debugConfigReloaded();
 }
