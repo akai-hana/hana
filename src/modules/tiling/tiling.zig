@@ -121,10 +121,6 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *
             return;
         }
     }
-
-    // Query pointer position BEFORE adding the new window
-    const pointer_cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
-    const pointer_reply = xcb.xcb_query_pointer_reply(wm.conn, pointer_cookie, null);
     
     // Insert at the beginning (new window becomes master)
     state.tiled_windows.insert(wm.allocator, 0, event.window) catch {
@@ -157,13 +153,18 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *
     // Retile all windows (which will also update border colors)
     retile(wm, state);
     
-    // After retiling, check if pointer is over another window and mark it to be ignored
-    if (pointer_reply) |reply| {
+    // IMPORTANT: Query pointer AFTER retiling to see which window it's actually over now
+    // This handles the case where retiling moves windows around and the cursor ends up
+    // over a different window than it was before
+    _ = xcb.xcb_flush(wm.conn);  // Ensure retiling is complete
+    
+    const pointer_cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
+    if (xcb.xcb_query_pointer_reply(wm.conn, pointer_cookie, null)) |reply| {
         defer std.c.free(reply);
         
-        // child is the window the pointer is currently in
+        // child is the window the pointer is currently over AFTER retiling
         if (reply.*.child != 0 and reply.*.child != event.window) {
-            // The pointer is over another window - ignore it for focus until mouse leaves
+            // The pointer is over another window after retiling - ignore it for focus
             window.ignoreWindowForFocus(reply.*.child);
         }
     }
