@@ -10,18 +10,14 @@ pub inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
-// ============================================================================
 // GENERIC LOGGING HELPERS
-// ============================================================================
 
 /// Log that a config value was set
-/// IMPORTANT: args must be a tuple, even for single values: .{value}
 pub fn debugConfigValue(comptime field: []const u8, comptime fmt: []const u8, args: anytype) void {
     std.log.info("[config] ✓ " ++ field ++ " = " ++ fmt, args);
 }
 
 /// Log that a config value is using default
-/// IMPORTANT: args must be a tuple, even for single values: .{value}
 pub fn debugConfigDefault(comptime field: []const u8, comptime fmt: []const u8, args: anytype) void {
     std.log.info("[config] ○ " ++ field ++ " not specified, using default: " ++ fmt, args);
 }
@@ -46,9 +42,7 @@ pub fn warnColorOutOfRange(comptime field: []const u8, color: u32) void {
     std.log.warn("[config] ✗ " ++ field ++ " 0x{x} exceeds 24-bit RGB range", .{color});
 }
 
-// ============================================================================
 // WM CORE DEBUG FUNCTIONS
-// ============================================================================
 
 pub fn debugWMStarted() void {
     debugPrint("{s}[WM]{s} hana window manager started\n", .{ colors.GREEN, colors.RESET });
@@ -74,9 +68,7 @@ pub fn errorConfigReloadFailed(err: anyerror) void {
     std.log.err("Config reload failed: {}", .{err});
 }
 
-// ============================================================================
 // CONFIG MODULE DEBUG FUNCTIONS
-// ============================================================================
 
 pub fn debugConfigNotFound(path: []const u8) void {
     std.log.info("Config file not found at '{s}', using defaults", .{path});
@@ -107,7 +99,6 @@ pub fn debugTilingParseStart() void {
 }
 
 pub fn debugTilingParseEnd() void {
-    std.log.info("[config] ===============================================", .{});
 }
 
 // Tiling-specific helpers with proper formatting
@@ -156,9 +147,7 @@ pub fn errorDuplicateKeybinding(modifiers: u16, keysym: u32) void {
     std.log.err("Duplicate keybinding: mod={x} keysym={d}", .{modifiers, keysym});
 }
 
-// ============================================================================
 // XKB MODULE DEBUG FUNCTIONS
-// ============================================================================
 
 pub fn debugXkbInitializing() void {
     std.log.info("Initializing XKB...", .{});
@@ -176,9 +165,7 @@ pub fn warnXkbKeycodeNotFound(keysym: u32) void {
     std.log.warn("Could not find keycode for keysym 0x{x}", .{keysym});
 }
 
-// ============================================================================
 // WINDOW MODULE DEBUG FUNCTIONS
-// ============================================================================
 
 pub fn debugWindowModuleInit() void {
     debugPrint("[window] Module initialized\n", .{});
@@ -197,9 +184,7 @@ pub fn debugWindowDestroyed(window_id: u32) void {
     debugPrint("{s}[window]{s} Window {x} destroyed\n", .{ colors.BLUE, colors.RESET, window_id });
 }
 
-// ============================================================================
 // INPUT MODULE DEBUG FUNCTIONS
-// ============================================================================
 
 pub fn debugInputModuleInit(keybind_count: usize) void {
     debugPrint("{s}[input]{s} Module initialized with {} keybindings\n", .{ colors.BLUE, colors.RESET, keybind_count });
@@ -265,19 +250,15 @@ pub fn errorCommandForkFailed(cmd: []const u8) void {
     std.log.err("Fork failed for command: {s}", .{cmd});
 }
 
-// ============================================================================
 // TILING MODULE DEBUG FUNCTIONS
-// ============================================================================
 
 pub fn debugTilingModuleInit() void {
     std.log.info("[tiling] ============ TILING CONFIGURATION ============", .{});
 }
 
 pub fn debugTilingModuleEnd() void {
-    std.log.info("[tiling] ===============================================", .{});
 }
 
-/// IMPORTANT: args must be a tuple, even for single values: .{value}
 pub fn debugTilingStateValue(comptime field: []const u8, comptime fmt: []const u8, args: anytype) void {
     std.log.info("[tiling] " ++ field ++ ": " ++ fmt, args);
 }
@@ -319,9 +300,7 @@ pub fn errorTilingWindowAddFailed() void {
     std.log.err("Failed to add window to tiling list", .{});
 }
 
-// ============================================================================
 // LAYOUT MODULE DEBUG FUNCTIONS
-// ============================================================================
 
 pub fn debugLayoutTiling(comptime layout: []const u8, window_count: usize, cols: anytype, rows: anytype) void {
     debugPrint("[" ++ layout ++ "] Tiling {} windows in {}x{} grid\n", .{window_count, cols, rows});

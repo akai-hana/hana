@@ -3,6 +3,7 @@ const std     = @import("std");
 const defs    = @import("defs");
 const builtin = @import("builtin");
 const log     = @import("logging");
+const window  = @import("window");
 const xcb     = defs.xcb;
 const WM      = defs.WM;
 
@@ -121,11 +122,19 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *
         }
     }
 
-    // Add window to tiling list
-    state.tiled_windows.append(wm.allocator, event.window) catch {
+    // Query pointer position BEFORE adding the new window
+    const pointer_cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
+    const pointer_reply = xcb.xcb_query_pointer_reply(wm.conn, pointer_cookie, null);
+    
+    // Insert at the beginning (new window becomes master)
+    state.tiled_windows.insert(wm.allocator, 0, event.window) catch {
         log.errorTilingWindowAddFailed();
         return;
     };
+
+    // Set up event mask for the new window to receive enter/leave events
+    _ = xcb.xcb_change_window_attributes(wm.conn, event.window,
+        xcb.XCB_CW_EVENT_MASK, &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
 
     // Map the window
     _ = xcb.xcb_map_window(wm.conn, event.window);
@@ -147,6 +156,17 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *
 
     // Retile all windows (which will also update border colors)
     retile(wm, state);
+    
+    // After retiling, check if pointer is over another window and mark it to be ignored
+    if (pointer_reply) |reply| {
+        defer std.c.free(reply);
+        
+        // child is the window the pointer is currently in
+        if (reply.*.child != 0 and reply.*.child != event.window) {
+            // The pointer is over another window - ignore it for focus until mouse leaves
+            window.ignoreWindowForFocus(reply.*.child);
+        }
+    }
 
     if (builtin.mode == .Debug) {
         log.debugTilingWindowAdded(event.window, state.tiled_windows.items.len);
@@ -184,10 +204,10 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
     }
 }
 
-fn handleRemoveWindow(window: u32, wm: *WM, state: *TilingState) void {
+fn handleRemoveWindow(window_id: u32, wm: *WM, state: *TilingState) void {
     var found = false;
     for (state.tiled_windows.items, 0..) |win, i| {
-        if (win == window) {
+        if (win == window_id) {
             _ = state.tiled_windows.orderedRemove(i);
             found = true;
             break;
@@ -195,9 +215,22 @@ fn handleRemoveWindow(window: u32, wm: *WM, state: *TilingState) void {
     }
     if (!found) return;
 
-    // If the focused window was removed, clear focus
-    if (wm.focused_window == window) {
+    // If the focused window was removed, try to focus another window
+    const was_focused = wm.focused_window == window_id;
+    if (was_focused) {
         wm.focused_window = null;
+        
+        // Focus the first window in the list (the current master)
+        if (state.tiled_windows.items.len > 0) {
+            const next_window = state.tiled_windows.items[0];
+            _ = xcb.xcb_set_input_focus(
+                wm.conn,
+                xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
+                next_window,
+                xcb.XCB_CURRENT_TIME
+            );
+            wm.focused_window = next_window;
+        }
     }
 
     if (state.tiled_windows.items.len > 0) {
@@ -205,7 +238,7 @@ fn handleRemoveWindow(window: u32, wm: *WM, state: *TilingState) void {
     }
 
     if (builtin.mode == .Debug) {
-        log.debugTilingWindowRemoved(window, state.tiled_windows.items.len);
+        log.debugTilingWindowRemoved(window_id, state.tiled_windows.items.len);
     }
 }
 

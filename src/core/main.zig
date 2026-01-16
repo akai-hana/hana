@@ -27,7 +27,8 @@ var should_reload_config: std.atomic.Value(bool) = std.atomic.Value(bool).init(f
 
 const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
     xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
-    xcb.XCB_EVENT_MASK_KEY_PRESS;
+    xcb.XCB_EVENT_MASK_KEY_PRESS |
+    xcb.XCB_EVENT_MASK_ENTER_WINDOW;  // Add this for focus-follows-mouse
 
 fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
     const cursor_font = xcb.xcb_generate_id(conn);
@@ -54,6 +55,13 @@ fn setupSignalHandler() void {
         .flags = posix.SA.RESTART,
     };
     posix.sigaction(posix.SIG.HUP, &sa, null);
+}
+
+fn setupWindowEventMask(conn: *xcb.xcb_connection_t, window_id: u32) void {
+    // Set up event mask for client windows to receive enter/leave events
+    const client_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
+    _ = xcb.xcb_change_window_attributes(conn, window_id, 
+        xcb.XCB_CW_EVENT_MASK, &[_]u32{client_mask});
 }
 
 pub fn main() !void {
@@ -118,6 +126,19 @@ pub fn main() !void {
     }
 
     try grabKeybindings(&wm);
+    
+    // Setup event masks for any existing windows
+    const tree_cookie = xcb.xcb_query_tree(conn, root);
+    if (xcb.xcb_query_tree_reply(conn, tree_cookie, null)) |tree_reply| {
+        defer std.c.free(tree_reply);
+        const children = xcb.xcb_query_tree_children(tree_reply);
+        const children_len = xcb.xcb_query_tree_children_length(tree_reply);
+        var i: usize = 0;
+        while (i < children_len) : (i += 1) {
+            setupWindowEventMask(conn, children[i]);
+        }
+    }
+    
     _ = xcb.xcb_flush(conn);
 
     // Event loop
