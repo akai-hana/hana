@@ -4,8 +4,8 @@ const defs = @import("defs");
 const builtin = @import("builtin");
 const log = @import("logging");
 const WM = defs.WM;
-const tiling_types = @import("tiling_types");
-const TilingState = tiling_types.TilingState;
+const types = @import("types");
+const TilingState = types.TilingState;
 
 pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, screen_h: u16) void {
     const n = windows.len;
@@ -31,9 +31,9 @@ pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, s
 
         const x = gap + (col * cell_w);
         const y = gap + (row * cell_h);
-        const w = tiling_types.calcWindowDimension(cell_w, gap, bw);
-        const h = tiling_types.calcWindowDimension(cell_h, gap, bw);
+        const w = types.calcWindowDimension(cell_w, gap, bw);
+        const h = types.calcWindowDimension(cell_h, gap, bw);
 
-        tiling_types.configureWindow(wm, win, x, y, w, h);
+        types.configureWindow(wm, win, x, y, w, h);
     }
 }

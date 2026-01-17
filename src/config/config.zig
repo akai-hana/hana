@@ -1,8 +1,10 @@
 // Configuration parser for Hana window manager
-const std = @import("std");
-const defs = @import("defs");
-const toml = @import("toml");
-const xkb = @import("xkbcommon");
+const std    = @import("std");
+
+const defs   = @import("defs");
+const parser = @import("parser");
+const xkb    = @import("xkbcommon");
+
 const Config = defs.Config;
 
 pub const ValidationError = error{
@@ -83,7 +85,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     defer allocator.free(content);
 
     // Parse TOML
-    var doc = try toml.parse(allocator, content);
+    var doc = try parser.parse(allocator, content);
     defer doc.deinit();
 
     var config = getDefaultConfig();
@@ -101,7 +103,7 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !Config {
     return loadConfig(allocator, path);
 }
 
-fn parseKeybindings(allocator: std.mem.Allocator, doc: *const toml.Document, config: *Config) !void {
+fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, config: *Config) !void {
     const section = doc.getSection("Keybindings") orelse return;
     try config.keybindings.ensureTotalCapacity(allocator, section.pairs.count());
 
@@ -192,7 +194,7 @@ fn substituteModVariable(allocator: std.mem.Allocator, keybind: []const u8, mod_
     return try allocator.dupe(u8, keybind);
 }
 
-fn parseTiling(doc: *const toml.Document, config: *Config) !void {
+fn parseTiling(doc: *const parser.Document, config: *Config) !void {
     const section = doc.getSection("tiling") orelse {
         std.log.info("[config] No [tiling] section found, using defaults", .{});
         return;

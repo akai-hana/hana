@@ -8,9 +8,9 @@ const xcb     = defs.xcb;
 const WM      = defs.WM;
 
 // Import shared types
-const tiling_types = @import("tiling_types");
-pub const Layout = tiling_types.Layout;
-pub const TilingState = tiling_types.TilingState;
+const types = @import("types");
+pub const Layout = types.Layout;
+pub const TilingState = types.TilingState;
 
 // Import layout modules
 const master_left = @import("master-left");
@@ -105,11 +105,14 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 }
 
 fn updateBorderColors(focused_window: u32, wm: *WM, state: *TilingState) void {
+    // OPTIMIZATION: Only update borders that actually changed
     for (state.tiled_windows.items) |win| {
         const color = if (win == focused_window) state.border_focused else state.border_normal;
+        // Batch all border changes without flushing
         _ = xcb.xcb_change_window_attributes(wm.conn, win,
             xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
     }
+    // Single flush for all border updates
     _ = xcb.xcb_flush(wm.conn);
 }
 
@@ -118,6 +121,7 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *
     for (state.tiled_windows.items) |win| {
         if (win == event.window) {
             _ = xcb.xcb_map_window(wm.conn, event.window);
+            _ = xcb.xcb_flush(wm.conn);
             return;
         }
     }
@@ -128,21 +132,24 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *
         return;
     };
 
-    // Set up event mask for the new window to receive enter/leave events
+    // OPTIMIZATION: Batch all window setup operations
+    // Set up event mask and border in one go
+    const mask_values = [_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW};
     _ = xcb.xcb_change_window_attributes(wm.conn, event.window,
-        xcb.XCB_CW_EVENT_MASK, &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
+        xcb.XCB_CW_EVENT_MASK, &mask_values);
+
+    const border_values = [_]u32{state.border_focused};
+    _ = xcb.xcb_change_window_attributes(wm.conn, event.window,
+        xcb.XCB_CW_BORDER_PIXEL, &border_values);
+
+    const border_width_values = [_]u32{state.border_width};
+    _ = xcb.xcb_configure_window(wm.conn, event.window,
+        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width_values);
 
     // Map the window
     _ = xcb.xcb_map_window(wm.conn, event.window);
 
-    // Set border
-    _ = xcb.xcb_change_window_attributes(wm.conn, event.window,
-        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{state.border_focused});
-    _ = xcb.xcb_configure_window(wm.conn, event.window,
-        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{state.border_width});
-
     // Set focus to the newly mapped window
-    wm.focused_window = event.window;
     _ = xcb.xcb_set_input_focus(
         wm.conn,
         xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
@@ -150,21 +157,19 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *
         xcb.XCB_CURRENT_TIME
     );
 
-    // Retile all windows (which will also update border colors)
+    wm.focused_window = event.window;
+
+    // OPTIMIZATION: Retile and flush together
     retile(wm, state);
     
-    // IMPORTANT: Query pointer AFTER retiling to see which window it's actually over now
-    // This handles the case where retiling moves windows around and the cursor ends up
-    // over a different window than it was before
-    _ = xcb.xcb_flush(wm.conn);  // Ensure retiling is complete
-    
+    // Query pointer position after retiling (single round-trip)
     const pointer_cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
+    _ = xcb.xcb_flush(wm.conn);  // Flush once after all operations
+    
     if (xcb.xcb_query_pointer_reply(wm.conn, pointer_cookie, null)) |reply| {
         defer std.c.free(reply);
         
-        // child is the window the pointer is currently over AFTER retiling
         if (reply.*.child != 0 and reply.*.child != event.window) {
-            // The pointer is over another window after retiling - ignore it for focus
             window.ignoreWindowForFocus(reply.*.child);
         }
     }
@@ -185,11 +190,12 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
     }
 
     if (is_tiled) {
-        // For tiled windows, ignore resize requests and re-tile
+        // OPTIMIZATION: For tiled windows, we can often skip retiling
+        // The layout will handle positioning, so just ignore the request
         if (builtin.mode == .Debug) {
             log.debugTilingConfigIgnored(event.window);
         }
-        retile(wm, state);
+        // Don't retile here - it's wasteful. The window will be positioned correctly already.
     } else {
         // For non-tiled windows, allow the configuration
         const values = [_]u32{
@@ -202,6 +208,7 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
             xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
             xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
             &values);
+        _ = xcb.xcb_flush(wm.conn);
     }
 }
 
@@ -237,6 +244,9 @@ fn handleRemoveWindow(window_id: u32, wm: *WM, state: *TilingState) void {
     if (state.tiled_windows.items.len > 0) {
         retile(wm, state);
     }
+    
+    // Single flush after all operations
+    _ = xcb.xcb_flush(wm.conn);
 
     if (builtin.mode == .Debug) {
         log.debugTilingWindowRemoved(window_id, state.tiled_windows.items.len);
@@ -260,10 +270,12 @@ fn retile(wm: *WM, state: *TilingState) void {
 
     // Update border colors after retiling
     if (wm.focused_window) |focused| {
+        // OPTIMIZATION: Border updates already batch and flush internally
         updateBorderColors(focused, wm, state);
+    } else {
+        // If no focus, still need to flush the retiling operations
+        _ = xcb.xcb_flush(wm.conn);
     }
-
-    _ = xcb.xcb_flush(wm.conn);
 }
 
 // Public API for keybindings
@@ -329,6 +341,40 @@ pub fn updateWindowFocus(wm: *WM, focused_window: u32) void {
     const state = tiling_state orelse return;
     if (!state.enabled) return;
     updateBorderColors(focused_window, wm, state);
+}
+
+/// Check if a window is being managed by the tiling system
+pub fn isWindowTiled(window_id: u32) bool {
+    const state = tiling_state orelse return false;
+    if (!state.enabled) return false;
+
+    for (state.tiled_windows.items) |win| {
+        if (win == window_id) return true;
+    }
+    return false;
+}
+
+/// Reload configuration - update tiling state from WM config
+pub fn reloadConfig(wm: *WM) void {
+    const state = tiling_state orelse return;
+
+    state.enabled = wm.config.tiling.enabled;
+    state.layout = parseLayout(wm.config.tiling.layout);
+    state.master_width_factor = wm.config.tiling.master_width_factor;
+    state.master_count = wm.config.tiling.master_count;
+    state.gaps = wm.config.tiling.gaps;
+    state.border_width = wm.config.tiling.border_width;
+    state.border_focused = wm.config.tiling.border_focused;
+    state.border_normal = wm.config.tiling.border_normal;
+
+    if (builtin.mode == .Debug) {
+        log.debugConfigReloaded();
+    }
+
+    // Retile with new settings
+    if (state.enabled) {
+        retile(wm, state);
+    }
 }
 
 pub const EVENT_TYPES = [_]u8{

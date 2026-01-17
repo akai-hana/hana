@@ -5,8 +5,8 @@ const builtin = @import("builtin");
 const log = @import("logging");
 const xcb = defs.xcb;
 const WM = defs.WM;
-const tiling_types = @import("tiling_types");
-const TilingState = tiling_types.TilingState;
+const types = @import("types");
+const TilingState = types.TilingState;
 
 pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, screen_h: u16) void {
     if (windows.len == 0) return;
@@ -18,11 +18,11 @@ pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, s
         log.debugLayoutTilingSimple("monocle", windows.len);
     }
 
-    const w = tiling_types.calcWindowDimension(screen_w, gap, bw);
-    const h = tiling_types.calcWindowDimension(screen_h, gap, bw);
+    const w = types.calcWindowDimension(screen_w, gap, bw);
+    const h = types.calcWindowDimension(screen_h, gap, bw);
 
     for (windows) |win| {
-        tiling_types.configureWindow(wm, win, gap, gap, w, h);
+        types.configureWindow(wm, win, gap, gap, w, h);
     }
 
     // Raise last window to top

@@ -143,7 +143,10 @@ pub fn main() !void {
 
     // Event loop
     while (true) {
-        _ = xcb.xcb_flush(conn);
+        const event = xcb.xcb_wait_for_event(conn) orelse break;
+        defer std.c.free(event);
+
+        const response_type = @as(*u8, @ptrCast(event)).* & 0x7F;
 
         if (should_reload_config.swap(false, .acq_rel)) {
             handleConfigReload(&wm) catch |err| {
@@ -151,17 +154,16 @@ pub fn main() !void {
             };
         }
 
-        const event = xcb.xcb_wait_for_event(conn) orelse break;
-        defer std.c.free(event);
-
-        const response_type = @as(*u8, @ptrCast(event)).* & 0x7F;
-
         // Automated routing to modules
         inline for (modules) |m| {
             if (std.mem.indexOfScalar(u8, m.event_types, response_type)) |_| {
                 m.handle_fn(response_type, event, &wm);
             }
         }
+        
+        // OPTIMIZATION: Single flush at end of event handling
+        // This batches all X11 operations from this event together
+        _ = xcb.xcb_flush(conn);
     }
 }
 
@@ -192,5 +194,9 @@ fn handleConfigReload(wm: *WM) !void {
     wm.config = new_config;
 
     try grabKeybindings(wm);
+    
+    // Notify tiling module to reload its config
+    tiling.reloadConfig(wm);
+    
     log.debugConfigReloaded();
 }

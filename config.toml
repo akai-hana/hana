@@ -6,9 +6,9 @@ Mod = "Super"
 
 # Window management
 Mod+Return = "ghostty"
-Mod+d = "kill"                    # Kill focused window (ACTION KEYWORD)
-Mod+Shift+q = "close"             # Also kills focused window (ACTION KEYWORD)
-Mod+Shift+r = "reload"            # Reload config (ACTION KEYWORD)
+Mod+d = "kill"         # Kill focused window
+Mod+Shift+q = "close"  # Also kills focused window
+Mod+Shift+r = "reload" # Reload config
 
 # Tiling layout controls (ALL ACTION KEYWORDS - NOT SHELL COMMANDS!)
 Mod+space = "toggle_layout"       # Cycle through layouts
@@ -36,11 +36,9 @@ master_count = 1
 # Master area width as percentage (5-95)
 master_width_factor = 55
 
-# Gap between windows in pixels
-gaps = 10
+gaps = 4 # 0 to disable gaps
 
-# Border width in pixels
-border_width = 2
+border_width = 4 # 0 to disable borders
 
 # Border colors in hex (with or without # or 0x prefix)
 border_focused = 0x5294E2

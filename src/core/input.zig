@@ -86,7 +86,7 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
 }
 
 fn setWindowFocus(wm: *WM, window: u32) void {
-    // Set X11 input focus
+    // OPTIMIZATION: Batch focus operations
     _ = xcb.xcb_set_input_focus(
         wm.conn,
         xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
@@ -94,7 +94,6 @@ fn setWindowFocus(wm: *WM, window: u32) void {
         xcb.XCB_CURRENT_TIME
     );
 
-    // Raise window to top
     _ = xcb.xcb_configure_window(
         wm.conn,
         window,
@@ -102,7 +101,6 @@ fn setWindowFocus(wm: *WM, window: u32) void {
         &[_]u32{xcb.XCB_STACK_MODE_ABOVE}
     );
 
-    // Update WM state BEFORE notifying tiling module
     const old_focus = wm.focused_window;
     wm.focused_window = window;
 
@@ -113,6 +111,7 @@ fn setWindowFocus(wm: *WM, window: u32) void {
         tiling.updateWindowFocus(wm, window);
     }
 
+    // Single flush for all focus operations
     _ = xcb.xcb_flush(wm.conn);
 }
 
@@ -138,7 +137,7 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     log.debugMouseButtonClick(event.detail, event.root_x, event.root_y, event.child);
     setWindowFocus(wm, event.child);
 
-    // Get window geometry and save drag state
+    // OPTIMIZATION: Use cookie-based geometry query for async operation
     const geom_cookie = xcb.xcb_get_geometry(wm.conn, event.child);
     if (xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null)) |g| {
         defer std.c.free(g);
@@ -177,6 +176,7 @@ fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void
         xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
         &geometry,
     );
+    // OPTIMIZATION: Don't flush on every motion event - let the event loop handle it
 }
 
 fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t) void {

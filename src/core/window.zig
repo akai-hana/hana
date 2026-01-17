@@ -54,12 +54,19 @@ fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     log.debugWindowMapRequest(event.window);
 
     _ = xcb.xcb_map_window(wm.conn, event.window);
-    _ = xcb.xcb_flush(wm.conn);
+    // OPTIMIZATION: Don't flush here - let the tiling module handle it
 }
 
 fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     log.debugWindowConfigure(event.window, event.width, event.height, event.x, event.y);
 
+    // Check if tiling is managing this window
+    if (wm.config.tiling.enabled and tiling.isWindowTiled(event.window)) {
+        // Let the tiling module handle it - don't apply the configure request
+        return;
+    }
+
+    // For floating/non-tiled windows, apply the configure request
     _ = xcb.xcb_configure_window(wm.conn, event.window, event.value_mask, &[_]u32{
         @intCast(event.x),
         @intCast(event.y),
@@ -72,12 +79,12 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
 fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     // Ignore root window and invalid windows
     if (event.event == wm.root or event.event == 0) return;
-    
+
     // Check if this window should be ignored for focus
     if (ignored_for_focus.contains(event.event)) {
         return;  // Don't focus this window yet
     }
-    
+
     // Normal focus behavior
     setWindowFocus(wm, event.event);
 }
@@ -93,14 +100,14 @@ fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) vo
 
     // Clean up ignored list
     _ = ignored_for_focus.remove(event.window);
-    
+
     const was_focused = wm.focused_window == event.window;
-    
+
     wm.removeWindow(event.window);
     if (wm.focused_window == event.window) {
         wm.focused_window = null;
     }
-    
+
     // If the destroyed window was focused, try to focus another window
     if (was_focused) {
         focusNextAvailableWindow(wm);
