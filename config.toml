@@ -7,27 +7,27 @@ Mod = "Super" # Mod1, Alt, Mod4, Super
 # Window management
 Mod+d       = "ghostty"
 Mod+Shift+f = "kill"
-Mod+Shift+q = "close"  # Also kills focused window
-Mod+Shift+r = "reload" # Reload config
+Mod+Shift+q = "close"  # huh
+Mod+Shift+r = "reload" # Reload WM (Apply config changes?)
 
 # Tiling layout controls
-Mod+space       = "toggle_layout"          # Cycle through layouts
-Mod+h           = "decrease_master"            # Decrease master width by 5%
-Mod+l           = "increase_master"            # Increase master width by 5%
-Mod+comma       = "increase_master_count"  # More windows in master
+Mod+space       = "toggle_layout"         # Cycle through layouts
+Mod+Shift+space = "toggle_tiling"         # Enable/disable tiling
+Mod+h           = "decrease_master"       # Decrease master width by 5%
+Mod+l           = "increase_master"       # Increase master width by 5%
+Mod+comma       = "increase_master_count" # More windows in master
 Mod+period      = "decrease_master_count" # Fewer windows in master
-Mod+Shift+space = "toggle_tiling"    # Enable/disable tiling
 
 # Workspace switching (1-9)
 Mod+1 = "workspace_1"
 Mod+2 = "workspace_2"
 Mod+3 = "workspace_3"
 Mod+4 = "workspace_4"
-Mod+5 = "workspace_5"
-Mod+6 = "workspace_6"
-Mod+7 = "workspace_7"
-Mod+8 = "workspace_8"
-Mod+9 = "workspace_9"
+Mod+q = "workspace_5"
+Mod+w = "workspace_6"
+Mod+e = "workspace_7"
+Mod+r = "workspace_8"
+#Mod+9 = "workspace_9"
 
 # Move window to workspace
 Mod+Shift+1 = "move_to_workspace_1"
@@ -38,11 +38,10 @@ Mod+Shift+5 = "move_to_workspace_5"
 Mod+Shift+6 = "move_to_workspace_6"
 Mod+Shift+7 = "move_to_workspace_7"
 Mod+Shift+8 = "move_to_workspace_8"
-Mod+Shift+9 = "move_to_workspace_9"
+#Mod+Shift+9 = "move_to_workspace_9"
 
 # Application launchers
 Mod+p   = "rofi -show drun"
-Mod+Tab = "dmenu_run"
 Mod+b   = "firefox"
 
 [tiling]
@@ -53,7 +52,7 @@ enabled = true
 layout = "master_left"
 
 # Number of windows in master area
-master_count = 1
+master_count = 2
 
 # Master area width as percentage (5-95)
 master_width_factor = 55
@@ -65,9 +64,9 @@ gaps = 12
 border_width = 4
 
 # Border colors in hex (with or without # or 0x prefix)
-border_focused = 0x5294E2
-border_normal = 0x383C4A
+border_focused = "#5294E2"
+border_normal  = "#383C4A"
 
 [workspaces]
 # Number of workspaces (1-20)
-count = 9
+count = 8
