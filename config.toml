@@ -2,20 +2,20 @@
 
 [Keybindings]
 # Define your modifier key
-Mod = "Super"
+Mod = "Super" # Mod1, Alt, Mod4, Super
 
 # Window management
-Mod+Return = "ghostty"
-Mod+d = "kill"         # Kill focused window
+Mod+d       = "ghostty"
+Mod+Shift+f = "kill"
 Mod+Shift+q = "close"  # Also kills focused window
 Mod+Shift+r = "reload" # Reload config
 
 # Tiling layout controls
-Mod+space = "toggle_layout"          # Cycle through layouts
-Mod+h = "decrease_master"            # Decrease master width by 5%
-Mod+l = "increase_master"            # Increase master width by 5%
-Mod+comma = "increase_master_count"  # More windows in master
-Mod+period = "decrease_master_count" # Fewer windows in master
+Mod+space       = "toggle_layout"          # Cycle through layouts
+Mod+h           = "decrease_master"            # Decrease master width by 5%
+Mod+l           = "increase_master"            # Increase master width by 5%
+Mod+comma       = "increase_master_count"  # More windows in master
+Mod+period      = "decrease_master_count" # Fewer windows in master
 Mod+Shift+space = "toggle_tiling"    # Enable/disable tiling
 
 # Workspace switching (1-9)
@@ -41,9 +41,9 @@ Mod+Shift+8 = "move_to_workspace_8"
 Mod+Shift+9 = "move_to_workspace_9"
 
 # Application launchers
-Mod+p = "rofi -show drun"
-Mod+Shift+d = "dmenu_run"
-Mod+b = "firefox"
+Mod+p   = "rofi -show drun"
+Mod+Tab = "dmenu_run"
+Mod+b   = "firefox"
 
 [tiling]
 # Enable/disable tiling (true or false)
@@ -59,7 +59,7 @@ master_count = 1
 master_width_factor = 55
 
 # Gaps between windows (in pixels)
-gaps = 8
+gaps = 12
 
 # Border width (in pixels)
 border_width = 4

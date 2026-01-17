@@ -1,5 +1,5 @@
 //! Main entry point and event loop for Hana window manager.
-//! 
+//!
 //! This module handles:
 //! - X11 connection setup and screen initialization
 //! - XKB keyboard state management
@@ -17,6 +17,7 @@ const xkbcommon = @import("xkbcommon");
 const window = @import("window");
 const input = @import("input");
 const tiling = @import("tiling");
+const workspaces = @import("workspaces");
 const error_handling = @import("error_handling");
 const log = @import("logging");
 
@@ -24,14 +25,16 @@ const xcb = defs.xcb;
 const WM = defs.WM;
 
 /// All registered modules that handle X11 events
+/// Order matters: workspaces must come before window/tiling to track window lifecycle
 const modules = [_]defs.Module{
+    defs.generateModule(workspaces),
     defs.generateModule(window),
     defs.generateModule(input),
     defs.generateModule(tiling),
 };
 
-/// Atomic flag set by SIGHUP signal to trigger config reload
-var should_reload_config = std.atomic.Value(bool).init(false);
+/// Atomic flag set by SIGHUP signal OR keybinding to trigger config reload
+var should_reload_config_storage = std.atomic.Value(bool).init(false);
 
 /// Event mask for root window - what events we want to receive
 const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
@@ -57,7 +60,7 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void 
 fn setupSignalHandler() void {
     const handler = struct {
         fn h(_: posix.SIG) callconv(.c) void {
-            should_reload_config.store(true, .release);
+            should_reload_config_storage.store(true, .release);
         }
     }.h;
 
@@ -113,6 +116,7 @@ pub fn main() !void {
         .windows = std.AutoHashMap(u32, defs.Window).init(allocator),
         .focused_window = null,
         .xkb_state = xkb_state,
+        .should_reload_config = &should_reload_config_storage,
     };
     defer wm.deinit();
 
@@ -157,7 +161,7 @@ pub fn main() !void {
         const response_type = @as(*u8, @ptrCast(event)).* & 0x7F;
 
         // Handle config reload if requested
-        if (should_reload_config.swap(false, .acq_rel)) {
+        if (should_reload_config_storage.swap(false, .acq_rel)) {
             handleConfigReload(&wm) catch |err| {
                 log.errorConfigReloadFailed(err);
             };
@@ -198,7 +202,7 @@ fn grabKeybindings(wm: *WM) !void {
     // Grab each keybinding with all lock modifier combinations
     for (wm.config.keybindings.items) |keybind| {
         const keycode = keybind.keycode orelse continue;
-        
+
         // Grab with CapsLock, NumLock, and both combinations to handle all cases
         inline for ([_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 }) |lock| {
             _ = xcb.xcb_grab_key(wm.conn, 0, wm.root,
@@ -218,12 +222,13 @@ fn handleConfigReload(wm: *WM) !void {
     errdefer new_config.deinit(wm.allocator);
 
     config.resolveKeybindings(new_config.keybindings.items, @ptrCast(@alignCast(wm.xkb_state)));
-    
+
     wm.config.deinit(wm.allocator);
     wm.config = new_config;
 
     try grabKeybindings(wm);
     tiling.reloadConfig(wm);
+    // Note: Workspace count changes require restart
 
     log.debugConfigReloaded();
 }

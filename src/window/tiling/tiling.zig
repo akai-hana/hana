@@ -18,6 +18,7 @@ const builtin = @import("builtin");
 const log = @import("logging");
 const xcb = defs.xcb;
 const WM = defs.WM;
+const workspaces = @import("workspaces");
 
 const types = @import("types");
 pub const Layout = types.Layout;
@@ -109,7 +110,7 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
             const e: *const xcb.xcb_configure_request_event_t = @ptrCast(@alignCast(event));
             handleConfigureRequest(e, wm);
         },
-        xcb.XCB_DESTROY_NOTIFY, xcb.XCB_UNMAP_NOTIFY => {
+        xcb.XCB_DESTROY_NOTIFY => {
             const e: *const xcb.xcb_destroy_notify_event_t = @ptrCast(@alignCast(event));
             handleRemoveWindow(e.window, wm, state);
         },
@@ -152,11 +153,13 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
 
 /// Handle new window map requests - add to tiling system
 fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *TilingState) void {
-    // Check if already tiled
+    // Check if already tiled - if so, just map it and retile
     for (state.tiled_windows.items) |win| {
         if (win == event.window) {
             _ = xcb.xcb_map_window(wm.conn, event.window);
             _ = xcb.xcb_flush(wm.conn);
+            // Retile to account for workspace changes
+            retile(wm, state);
             return;
         }
     }
@@ -224,16 +227,51 @@ fn handleRemoveWindow(window_id: u32, wm: *WM, state: *TilingState) void {
 
 /// Retile all windows using current layout algorithm
 fn retile(wm: *WM, state: *TilingState) void {
-    const windows = state.tiled_windows.items;
-    if (windows.len == 0) return;
+    if (state.tiled_windows.items.len == 0) return;
 
     const screen = wm.screen;
 
-    // Dispatch to appropriate layout implementation
+    // Get current workspace windows
+    const workspace_windows = workspaces.getCurrentWindows() orelse {
+        _ = xcb.xcb_flush(wm.conn);
+        return;
+    };
+
+    // Filter to only windows that are both tiled AND on current workspace
+    var visible_windows = std.ArrayList(u32){};
+    defer visible_windows.deinit(wm.allocator);
+
+    for (state.tiled_windows.items) |win| {
+        // Check if window is on current workspace
+        var on_current_workspace = false;
+        for (workspace_windows) |ws_win| {
+            if (ws_win == win) {
+                on_current_workspace = true;
+                break;
+            }
+        }
+        if (!on_current_workspace) continue;
+
+        // Check if window is actually mapped/visible
+        const attrs_cookie = xcb.xcb_get_window_attributes(wm.conn, win);
+        if (xcb.xcb_get_window_attributes_reply(wm.conn, attrs_cookie, null)) |attrs| {
+            defer std.c.free(attrs);
+            if (attrs.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE) {
+                visible_windows.append(wm.allocator, win) catch continue;
+            }
+        }
+    }
+
+    if (visible_windows.items.len == 0) {
+        _ = xcb.xcb_flush(wm.conn);
+        return;
+    }
+
+    // Dispatch to appropriate layout implementation with only visible windows
     switch (state.layout) {
-        .master_left => master_left.tile(wm, state, windows, screen.width_in_pixels, screen.height_in_pixels),
-        .monocle => monocle.tile(wm, state, windows, screen.width_in_pixels, screen.height_in_pixels),
-        .grid => grid.tile(wm, state, windows, screen.width_in_pixels, screen.height_in_pixels),
+        .master_left => master_left.tile(wm, state, visible_windows.items, screen.width_in_pixels, screen.height_in_pixels),
+        .monocle => monocle.tile(wm, state, visible_windows.items, screen.width_in_pixels, screen.height_in_pixels),
+        .grid => grid.tile(wm, state, visible_windows.items, screen.width_in_pixels, screen.height_in_pixels),
     }
 
     // Update border colors after layout
@@ -242,6 +280,13 @@ fn retile(wm: *WM, state: *TilingState) void {
     } else {
         _ = xcb.xcb_flush(wm.conn);
     }
+}
+
+/// Public function to trigger retiling (called by workspaces module)
+pub fn retileCurrentWorkspace(wm: *WM) void {
+    const state = tiling_state orelse return;
+    if (!state.enabled) return;
+    retile(wm, state);
 }
 
 // === Public API for keybindings ===
@@ -336,6 +381,5 @@ pub const EVENT_TYPES = [_]u8{
     xcb.XCB_MAP_REQUEST,
     xcb.XCB_CONFIGURE_REQUEST,
     xcb.XCB_DESTROY_NOTIFY,
-    xcb.XCB_UNMAP_NOTIFY,
     xcb.XCB_FOCUS_IN,
 };

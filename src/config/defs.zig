@@ -175,27 +175,30 @@ pub const Config = struct {
 pub const WM = struct {
     /// Memory allocator
     allocator: std.mem.Allocator,
-    
+
     /// XCB connection to X server
     conn: *xcb.xcb_connection_t,
-    
+
     /// Default screen
     screen: *xcb.xcb_screen_t,
-    
+
     /// Root window ID
     root: u32,
-    
+
     /// Current configuration
     config: Config,
-    
+
     /// All managed windows
     windows: std.AutoHashMap(u32, Window),
-    
+
     /// Currently focused window ID
     focused_window: ?u32 = null,
-    
+
     /// XKB keyboard state
     xkb_state: ?*xkbcommon.XkbState,
+
+    /// Flag to trigger config reload on next event loop iteration
+    should_reload_config: *std.atomic.Value(bool),
 
     pub fn deinit(self: *WM) void {
         // Clean up all window properties

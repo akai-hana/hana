@@ -181,5 +181,5 @@ fn closeWindow(wm: *WM) void {
 /// Trigger configuration reload
 fn reloadConfig(wm: *WM) !void {
     log.debugConfigReloadTriggered();
-    try buildKeybindMap(wm);
+    wm.should_reload_config.store(true, .release);
 }
