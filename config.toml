@@ -42,7 +42,7 @@ Mod+Shift+8 = "move_to_workspace_8"
 
 # Application launchers
 Mod+p   = "rofi -show drun"
-Mod+b   = "firefox"
+Mod+a   = "firefox"
 
 [tiling]
 # Enable/disable tiling (true or false)
@@ -52,7 +52,7 @@ enabled = true
 layout = "master_left"
 
 # Number of windows in master area
-master_count = 2
+master_count = 1
 
 # Master area width as percentage (5-95)
 master_width_factor = 55
