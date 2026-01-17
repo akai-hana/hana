@@ -1,20 +1,20 @@
-// Main event loop - clean and minimal
+// Main event loop - optimized for performance
 
-const std     = @import("std");
-const posix   = std.posix;
+const std = @import("std");
+const posix = std.posix;
 const builtin = @import("builtin");
 
-const config         = @import("config");
-const defs           = @import("defs");
-const xkbcommon      = @import("xkbcommon");
-const window         = @import("window");
-const input          = @import("input");
-const tiling         = @import("tiling");
+const config = @import("config");
+const defs = @import("defs");
+const xkbcommon = @import("xkbcommon");
+const window = @import("window");
+const input = @import("input");
+const tiling = @import("tiling");
 const error_handling = @import("error_handling");
-const log            = @import("logging");
+const log = @import("logging");
 
 const xcb = defs.xcb;
-const WM  = defs.WM;
+const WM = defs.WM;
 
 // Centralized module registration
 const modules = [_]defs.Module{
@@ -23,12 +23,12 @@ const modules = [_]defs.Module{
     defs.generateModule(tiling),
 };
 
-var should_reload_config: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var should_reload_config = std.atomic.Value(bool).init(false);
 
 const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
     xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
     xcb.XCB_EVENT_MASK_KEY_PRESS |
-    xcb.XCB_EVENT_MASK_ENTER_WINDOW;  // Add this for focus-follows-mouse
+    xcb.XCB_EVENT_MASK_ENTER_WINDOW;
 
 fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
     const cursor_font = xcb.xcb_generate_id(conn);
@@ -58,10 +58,8 @@ fn setupSignalHandler() void {
 }
 
 fn setupWindowEventMask(conn: *xcb.xcb_connection_t, window_id: u32) void {
-    // Set up event mask for client windows to receive enter/leave events
     const client_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
-    _ = xcb.xcb_change_window_attributes(conn, window_id, 
-        xcb.XCB_CW_EVENT_MASK, &[_]u32{client_mask});
+    _ = xcb.xcb_change_window_attributes(conn, window_id, xcb.XCB_CW_EVENT_MASK, &[_]u32{client_mask});
 }
 
 pub fn main() !void {
@@ -102,13 +100,13 @@ pub fn main() !void {
 
     setupSignalHandler();
 
-    // Initialize modules with proper error handling
+    // Initialize modules
     var initialized_count: usize = 0;
     errdefer {
         var i = initialized_count;
         while (i > 0) {
             i -= 1;
-            if (modules[i].deinit_fn) |deinit| deinit(&wm);
+            if (modules[i].deinit_fn) |deinit_fn| deinit_fn(&wm);
         }
     }
 
@@ -121,27 +119,26 @@ pub fn main() !void {
         var i = initialized_count;
         while (i > 0) {
             i -= 1;
-            if (modules[i].deinit_fn) |deinit| deinit(&wm);
+            if (modules[i].deinit_fn) |deinit_fn| deinit_fn(&wm);
         }
     }
 
     try grabKeybindings(&wm);
-    
-    // Setup event masks for any existing windows
+
+    // Setup event masks for existing windows
     const tree_cookie = xcb.xcb_query_tree(conn, root);
     if (xcb.xcb_query_tree_reply(conn, tree_cookie, null)) |tree_reply| {
         defer std.c.free(tree_reply);
         const children = xcb.xcb_query_tree_children(tree_reply);
-        const children_len = xcb.xcb_query_tree_children_length(tree_reply);
-        var i: usize = 0;
-        while (i < children_len) : (i += 1) {
+        const children_len: usize = @intCast(xcb.xcb_query_tree_children_length(tree_reply));
+        for (0..children_len) |i| {
             setupWindowEventMask(conn, children[i]);
         }
     }
-    
+
     _ = xcb.xcb_flush(conn);
 
-    // Event loop
+    // Event loop - optimized dispatch
     while (true) {
         const event = xcb.xcb_wait_for_event(conn) orelse break;
         defer std.c.free(event);
@@ -154,15 +151,18 @@ pub fn main() !void {
             };
         }
 
-        // Automated routing to modules
+        // Fast path: dispatch to modules using comptime unrolling
         inline for (modules) |m| {
-            if (std.mem.indexOfScalar(u8, m.event_types, response_type)) |_| {
-                m.handle_fn(response_type, event, &wm);
+            // Check if this module handles this event type
+            inline for (m.event_types) |et| {
+                if (et == response_type) {
+                    m.handle_fn(response_type, event, &wm);
+                    break;
+                }
             }
         }
-        
-        // OPTIMIZATION: Single flush at end of event handling
-        // This batches all X11 operations from this event together
+
+        // Single flush per event
         _ = xcb.xcb_flush(conn);
     }
 }
@@ -172,8 +172,8 @@ fn grabKeybindings(wm: *WM) !void {
 
     for (wm.config.keybindings.items) |keybind| {
         const keycode = keybind.keycode orelse continue;
-        // Grab with all combinations of lock modifiers (Caps/Num Lock)
-        for ([_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 }) |lock| {
+        // Grab with all lock modifier combinations
+        inline for ([_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 }) |lock| {
             _ = xcb.xcb_grab_key(wm.conn, 0, wm.root,
                 @intCast(keybind.modifiers | lock), keycode,
                 xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC);
@@ -194,9 +194,7 @@ fn handleConfigReload(wm: *WM) !void {
     wm.config = new_config;
 
     try grabKeybindings(wm);
-    
-    // Notify tiling module to reload its config
     tiling.reloadConfig(wm);
-    
+
     log.debugConfigReloaded();
 }

@@ -22,18 +22,24 @@ pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, s
         log.debugLayoutTiling("grid", n, cols, rows);
     }
 
-    const cell_w = screen_w / cols;
-    const cell_h = screen_h / rows;
+    // Calculate cell size accounting for gaps: gap + cell + gap + cell + ... + gap
+    // Total: (cols+1)*gap + cols*cell_w = screen_w
+    // Therefore: cell_w = (screen_w - (cols+1)*gap) / cols
+    const cell_w = (screen_w - (cols + 1) * gap) / cols;
+    const cell_h = (screen_h - (rows + 1) * gap) / rows;
+
+    // Window size is cell size minus borders
+    const win_w = if (cell_w > 2 * bw) cell_w - 2 * bw else 1;
+    const win_h = if (cell_h > 2 * bw) cell_h - 2 * bw else 1;
 
     for (windows, 0..) |win, idx| {
         const col = @as(u16, @intCast(idx % cols));
         const row = @as(u16, @intCast(idx / cols));
 
-        const x = gap + (col * cell_w);
-        const y = gap + (row * cell_h);
-        const w = types.calcWindowDimension(cell_w, gap, bw);
-        const h = types.calcWindowDimension(cell_h, gap, bw);
+        // Position: gap + col * (cell + gap)
+        const x = gap + col * (cell_w + gap);
+        const y = gap + row * (cell_h + gap);
 
-        types.configureWindow(wm, win, x, y, w, h);
+        types.configureWindow(wm, win, x, y, win_w, win_h);
     }
 }
