@@ -166,22 +166,31 @@ inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
 }
 
 fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
+    // Allocate null-terminated string in parent process before fork
+    const cmd_z = try wm.allocator.dupeZ(u8, cmd);
+    defer wm.allocator.free(cmd_z);
+
     const pid = c.fork();
     if (pid == 0) {
+        // First child - fork again to avoid zombies
         const pid2 = c.fork();
         if (pid2 == 0) {
+            // Second child - this will actually run the command
             _ = c.setsid();
-            const cmd_z = try wm.allocator.dupeZ(u8, cmd);
-            defer wm.allocator.free(cmd_z);
-            _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{ 
-                "/bin/sh", "-c", cmd_z.ptr, null 
+
+            // Don't use allocator in child process - cmd_z is already allocated
+            _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{
+                "/bin/sh", "-c", cmd_z.ptr, null
             }));
+            // If execvp fails, just exit - don't try to free anything
             std.process.exit(1);
         } else if (pid2 < 0) {
             std.process.exit(1);
         }
+        // First child exits immediately
         std.process.exit(0);
     } else if (pid > 0) {
+        // Parent waits for first child to avoid zombies
         var status: c_int = 0;
         _ = waitpid(pid, &status, 0);
     }
