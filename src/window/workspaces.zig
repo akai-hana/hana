@@ -14,7 +14,7 @@ pub const Workspace = struct {
 };
 
 pub const WorkspaceState = struct {
-    workspaces: [10]Workspace,
+    workspaces: []Workspace,
     current: usize,
     allocator: std.mem.Allocator,
 };
@@ -30,9 +30,16 @@ pub fn init(wm: *WM) void {
     state.allocator = wm.allocator;
     state.current = 0;
 
-    // Initialize 10 workspaces
-    inline for (0..10) |i| {
-        state.workspaces[i] = .{
+    // Initialize workspaces based on config
+    const ws_count = wm.config.workspaces.count;
+    state.workspaces = wm.allocator.alloc(Workspace, ws_count) catch {
+        std.log.err("Failed to allocate workspaces", .{});
+        wm.allocator.destroy(state);
+        return;
+    };
+
+    for (state.workspaces, 0..) |*ws, i| {
+        ws.* = .{
             .id = i,
             .windows = std.ArrayList(u32).init(wm.allocator),
             .name = std.fmt.allocPrint(wm.allocator, "{}", .{i + 1}) catch "?",
@@ -40,18 +47,19 @@ pub fn init(wm: *WM) void {
     }
 
     workspace_state = state;
-    
+
     if (builtin.mode == .Debug) {
-        std.log.info("[workspaces] Initialized 10 workspaces", .{});
+        std.log.info("[workspaces] Initialized {} workspaces", .{ws_count});
     }
 }
 
 pub fn deinit(wm: *WM) void {
     if (workspace_state) |state| {
-        for (&state.workspaces) |*ws| {
+        for (state.workspaces) |*ws| {
             ws.windows.deinit();
             wm.allocator.free(ws.name);
         }
+        wm.allocator.free(state.workspaces);
         wm.allocator.destroy(state);
         workspace_state = null;
     }
@@ -65,14 +73,14 @@ pub fn handleEvent(_: u8, _: *anyopaque, _: *WM) void {
 pub fn addWindow(window_id: u32) void {
     const state = workspace_state orelse return;
     const ws = &state.workspaces[state.current];
-    
+
     // Check if already exists
     for (ws.windows.items) |win| {
         if (win == window_id) return;
     }
-    
-    ws.windows.append(window_id) catch return;
-    
+
+    ws.windows.append(state.allocator, window_id) catch return;
+
     if (builtin.mode == .Debug) {
         std.log.info("[workspaces] Added window {x} to workspace {}", .{window_id, state.current + 1});
     }
@@ -81,8 +89,8 @@ pub fn addWindow(window_id: u32) void {
 /// Remove window from all workspaces
 pub fn removeWindow(window_id: u32) void {
     const state = workspace_state orelse return;
-    
-    for (&state.workspaces) |*ws| {
+
+    for (state.workspaces) |*ws| {
         for (ws.windows.items, 0..) |win, i| {
             if (win == window_id) {
                 _ = ws.windows.orderedRemove(i);
@@ -98,28 +106,28 @@ pub fn removeWindow(window_id: u32) void {
 /// Switch to a different workspace
 pub fn switchTo(wm: *WM, workspace_id: usize) void {
     const state = workspace_state orelse return;
-    
+
     if (workspace_id >= state.workspaces.len or workspace_id == state.current) return;
-    
+
     // Hide all windows on current workspace
     const current_ws = &state.workspaces[state.current];
     for (current_ws.windows.items) |win| {
         _ = xcb.xcb_unmap_window(wm.conn, win);
     }
-    
+
     // Switch workspace
     const old_workspace = state.current;
     state.current = workspace_id;
-    
+
     // Show all windows on new workspace
     const new_ws = &state.workspaces[state.current];
     for (new_ws.windows.items) |win| {
         _ = xcb.xcb_map_window(wm.conn, win);
     }
-    
+
     // Focus first window if any
     wm.focused_window = if (new_ws.windows.items.len > 0) new_ws.windows.items[0] else null;
-    
+
     if (wm.focused_window) |focused| {
         _ = xcb.xcb_set_input_focus(
             wm.conn,
@@ -128,12 +136,9 @@ pub fn switchTo(wm: *WM, workspace_id: usize) void {
             xcb.XCB_CURRENT_TIME
         );
     }
-    
+
     _ = xcb.xcb_flush(wm.conn);
-    
-    // Notify tiling to retile the new workspace
-    tiling.retileCurrentWorkspace(wm);
-    
+
     if (builtin.mode == .Debug) {
         std.log.info("[workspaces] Switched from workspace {} to {}", .{old_workspace + 1, workspace_id + 1});
     }
@@ -143,9 +148,9 @@ pub fn switchTo(wm: *WM, workspace_id: usize) void {
 pub fn moveWindowTo(wm: *WM, target_workspace: usize) void {
     const state = workspace_state orelse return;
     const focused = wm.focused_window orelse return;
-    
+
     if (target_workspace >= state.workspaces.len or target_workspace == state.current) return;
-    
+
     // Remove from current workspace
     const current_ws = &state.workspaces[state.current];
     for (current_ws.windows.items, 0..) |win, i| {
@@ -154,20 +159,19 @@ pub fn moveWindowTo(wm: *WM, target_workspace: usize) void {
             break;
         }
     }
-    
+
     // Add to target workspace
     const target_ws = &state.workspaces[target_workspace];
-    target_ws.windows.append(focused) catch return;
-    
+    target_ws.windows.append(state.allocator, focused) catch return;
+
     // Hide the window
     _ = xcb.xcb_unmap_window(wm.conn, focused);
-    
+
     // Focus next window in current workspace
     wm.focused_window = if (current_ws.windows.items.len > 0) current_ws.windows.items[0] else null;
-    
+
     _ = xcb.xcb_flush(wm.conn);
-    tiling.retileCurrentWorkspace(wm);
-    
+
     if (builtin.mode == .Debug) {
         std.log.info("[workspaces] Moved window {x} to workspace {}", .{focused, target_workspace + 1});
     }

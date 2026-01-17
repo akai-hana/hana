@@ -31,6 +31,8 @@ pub const Action = union(enum) {
     increase_master_count,
     decrease_master_count,
     toggle_tiling,
+    switch_workspace: usize,  // Switch to workspace N
+    move_to_workspace: usize, // Move window to workspace N
 
     pub fn deinit(self: *Action, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -60,6 +62,11 @@ pub const TilingConfig = struct {
     border_normal: u32 = 0x383C4A,
 };
 
+// Workspace configuration
+pub const WorkspaceConfig = struct {
+    count: usize = 9,
+};
+
 // Window properties
 pub const WindowProperties = std.StringHashMap([]const u8);
 
@@ -80,6 +87,7 @@ pub const Window = struct {
 pub const Config = struct {
     keybindings: std.ArrayListUnmanaged(Keybind) = .{},
     tiling: TilingConfig = .{},
+    workspaces: WorkspaceConfig = .{},
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         for (self.keybindings.items) |*kb| {

@@ -5,6 +5,8 @@ const defs = @import("defs");
 const xkbcommon = @import("xkbcommon");
 const log = @import("logging");
 const tiling = @import("tiling");
+const workspaces = @import("workspaces");
+const cursor_drag = @import("cursor-window-drag");
 
 const c = @cImport({
     @cInclude("unistd.h");
@@ -23,28 +25,6 @@ pub const EVENT_TYPES = [_]u8{
 
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
 var keybind_initialized = false;
-
-// Drag state
-const DragState = struct {
-    button: u8 = 0,
-    subwindow: u32 = 0,
-    start_x: i16 = 0,
-    start_y: i16 = 0,
-    attr_x: i16 = 0,
-    attr_y: i16 = 0,
-    attr_width: u16 = 0,
-    attr_height: u16 = 0,
-
-    fn isDragging(self: *const DragState) bool {
-        return self.subwindow != 0;
-    }
-
-    fn reset(self: *DragState) void {
-        self.subwindow = 0;
-    }
-};
-
-var drag: DragState = .{};
 
 pub fn init(wm: *WM) void {
     keybind_map = std.AutoHashMap(u64, *const defs.Action).init(wm.allocator);
@@ -71,8 +51,23 @@ fn buildKeybindMap(wm: *WM) !void {
 }
 
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
-    _ = conn;
-    _ = root;
+    // Grab mouse buttons with Super modifier for window dragging
+    // Button 1 = left click (move), Button 3 = right click (resize)
+    for ([_]u8{ 1, 3 }) |button| {
+        _ = xcb.xcb_grab_button(
+            conn,
+            0, // owner_events
+            root,
+            xcb.XCB_EVENT_MASK_BUTTON_PRESS | xcb.XCB_EVENT_MASK_BUTTON_RELEASE | xcb.XCB_EVENT_MASK_POINTER_MOTION,
+            xcb.XCB_GRAB_MODE_ASYNC,
+            xcb.XCB_GRAB_MODE_ASYNC,
+            root,
+            xcb.XCB_NONE,
+            button,
+            defs.MOD_SUPER,
+        );
+    }
+    _ = xcb.xcb_flush(conn);
 }
 
 pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
@@ -80,13 +75,12 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
         xcb.XCB_KEY_PRESS => handleKeyPress(@ptrCast(@alignCast(event)), wm),
         xcb.XCB_BUTTON_PRESS => handleButtonPress(@ptrCast(@alignCast(event)), wm),
         xcb.XCB_MOTION_NOTIFY => handleMotionNotify(@ptrCast(@alignCast(event)), wm),
-        xcb.XCB_BUTTON_RELEASE => handleButtonRelease(@ptrCast(@alignCast(event))),
+        xcb.XCB_BUTTON_RELEASE => handleButtonRelease(@ptrCast(@alignCast(event)), wm),
         else => {},
     }
 }
 
 fn setWindowFocus(wm: *WM, window: u32) void {
-    // OPTIMIZATION: Batch focus operations
     _ = xcb.xcb_set_input_focus(
         wm.conn,
         xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
@@ -106,12 +100,10 @@ fn setWindowFocus(wm: *WM, window: u32) void {
 
     log.debugWindowFocusChanged(window);
 
-    // Notify tiling module about focus change
     if (old_focus != window) {
         tiling.updateWindowFocus(wm, window);
     }
 
-    // Single flush for all focus operations
     _ = xcb.xcb_flush(wm.conn);
 }
 
@@ -135,54 +127,29 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     if (event.child == 0) return;
 
     log.debugMouseButtonClick(event.detail, event.root_x, event.root_y, event.child);
-    setWindowFocus(wm, event.child);
-
-    // OPTIMIZATION: Use cookie-based geometry query for async operation
-    const geom_cookie = xcb.xcb_get_geometry(wm.conn, event.child);
-    if (xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null)) |g| {
-        defer std.c.free(g);
-        drag = .{
-            .button = event.detail,
-            .subwindow = event.child,
-            .start_x = event.root_x,
-            .start_y = event.root_y,
-            .attr_x = g.*.x,
-            .attr_y = g.*.y,
-            .attr_width = g.*.width,
-            .attr_height = g.*.height,
-        };
+    
+    // Check if Super modifier is pressed for dragging
+    const has_super = (event.state & defs.MOD_SUPER) != 0;
+    
+    if (has_super and (event.detail == 1 or event.detail == 3)) {
+        // Super+Left or Super+Right click - start dragging
+        cursor_drag.startDrag(wm, event.child, event.detail, event.root_x, event.root_y);
+    } else {
+        // Normal click - just focus
+        setWindowFocus(wm, event.child);
     }
 }
 
 fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
-    if (!drag.isDragging()) return;
-
-    log.debugDragMotion(event.root_x, event.root_y);
-
-    const dx: i32 = event.root_x - drag.start_x;
-    const dy: i32 = event.root_y - drag.start_y;
-    const is_move = drag.button == 1;
-
-    const geometry = [_]u32{
-        @intCast(if (is_move) drag.attr_x + @as(i16, @intCast(dx)) else drag.attr_x),
-        @intCast(if (is_move) drag.attr_y + @as(i16, @intCast(dy)) else drag.attr_y),
-        @intCast(if (is_move) drag.attr_width else @max(1, drag.attr_width + dx)),
-        @intCast(if (is_move) drag.attr_height else @max(1, drag.attr_height + dy)),
-    };
-
-    _ = xcb.xcb_configure_window(
-        wm.conn, drag.subwindow,
-        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
-        xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
-        &geometry,
-    );
-    // OPTIMIZATION: Don't flush on every motion event - let the event loop handle it
+    if (cursor_drag.isDragging()) {
+        cursor_drag.updateDrag(wm, event.root_x, event.root_y);
+    }
 }
 
-fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t) void {
-    _ = event;
-    log.debugMouseButtonRelease(drag.button);
-    drag.reset();
+fn handleButtonRelease(_: *const xcb.xcb_button_release_event_t, wm: *WM) void {
+    if (cursor_drag.isDragging()) {
+        cursor_drag.stopDrag(wm);
+    }
 }
 
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
@@ -244,6 +211,14 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .toggle_tiling => {
             log.debugExecutingAction("toggle_tiling");
             tiling.toggleTiling(wm);
+        },
+        .switch_workspace => |ws_num| {
+            log.debugExecutingAction("switch_workspace");
+            workspaces.switchTo(wm, ws_num);
+        },
+        .move_to_workspace => |ws_num| {
+            log.debugExecutingAction("move_to_workspace");
+            workspaces.moveWindowTo(wm, ws_num);
         },
     }
 }

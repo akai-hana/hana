@@ -91,6 +91,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     var config = getDefaultConfig();
     try parseKeybindings(allocator, &doc, &config);
     try parseTiling(&doc, &config);
+    try parseWorkspaces(&doc, &config);
     try validateConfig(allocator, &config);
 
     std.log.info("Successfully loaded config from: {s}", .{path});
@@ -179,6 +180,32 @@ fn parseAction(allocator: std.mem.Allocator, command: []const u8) !defs.Action {
     } else if (std.mem.eql(u8, command, "toggle_tiling")) {
         std.log.info("[config] Keybinding → toggle_tiling action", .{});
         return .toggle_tiling;
+    } else if (std.mem.startsWith(u8, command, "workspace_")) {
+        // Parse workspace number
+        const num_str = command[10..]; // Skip "workspace_"
+        const workspace_num = std.fmt.parseInt(usize, num_str, 10) catch {
+            std.log.warn("[config] Invalid workspace number in '{s}'", .{command});
+            return error.InvalidConfigValue;
+        };
+        if (workspace_num < 1) {
+            std.log.warn("[config] Workspace number must be >= 1", .{});
+            return error.InvalidConfigValue;
+        }
+        std.log.info("[config] Keybinding → switch to workspace {}", .{workspace_num});
+        return .{ .switch_workspace = workspace_num - 1 }; // 0-indexed internally
+    } else if (std.mem.startsWith(u8, command, "move_to_workspace_")) {
+        // Parse workspace number
+        const num_str = command[18..]; // Skip "move_to_workspace_"
+        const workspace_num = std.fmt.parseInt(usize, num_str, 10) catch {
+            std.log.warn("[config] Invalid workspace number in '{s}'", .{command});
+            return error.InvalidConfigValue;
+        };
+        if (workspace_num < 1) {
+            std.log.warn("[config] Workspace number must be >= 1", .{});
+            return error.InvalidConfigValue;
+        }
+        std.log.info("[config] Keybinding → move to workspace {}", .{workspace_num});
+        return .{ .move_to_workspace = workspace_num - 1 }; // 0-indexed internally
     } else {
         // Not a keyword, treat as command to execute
         std.log.info("[config] Keybinding → exec command: {s}", .{command});
@@ -285,6 +312,31 @@ fn parseTiling(doc: *const parser.Document, config: *Config) !void {
     }
 
     std.log.info("[config] ===============================================", .{});
+}
+
+fn parseWorkspaces(doc: *const parser.Document, config: *Config) !void {
+    const section = doc.getSection("workspaces") orelse {
+        std.log.info("[config] No [workspaces] section found, using defaults", .{});
+        return;
+    };
+
+    std.log.info("[config] ========== PARSING WORKSPACE CONFIG ==========", .{});
+
+    if (section.getInt("count")) |count| {
+        if (count < 1) {
+            std.log.warn("[config] ✗ workspace count must be at least 1, using default", .{});
+        } else if (count > 20) {
+            std.log.warn("[config] ✗ workspace count {} seems excessive, capping at 20", .{count});
+            config.workspaces.count = 20;
+        } else {
+            config.workspaces.count = @intCast(count);
+            std.log.info("[config] ✓ workspace count = {}", .{count});
+        }
+    } else {
+        std.log.info("[config] ○ workspace count not specified, using default: {}", .{config.workspaces.count});
+    }
+
+    std.log.info("[config] ==================================================", .{});
 }
 
 fn parseKeybindString(str: []const u8) !struct { modifiers: u16, keysym: u32 } {
