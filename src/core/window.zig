@@ -76,11 +76,20 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     workspaces.removeWindow(win);
     tiling.notifyWindowDestroyed(wm, win);
 
+    // Only refocus if the destroyed window was focused
+    // Let the workspace/tiling system handle focusing the next window on the CURRENT workspace
     if (was_focused) {
         wm.focused_window = null;
-        var iter = wm.windows.keyIterator();
-        if (iter.next()) |next_win| {
-            focus.setFocus(wm, next_win.*, .window_destroyed);
+        
+        // Focus next window on current workspace only
+        if (workspaces.getCurrentWindowsView()) |ws_windows| {
+            if (ws_windows.len > 0) {
+                // Focus the first window on the current workspace
+                focus.setFocus(wm, ws_windows[0], .window_destroyed);
+            } else {
+                // No windows left on current workspace
+                focus.clearFocus(wm);
+            }
         }
     }
 }
