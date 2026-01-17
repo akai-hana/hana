@@ -44,16 +44,16 @@ pub fn init(wm: *WM) void {
         .border_width = wm.config.tiling.border_width,
         .border_focused = wm.config.tiling.border_focused,
         .border_normal = wm.config.tiling.border_normal,
-        .tiled_windows = std.ArrayList(u32){},
-        .visible_cache = std.ArrayList(u32){},
+        .tiled_windows = std.ArrayList(u32).init(wm.allocator),
+        .visible_cache = std.ArrayList(u32).init(wm.allocator),
     };
     state = s;
 }
 
 pub fn deinit(wm: *WM) void {
     if (state) |s| {
-        s.tiled_windows.deinit(wm.allocator);
-        s.visible_cache.deinit(wm.allocator);
+        s.tiled_windows.deinit();
+        s.visible_cache.deinit();
         wm.allocator.destroy(s);
         state = null;
     }
@@ -83,7 +83,7 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
         }
     }
 
-    s.tiled_windows.insert(wm.allocator, 0, win) catch return;
+    s.tiled_windows.insert(0, win) catch return;
 
     // Setup window - non-blocking configuration
     const attrs = utils.WindowAttrs{
@@ -100,16 +100,16 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
 
 pub fn notifyWindowDestroyed(wm: *WM, win: u32) void {
     const s = state orelse return;
-    
+
     for (s.tiled_windows.items, 0..) |w, i| {
         if (w == win) {
             _ = s.tiled_windows.orderedRemove(i);
             s.needs_retile = true;
-            
+
             if (s.tiled_windows.items.len > 0) {
                 if (wm.focused_window == win) {
                     const next = s.tiled_windows.items[0];
-                    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, 
+                    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
                         next, xcb.XCB_CURRENT_TIME);
                     wm.focused_window = next;
                 }
@@ -143,19 +143,29 @@ fn retile(wm: *WM, s: *State) void {
     if (!s.needs_retile) return;
     s.needs_retile = false;
 
-    // Build visible window list - NO BLOCKING X11 CALLS
-    // Trust workspace state instead of querying each window
     s.visible_cache.clearRetainingCapacity();
-    
+
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
+    
+    // CRITICAL: Build visible window list - validate each window still exists
     for (s.tiled_windows.items) |win| {
-        // Simple membership check - no X11 roundtrip
+        // Check workspace membership
         const on_ws = for (ws_windows) |w| {
             if (w == win) break true;
         } else false;
+
+        if (!on_ws) continue;
         
-        if (on_ws) {
-            s.visible_cache.append(wm.allocator, win) catch continue;
+        // CRITICAL: Verify window still exists in X11 before adding to visible cache
+        const cookie = xcb.xcb_get_window_attributes(wm.conn, win);
+        const attrs = xcb.xcb_get_window_attributes_reply(wm.conn, cookie, null);
+        if (attrs) |a| {
+            defer std.c.free(a);
+            // Only include if window is valid and viewable
+            if (a.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE or 
+                a.*.map_state == xcb.XCB_MAP_STATE_UNMAPPED) {
+                s.visible_cache.append(wm.allocator, win) catch continue;
+            }
         }
     }
 
@@ -175,7 +185,6 @@ fn retile(wm: *WM, s: *State) void {
     utils.flush(wm.conn);
 }
 
-// Layout algorithms unchanged from previous version
 fn tileMasterLeft(wm: *WM, s: *State, windows: []const u32, sw: u16, sh: u16) void {
     const n = windows.len;
     const m = s.margins();
@@ -185,10 +194,12 @@ fn tileMasterLeft(wm: *WM, s: *State, windows: []const u32, sw: u16, sh: u16) vo
     const master_w: u16 = if (s_count == 0) sw else @intFromFloat(@as(f32, @floatFromInt(sw)) * s.master_width_factor);
 
     const m_layout = utils.calcColumnLayout(sh, m_count, m);
-    const s_layout = if (s_count > 0)
-        utils.calcColumnLayout(sh, s_count, m)
-    else
-        @TypeOf(m_layout){ .item_h = 0, .spacing = 0 };  // Use @TypeOf to match the type
+    
+    // CRITICAL FIX: Use @TypeOf to ensure struct literal matches return type
+    const s_layout = if (s_count > 0) 
+        utils.calcColumnLayout(sh, s_count, m) 
+    else 
+        @TypeOf(m_layout){ .item_h = 0, .spacing = 0 };
 
     for (windows, 0..) |win, i| {
         const rect = if (i < m_count) blk: {
@@ -235,7 +246,7 @@ fn tileGrid(wm: *WM, s: *State, windows: []const u32, sw: u16, sh: u16) void {
     for (windows, 0..) |win, idx| {
         const col: u16 = @intCast(idx % dims.cols);
         const row: u16 = @intCast(idx / dims.cols);
-        
+
         utils.configureWindow(wm.conn, win, .{
             .x = @intCast(m.gap + col * (cell_w + m.gap)),
             .y = @intCast(m.gap + row * (cell_h + m.gap)),
@@ -247,14 +258,14 @@ fn tileGrid(wm: *WM, s: *State, windows: []const u32, sw: u16, sh: u16) void {
 
 fn updateBorders(wm: *WM, s: *State, focused: u32) void {
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
-    
+
     for (s.tiled_windows.items) |win| {
         const on_ws = for (ws_windows) |w| {
             if (w == win) break true;
         } else false;
-        
+
         if (!on_ws) continue;
-        
+
         const color = if (win == focused) s.border_focused else s.border_normal;
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
     }

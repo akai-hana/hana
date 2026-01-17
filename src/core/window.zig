@@ -21,32 +21,43 @@ pub fn deinit(_: *WM) void {}
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win = event.window;
 
-    // RESPONSIVITY: Map window IMMEDIATELY to current workspace
-    // Apply rules asynchronously (slight delay acceptable for correct placement)
+    // CRITICAL: Check workspace rules BEFORE mapping to avoid flicker
+    const target_ws = if (wm.config.workspaces.rules.items.len > 0)
+        matchWorkspaceRule(wm, win)
+    else
+        null;
+
+    const current_ws = workspaces.getCurrentWorkspace() orelse 0;
+
+    if (target_ws) |ws| {
+        if (ws != current_ws) {
+            // Add to target workspace but don't map (it's not current)
+            workspaces.addWindowToWorkspace(wm, win, ws);
+            
+            // Configure window but don't show it
+            if (wm.config.tiling.enabled) {
+                // Set up tiling state but don't map
+                const attrs = utils.WindowAttrs{
+                    .border_width = wm.config.tiling.border_width,
+                    .event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW,
+                };
+                attrs.configure(wm.conn, win);
+            }
+            
+            utils.flush(wm.conn);
+            return; // Don't map - window goes to different workspace
+        }
+    }
+
+    // Map to current workspace
     workspaces.addWindowToCurrentWorkspace(wm, win);
     _ = xcb.xcb_map_window(wm.conn, win);
-    
+
     if (wm.config.tiling.enabled) {
         tiling.notifyWindowMapped(wm, win);
     }
 
-    // OPTIONAL: Apply workspace rules after window is visible
-    // This creates a slight delay but window appears instantly
-    if (wm.config.workspaces.rules.items.len > 0) {
-        applyWorkspaceRulesAsync(wm, win);
-    }
-}
-
-/// Apply workspace rules without blocking initial window display
-fn applyWorkspaceRulesAsync(wm: *WM, win: u32) void {
-    const target_ws = matchWorkspaceRule(wm, win) orelse return;
-    const current_ws = workspaces.getCurrentWorkspace() orelse return;
-    
-    if (target_ws != current_ws) {
-        // Move window to correct workspace
-        // User sees window appear briefly before it moves - acceptable tradeoff
-        workspaces.moveWindowToWorkspace(wm, win, target_ws);
-    }
+    utils.flush(wm.conn);
 }
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
@@ -72,25 +83,30 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     const win = event.window;
     const was_focused = wm.focused_window == win;
 
-    wm.removeWindow(win);
-    workspaces.removeWindow(win);
+    // CRITICAL: Clean up in correct order
+    // 1. Notify tiling FIRST (while window is still in workspaces)
     tiling.notifyWindowDestroyed(wm, win);
+    
+    // 2. Remove from workspaces
+    workspaces.removeWindow(win);
+    
+    // 3. Remove from WM's window map
+    wm.removeWindow(win);
 
-    // Only refocus if the destroyed window was focused
-    // Let the workspace/tiling system handle focusing the next window on the CURRENT workspace
+    // 4. Handle focus
     if (was_focused) {
         wm.focused_window = null;
         
-        // Focus next window on current workspace only
+        // Try to focus a window from current workspace, not global window list
         if (workspaces.getCurrentWindowsView()) |ws_windows| {
             if (ws_windows.len > 0) {
-                // Focus the first window on the current workspace
                 focus.setFocus(wm, ws_windows[0], .window_destroyed);
-            } else {
-                // No windows left on current workspace
-                focus.clearFocus(wm);
+                return;
             }
         }
+        
+        // No windows left, clear focus
+        focus.clearFocus(wm);
     }
 }
 
@@ -99,8 +115,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
 // ============================================================================
 
 fn matchWorkspaceRule(wm: *WM, win: u32) ?usize {
-    // This still blocks, but only AFTER window is mapped
-    // User sees window immediately, rule application is delayed
+    // This may block on X11, but only BEFORE window is mapped
     const wm_class = utils.getWMClass(wm.conn, win, wm.allocator) orelse return null;
     defer wm_class.deinit(wm.allocator);
 

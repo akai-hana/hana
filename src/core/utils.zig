@@ -66,7 +66,7 @@ pub fn calcColumnLayout(
 ) struct { item_h: u16, spacing: u16 } {
     if (count == 0) return .{ .item_h = 0, .spacing = 0 };
 
-    // For n windows, we need (n+1) gaps: top, bottom, and (n-1) in between
+    // CRITICAL FIX: For n windows, we need (n+1) gaps: top, bottom, and (n-1) in between
     const gaps = @as(u32, margins.gap) * (count + 1);
     const borders = @as(u32, margins.border) * 2 * count;
     const overhead = gaps + borders;
@@ -100,7 +100,7 @@ pub const WindowAttrs = struct {
         var values: [5]u32 = undefined;
         var idx: usize = 0;
 
-        // Manually handle each field instead of using comptime string manipulation
+        // CRITICAL FIX: Manually handle each field instead of using comptime string manipulation
         if (self.x) |val| {
             mask |= xcb.XCB_CONFIG_WINDOW_X;
             values[idx] = @bitCast(@as(i32, val));
@@ -151,6 +151,12 @@ pub fn configureWindow(conn: *xcb.xcb_connection_t, win: u32, rect: Rect) void {
         .height = r.height,
     };
     attrs.configure(conn, win);
+    
+    // CRITICAL: Check for connection errors after configure
+    const err_code = xcb.xcb_connection_has_error(conn);
+    if (err_code != 0) {
+        std.log.err("[XCB] Connection error {} during configure", .{err_code});
+    }
 }
 
 pub fn getGeometry(conn: *xcb.xcb_connection_t, win: u32) ?Rect {
@@ -164,7 +170,14 @@ pub fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
     const cookie = xcb.xcb_get_window_attributes(conn, win);
     const attrs = xcb.xcb_get_window_attributes_reply(conn, cookie, null) orelse return false;
     defer std.c.free(attrs);
-    return attrs.map_state == xcb.XCB_MAP_STATE_VIEWABLE;
+    return attrs.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE;
+}
+
+pub fn isWindowValid(conn: *xcb.xcb_connection_t, win: u32) bool {
+    const cookie = xcb.xcb_get_window_attributes(conn, win);
+    const attrs = xcb.xcb_get_window_attributes_reply(conn, cookie, null) orelse return false;
+    defer std.c.free(attrs);
+    return true;
 }
 
 pub fn batchMap(conn: *xcb.xcb_connection_t, windows: []const u32) void {
@@ -207,7 +220,8 @@ pub fn getWMClass(
     const reply = xcb.xcb_get_property_reply(conn, cookie, null) orelse return null;
     defer std.c.free(reply);
 
-    if (reply.*.value_len == 0) return null;  // Add dereference operator
+    // CRITICAL FIX: Add dereference operator for C pointer
+    if (reply.*.value_len == 0) return null;
 
     const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
     const len: usize = @intCast(xcb.xcb_get_property_value_length(reply));
@@ -227,6 +241,7 @@ pub fn getWMClass(
         .class = allocator.dupe(u8, data[class_start .. class_start + class_len]) catch return null,
     };
 }
+
 // HELPERS
 
 pub inline fn clampU16(val: anytype, min: u16, max: u16) u16 {

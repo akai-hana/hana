@@ -25,16 +25,19 @@ const COALESCE_MOTION_EVENTS = true;
 // ============================================================================
 
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
+var keybind_map_ready = std.atomic.Value(bool).init(false);
 var initialized = false;
 
 pub fn init(wm: *WM) void {
     keybind_map = std.AutoHashMap(u64, *const defs.Action).init(wm.allocator);
     buildKeybindMap(wm) catch return;
+    keybind_map_ready.store(true, .release);
     initialized = true;
 }
 
 pub fn deinit(_: *WM) void {
     if (initialized) {
+        keybind_map_ready.store(false, .release);
         keybind_map.deinit();
         initialized = false;
     }
@@ -49,6 +52,10 @@ fn buildKeybindMap(wm: *WM) !void {
 }
 
 pub fn rebuildKeybindMap(wm: *WM) !void {
+    // CRITICAL: Prevent key handling during rebuild
+    keybind_map_ready.store(false, .release);
+    defer keybind_map_ready.store(true, .release);
+    
     try buildKeybindMap(wm);
 }
 
@@ -73,8 +80,11 @@ pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
 // ============================================================================
 
 pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
-    const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
+    // SAFETY: Don't process keys if map isn't ready
+    if (!keybind_map_ready.load(.acquire)) return;
     
+    const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
+
     const mods = utils.normalizeModifiers(event.state);
     const keysym = xkb_ptr.keycodeToKeysym(event.detail);
     const key = makeHash(mods, keysym);
@@ -123,12 +133,12 @@ fn hasQueuedMotionEvents(conn: *xcb.xcb_connection_t) bool {
     if (queued) |next_event| {
         defer std.c.free(next_event);
         const next_type = @as(*u8, @ptrCast(next_event)).* & 0x7F;
-        
+
         // If next event is also motion, skip current one
         if (next_type == xcb.XCB_MOTION_NOTIFY) {
             return true;
         }
-        
+
         // Otherwise, we need to process both events
         // Put the event back (not ideal, but xcb doesn't have unget)
         // In practice, this rarely happens
@@ -156,20 +166,20 @@ inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .toggle_tiling => tiling.toggleTiling(wm),
         .dump_state => dumpState(wm),
         .emergency_recover => emergencyRecover(wm),
-        
+
         .exec => |cmd| try executeShellCommand(wm, cmd),
         .switch_workspace => |ws| workspaces.switchTo(wm, ws),
         .move_to_workspace => |ws| workspaces.moveWindowTo(wm, ws),
-        
+
         .focus_next, .focus_prev => {},
     }
 }
 
 fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
-    // Allocate null-terminated string in parent process before fork
+    // CRITICAL: Allocate null-terminated string in parent process before fork
     const cmd_z = try wm.allocator.dupeZ(u8, cmd);
     defer wm.allocator.free(cmd_z);
-
+    
     const pid = c.fork();
     if (pid == 0) {
         // First child - fork again to avoid zombies
@@ -177,7 +187,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
         if (pid2 == 0) {
             // Second child - this will actually run the command
             _ = c.setsid();
-
+            
             // Don't use allocator in child process - cmd_z is already allocated
             _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{
                 "/bin/sh", "-c", cmd_z.ptr, null
