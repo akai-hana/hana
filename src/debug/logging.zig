@@ -65,7 +65,7 @@ pub fn debugCursorSetupFailed() void {
 }
 
 pub fn errorConfigReloadFailed(err: anyerror) void {
-    std.log.err("Config reload failed: {}", .{err});
+    std.log.err("Config reload failed: {any}", .{err});
 }
 
 // CONFIG MODULE DEBUG FUNCTIONS
@@ -132,7 +132,7 @@ pub fn warnKeybindingValueNotString(key: []const u8) void {
 }
 
 pub fn warnInvalidKeybinding(key: []const u8, err: anyerror) void {
-    std.log.warn("Invalid keybinding '{s}': {}", .{key, err});
+    std.log.warn("Invalid keybinding '{s}': {any}", .{key, err});
 }
 
 pub fn warnUnknownKeyName(name: []const u8) void {
@@ -235,15 +235,15 @@ pub fn debugDragMotion(x: i16, y: i16) void {
 }
 
 pub fn errorKeybindMapBuildFailed(err: anyerror) void {
-    std.log.err("Failed to build keybind map: {}", .{err});
+    std.log.err("Failed to build keybind map: {any}", .{err});
 }
 
 pub fn errorKeybindMapRebuildFailed(err: anyerror) void {
-    std.log.err("Failed to rebuild keybind map: {}", .{err});
+    std.log.err("Failed to rebuild keybind map: {any}", .{err});
 }
 
 pub fn errorActionExecutionFailed(err: anyerror) void {
-    std.log.err("Failed to execute keybinding action: {}", .{err});
+    std.log.err("Failed to execute keybinding action: {any}", .{err});
 }
 
 pub fn errorCommandForkFailed(cmd: []const u8) void {

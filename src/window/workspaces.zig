@@ -15,6 +15,8 @@ const defs = @import("defs");
 const builtin = @import("builtin");
 const log = @import("logging");
 const tiling = @import("tiling");
+const focus = @import("focus");
+const error_handling = @import("error_handling");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -87,15 +89,11 @@ pub fn deinit(wm: *WM) void {
     }
 }
 
-/// Handle X11 events - we intercept MAP_REQUEST and DESTROY_NOTIFY
+/// Handle X11 events - only DESTROY_NOTIFY now (MAP_REQUEST moved to window.zig)
 pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
     const state = workspace_state orelse return;
-    
+
     switch (event_type & 0x7F) {
-        xcb.XCB_MAP_REQUEST => {
-            const e: *const xcb.xcb_map_request_event_t = @ptrCast(@alignCast(event));
-            handleMapRequest(e, wm, state);
-        },
         xcb.XCB_DESTROY_NOTIFY => {
             const e: *const xcb.xcb_destroy_notify_event_t = @ptrCast(@alignCast(event));
             handleDestroyNotify(e, wm, state);
@@ -104,32 +102,11 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
     }
 }
 
-/// Add window to current workspace when it's mapped
-fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *WorkspaceState) void {
-    _ = wm;
-    const window_id = event.window;
-    const ws = &state.workspaces[state.current];
-
-    // Check if already exists
-    for (ws.windows.items) |win| {
-        if (win == window_id) return;
-    }
-
-    ws.windows.append(state.allocator, window_id) catch {
-        std.log.err("[workspaces] Failed to add window {x}", .{window_id});
-        return;
-    };
-
-    if (builtin.mode == .Debug) {
-        std.log.info("[workspaces] Added window {x} to workspace {}", .{window_id, state.current + 1});
-    }
-}
-
 /// Remove window from all workspaces when it's destroyed
 fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM, state: *WorkspaceState) void {
     _ = wm;
     const window_id = event.window;
-    
+
     for (state.workspaces) |*ws| {
         for (ws.windows.items, 0..) |win, i| {
             if (win == window_id) {
@@ -143,6 +120,56 @@ fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM, st
     }
 }
 
+/// Add window to current workspace (called by window.zig)
+pub fn addWindowToCurrentWorkspace(_: *WM, window_id: u32) void {
+    const state = workspace_state orelse return;
+    const ws = &state.workspaces[state.current];
+
+    // Check if already exists
+    for (ws.windows.items) |win| {
+        if (win == window_id) return;
+    }
+
+    ws.windows.append(state.allocator, window_id) catch {
+        std.log.err("[workspaces] Failed to add window {x}", .{window_id});
+        return;
+    };
+
+    if (builtin.mode == .Debug) {
+        std.log.info("[workspaces] Added window {x} to workspace {}",
+            .{window_id, state.current + 1});
+    }
+}
+
+/// Add window to a specific workspace (used by rules)
+pub fn addWindowToWorkspace(wm: *WM, window_id: u32, workspace_id: usize) void {
+    _ = wm;
+    const state = workspace_state orelse return;
+
+    if (workspace_id >= state.workspaces.len) {
+        std.log.err("[workspaces] Invalid workspace ID: {}", .{workspace_id});
+        return;
+    }
+
+    const ws = &state.workspaces[workspace_id];
+
+    // Check if already exists
+    for (ws.windows.items) |win| {
+        if (win == window_id) return;
+    }
+
+    ws.windows.append(state.allocator, window_id) catch {
+        std.log.err("[workspaces] Failed to add window {x} to workspace {}",
+            .{window_id, workspace_id + 1});
+        return;
+    };
+
+    if (builtin.mode == .Debug) {
+        std.log.info("[workspaces] Added window {x} to workspace {} (via rule)",
+            .{window_id, workspace_id + 1});
+    }
+}
+
 /// Switch to a different workspace
 pub fn switchTo(wm: *WM, workspace_id: usize) void {
     const state = workspace_state orelse return;
@@ -151,7 +178,7 @@ pub fn switchTo(wm: *WM, workspace_id: usize) void {
         std.log.warn("[workspaces] Invalid workspace ID: {}", .{workspace_id});
         return;
     }
-    
+
     if (workspace_id == state.current) {
         if (builtin.mode == .Debug) {
             std.log.info("[workspaces] Already on workspace {}", .{workspace_id + 1});
@@ -164,52 +191,64 @@ pub fn switchTo(wm: *WM, workspace_id: usize) void {
     const new_ws = &state.workspaces[workspace_id];
 
     if (builtin.mode == .Debug) {
-        std.log.info("[workspaces] Switching from workspace {} ({} windows) to workspace {} ({} windows)", 
+        std.log.info("[workspaces] Switching from workspace {} ({} windows) to workspace {} ({} windows)",
             .{old_workspace + 1, old_ws.windows.items.len, workspace_id + 1, new_ws.windows.items.len});
     }
 
+    // Disable tiling temporarily to prevent interference during switch
+    const tiling_was_enabled = wm.config.tiling.enabled;
+    wm.config.tiling.enabled = false;
+
     // Hide all windows on current workspace
     for (old_ws.windows.items) |win| {
-        _ = xcb.xcb_unmap_window(wm.conn, win);
+        const cookie = xcb.xcb_unmap_window_checked(wm.conn, win);
+        _ = error_handling.xcbCheckError(wm.conn, cookie, "unmap during workspace switch");
         if (builtin.mode == .Debug) {
             std.log.info("[workspaces]   Hiding window {x}", .{win});
         }
     }
 
+    _ = xcb.xcb_flush(wm.conn);
+
     // Switch to new workspace
     state.current = workspace_id;
 
-    // Show all windows on new workspace
+    // Re-enable tiling BEFORE mapping windows so they get added to tiling system
+    wm.config.tiling.enabled = tiling_was_enabled;
+
+    // Show all windows on new workspace AND notify tiling system
     for (new_ws.windows.items) |win| {
-        _ = xcb.xcb_map_window(wm.conn, win);
+        const cookie = xcb.xcb_map_window_checked(wm.conn, win);
+        _ = error_handling.xcbCheckError(wm.conn, cookie, "map during workspace switch");
         if (builtin.mode == .Debug) {
             std.log.info("[workspaces]   Showing window {x}", .{win});
         }
+        
+        // CRITICAL FIX: Notify tiling system about this window
+        // This ensures windows created on other workspaces get properly tiled
+        // when we switch to them
+        if (tiling_was_enabled) {
+            tiling.notifyWindowMapped(wm, win);
+        }
     }
+
+    _ = xcb.xcb_flush(wm.conn);
 
     // Focus first window if any exist, otherwise clear focus
     if (new_ws.windows.items.len > 0) {
         const first_window = new_ws.windows.items[0];
-        _ = xcb.xcb_set_input_focus(
-            wm.conn,
-            xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-            first_window,
-            xcb.XCB_CURRENT_TIME
-        );
-        _ = xcb.xcb_configure_window(wm.conn, first_window, 
-            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
-        wm.focused_window = first_window;
-        
-        // Notify tiling system about focus change
-        tiling.updateWindowFocus(wm, first_window);
+        focus.setFocus(wm, first_window, .workspace_switch);
     } else {
-        wm.focused_window = null;
+        focus.clearFocus(wm);
     }
 
     _ = xcb.xcb_flush(wm.conn);
-    
-    // Retile the new workspace
-    tiling.retileCurrentWorkspace(wm);
+
+    // Retile is now handled by notifyWindowMapped calls above
+    // But we call it once more to ensure everything is positioned correctly
+    if (tiling_was_enabled) {
+        tiling.retileCurrentWorkspace(wm);
+    }
 
     if (builtin.mode == .Debug) {
         std.log.info("[workspaces] Now on workspace {}", .{workspace_id + 1});
@@ -228,7 +267,7 @@ pub fn moveWindowTo(wm: *WM, target_workspace: usize) void {
         std.log.warn("[workspaces] Invalid workspace ID: {}", .{target_workspace});
         return;
     }
-    
+
     if (target_workspace == state.current) {
         if (builtin.mode == .Debug) {
             std.log.info("[workspaces] Window already on workspace {}", .{target_workspace + 1});
@@ -266,17 +305,13 @@ pub fn moveWindowTo(wm: *WM, target_workspace: usize) void {
     // Focus next window in current workspace
     if (current_ws.windows.items.len > 0) {
         const next_window = current_ws.windows.items[0];
-        _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, next_window, xcb.XCB_CURRENT_TIME);
-        _ = xcb.xcb_configure_window(wm.conn, next_window, 
-            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
-        wm.focused_window = next_window;
-        tiling.updateWindowFocus(wm, next_window);
+        focus.setFocus(wm, next_window, .window_destroyed);
     } else {
-        wm.focused_window = null;
+        focus.clearFocus(wm);
     }
 
     _ = xcb.xcb_flush(wm.conn);
-    
+
     // Retile the current workspace after removing a window
     tiling.retileCurrentWorkspace(wm);
 
@@ -285,10 +320,15 @@ pub fn moveWindowTo(wm: *WM, target_workspace: usize) void {
     }
 }
 
-/// Get current workspace's window list
-pub fn getCurrentWindows() ?[]const u32 {
+/// Get current workspace's window list (returns a COPY to avoid use-after-free)
+pub fn getCurrentWindows(allocator: std.mem.Allocator) ?[]u32 {
     const state = workspace_state orelse return null;
-    return state.workspaces[state.current].windows.items;
+    const ws = &state.workspaces[state.current];
+
+    // Return a COPY to avoid use-after-free
+    const copy = allocator.alloc(u32, ws.windows.items.len) catch return null;
+    @memcpy(copy, ws.windows.items);
+    return copy;
 }
 
 /// Get current workspace ID
@@ -297,7 +337,11 @@ pub fn getCurrentWorkspace() ?usize {
     return state.current;
 }
 
+/// Get workspace state pointer for debugging
+pub fn getState() ?*WorkspaceState {
+    return workspace_state;
+}
+
 pub const EVENT_TYPES = [_]u8{
-    xcb.XCB_MAP_REQUEST,
     xcb.XCB_DESTROY_NOTIFY,
 };

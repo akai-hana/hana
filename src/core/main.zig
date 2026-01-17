@@ -189,7 +189,20 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32) void {
         const children = xcb.xcb_query_tree_children(tree_reply);
         const children_len: usize = @intCast(xcb.xcb_query_tree_children_length(tree_reply));
         for (0..children_len) |i| {
-            setupWindowEventMask(conn, children[i]);
+            const win = children[i];
+            
+            // Get window attributes to filter special windows
+            const attrs_cookie = xcb.xcb_get_window_attributes(conn, win);
+            const attrs = xcb.xcb_get_window_attributes_reply(conn, attrs_cookie, null) orelse continue;
+            defer std.c.free(attrs);
+            
+            // Skip override-redirect windows (popups, tooltips, etc.)
+            if (attrs.*.override_redirect != 0) continue;
+            
+            // Skip unmapped windows
+            if (attrs.*.map_state != xcb.XCB_MAP_STATE_VIEWABLE) continue;
+            
+            setupWindowEventMask(conn, win);
         }
     }
 }
@@ -205,9 +218,13 @@ fn grabKeybindings(wm: *WM) !void {
 
         // Grab with CapsLock, NumLock, and both combinations to handle all cases
         inline for ([_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 }) |lock| {
-            _ = xcb.xcb_grab_key(wm.conn, 0, wm.root,
+            const cookie = xcb.xcb_grab_key_checked(wm.conn, 0, wm.root,
                 @intCast(keybind.modifiers | lock), keycode,
                 xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC);
+            if (!error_handling.xcbCheckError(wm.conn, cookie, "grab key")) {
+                std.log.warn("[keybind] Failed to grab: mod=0x{x} key={}", 
+                    .{keybind.modifiers, keycode});
+            }
         }
     }
     _ = xcb.xcb_flush(wm.conn);
@@ -227,6 +244,7 @@ fn handleConfigReload(wm: *WM) !void {
     wm.config = new_config;
 
     try grabKeybindings(wm);
+    try input.rebuildKeybindMap(wm);
     tiling.reloadConfig(wm);
     // Note: Workspace count changes require restart
 

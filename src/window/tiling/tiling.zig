@@ -102,10 +102,6 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
     if (!state.enabled) return;
 
     switch (event_type & 0x7F) {
-        xcb.XCB_MAP_REQUEST => {
-            const e: *const xcb.xcb_map_request_event_t = @ptrCast(@alignCast(event));
-            handleMapRequest(e, wm, state);
-        },
         xcb.XCB_CONFIGURE_REQUEST => {
             const e: *const xcb.xcb_configure_request_event_t = @ptrCast(@alignCast(event));
             handleConfigureRequest(e, wm);
@@ -122,9 +118,81 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
     }
 }
 
+/// Called by window.zig when a window is mapped (instead of handling MAP_REQUEST)
+pub fn notifyWindowMapped(wm: *WM, window_id: u32) void {
+    const state = tiling_state orelse return;
+    if (!state.enabled) return;
+
+    // Check if window is on current workspace
+    const workspace_windows = workspaces.getCurrentWindows(wm.allocator) orelse return;
+    defer wm.allocator.free(workspace_windows);
+    
+    var on_current_workspace = false;
+    for (workspace_windows) |ws_win| {
+        if (ws_win == window_id) {
+            on_current_workspace = true;
+            break;
+        }
+    }
+    
+    if (!on_current_workspace) {
+        if (builtin.mode == .Debug) {
+            std.log.info("[tiling] Window {x} not on current workspace, skipping tiling", .{window_id});
+        }
+        return;
+    }
+
+    // Check if already tiled
+    for (state.tiled_windows.items) |win| {
+        if (win == window_id) {
+            // Already tiled, just retile
+            retile(wm, state);
+            return;
+        }
+    }
+
+    // Add new window at front (becomes focused)
+    state.tiled_windows.insert(wm.allocator, 0, window_id) catch {
+        log.errorTilingWindowAddFailed();
+        return;
+    };
+
+    // Batch setup operations for new window
+    _ = xcb.xcb_change_window_attributes(wm.conn, window_id,
+        xcb.XCB_CW_EVENT_MASK, &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
+    _ = xcb.xcb_change_window_attributes(wm.conn, window_id,
+        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{state.border_focused});
+    _ = xcb.xcb_configure_window(wm.conn, window_id,
+        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{state.border_width});
+
+    wm.focused_window = window_id;
+
+    retile(wm, state);
+
+    if (builtin.mode == .Debug) {
+        log.debugTilingWindowAdded(window_id, state.tiled_windows.items.len);
+    }
+}
+
 /// Update border colors for all tiled windows based on focus
 fn updateBorderColors(focused_window: u32, wm: *WM, state: *TilingState) void {
+    // Only update windows on current workspace
+    const workspace_windows = workspaces.getCurrentWindows(wm.allocator) orelse {
+        _ = xcb.xcb_flush(wm.conn);
+        return;
+    };
+    defer wm.allocator.free(workspace_windows);
+
     for (state.tiled_windows.items) |win| {
+        var on_current_workspace = false;
+        for (workspace_windows) |ws_win| {
+            if (ws_win == win) {
+                on_current_workspace = true;
+                break;
+            }
+        }
+        if (!on_current_workspace) continue;
+
         const color = if (win == focused_window) state.border_focused else state.border_normal;
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
     }
@@ -149,44 +217,6 @@ fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *
             event.height,
         });
     _ = xcb.xcb_flush(wm.conn);
-}
-
-/// Handle new window map requests - add to tiling system
-fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM, state: *TilingState) void {
-    // Check if already tiled - if so, just map it and retile
-    for (state.tiled_windows.items) |win| {
-        if (win == event.window) {
-            _ = xcb.xcb_map_window(wm.conn, event.window);
-            _ = xcb.xcb_flush(wm.conn);
-            // Retile to account for workspace changes
-            retile(wm, state);
-            return;
-        }
-    }
-
-    // Add new window at front (becomes focused)
-    state.tiled_windows.insert(wm.allocator, 0, event.window) catch {
-        log.errorTilingWindowAddFailed();
-        return;
-    };
-
-    // Batch setup operations for new window
-    _ = xcb.xcb_change_window_attributes(wm.conn, event.window,
-        xcb.XCB_CW_EVENT_MASK, &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
-    _ = xcb.xcb_change_window_attributes(wm.conn, event.window,
-        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{state.border_focused});
-    _ = xcb.xcb_configure_window(wm.conn, event.window,
-        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{state.border_width});
-    _ = xcb.xcb_map_window(wm.conn, event.window);
-    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, event.window, xcb.XCB_CURRENT_TIME);
-
-    wm.focused_window = event.window;
-
-    retile(wm, state);
-
-    if (builtin.mode == .Debug) {
-        log.debugTilingWindowAdded(event.window, state.tiled_windows.items.len);
-    }
 }
 
 /// Remove window from tiling system and focus next window
@@ -232,10 +262,14 @@ fn retile(wm: *WM, state: *TilingState) void {
     const screen = wm.screen;
 
     // Get current workspace windows
-    const workspace_windows = workspaces.getCurrentWindows() orelse {
+    const workspace_windows = workspaces.getCurrentWindows(wm.allocator) orelse {
+        if (builtin.mode == .Debug) {
+            std.log.warn("[tiling] No workspace windows available, skipping retile", .{});
+        }
         _ = xcb.xcb_flush(wm.conn);
         return;
     };
+    defer wm.allocator.free(workspace_windows);
 
     // Filter to only windows that are both tiled AND on current workspace
     var visible_windows = std.ArrayList(u32){};
@@ -263,6 +297,9 @@ fn retile(wm: *WM, state: *TilingState) void {
     }
 
     if (visible_windows.items.len == 0) {
+        if (builtin.mode == .Debug) {
+            std.log.info("[tiling] No visible windows to tile", .{});
+        }
         _ = xcb.xcb_flush(wm.conn);
         return;
     }
@@ -377,8 +414,12 @@ pub fn reloadConfig(wm: *WM) void {
     if (state.enabled) retile(wm, state);
 }
 
+/// Get tiling state pointer for debugging
+pub fn getState() ?*TilingState {
+    return tiling_state;
+}
+
 pub const EVENT_TYPES = [_]u8{
-    xcb.XCB_MAP_REQUEST,
     xcb.XCB_CONFIGURE_REQUEST,
     xcb.XCB_DESTROY_NOTIFY,
     xcb.XCB_FOCUS_IN,
