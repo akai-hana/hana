@@ -1,4 +1,16 @@
-// Grid layout - windows arranged in a grid pattern
+// === grid.zig ===
+//! Grid layout - windows arranged in a square grid.
+//!
+//! Windows are arranged in rows and columns to form an approximately
+//! square grid. Number of columns is calculated as ceil(sqrt(N)).
+//!
+//! Example with 6 windows (3x2):
+//! ┌───┬───┬───┐
+//! │ 1 │ 2 │ 3 │
+//! ├───┼───┼───┤
+//! │ 4 │ 5 │ 6 │
+//! └───┴───┴───┘
+
 const std = @import("std");
 const defs = @import("defs");
 const builtin = @import("builtin");
@@ -14,6 +26,7 @@ pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, s
     const gap = state.gaps;
     const bw = state.border_width;
 
+    // Calculate grid dimensions (approximately square)
     const cols_f = @ceil(@sqrt(@as(f32, @floatFromInt(n))));
     const cols = @as(u16, @intFromFloat(cols_f));
     const rows = @as(u16, @intCast((n + cols - 1) / cols));
@@ -22,9 +35,9 @@ pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, s
         log.debugLayoutTiling("grid", n, cols, rows);
     }
 
-    // Calculate cell size accounting for gaps: gap + cell + gap + cell + ... + gap
-    // Total: (cols+1)*gap + cols*cell_w = screen_w
-    // Therefore: cell_w = (screen_w - (cols+1)*gap) / cols
+    // Calculate cell size accounting for gaps between cells
+    // Layout: gap + cell + gap + cell + ... + gap
+    // Total width: (cols + 1) * gap + cols * cell_w = screen_w
     const cell_w = (screen_w - (cols + 1) * gap) / cols;
     const cell_h = (screen_h - (rows + 1) * gap) / rows;
 
@@ -36,7 +49,7 @@ pub fn tile(wm: *WM, state: *TilingState, windows: []const u32, screen_w: u16, s
         const col = @as(u16, @intCast(idx % cols));
         const row = @as(u16, @intCast(idx / cols));
 
-        // Position: gap + col * (cell + gap)
+        // Position: gap + col * (cell_w + gap) for even spacing
         const x = gap + col * (cell_w + gap);
         const y = gap + row * (cell_h + gap);
 

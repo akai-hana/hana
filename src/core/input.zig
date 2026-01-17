@@ -1,4 +1,10 @@
-// Input handling - keyboard and mouse events (OPTIMIZED)
+//! Input event handling for keyboard and mouse.
+//!
+//! Handles:
+//! - Keybinding matching and action execution
+//! - Mouse button events for window dragging/resizing
+//! - Focus changes on mouse enter
+//! - Configuration-based keybinding map
 
 const std = @import("std");
 const defs = @import("defs");
@@ -22,6 +28,7 @@ pub const EVENT_TYPES = [_]u8{
     xcb.XCB_MOTION_NOTIFY,
 };
 
+/// Fast lookup table: (modifiers << 32 | keysym) -> Action
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
 var keybind_initialized = false;
 
@@ -42,15 +49,18 @@ pub fn deinit(_: *WM) void {
     }
 }
 
+/// Build hashmap for O(1) keybinding lookups
 fn buildKeybindMap(wm: *WM) !void {
     keybind_map.clearRetainingCapacity();
     for (wm.config.keybindings.items) |*keybind| {
-        try keybind_map.put((@as(u64, keybind.modifiers) << 32) | keybind.keysym, &keybind.action);
+        const key = (@as(u64, keybind.modifiers) << 32) | keybind.keysym;
+        try keybind_map.put(key, &keybind.action);
     }
 }
 
+/// Setup mouse button grabs for window manipulation
+/// Super+Button1 = move window, Super+Button3 = resize window
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
-    // Grab Super+Button1 and Super+Button3 for window dragging
     inline for ([_]u8{ 1, 3 }) |button| {
         _ = xcb.xcb_grab_button(
             conn, 0, root,
@@ -79,8 +89,11 @@ pub fn handleEvent(event_type: u8, event: *anyopaque, wm: *WM) void {
     }
 }
 
+/// Handle key press events - lookup and execute actions
 fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
+    
+    // Extract relevant modifiers (ignore locks)
     const modifiers: u16 = @intCast(event.state & defs.MOD_MASK_RELEVANT);
     const keysym = xkb_ptr.keycodeToKeysym(event.detail);
     const key = (@as(u64, modifiers) << 32) | keysym;
@@ -95,22 +108,24 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     }
 }
 
+/// Handle mouse button presses - window focus or drag
 fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
-    if (event.child == 0) return;
+    if (event.child == 0) return; // Click on root window, ignore
 
     const has_super = (event.state & defs.MOD_SUPER) != 0;
-    
+
     if (has_super and (event.detail == 1 or event.detail == 3)) {
+        // Super+Button1/3: Start window drag/resize
         log.debugMouseButtonClick(event.detail, event.root_x, event.root_y, event.child);
         cursor_drag.startDrag(wm, event.child, event.detail, event.root_x, event.root_y);
     } else {
-        // Batch focus operations - set focus and raise window together
+        // Normal click: Focus and raise window
         _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, event.child, xcb.XCB_CURRENT_TIME);
         _ = xcb.xcb_configure_window(wm.conn, event.child, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
-        
+
         const old_focus = wm.focused_window;
         wm.focused_window = event.child;
-        
+
         if (old_focus != event.child) {
             tiling.updateWindowFocus(wm, event.child);
         }
@@ -118,33 +133,12 @@ fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     }
 }
 
+/// Execute a keybinding action
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
-        .exec => |cmd| {
-            log.debugExecutingCommand(cmd);
-            const pid = c.fork();
-            if (pid == 0) {
-                _ = c.setsid();
-                const cmd_z = try wm.allocator.dupeZ(u8, cmd);
-                defer wm.allocator.free(cmd_z);
-                _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z.ptr, null }));
-                std.process.exit(1);
-            } else if (pid < 0) {
-                log.errorCommandForkFailed(cmd);
-            }
-        },
-        .close_window => {
-            if (wm.focused_window) |win_id| {
-                log.debugClosingWindow(win_id);
-                _ = xcb.xcb_destroy_window(wm.conn, win_id);
-            } else {
-                log.debugNoFocusedWindow();
-            }
-        },
-        .reload_config => {
-            log.debugConfigReloadTriggered();
-            buildKeybindMap(wm) catch |err| log.errorKeybindMapRebuildFailed(err);
-        },
+        .exec => |cmd| try executeShellCommand(wm, cmd),
+        .close_window => closeWindow(wm),
+        .reload_config => try reloadConfig(wm),
         .focus_next, .focus_prev => log.debugFocusNotImplemented(),
         .toggle_layout => tiling.toggleLayout(wm),
         .increase_master => tiling.increaseMasterWidth(wm),
@@ -155,4 +149,37 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .switch_workspace => |ws| workspaces.switchTo(wm, ws),
         .move_to_workspace => |ws| workspaces.moveWindowTo(wm, ws),
     }
+}
+
+/// Execute a shell command in a forked process
+fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
+    log.debugExecutingCommand(cmd);
+    
+    const pid = c.fork();
+    if (pid == 0) {
+        // Child process
+        _ = c.setsid();
+        const cmd_z = try wm.allocator.dupeZ(u8, cmd);
+        defer wm.allocator.free(cmd_z);
+        _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z.ptr, null }));
+        std.process.exit(1);
+    } else if (pid < 0) {
+        log.errorCommandForkFailed(cmd);
+    }
+}
+
+/// Close the currently focused window
+fn closeWindow(wm: *WM) void {
+    if (wm.focused_window) |win_id| {
+        log.debugClosingWindow(win_id);
+        _ = xcb.xcb_destroy_window(wm.conn, win_id);
+    } else {
+        log.debugNoFocusedWindow();
+    }
+}
+
+/// Trigger configuration reload
+fn reloadConfig(wm: *WM) !void {
+    log.debugConfigReloadTriggered();
+    try buildKeybindMap(wm);
 }

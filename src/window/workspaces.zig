@@ -1,4 +1,15 @@
-// Workspace management - virtual desktops
+//! Virtual desktop workspace management.
+//!
+//! Provides multiple independent workspaces (virtual desktops) where windows
+//! can be organized. Each workspace maintains its own window list, and only
+//! windows on the current workspace are visible.
+//!
+//! Features:
+//! - Configurable number of workspaces (default: 9)
+//! - Switch between workspaces
+//! - Move windows between workspaces
+//! - Windows persist when switching workspaces
+
 const std = @import("std");
 const defs = @import("defs");
 const builtin = @import("builtin");
@@ -7,15 +18,26 @@ const tiling = @import("tiling");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
+/// A single workspace containing windows
 pub const Workspace = struct {
+    /// Workspace index (0-based)
     id: usize,
+
+    /// Windows currently on this workspace
     windows: std.ArrayList(u32),
+
+    /// Human-readable name
     name: []const u8,
 };
 
+/// Global workspace state
 pub const WorkspaceState = struct {
+    /// All available workspaces
     workspaces: []Workspace,
+
+    /// Index of currently visible workspace
     current: usize,
+
     allocator: std.mem.Allocator,
 };
 
@@ -41,7 +63,7 @@ pub fn init(wm: *WM) void {
     for (state.workspaces, 0..) |*ws, i| {
         ws.* = .{
             .id = i,
-            .windows = std.ArrayList(u32).init(wm.allocator),
+            .windows = std.ArrayList(u32){},
             .name = std.fmt.allocPrint(wm.allocator, "{}", .{i + 1}) catch "?",
         };
     }
@@ -56,7 +78,7 @@ pub fn init(wm: *WM) void {
 pub fn deinit(wm: *WM) void {
     if (workspace_state) |state| {
         for (state.workspaces) |*ws| {
-            ws.windows.deinit();
+            ws.windows.deinit(wm.allocator);
             wm.allocator.free(ws.name);
         }
         wm.allocator.free(state.workspaces);
@@ -115,7 +137,7 @@ pub fn switchTo(wm: *WM, workspace_id: usize) void {
         _ = xcb.xcb_unmap_window(wm.conn, win);
     }
 
-    // Switch workspace
+    // Switch to new workspace
     const old_workspace = state.current;
     state.current = workspace_id;
 
@@ -125,7 +147,7 @@ pub fn switchTo(wm: *WM, workspace_id: usize) void {
         _ = xcb.xcb_map_window(wm.conn, win);
     }
 
-    // Focus first window if any
+    // Focus first window if any exist
     wm.focused_window = if (new_ws.windows.items.len > 0) new_ws.windows.items[0] else null;
 
     if (wm.focused_window) |focused| {
@@ -162,9 +184,9 @@ pub fn moveWindowTo(wm: *WM, target_workspace: usize) void {
 
     // Add to target workspace
     const target_ws = &state.workspaces[target_workspace];
-    target_ws.windows.append(state.allocator, focused) catch return;
+    target_ws.windows.append(wm.allocator, focused) catch return;
 
-    // Hide the window
+    // Hide the window since it's no longer on current workspace
     _ = xcb.xcb_unmap_window(wm.conn, focused);
 
     // Focus next window in current workspace
