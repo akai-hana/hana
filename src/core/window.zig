@@ -1,6 +1,5 @@
 //! Window management optimized for responsivity
-//! - Map windows IMMEDIATELY (no blocking on WM_CLASS)
-//! - Apply workspace rules asynchronously after mapping
+//! OPTIMIZED: Enter event coalescing, reduced XCB calls
 const std = @import("std");
 const defs = @import("defs");
 const xcb = defs.xcb;
@@ -14,9 +13,7 @@ const builtin = @import("builtin");
 pub fn init(_: *WM) void {}
 pub fn deinit(_: *WM) void {}
 
-// ============================================================================
 // EVENT HANDLERS - OPTIMIZED FOR IMMEDIATE RESPONSE
-// ============================================================================
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win = event.window;
@@ -31,25 +28,21 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
     if (target_ws) |ws| {
         if (ws != current_ws) {
-            // Add to target workspace but don't map (it's not current)
             workspaces.addWindowToWorkspace(wm, win, ws);
-            
-            // Configure window but don't show it
+
             if (wm.config.tiling.enabled) {
-                // Set up tiling state but don't map
                 const attrs = utils.WindowAttrs{
                     .border_width = wm.config.tiling.border_width,
                     .event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW,
                 };
                 attrs.configure(wm.conn, win);
             }
-            
+
             utils.flush(wm.conn);
-            return; // Don't map - window goes to different workspace
+            return;
         }
     }
 
-    // Map to current workspace
     workspaces.addWindowToCurrentWorkspace(wm, win);
     _ = xcb.xcb_map_window(wm.conn, win);
 
@@ -57,14 +50,13 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         tiling.notifyWindowMapped(wm, win);
     }
 
+    focus.markLayoutOperation();
     utils.flush(wm.conn);
 }
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
-    // Let tiling handle tiled windows
     if (wm.config.tiling.enabled and tiling.isWindowTiled(event.window)) return;
 
-    // Configure floating window - single XCB call
     _ = xcb.xcb_configure_window(wm.conn, event.window, event.value_mask, &[_]u32{
         @intCast(event.x),
         @intCast(event.y),
@@ -74,48 +66,64 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     });
 }
 
+/// OPTIMIZED: Coalesce enter notify events to prevent focus thrashing
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     if (event.event == wm.root or event.event == 0) return;
+
+    // Check focus protection
+    if (focus.shouldSuppressMouseFocus()) return;
+
+    // OPTIMIZATION: Coalesce enter events - skip if more are queued
+    // This is critical when rapidly moving cursor across many windows
+    if (hasQueuedEnterEvents(wm.conn)) {
+        return; // Skip this event, process the latest one instead
+    }
+
     focus.setFocus(wm, event.event, .mouse_enter);
+}
+
+/// Check if there are more enter notify events in the queue
+/// Returns true if we should skip the current event
+fn hasQueuedEnterEvents(conn: *xcb.xcb_connection_t) bool {
+    const queued = xcb.xcb_poll_for_event(conn);
+    if (queued) |next_event| {
+        defer std.c.free(next_event);
+        const next_type = @as(*u8, @ptrCast(next_event)).* & 0x7F;
+        
+        // If next event is also enter notify, skip current one
+        if (next_type == xcb.XCB_ENTER_NOTIFY) {
+            return true;
+        }
+    }
+    return false;
 }
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
     const win = event.window;
     const was_focused = wm.focused_window == win;
 
-    // CRITICAL: Clean up in correct order
-    // 1. Notify tiling FIRST (while window is still in workspaces)
+    // Clean up in correct order
     tiling.notifyWindowDestroyed(wm, win);
-    
-    // 2. Remove from workspaces
     workspaces.removeWindow(win);
-    
-    // 3. Remove from WM's window map
     wm.removeWindow(win);
 
-    // 4. Handle focus
     if (was_focused) {
         wm.focused_window = null;
-        
-        // Try to focus a window from current workspace, not global window list
+
         if (workspaces.getCurrentWindowsView()) |ws_windows| {
             if (ws_windows.len > 0) {
                 focus.setFocus(wm, ws_windows[0], .window_destroyed);
                 return;
             }
         }
-        
-        // No windows left, clear focus
+
         focus.clearFocus(wm);
     }
 }
 
-// ============================================================================
-// WORKSPACE RULES - NON-BLOCKING
-// ============================================================================
+// WORKSPACE RULES
 
 fn matchWorkspaceRule(wm: *WM, win: u32) ?usize {
-    // This may block on X11, but only BEFORE window is mapped
     const wm_class = utils.getWMClass(wm.conn, win, wm.allocator) orelse return null;
     defer wm_class.deinit(wm.allocator);
 

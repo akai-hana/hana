@@ -1,4 +1,4 @@
-//! Input handling with optional motion event coalescing for smooth dragging
+//! Input handling with motion AND enter event coalescing for maximum responsiveness
 const std = @import("std");
 const defs = @import("defs");
 const xkbcommon = @import("xkbcommon");
@@ -17,7 +17,6 @@ extern "c" fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
 // ============================================================================
 
 /// Enable motion event coalescing for smoother window dragging
-/// Discards intermediate motion events when multiple are queued
 const COALESCE_MOTION_EVENTS = true;
 
 // ============================================================================
@@ -52,10 +51,9 @@ fn buildKeybindMap(wm: *WM) !void {
 }
 
 pub fn rebuildKeybindMap(wm: *WM) !void {
-    // CRITICAL: Prevent key handling during rebuild
     keybind_map_ready.store(false, .release);
     defer keybind_map_ready.store(true, .release);
-    
+
     try buildKeybindMap(wm);
 }
 
@@ -80,9 +78,8 @@ pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
 // ============================================================================
 
 pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
-    // SAFETY: Don't process keys if map isn't ready
     if (!keybind_map_ready.load(.acquire)) return;
-    
+
     const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
 
     const mods = utils.normalizeModifiers(event.state);
@@ -115,11 +112,10 @@ pub fn handleButtonRelease(_: *const xcb.xcb_button_release_event_t, wm: *WM) vo
 pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
     if (!@import("cursor-window-drag").isDragging()) return;
 
-    // RESPONSIVITY: Coalesce motion events
-    // If more motion events are queued, skip this one
+    // OPTIMIZATION: Coalesce motion events
     if (COALESCE_MOTION_EVENTS) {
         if (hasQueuedMotionEvents(wm.conn)) {
-            return; // Skip intermediate event, process latest one
+            return;
         }
     }
 
@@ -127,27 +123,21 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
 }
 
 /// Check if there are more motion events queued
-/// Returns true if we should skip the current event
 fn hasQueuedMotionEvents(conn: *xcb.xcb_connection_t) bool {
     const queued = xcb.xcb_poll_for_event(conn);
     if (queued) |next_event| {
         defer std.c.free(next_event);
         const next_type = @as(*u8, @ptrCast(next_event)).* & 0x7F;
 
-        // If next event is also motion, skip current one
         if (next_type == xcb.XCB_MOTION_NOTIFY) {
             return true;
         }
-
-        // Otherwise, we need to process both events
-        // Put the event back (not ideal, but xcb doesn't have unget)
-        // In practice, this rarely happens
     }
     return false;
 }
 
 // ============================================================================
-// ACTION EXECUTION - INLINE FAST PATHS
+// ACTION EXECUTION
 // ============================================================================
 
 inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
@@ -176,31 +166,23 @@ inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
 }
 
 fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
-    // CRITICAL: Allocate null-terminated string in parent process before fork
     const cmd_z = try wm.allocator.dupeZ(u8, cmd);
     defer wm.allocator.free(cmd_z);
-    
+
     const pid = c.fork();
     if (pid == 0) {
-        // First child - fork again to avoid zombies
         const pid2 = c.fork();
         if (pid2 == 0) {
-            // Second child - this will actually run the command
             _ = c.setsid();
-            
-            // Don't use allocator in child process - cmd_z is already allocated
             _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{
                 "/bin/sh", "-c", cmd_z.ptr, null
             }));
-            // If execvp fails, just exit - don't try to free anything
             std.process.exit(1);
         } else if (pid2 < 0) {
             std.process.exit(1);
         }
-        // First child exits immediately
         std.process.exit(0);
     } else if (pid > 0) {
-        // Parent waits for first child to avoid zombies
         var status: c_int = 0;
         _ = waitpid(pid, &status, 0);
     }

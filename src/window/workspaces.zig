@@ -76,7 +76,7 @@ pub fn deinit(wm: *WM) void {
 pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
     const s = state orelse return;
     const ws = &s.workspaces[s.current];
-    
+
     if (ws.contains(win)) return;
     ws.windows.append(s.allocator, win) catch return;
 }
@@ -84,7 +84,7 @@ pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
 pub fn addWindowToWorkspace(_: *WM, win: u32, ws_id: usize) void {
     const s = state orelse return;
     if (ws_id >= s.workspaces.len) return;
-    
+
     const ws = &s.workspaces[ws_id];
     if (ws.contains(win)) return;
     ws.windows.append(s.allocator, win) catch return;
@@ -101,31 +101,32 @@ pub fn removeWindow(win: u32) void {
 pub fn moveWindowToWorkspace(wm: *WM, win: u32, target_ws: usize) void {
     const s = state orelse return;
     if (target_ws >= s.workspaces.len) return;
-    
+
     const current_ws = &s.workspaces[s.current];
     const target = &s.workspaces[target_ws];
-    
+
     // Remove from current
     if (!current_ws.remove(win)) return;
-    
+
     // Add to target
     target.windows.append(s.allocator, win) catch return;
-    
+
     // Unmap since moving to different workspace
     _ = xcb.xcb_unmap_window(wm.conn, win);
-    utils.flush(wm.conn);
     
+    // CRITICAL: Mark layout operation before flush
+    focus.markLayoutOperation();
+    utils.flush(wm.conn);
+
     // Update tiling state
     tiling.retileCurrentWorkspace(wm);
 }
 
-// ============================================================================
 // WORKSPACE SWITCHING - BATCHED FOR RESPONSIVITY
-// ============================================================================
 
 pub fn switchTo(wm: *WM, ws_id: usize) void {
     const s = state orelse return;
-    
+
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
 
     const old_ws = &s.workspaces[s.current];
@@ -133,11 +134,14 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
 
     // Batch unmap old windows - appears as atomic operation
     utils.batchUnmap(wm.conn, old_ws.windows.items);
-    
+
     s.current = ws_id;
 
     // Batch map new windows - appears as atomic operation
     utils.batchMap(wm.conn, new_ws.windows.items);
+    
+    // CRITICAL: Mark layout operation before flush to protect focus
+    focus.markLayoutOperation();
     utils.flush(wm.conn);
 
     // Handle tiling in one operation
@@ -159,16 +163,16 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
 pub fn moveWindowTo(wm: *WM, target_ws: usize) void {
     const s = state orelse return;
     const focused = wm.focused_window orelse return;
-    
+
     if (target_ws >= s.workspaces.len or target_ws == s.current) return;
 
     const current_ws = &s.workspaces[s.current];
     const target = &s.workspaces[target_ws];
 
     if (!current_ws.remove(focused)) return;
-    
+
     target.windows.append(s.allocator, focused) catch return;
-    
+
     _ = xcb.xcb_unmap_window(wm.conn, focused);
 
     if (current_ws.windows.items.len > 0) {
@@ -177,13 +181,13 @@ pub fn moveWindowTo(wm: *WM, target_ws: usize) void {
         focus.clearFocus(wm);
     }
 
+    // CRITICAL: Mark layout operation before flush
+    focus.markLayoutOperation();
     utils.flush(wm.conn);
     tiling.retileCurrentWorkspace(wm);
 }
 
-// ============================================================================
 // QUERY FUNCTIONS - ZERO-COPY
-// ============================================================================
 
 pub fn getCurrentWindowsView() ?[]const u32 {
     const s = state orelse return null;

@@ -1,4 +1,5 @@
 //! Main entry point with optimized event loop
+//! OPTIMIZED: Reduced flush frequency, batch operations
 const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
@@ -13,24 +14,36 @@ const utils = @import("utils");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
-// ============================================================================
 // CONSTANTS
-// ============================================================================
 
 const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
     xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
     xcb.XCB_EVENT_MASK_KEY_PRESS |
     xcb.XCB_EVENT_MASK_ENTER_WINDOW;
 
-// ============================================================================
+/// OPTIMIZATION: Events that don't need immediate flush
+/// These can be batched for better performance
+const BATCHABLE_EVENTS = [_]u8{
+    xcb.XCB_ENTER_NOTIFY,      // Focus changes can be batched
+    xcb.XCB_LEAVE_NOTIFY,
+    xcb.XCB_FOCUS_IN,
+    xcb.XCB_FOCUS_OUT,
+};
+
+/// OPTIMIZATION: Events that need immediate flush
+const CRITICAL_EVENTS = [_]u8{
+    xcb.XCB_MAP_REQUEST,       // Window mapping should be immediate
+    xcb.XCB_CONFIGURE_REQUEST, // Window configuration should be immediate
+    xcb.XCB_KEY_PRESS,         // User input should be immediate
+    xcb.XCB_BUTTON_PRESS,      // User input should be immediate
+    xcb.XCB_BUTTON_RELEASE,    // User input should be immediate
+};
+
 // GLOBAL STATE
-// ============================================================================
 
 var should_reload = std.atomic.Value(bool).init(false);
 
-// ============================================================================
 // SIGNAL HANDLING
-// ============================================================================
 
 fn setupSignalHandler() void {
     const handler = struct {
@@ -47,9 +60,7 @@ fn setupSignalHandler() void {
     posix.sigaction(posix.SIG.HUP, &sa, null);
 }
 
-// ============================================================================
 // X11 SETUP
-// ============================================================================
 
 fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
     const font = xcb.xcb_generate_id(conn);
@@ -83,23 +94,18 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32) void {
     for (0..len) |i| {
         const win = children[i];
 
-        // Skip if override-redirect or unmapped
         const attrs_cookie = xcb.xcb_get_window_attributes(conn, win);
         const attrs = xcb.xcb_get_window_attributes_reply(conn, attrs_cookie, null) orelse continue;
         defer std.c.free(attrs);
 
         if (attrs.*.override_redirect != 0 or attrs.*.map_state != xcb.XCB_MAP_STATE_VIEWABLE) continue;
 
-
-        // Setup event mask
         _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_EVENT_MASK,
             &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
     }
 }
 
-// ============================================================================
 // KEYBINDING MANAGEMENT
-// ============================================================================
 
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
@@ -107,7 +113,6 @@ fn grabKeybindings(wm: *WM) !void {
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
 
-        // Grab with all lock combinations
         for ([_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 }) |lock| {
             const cookie = xcb.xcb_grab_key_checked(wm.conn, 0, wm.root,
                 @intCast(kb.modifiers | lock), keycode,
@@ -140,12 +145,26 @@ fn handleConfigReload(wm: *WM) !void {
     std.log.info("[config] Reloaded successfully", .{});
 }
 
-// ============================================================================
+// EVENT CLASSIFICATION
+
+fn needsImmediateFlush(event_type: u8) bool {
+    for (CRITICAL_EVENTS) |critical| {
+        if (event_type == critical) return true;
+    }
+    return false;
+}
+
+fn isBatchable(event_type: u8) bool {
+    for (BATCHABLE_EVENTS) |batchable| {
+        if (event_type == batchable) return true;
+    }
+    return false;
+}
+
 // MAIN
-// ============================================================================
 
 pub fn main() !void {
-    // === X11 Connection ===
+    // X11 Connection
     const conn = xcb.xcb_connect(null, null) orelse return error.X11ConnectionFailed;
     defer xcb.xcb_disconnect(conn);
 
@@ -159,22 +178,22 @@ pub fn main() !void {
     setupRootCursor(conn, screen);
     input.setupGrabs(conn, root);
 
-    // === Allocator ===
+    // Allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
-    // === XKB Setup ===
+    // XKB Setup
     const xkb_state = try allocator.create(xkbcommon.XkbState);
     defer allocator.destroy(xkb_state);
     xkb_state.* = try xkbcommon.XkbState.init(conn);
     defer xkb_state.deinit();
 
-    // === Config ===
+    // Config
     var user_config = try config.loadConfigDefault(allocator);
     config.resolveKeybindings(user_config.keybindings.items, xkb_state);
 
-    // === WM State ===
+    // WM State
     var wm = WM{
         .allocator = allocator,
         .conn = conn,
@@ -190,7 +209,7 @@ pub fn main() !void {
 
     setupSignalHandler();
 
-    // === Module Initialization ===
+    // Module Initialization
     events.initModules(&wm);
     defer events.deinitModules(&wm);
 
@@ -200,7 +219,10 @@ pub fn main() !void {
 
     std.log.info("[hana] Window manager started", .{});
 
-    // === Main Event Loop ===
+    // Main Event Loop - OPTIMIZED
+    var batch_count: usize = 0;
+    const MAX_BATCH_SIZE: usize = 10;
+    
     while (true) {
         const event = xcb.xcb_wait_for_event(conn) orelse break;
         defer std.c.free(event);
@@ -214,10 +236,30 @@ pub fn main() !void {
             };
         }
 
-        // Dispatch event - uses comptime jump table for O(1) dispatch
+        // Dispatch event
         events.dispatchFast(event_type, event, &wm);
 
-        // Single flush per event
-        utils.flush(conn);
+        // OPTIMIZATION: Intelligent flush strategy
+        // 1. Critical events (user input, map requests) flush immediately
+        // 2. Batchable events (focus changes) batch up to MAX_BATCH_SIZE
+        // 3. Unknown events flush to be safe
+        
+        if (needsImmediateFlush(event_type)) {
+            // User input and critical operations need immediate response
+            utils.flush(conn);
+            batch_count = 0;
+        } else if (isBatchable(event_type)) {
+            // Batchable events can accumulate
+            batch_count += 1;
+            if (batch_count >= MAX_BATCH_SIZE) {
+                utils.flush(conn);
+                batch_count = 0;
+            }
+            // Otherwise skip flush - will happen on next critical event
+        } else {
+            // Unknown event type - flush to be safe
+            utils.flush(conn);
+            batch_count = 0;
+        }
     }
 }
