@@ -44,16 +44,16 @@ pub fn init(wm: *WM) void {
         .border_width = wm.config.tiling.border_width,
         .border_focused = wm.config.tiling.border_focused,
         .border_normal = wm.config.tiling.border_normal,
-        .tiled_windows = std.ArrayList(u32).init(wm.allocator),
-        .visible_cache = std.ArrayList(u32).init(wm.allocator),
+        .tiled_windows = .{},
+        .visible_cache = .{},
     };
     state = s;
 }
 
 pub fn deinit(wm: *WM) void {
     if (state) |s| {
-        s.tiled_windows.deinit();
-        s.visible_cache.deinit();
+        s.tiled_windows.deinit(wm.allocator);
+        s.visible_cache.deinit(wm.allocator);
         wm.allocator.destroy(s);
         state = null;
     }
@@ -83,7 +83,7 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
         }
     }
 
-    s.tiled_windows.insert(0, win) catch return;
+    s.tiled_windows.insert(wm.allocator, 0, win) catch return;
 
     // Setup window - non-blocking configuration
     const attrs = utils.WindowAttrs{
@@ -135,9 +135,7 @@ pub fn isWindowTiled(win: u32) bool {
     return false;
 }
 
-// ============================================================================
-// LAYOUT ENGINE - OPTIMIZED FOR RESPONSIVITY
-// ============================================================================
+// LAYOUT ENGINE
 
 fn retile(wm: *WM, s: *State) void {
     if (!s.needs_retile) return;
@@ -146,25 +144,25 @@ fn retile(wm: *WM, s: *State) void {
     s.visible_cache.clearRetainingCapacity();
 
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
-    
+
     // CRITICAL: Build visible window list - validate each window still exists
-    for (s.tiled_windows.items) |win| {
+    for (s.tiled_windows.items) |win| {  // <-- This line must exist!
         // Check workspace membership
         const on_ws = for (ws_windows) |w| {
             if (w == win) break true;
         } else false;
 
         if (!on_ws) continue;
-        
+
         // CRITICAL: Verify window still exists in X11 before adding to visible cache
         const cookie = xcb.xcb_get_window_attributes(wm.conn, win);
         const attrs = xcb.xcb_get_window_attributes_reply(wm.conn, cookie, null);
         if (attrs) |a| {
             defer std.c.free(a);
             // Only include if window is valid and viewable
-            if (a.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE or 
+            if (a.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE or
                 a.*.map_state == xcb.XCB_MAP_STATE_UNMAPPED) {
-                s.visible_cache.append(wm.allocator, win) catch continue;
+                s.visible_cache.append(wm.allocator, win) catch continue;  // <-- Line 144
             }
         }
     }

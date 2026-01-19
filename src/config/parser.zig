@@ -244,10 +244,9 @@ const Parser = struct {
         }
 
         // Slow path: handle escapes
-        var result: std.ArrayList(u8) = std.ArrayList(u8){ .items = null, .len = 0, .allocator = allocator };
-
-        errdefer result.deinit();
-        try result.ensureTotalCapacity(end_pos - start);
+        var result: std.ArrayList(u8) = .{};
+        errdefer result.deinit(allocator);
+        try result.ensureTotalCapacity(allocator, end_pos - start);
 
         while (self.peek()) |c| {
             if (c == quote) break;
@@ -256,7 +255,7 @@ const Parser = struct {
             if (c == '\\') {
                 _ = self.consume();
                 const next = self.consume() orelse return ParseError.InvalidValue;
-                try result.append(switch (next) {
+                try result.append(allocator, switch (next) {
                     'n' => '\n',
                     't' => '\t',
                     'r' => '\r',
@@ -264,14 +263,15 @@ const Parser = struct {
                     '"', '\'' => next,
                     else => return ParseError.InvalidValue,
                 });
+
             } else {
-                try result.append(c);
+                try result.append(allocator, c);
                 _ = self.consume();
             }
         }
 
         _ = self.consume(); // consume closing quote
-        return try result.toOwnedSlice();
+        return try result.toOwnedSlice(allocator);
     }
 
     fn parseColor(_: *Parser, value: []const u8) !u32 {
@@ -294,12 +294,12 @@ const Parser = struct {
     fn parseArray(self: *Parser, allocator: std.mem.Allocator) ParseError!std.ArrayList(Value) {
         _ = self.consume(); // consume '['
 
-        var array = std.ArrayList(Value).init(allocator);
+        var array: std.ArrayList(Value) = .{};
         errdefer {
             for (array.items) |*item| item.deinit(allocator);
-            array.deinit();
+            array.deinit(allocator);
         }
-        try array.ensureTotalCapacity(4);
+        try array.ensureTotalCapacity(allocator, 4);
 
         while (true) {
             self.skipWhitespace();
@@ -308,7 +308,7 @@ const Parser = struct {
                 break;
             }
 
-            try array.append(try self.parseValue(allocator));
+            try array.append(allocator, try self.parseValue(allocator));
             self.skipWhitespace();
             if (self.peek() == ',') _ = self.consume();
         }
@@ -365,12 +365,12 @@ const Parser = struct {
         errdefer self.allocator.free(key);  // Free key if error occurs after allocation
         self.skipWhitespace();
         if (self.consume() != '=') return ParseError.InvalidSyntax;
-        
+
         const value = self.parseValue(allocator) catch |err| {
             self.allocator.free(key);
             return err;
         };
-        
+
         return .{ key, value };
     }
 
@@ -382,12 +382,12 @@ const Parser = struct {
         // Check if there's an equals sign
         if (self.peek() == '=') {
             _ = self.consume(); // consume '='
-            
+
             const value = self.parseValue(allocator) catch |err| {
                 self.allocator.free(key);
                 return err;
             };
-            
+
             return .{ key, value };
         } else {
             // No equals sign - treat as bare word with implicit true value
