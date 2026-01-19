@@ -85,17 +85,22 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
 /// Check if there are more enter notify events in the queue
 /// Returns true if we should skip the current event
 fn hasQueuedEnterEvents(conn: *xcb.xcb_connection_t) bool {
-    const queued = xcb.xcb_poll_for_event(conn);
-    if (queued) |next_event| {
-        defer std.c.free(next_event);
-        const next_type = @as(*u8, @ptrCast(next_event)).* & 0x7F;
-        
-        // If next event is also enter notify, skip current one
-        if (next_type == xcb.XCB_ENTER_NOTIFY) {
-            return true;
+    // Check for multiple queued enter events
+    var count: u8 = 0;
+    while (count < 2) {
+        // Check for 2 queued events instead of 1
+        const queued = xcb.xcb_poll_for_event(conn);
+        if (queued) |next_event| {
+            defer std.c.free(next_event);
+            const next_type = @as(*u8, @ptrCast(next_event)).* & 0x7F;
+            if (next_type == xcb.XCB_ENTER_NOTIFY) {
+                count += 1;
+                continue;
+            }
         }
+        return count > 0; // This ensures we return in all cases
     }
-    return false;
+    return false; // Default return if loop completes
 }
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {

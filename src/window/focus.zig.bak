@@ -17,7 +17,7 @@ pub const Reason = enum {
 };
 
 /// Grace period in nanoseconds after layout operations to ignore mouse focus changes
-const FOCUS_PROTECTION_GRACE_NS: u64 = 50 * std.time.ns_per_ms; // 50ms
+const FOCUS_PROTECTION_GRACE_NS: u64 = 150 * std.time.ns_per_ms; // 150ms
 
 /// Timer to track time since last layout operation
 var layout_timer: ?std.time.Timer = null;
@@ -30,7 +30,7 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
 
     // OPTIMIZATION: Single XCB call for focus
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, xcb.XCB_CURRENT_TIME);
-
+    
     // OPTIMIZATION: Only raise window on explicit user actions, not mouse enter
     // This reduces XCB traffic significantly during cursor sweeps
     if (reason == .mouse_click or reason == .user_command) {
@@ -50,7 +50,7 @@ pub fn clearFocus(wm: *WM) void {
     const old = wm.focused_window;
     wm.focused_window = null;
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, wm.root, xcb.XCB_CURRENT_TIME);
-
+    
     // Update border of previously focused window
     if (old) |old_win| {
         tiling.updateWindowFocusIncremental(wm, old_win, null);

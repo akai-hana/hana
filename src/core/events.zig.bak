@@ -10,15 +10,15 @@ const input = @import("input");
 const tiling = @import("tiling");
 const workspaces = @import("workspaces");
 
-
+// ============================================================================
 // EVENT HANDLER FUNCTION TYPE
-
+// ============================================================================
 
 const HandlerFn = *const fn (*anyopaque, *WM) void;
 
-
+// ============================================================================
 // COMPTIME EVENT DISPATCH TABLE
-
+// ============================================================================
 
 const EventHandlers = struct {
     // Core window events
@@ -60,16 +60,15 @@ fn wrapHandler(
 
 const handlers = makeHandlers();
 
-
+// ============================================================================
 // FAST EVENT DISPATCH - O(1) with comptime jump table
-
+// ============================================================================
 
 pub fn dispatch(event_type: u8, event: *anyopaque, wm: *WM) void {
     const normalized_type = event_type & 0x7F;
 
     // Comptime-generated jump table - compiler optimizes to switch
     inline for (comptime std.enums.values(xcb.XcbEventType)) |evt_type| {
-
         if (normalized_type == @intFromEnum(evt_type)) {
             switch (evt_type) {
                 .map_request => handlers.map_request(event, wm),
@@ -122,7 +121,9 @@ pub fn dispatchFast(event_type: u8, event: *anyopaque, wm: *WM) void {
     }
 }
 
+// ============================================================================
 // MODULE INITIALIZATION - Simplified
+// ============================================================================
 
 pub fn initModules(wm: *WM) void {
     workspaces.init(wm);
