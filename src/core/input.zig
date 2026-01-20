@@ -6,22 +6,19 @@ const utils = @import("utils");
 const tiling = @import("tiling");
 const workspaces = @import("workspaces");
 const focus = @import("focus");
+const log = @import("logging");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
 const c = @cImport(@cInclude("unistd.h"));
 extern "c" fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
 
-// ============================================================================
 // CONFIGURATION
-// ============================================================================
 
 /// Enable motion event coalescing for smoother window dragging
 const COALESCE_MOTION_EVENTS = true;
 
-// ============================================================================
 // KEYBIND SYSTEM
-// ============================================================================
 
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
 var keybind_map_ready = std.atomic.Value(bool).init(false);
@@ -64,18 +61,22 @@ inline fn makeHash(mods: u16, keysym: u32) u64 {
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
     for ([_]u8{ 1, 3 }) |button| {
         _ = xcb.xcb_grab_button(
-            conn, 0, root,
+            conn,
+            0,
+            root,
             xcb.XCB_EVENT_MASK_BUTTON_PRESS | xcb.XCB_EVENT_MASK_BUTTON_RELEASE | xcb.XCB_EVENT_MASK_POINTER_MOTION,
-            xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC,
-            root, xcb.XCB_NONE, button, defs.MOD_SUPER,
+            xcb.XCB_GRAB_MODE_ASYNC,
+            xcb.XCB_GRAB_MODE_ASYNC,
+            root,
+            xcb.XCB_NONE,
+            button,
+            defs.MOD_SUPER,
         );
     }
     utils.flush(conn);
 }
 
-// ============================================================================
 // EVENT HANDLERS
-// ============================================================================
 
 pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     if (!keybind_map_ready.load(.acquire)) return;
@@ -136,9 +137,7 @@ fn hasQueuedMotionEvents(conn: *xcb.xcb_connection_t) bool {
     return false;
 }
 
-// ============================================================================
 // ACTION EXECUTION
-// ============================================================================
 
 inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
@@ -159,7 +158,11 @@ inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
 
         .exec => |cmd| try executeShellCommand(wm, cmd),
         .switch_workspace => |ws| workspaces.switchTo(wm, ws),
-        .move_to_workspace => |ws| workspaces.moveWindowTo(wm, ws),
+        .move_to_workspace => |ws| {
+            if (wm.focused_window) |win| {
+                workspaces.moveWindowTo(wm, win, ws);
+            }
+        },
 
         .focus_next, .focus_prev => {},
     }
@@ -174,9 +177,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
         const pid2 = c.fork();
         if (pid2 == 0) {
             _ = c.setsid();
-            _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{
-                "/bin/sh", "-c", cmd_z.ptr, null
-            }));
+            _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z.ptr, null }));
             std.process.exit(1);
         } else if (pid2 < 0) {
             std.process.exit(1);
@@ -189,25 +190,25 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
 }
 
 fn dumpState(wm: *WM) void {
-    std.log.info("========== WM STATE DUMP ==========", .{});
-    std.log.info("Focused: {?}", .{wm.focused_window});
-    std.log.info("Total windows: {}", .{wm.windows.count()});
+    log.dumpStateSeparator();
+    log.dumpStateFocused(wm.focused_window);
+    log.dumpStateTotalWindows(wm.windows.count());
 
     if (workspaces.getState()) |ws_state| {
-        std.log.info("Current workspace: {}", .{ws_state.current + 1});
+        log.dumpStateCurrentWorkspace(ws_state.current);
         for (ws_state.workspaces, 0..) |*ws, i| {
-            std.log.info("  WS{}: {} windows", .{i + 1, ws.windows.items.len});
+            log.dumpStateWorkspace(i, ws.windows.items.len);
         }
     }
 
     if (tiling.getState()) |t_state| {
-        std.log.info("Tiling: {} ({} windows)", .{t_state.enabled, t_state.tiled_windows.items.len});
+        log.dumpStateTiling(t_state.enabled, t_state.tiled_windows.items.len);
     }
-    std.log.info("===================================", .{});
+    log.dumpStateEnd();
 }
 
 fn emergencyRecover(wm: *WM) void {
-    std.log.warn("========== EMERGENCY RECOVERY ==========", .{});
+    log.emergencyRecoveryStart();
 
     if (workspaces.getState()) |ws_state| {
         for (ws_state.workspaces) |*ws| {
@@ -222,5 +223,5 @@ fn emergencyRecover(wm: *WM) void {
     }
 
     utils.flush(wm.conn);
-    std.log.warn("Recovery complete", .{});
+    log.emergencyRecoveryComplete();
 }

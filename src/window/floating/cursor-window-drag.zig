@@ -76,15 +76,11 @@ pub fn startDrag(wm: *WM, window: u32, button: u8, root_x: i16, root_y: i16) voi
         .attr_height = geom_reply.*.height,
     };
 
-    if (@import("builtin").mode == .Debug) {
-        const action = if (button == 1) "move" else "resize";
-        std.log.info("[drag] Started {s} on window {x} at ({}, {})", .{action, window, root_x, root_y});
-    }
+    const action = if (button == 1) "move" else "resize";
+    log.dragStarted(action, window, root_x, root_y);
 
     // Raise window to top
-    _ = xcb.xcb_configure_window(wm.conn, window,
-        xcb.XCB_CONFIG_WINDOW_STACK_MODE,
-        &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+    _ = xcb.xcb_configure_window(wm.conn, window, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 }
 
 /// Update window position/size as cursor moves
@@ -111,24 +107,20 @@ pub fn updateDrag(wm: *WM, root_x: i16, root_y: i16) void {
         const new_x: i16 = @intCast(std.math.clamp(new_x_i32, std.math.minInt(i16), std.math.maxInt(i16)));
         const new_y: i16 = @intCast(std.math.clamp(new_y_i32, std.math.minInt(i16), std.math.maxInt(i16)));
 
-        _ = xcb.xcb_configure_window(wm.conn, drag_state.window,
-            xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
-            &[_]u32{
-                @bitCast(@as(i32, new_x)),
-                @bitCast(@as(i32, new_y)),
-            });
+        _ = xcb.xcb_configure_window(wm.conn, drag_state.window, xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{
+            @bitCast(@as(i32, new_x)),
+            @bitCast(@as(i32, new_y)),
+        });
     } else {
         // Resize window
         // Prevent negative sizes and overflow
         const new_width = std.math.add(i32, drag_state.attr_width, dx) catch 65535;
         const new_height = std.math.add(i32, drag_state.attr_height, dy) catch 65535;
 
-        _ = xcb.xcb_configure_window(wm.conn, drag_state.window,
-            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
-            &[_]u32{
-                @intCast(std.math.clamp(new_width, MIN_WINDOW_SIZE, 65535)),
-                @intCast(std.math.clamp(new_height, MIN_WINDOW_SIZE, 65535)),
-            });
+        _ = xcb.xcb_configure_window(wm.conn, drag_state.window, xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT, &[_]u32{
+            @intCast(std.math.clamp(new_width, MIN_WINDOW_SIZE, 65535)),
+            @intCast(std.math.clamp(new_height, MIN_WINDOW_SIZE, 65535)),
+        });
     }
 }
 
@@ -136,9 +128,7 @@ pub fn updateDrag(wm: *WM, root_x: i16, root_y: i16) void {
 pub fn stopDrag(wm: *WM) void {
     if (!drag_state.isDragging()) return;
 
-    if (@import("builtin").mode == .Debug) {
-        std.log.info("[drag] Stopped dragging window {x}", .{drag_state.window});
-    }
+    log.dragStopped(drag_state.window);
 
     _ = xcb.xcb_flush(wm.conn);
     drag_state.reset();

@@ -1,5 +1,4 @@
 //! Window management optimized for responsivity
-//! OPTIMIZED: Enter event coalescing, reduced XCB calls
 const std = @import("std");
 const defs = @import("defs");
 const xcb = defs.xcb;
@@ -13,12 +12,9 @@ const builtin = @import("builtin");
 pub fn init(_: *WM) void {}
 pub fn deinit(_: *WM) void {}
 
-// EVENT HANDLERS - OPTIMIZED FOR IMMEDIATE RESPONSE
-
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win = event.window;
 
-    // CRITICAL: Check workspace rules BEFORE mapping to avoid flicker
     const target_ws = if (wm.config.workspaces.rules.items.len > 0)
         matchWorkspaceRule(wm, win)
     else
@@ -28,7 +24,8 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
     if (target_ws) |ws| {
         if (ws != current_ws) {
-            workspaces.addWindowToWorkspace(wm, win, ws);
+            // Add to target workspace (will be mapped when switched)
+            workspaces.moveWindowTo(wm, win, ws);
 
             if (wm.config.tiling.enabled) {
                 const attrs = utils.WindowAttrs{
@@ -66,48 +63,31 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     });
 }
 
-/// OPTIMIZED: Coalesce enter notify events to prevent focus thrashing
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     if (event.event == wm.root or event.event == 0) return;
-
-    // Check focus protection
     if (focus.shouldSuppressMouseFocus()) return;
 
-    // OPTIMIZATION: Coalesce enter events - skip if more are queued
-    // This is critical when rapidly moving cursor across many windows
-    if (hasQueuedEnterEvents(wm.conn)) {
-        return; // Skip this event, process the latest one instead
-    }
+    // Coalesce enter events - skip if more are queued
+    if (hasQueuedEnterEvents(wm.conn)) return;
 
     focus.setFocus(wm, event.event, .mouse_enter);
 }
 
-/// Check if there are more enter notify events in the queue
-/// Returns true if we should skip the current event
 fn hasQueuedEnterEvents(conn: *xcb.xcb_connection_t) bool {
-    // Check for multiple queued enter events
     var count: u8 = 0;
-    while (count < 2) {
-        // Check for 2 queued events instead of 1
-        const queued = xcb.xcb_poll_for_event(conn);
-        if (queued) |next_event| {
-            defer std.c.free(next_event);
-            const next_type = @as(*u8, @ptrCast(next_event)).* & 0x7F;
-            if (next_type == xcb.XCB_ENTER_NOTIFY) {
-                count += 1;
-                continue;
-            }
-        }
-        return count > 0; // This ensures we return in all cases
+    while (count < 2) : (count += 1) {
+        const queued = xcb.xcb_poll_for_event(conn) orelse return count > 0;
+        defer std.c.free(queued);
+        const next_type = @as(*u8, @ptrCast(queued)).* & 0x7F;
+        if (next_type != xcb.XCB_ENTER_NOTIFY) return count > 0;
     }
-    return false; // Default return if loop completes
+    return true;
 }
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
     const win = event.window;
     const was_focused = wm.focused_window == win;
 
-    // Clean up in correct order
     tiling.notifyWindowDestroyed(wm, win);
     workspaces.removeWindow(win);
     wm.removeWindow(win);
@@ -125,8 +105,6 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
         focus.clearFocus(wm);
     }
 }
-
-// WORKSPACE RULES
 
 fn matchWorkspaceRule(wm: *WM, win: u32) ?usize {
     const wm_class = utils.getWMClass(wm.conn, win, wm.allocator) orelse return null;

@@ -1,7 +1,7 @@
 // Minimal custom TOML parser with improved error resilience
 
 const std = @import("std");
-const builtin = @import("builtin");
+const log = @import("logging");
 
 pub const Value = union(enum) {
     integer: i64,
@@ -20,7 +20,7 @@ pub const Value = union(enum) {
     pub inline fn asBool(self: Value) ?bool {
         return switch (self) {
             .boolean => |b| b,
-            .integer => |i| i != 0,  // Also accept integers as booleans
+            .integer => |i| i != 0, // Also accept integers as booleans
             else => null,
         };
     }
@@ -204,7 +204,7 @@ const Parser = struct {
         if (self.peek() != ']') return ParseError.InvalidSection;
         _ = self.consume(); // consume ']'
 
-        const name = std.mem.trim(u8, self.content[start..self.pos - 1], " \t");
+        const name = std.mem.trim(u8, self.content[start .. self.pos - 1], " \t");
         return if (name.len > 0) try self.allocator.dupe(u8, name) else ParseError.InvalidSection;
     }
 
@@ -263,7 +263,6 @@ const Parser = struct {
                     '"', '\'' => next,
                     else => return ParseError.InvalidValue,
                 });
-
             } else {
                 try result.append(allocator, c);
                 _ = self.consume();
@@ -338,7 +337,9 @@ const Parser = struct {
 
         // Detect color: has # prefix, 0x prefix, or hex letters a-f/A-F
         const is_color = raw[0] == '#' or (raw.len > 2 and raw[0] == '0' and raw[1] == 'x') or
-            for (raw) |ch| { if (ch >= 'a' and ch <= 'f' or ch >= 'A' and ch <= 'F') break true; } else false;
+            for (raw) |ch| {
+            if (ch >= 'a' and ch <= 'f' or ch >= 'A' and ch <= 'F') break true;
+        } else false;
 
         if (is_color) {
             // Try to parse as color, but if it fails, try integer fallback
@@ -350,7 +351,7 @@ const Parser = struct {
                     return .{ .integer = int_val };
                 } else |_| {
                     // Both failed - this is truly invalid
-                    std.log.warn("[parser] Invalid color value '{s}' at line {}", .{raw, self.line});
+                    log.parserInvalidColor(raw, self.line);
                     return ParseError.InvalidColor;
                 }
             }
@@ -362,7 +363,7 @@ const Parser = struct {
 
     fn parseKeyValue(self: *Parser, allocator: std.mem.Allocator) ParseError!struct { []const u8, Value } {
         const key = try self.parseKey();
-        errdefer self.allocator.free(key);  // Free key if error occurs after allocation
+        errdefer self.allocator.free(key); // Free key if error occurs after allocation
         self.skipWhitespace();
         if (self.consume() != '=') return ParseError.InvalidSyntax;
 
@@ -422,7 +423,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
 
         if (c == '[') {
             const section_name = parser.parseSection() catch |err| {
-                std.log.warn("[parser] Skipping invalid section at line {}: {}", .{parser.line, err});
+                log.parserInvalidSection(parser.line, err);
                 parser.skipLine();
                 continue;
             };
@@ -430,7 +431,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
 
             if (doc.sections.contains(section_name)) {
                 allocator.free(section_name); // Free duplicate section name
-                std.log.warn("[parser] Duplicate section at line {}, ignoring", .{parser.line});
+                log.parserDuplicateSection(parser.line);
                 parser.skipLine();
                 continue;
             }
@@ -448,18 +449,18 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
             // Try to parse as key-value, or fall back to bare word
             var kv = parser.parseKeyValueOrBareWord(allocator) catch |err| {
                 // Skip this line and continue parsing
-                std.log.warn("[parser] Skipping invalid key-value at line {}: {any}", .{parser.line, err});
+                log.parserInvalidKeyValue(parser.line, err);
                 parser.skipLine();
                 break;
             };
 
             errdefer {
-                allocator.free(kv[0]);  // Free the duplicated key
-                kv[1].deinit(allocator);  // Deinit the value (handles strings, arrays, etc.)
+                allocator.free(kv[0]); // Free the duplicated key
+                kv[1].deinit(allocator); // Deinit the value (handles strings, arrays, etc.)
             }
 
             if (current_section.pairs.contains(kv[0])) {
-                std.log.warn("[parser] Duplicate key '{s}' at line {}, using last value", .{kv[0], parser.line});
+                log.parserDuplicateKey(kv[0], parser.line);
                 // Free the old value before replacing
                 if (current_section.pairs.getPtr(kv[0])) |old_val| {
                     old_val.deinit(allocator);
@@ -493,7 +494,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
                 break;
             } else {
                 // Unexpected character - skip rest of line
-                std.log.warn("[parser] Unexpected character after value at line {}, skipping line", .{parser.line});
+                log.parserUnexpectedChar(parser.line);
                 parser.skipLine();
                 break;
             }

@@ -1,5 +1,4 @@
 //! Tiling system optimized for maximum responsivity
-//! OPTIMIZED: Incremental border updates, reduced XCB calls, batch operations
 const std = @import("std");
 const defs = @import("defs");
 const xcb = defs.xcb;
@@ -20,7 +19,6 @@ pub const State = struct {
     border_width: u16,
     border_focused: u32,
     border_normal: u32,
-
     tiled_windows: std.ArrayList(u32),
     visible_cache: std.ArrayList(u32),
     needs_retile: bool = true,
@@ -69,11 +67,8 @@ fn parseLayout(name: []const u8) Layout {
 
 pub fn notifyWindowMapped(wm: *WM, win: u32) void {
     const s = state orelse return;
-    if (!s.enabled) return;
+    if (!s.enabled or !workspaces.isOnCurrentWorkspace(win)) return;
 
-    if (!workspaces.isOnCurrentWorkspace(win)) return;
-
-    // Check if already tiled
     for (s.tiled_windows.items) |w| {
         if (w == win) {
             s.needs_retile = true;
@@ -83,8 +78,7 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
     }
 
     s.tiled_windows.insert(wm.allocator, 0, win) catch return;
-
-    // Setup window - non-blocking configuration
+    
     const attrs = utils.WindowAttrs{
         .border_width = s.border_width,
         .border_color = s.border_focused,
@@ -105,51 +99,33 @@ pub fn notifyWindowDestroyed(wm: *WM, win: u32) void {
             _ = s.tiled_windows.orderedRemove(i);
             s.needs_retile = true;
 
-            if (s.tiled_windows.items.len > 0) {
-                if (wm.focused_window == win) {
-                    const next = s.tiled_windows.items[0];
-                    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-                        next, xcb.XCB_CURRENT_TIME);
-                    wm.focused_window = next;
-                }
-                retile(wm, s);
+            if (s.tiled_windows.items.len > 0 and wm.focused_window == win) {
+                const next = s.tiled_windows.items[0];
+                _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, next, xcb.XCB_CURRENT_TIME);
+                wm.focused_window = next;
             }
+            retile(wm, s);
             return;
         }
     }
 }
 
-/// DEPRECATED: Use updateWindowFocusIncremental instead
-pub fn updateWindowFocus(wm: *WM, focused: u32) void {
-    const s = state orelse return;
-    if (!s.enabled) return;
-    updateBorders(wm, s, focused);
-}
-
-/// OPTIMIZED: Only update borders for windows that changed focus state
-/// This is O(1) instead of O(n) on every focus change
-pub fn updateWindowFocusIncremental(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
+/// Update borders when focus changes - O(1) incremental update
+pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     const s = state orelse return;
     if (!s.enabled) return;
 
-    // Update old focused window to normal color
     if (old_focused) |old_win| {
         if (isWindowTiled(old_win)) {
-            _ = xcb.xcb_change_window_attributes(wm.conn, old_win, 
-                xcb.XCB_CW_BORDER_PIXEL, &[_]u32{s.border_normal});
+            _ = xcb.xcb_change_window_attributes(wm.conn, old_win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{s.border_normal});
         }
     }
 
-    // Update new focused window to focused color
     if (new_focused) |new_win| {
         if (isWindowTiled(new_win)) {
-            _ = xcb.xcb_change_window_attributes(wm.conn, new_win,
-                xcb.XCB_CW_BORDER_PIXEL, &[_]u32{s.border_focused});
+            _ = xcb.xcb_change_window_attributes(wm.conn, new_win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{s.border_focused});
         }
     }
-    
-    // OPTIMIZATION: Don't flush here - let caller batch flushes
-    // utils.flush(wm.conn);
 }
 
 pub fn isWindowTiled(win: u32) bool {
@@ -161,8 +137,6 @@ pub fn isWindowTiled(win: u32) bool {
     return false;
 }
 
-// LAYOUT ENGINE
-
 fn retile(wm: *WM, s: *State) void {
     if (!s.needs_retile) return;
     s.needs_retile = false;
@@ -171,18 +145,12 @@ fn retile(wm: *WM, s: *State) void {
 
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
 
-    // Build visible window list - validate each window still exists
     for (s.tiled_windows.items) |win| {
-        // Check workspace membership
         const on_ws = for (ws_windows) |w| {
             if (w == win) break true;
         } else false;
 
-        if (!on_ws) continue;
-
-        // OPTIMIZATION: Trust workspace state more, reduce validation calls
-        // Only validate on destroy events, not every retile
-        s.visible_cache.append(wm.allocator, win) catch continue;
+        if (on_ws) s.visible_cache.append(wm.allocator, win) catch continue;
     }
 
     if (s.visible_cache.items.len == 0) {
@@ -197,10 +165,8 @@ fn retile(wm: *WM, s: *State) void {
         .grid => tileGrid(wm, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
     }
 
-    // OPTIMIZATION: Only update borders if we have a focused window
-    // Use incremental update instead of full scan
     if (wm.focused_window) |focused| {
-        updateBordersFast(wm, s, focused);
+        updateBorders(wm, s, focused);
     }
 
     focus.markLayoutOperation();
@@ -247,11 +213,8 @@ fn tileMasterLeft(wm: *WM, s: *State, windows: []const u32, sw: u16, sh: u16) vo
 
 fn tileMonocle(wm: *WM, s: *State, windows: []const u32, sw: u16, sh: u16) void {
     const inner = s.margins().innerRect(sw, sh);
-    for (windows) |win| {
-        utils.configureWindow(wm.conn, win, inner);
-    }
-    _ = xcb.xcb_configure_window(wm.conn, windows[windows.len - 1],
-        xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+    for (windows) |win| utils.configureWindow(wm.conn, win, inner);
+    _ = xcb.xcb_configure_window(wm.conn, windows[windows.len - 1], xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 }
 
 fn tileGrid(wm: *WM, s: *State, windows: []const u32, sw: u16, sh: u16) void {
@@ -276,33 +239,21 @@ fn tileGrid(wm: *WM, s: *State, windows: []const u32, sw: u16, sh: u16) void {
     }
 }
 
-/// OPTIMIZED: Fast border update - batch all border changes, single workspace check
-fn updateBordersFast(wm: *WM, s: *State, focused: u32) void {
+fn updateBorders(wm: *WM, s: *State, focused: u32) void {
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
-    
-    // OPTIMIZATION: Build workspace membership lookup for O(1) checks
+
     var on_workspace = std.AutoHashMap(u32, void).init(wm.allocator);
     defer on_workspace.deinit();
-    
-    for (ws_windows) |w| {
-        on_workspace.put(w, {}) catch continue;
-    }
 
-    // Single pass through tiled windows, batch border updates
+    for (ws_windows) |w| on_workspace.put(w, {}) catch continue;
+
     for (s.tiled_windows.items) |win| {
         if (!on_workspace.contains(win)) continue;
-        
         const color = if (win == focused) s.border_focused else s.border_normal;
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
     }
-    
-    // Single flush at the end
-    utils.flush(wm.conn);
-}
 
-/// OLD IMPLEMENTATION - kept for compatibility but should be replaced
-fn updateBorders(wm: *WM, s: *State, focused: u32) void {
-    updateBordersFast(wm, s, focused);
+    utils.flush(wm.conn);
 }
 
 pub fn retileCurrentWorkspace(wm: *WM) void {
