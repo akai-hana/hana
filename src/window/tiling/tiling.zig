@@ -28,8 +28,9 @@ pub const State = struct {
     tiled_windows: std.ArrayList(u32),
     visible_cache: std.ArrayList(u32),
     needs_retile: bool = true,
+    allocator: std.mem.Allocator,
 
-    pub fn margins(self: *const State) utils.Margins {
+    pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.gaps, .border = self.border_width };
     }
 };
@@ -50,14 +51,15 @@ pub fn init(wm: *WM) void {
         .border_normal = wm.config.tiling.border_normal,
         .tiled_windows = .{},
         .visible_cache = .{},
+        .allocator = wm.allocator,
     };
     state = s;
 }
 
 pub fn deinit(wm: *WM) void {
     if (state) |s| {
-        s.tiled_windows.deinit(wm.allocator);
-        s.visible_cache.deinit(wm.allocator);
+        s.tiled_windows.deinit(s.allocator);
+        s.visible_cache.deinit(s.allocator);
         wm.allocator.destroy(s);
         state = null;
     }
@@ -84,7 +86,7 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
         }
     }
 
-    s.tiled_windows.insert(wm.allocator, 0, win) catch return;
+    s.tiled_windows.insert(s.allocator, 0, win) catch return;
 
     const attrs = utils.WindowAttrs{
         .border_width = s.border_width,
@@ -157,7 +159,7 @@ fn retile(wm: *WM, s: *State) void {
             if (w == win) break true;
         } else false;
 
-        if (on_ws) s.visible_cache.append(wm.allocator, win) catch continue;
+        if (on_ws) s.visible_cache.append(s.allocator, win) catch continue;
     }
 
     if (s.visible_cache.items.len == 0) {
@@ -166,7 +168,7 @@ fn retile(wm: *WM, s: *State) void {
     }
 
     const screen = wm.screen;
-    
+
     // Delegate to layout-specific implementations
     switch (s.layout) {
         .master => master_layout.tile(wm, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
@@ -185,13 +187,14 @@ fn retile(wm: *WM, s: *State) void {
 fn updateBorders(wm: *WM, s: *State, focused: u32) void {
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
 
-    var on_workspace = std.AutoHashMap(u32, void).init(wm.allocator);
-    defer on_workspace.deinit();
-
-    for (ws_windows) |w| on_workspace.put(w, {}) catch continue;
-
+    // Direct linear search - faster than HashMap for typical window counts (<50)
     for (s.tiled_windows.items) |win| {
-        if (!on_workspace.contains(win)) continue;
+        const on_workspace = for (ws_windows) |w| {
+            if (w == win) break true;
+        } else false;
+
+        if (!on_workspace) continue;
+
         const color = if (win == focused) s.border_focused else s.border_normal;
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
     }
