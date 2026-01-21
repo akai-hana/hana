@@ -9,15 +9,16 @@ const workspaces = @import("workspaces");
 const focus = @import("focus");
 
 // Import layout implementations
-const master_left_layout = @import("master-left");
+const master_layout = @import("master");
 const monocle_layout = @import("monocle");
 const grid_layout = @import("grid");
 
-pub const Layout = enum { master_left, monocle, grid };
+pub const Layout = enum { master, monocle, grid };
 
 pub const State = struct {
     enabled: bool,
     layout: Layout,
+    master_side: []const u8,
     master_width_factor: f32,
     master_count: usize,
     gaps: u16,
@@ -40,6 +41,7 @@ pub fn init(wm: *WM) void {
     s.* = .{
         .enabled = wm.config.tiling.enabled,
         .layout = parseLayout(wm.config.tiling.layout),
+        .master_side = wm.config.tiling.master_side,
         .master_width_factor = wm.config.tiling.master_width_factor,
         .master_count = wm.config.tiling.master_count,
         .gaps = wm.config.tiling.gaps,
@@ -63,11 +65,11 @@ pub fn deinit(wm: *WM) void {
 
 fn parseLayout(name: []const u8) Layout {
     const map = std.StaticStringMap(Layout).initComptime(.{
-        .{ "master_left", .master_left },
+        .{ "master", .master },
         .{ "monocle", .monocle },
         .{ "grid", .grid },
     });
-    return map.get(name) orelse .master_left;
+    return map.get(name) orelse .master;
 }
 
 pub fn notifyWindowMapped(wm: *WM, win: u32) void {
@@ -167,7 +169,7 @@ fn retile(wm: *WM, s: *State) void {
     
     // Delegate to layout-specific implementations
     switch (s.layout) {
-        .master_left => master_left_layout.tile(wm, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
+        .master => master_layout.tile(wm, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
         .monocle => monocle_layout.tile(wm, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
         .grid => grid_layout.tile(wm, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
     }
@@ -209,9 +211,9 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
 pub fn toggleLayout(wm: *WM) void {
     const s = state orelse return;
     s.layout = switch (s.layout) {
-        .master_left => .monocle,
+        .master => .monocle,
         .monocle => .grid,
-        .grid => .master_left,
+        .grid => .master,
     };
     s.needs_retile = true;
     retile(wm, s);
@@ -258,6 +260,7 @@ pub fn reloadConfig(wm: *WM) void {
     const s = state orelse return;
     s.enabled = wm.config.tiling.enabled;
     s.layout = parseLayout(wm.config.tiling.layout);
+    s.master_side = wm.config.tiling.master_side;
     s.master_width_factor = wm.config.tiling.master_width_factor;
     s.master_count = wm.config.tiling.master_count;
     s.gaps = wm.config.tiling.gaps;

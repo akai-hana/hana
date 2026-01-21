@@ -17,22 +17,22 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
     const m_count: u16 = @intCast(@min(state.master_count, n));
     const s_count: u16 = @intCast(if (n > m_count) n - m_count else 0);
 
-    if (log.isDebug()) {
-        std.log.debug("[layout:master_left] Tiling {} windows (master={}, stack={})", .{n, m_count, s_count});
-    }
+    std.log.debug("[master_layout] master_side value: '{s}' (len={})", .{state.master_side, state.master_side.len});
 
-    // Calculate master width
-    const master_w: u16 = if (s_count == 0)
-        screen_w
-    else
-        @intFromFloat(@as(f32, @floatFromInt(screen_w)) * state.master_width_factor);
+    // Determine if master is on right side
+    const master_on_right = std.mem.eql(u8, state.master_side, "right");
+    
+    std.log.debug("[master_layout] master_on_right={}, master_x will be: {}", .{master_on_right, if (master_on_right) screen_w - master_w else 0});
+
+    const master_x: u16 = if (master_on_right) screen_w - master_w else 0;
+    const stack_x: u16 = if (master_on_right) 0 else master_w;
 
     // Tile master area
     const m_layout = utils.calcColumnLayout(screen_h, m_count, m);
     for (windows[0..m_count], 0..) |win, i| {
         const row: u16 = @intCast(i);
         utils.configureWindow(wm.conn, win, .{
-            .x = @intCast(m.gap),
+            .x = @intCast(master_x + m.gap),
             .y = @intCast(m.gap + row * m_layout.spacing),
             .width = if (master_w > m.total()) master_w - m.total() else utils.MIN_WINDOW_DIM,
             .height = m_layout.item_h,
@@ -56,7 +56,7 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
         for (stack_windows, 0..) |win, i| {
             const row: u16 = @intCast(i);
             utils.configureWindow(wm.conn, win, .{
-                .x = @intCast(master_w),
+                .x = @intCast(stack_x),
                 .y = @intCast(m.gap + row * s_layout.spacing),
                 .width = if (stack_w > m.gap + 2 * m.border)
                     @max(utils.MIN_WINDOW_DIM, stack_w - m.gap - 2 * m.border)
@@ -101,7 +101,7 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
                 const win = stack_windows[win_idx];
                 
                 utils.configureWindow(wm.conn, win, .{
-                    .x = @intCast(master_w + col * row_col_w),
+                    .x = @intCast(stack_x + col * row_col_w),
                     .y = @intCast(y_pos),
                     .width = if (row_col_w > m.gap + 2 * m.border)
                         @max(utils.MIN_WINDOW_DIM, row_col_w - m.gap - 2 * m.border)

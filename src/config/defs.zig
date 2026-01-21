@@ -53,6 +53,7 @@ pub const Keybind = struct {
 pub const TilingConfig = struct {
     enabled: bool = true,
     layout: []const u8 = "master_left",
+    master_side: []const u8 = "left",
     master_width_factor: f32 = 0.50,
     master_count: usize = 1,
     gaps: u16 = 10,

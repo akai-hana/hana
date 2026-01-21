@@ -274,6 +274,11 @@ fn parseTiling(doc: *const parser.Document, config: *defs.Config) void {
 
     config.tiling.enabled = get(bool, section, "enabled", true, null);
     config.tiling.layout = get([]const u8, section, "layout", "master_left", null);
+    config.tiling.master_side = get([]const u8, section, "master_side", "left", struct {
+        fn v(val: []const u8) bool {
+            return std.mem.eql(u8, val, "left") or std.mem.eql(u8, val, "right");
+        }
+    }.v);
     config.tiling.master_count = get(usize, section, "master_count", 1, struct {
         fn v(n: usize) bool {
             return n >= 1;
