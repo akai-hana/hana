@@ -1,13 +1,4 @@
-//! Master-left layout: master area on left, stack on right.
-//!
-//! Normal (all fit):        With wrapping (progressive pairing):
-//! ┌──────────┬──────┐      ┌──────────┬───┬───┐
-//! │          │  S1  │      │          │S1 │S4 │  <- First row pair
-//! │          ├──────┤      │          ├───┼───┤
-//! │  Master  │  S2  │      │  Master  │S2 │S5 │  <- Second row pair
-//! │          ├──────┤      │          ├───┼───┤
-//! │          │  S3  │      │          │S3 │S6 │  <- Third row pair
-//! └──────────┴──────┘      └──────────┴───┴───┘
+//! Master-left layout
 
 const std = @import("std");
 const defs = @import("defs");
@@ -50,8 +41,10 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
 
     if (s_count == 0) return;
 
-    // Calculate how many windows can fit at full height in the stack area
     const stack_w = screen_w - master_w;
+    const stack_windows = windows[m_count..];
+
+    // Calculate how many windows fit at full height in the stack
     const space_per_window: u32 = utils.MIN_WINDOW_DIM + 2 * @as(u32, m.border) + @as(u32, m.gap);
     const available: u32 = @as(u32, screen_h) - @as(u32, m.gap);
     const max_fit: u16 = @intCast(@max(1, available / space_per_window));
@@ -60,7 +53,7 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
         // All windows fit - single column at full width
         const s_layout = utils.calcColumnLayout(screen_h, s_count, m);
 
-        for (windows[m_count..], 0..) |win, i| {
+        for (stack_windows, 0..) |win, i| {
             const row: u16 = @intCast(i);
             utils.configureWindow(wm.conn, win, .{
                 .x = @intCast(master_w),
@@ -71,73 +64,57 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
                     utils.MIN_WINDOW_DIM,
                 .height = s_layout.item_h,
             });
-
-            if (log.isDebug()) {
-                std.log.debug("[layout:master_left] Stack[{}] full-width", .{i});
-            }
         }
     } else {
-        // Overflow: pair windows as needed
-        // First max_fit windows go in left column
-        // Overflow windows pair with them on the right
-        const overflow_count: u16 = s_count - max_fit;
-        const half_stack_w = stack_w / 2;
+        // Overflow: progressively split rows as needed
+        // Calculate layout for rows
+        const s_layout = utils.calcColumnLayout(screen_h, max_fit, m);
 
         if (log.isDebug()) {
-            std.log.debug("[layout:master_left] Overflow pairing: {} base, {} overflow",
-                .{max_fit, overflow_count});
+            std.log.debug("[layout:master_left] Overflow mode: max_fit={}", .{max_fit});
         }
 
-        const base_layout = utils.calcColumnLayout(screen_h, max_fit, m);
+        // Tile stack windows row by row
+        // Each row can have multiple columns: windows at indices i, i+max_fit, i+2*max_fit, etc.
+        var row: u16 = 0;
+        while (row < max_fit) : (row += 1) {
+            // Count how many windows are in this row
+            var cols_in_row: u16 = 0;
+            var win_idx = row;
+            while (win_idx < s_count) : (win_idx += max_fit) {
+                cols_in_row += 1;
+            }
 
-        // Tile all windows
-        for (windows[m_count..], 0..) |win, i| {
-            const idx: u16 = @intCast(i);
-            
-            if (idx < max_fit) {
-                // First max_fit windows - check if they have a pair
-                const has_pair = idx < overflow_count;
-                const row: u16 = idx;
+            if (cols_in_row == 0) break; // No more windows
 
+            const row_col_w = stack_w / cols_in_row;
+            const y_pos = m.gap + row * s_layout.spacing;
+
+            if (log.isDebug()) {
+                std.log.debug("[layout:master_left] Row {} has {} columns", .{row, cols_in_row});
+            }
+
+            // Place all windows in this row
+            var col: u16 = 0;
+            win_idx = row;
+            while (win_idx < s_count) : (win_idx += max_fit) {
+                const win = stack_windows[win_idx];
+                
                 utils.configureWindow(wm.conn, win, .{
-                    .x = @intCast(master_w),
-                    .y = @intCast(m.gap + row * base_layout.spacing),
-                    .width = if (has_pair) blk: {
-                        break :blk if (half_stack_w > m.gap + 2 * m.border)
-                            @max(utils.MIN_WINDOW_DIM, half_stack_w - m.gap - 2 * m.border)
-                        else
-                            utils.MIN_WINDOW_DIM;
-                    } else blk: {
-                        break :blk if (stack_w > m.gap + 2 * m.border)
-                            @max(utils.MIN_WINDOW_DIM, stack_w - m.gap - 2 * m.border)
-                        else
-                            utils.MIN_WINDOW_DIM;
-                    },
-                    .height = base_layout.item_h,
-                });
-
-                if (log.isDebug()) {
-                    const width_type = if (has_pair) "half" else "full";
-                    std.log.debug("[layout:master_left] Stack[{}] left, row {} ({})", .{i, row, width_type});
-                }
-            } else {
-                // Overflow windows - pair with earlier windows
-                const pair_idx = idx - max_fit;
-                const row: u16 = pair_idx;
-
-                utils.configureWindow(wm.conn, win, .{
-                    .x = @intCast(master_w + half_stack_w),
-                    .y = @intCast(m.gap + row * base_layout.spacing),
-                    .width = if (half_stack_w > m.gap + 2 * m.border)
-                        @max(utils.MIN_WINDOW_DIM, half_stack_w - m.gap - 2 * m.border)
+                    .x = @intCast(master_w + col * row_col_w),
+                    .y = @intCast(y_pos),
+                    .width = if (row_col_w > m.gap + 2 * m.border)
+                        @max(utils.MIN_WINDOW_DIM, row_col_w - m.gap - 2 * m.border)
                     else
                         utils.MIN_WINDOW_DIM,
-                    .height = base_layout.item_h,
+                    .height = s_layout.item_h,
                 });
 
                 if (log.isDebug()) {
-                    std.log.debug("[layout:master_left] Stack[{}] right, row {} (paired)", .{i, row});
+                    std.log.debug("[layout:master_left] Window idx={} -> row={} col={}", .{win_idx, row, col});
                 }
+
+                col += 1;
             }
         }
     }
