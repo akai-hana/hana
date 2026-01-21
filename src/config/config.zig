@@ -240,6 +240,54 @@ pub fn resolveKeybindings(keybindings: anytype, xkb_state: *xkb.XkbState) void {
     }
 }
 
+// COLOR PARSING HELPERS
+
+/// Parse a color from a Section, handling strings, integers, and color types
+fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
+    const value = section.get(key) orelse return default;
+    
+    // If it's already a color type, return it
+    if (value.asColor()) |color| {
+        return if (isValidColor(color)) color else default;
+    }
+    
+    // If it's a string, try to parse it as a color
+    if (value.asString()) |str| {
+        const color = parseColorString(str) catch {
+            std.log.warn("[config] Invalid color string for {s}: '{s}', using default", .{key, str});
+            return default;
+        };
+        return if (isValidColor(color)) color else default;
+    }
+    
+    // If it's an integer, use it directly (for backward compatibility)
+    if (value.asInt()) |int_val| {
+        const color: u32 = @intCast(int_val);
+        return if (isValidColor(color)) color else default;
+    }
+    
+    return default;
+}
+
+/// Parse a color string like "#FFFFFF" or "FFFFFF" or "0xFFFFFF"
+fn parseColorString(str: []const u8) !u32 {
+    if (str.len == 0) return error.InvalidColor;
+    
+    // Remove # prefix if present
+    const offset: usize = if (str[0] == '#') 1 else if (str.len > 2 and str[0] == '0' and str[1] == 'x') 2 else 0;
+    const hex_part = str[offset..];
+    
+    if (hex_part.len == 0) return error.InvalidColor;
+    
+    // Parse hex value
+    const color = std.fmt.parseInt(u32, hex_part, 16) catch return error.InvalidColor;
+    
+    // Validate RGB range
+    if (color > 0xFFFFFF) return error.InvalidColor;
+    
+    return color;
+}
+
 // TILING CONFIG
 
 fn parseTiling(doc: *const parser.Document, config: *defs.Config) void {
@@ -267,8 +315,10 @@ fn parseTiling(doc: *const parser.Document, config: *defs.Config) void {
             return n <= 100;
         }
     }.v);
-    config.tiling.border_focused = get(u32, section, "border_focused", 0x5294E2, isValidColor);
-    config.tiling.border_normal = get(u32, section, "border_normal", 0x383C4A, isValidColor);
+    
+    // Use getColor helper to handle string/color/int types
+    config.tiling.border_focused = getColor(section, "border_focused", 0x5294E2);
+    config.tiling.border_normal = getColor(section, "border_normal", 0x383C4A);
 }
 
 // WORKSPACES CONFIG
