@@ -138,6 +138,8 @@ const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
     .{ "increase_master_count", .increase_master_count },
     .{ "decrease_master_count", .decrease_master_count },
     .{ "toggle_tiling", .toggle_tiling },
+    .{ "toggle_fullscreen", .toggle_fullscreen },
+    .{ "fullscreen", .toggle_fullscreen },
     .{ "dump_state", .dump_state },
     .{ "emergency_recover", .emergency_recover },
 });

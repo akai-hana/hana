@@ -39,6 +39,7 @@ pub const Action = union(enum) {
     increase_master_count,
     decrease_master_count,
     toggle_tiling,
+    toggle_fullscreen,
     switch_workspace: usize,
     move_to_workspace: usize,
     dump_state,
@@ -125,8 +126,17 @@ pub const WM = struct {
     config: Config,
     windows: std.AutoHashMap(u32, Window),
     focused_window: ?u32 = null,
+    fullscreen_window: ?u32 = null,
+    fullscreen_geometry: ?struct { // store original geometry (previous to fullscreen)
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        border_width: u16,
+    } = null,
     xkb_state: ?*xkbcommon.XkbState,
     should_reload_config: *std.atomic.Value(bool),
+
 
     pub fn deinit(self: *WM) void {
         var iter = self.windows.valueIterator();

@@ -91,6 +91,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
 
     const was_focused = wm.focused_window == win;
 
+    @import("fullscreen").notifyWindowDestroyed(wm, win);
     tiling.notifyWindowDestroyed(wm, win);
     workspaces.removeWindow(win);
     wm.removeWindow(win);

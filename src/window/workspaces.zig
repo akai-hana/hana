@@ -117,6 +117,8 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
     const s = state orelse return;
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
 
+    @import("fullscreen").notifyWorkspaceSwitch(wm);
+
     const old_ws = &s.workspaces[s.current];
     const new_ws = &s.workspaces[ws_id];
 

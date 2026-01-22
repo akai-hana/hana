@@ -132,7 +132,9 @@ fn hasQueuedMotionEvents(conn: *xcb.xcb_connection_t) bool {
 
 inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
+        .toggle_fullscreen => @import("fullscreen").toggleFullscreen(wm),
         .close_window => {
+
             if (wm.focused_window) |win| {
                 // DEBUG: Log what we're about to destroy
                 std.log.warn("[DEBUG] Attempting to destroy focused window: 0x{x}", .{win});
