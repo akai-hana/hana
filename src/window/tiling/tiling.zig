@@ -107,12 +107,9 @@ pub fn notifyWindowDestroyed(wm: *WM, win: u32) void {
         if (w == win) {
             _ = s.tiled_windows.orderedRemove(i);
             s.needs_retile = true;
-
-            if (s.tiled_windows.items.len > 0 and wm.focused_window == win) {
-                const next = s.tiled_windows.items[0];
-                _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, next, xcb.XCB_CURRENT_TIME);
-                wm.focused_window = next;
-            }
+            
+            // Don't set focus here, let handleDestroyNotify handle it
+            // Just retile to update the layout
             retile(wm, s);
             return;
         }

@@ -103,13 +103,40 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
 
         if (workspaces.getCurrentWindowsView()) |ws_windows| {
             if (ws_windows.len > 0) {
-                focus.setFocus(wm, ws_windows[0], .window_destroyed);
+                // Retile first so windows are in their new positions
+                tiling.retileCurrentWorkspace(wm);
+                utils.flush(wm.conn);
+
+                // Now find which window the cursor is over
+                const cursor_win = getWindowUnderCursor(wm) orelse ws_windows[0];
+                focus.setFocus(wm, cursor_win, .window_destroyed);
                 return;
             }
         }
 
         focus.clearFocus(wm);
     }
+}
+
+fn getWindowUnderCursor(wm: *WM) ?u32 {
+    const cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
+    const reply = xcb.xcb_query_pointer_reply(wm.conn, cookie, null) orelse return null;
+    defer std.c.free(reply);
+
+    const child = reply.*.child;
+
+    // Check if the child window is in our current workspace
+    if (child != 0 and child != wm.root) {
+        if (workspaces.getCurrentWindowsView()) |ws_windows| {
+            for (ws_windows) |ws_win| {
+                if (ws_win == child) {
+                    return child;
+                }
+            }
+        }
+    }
+
+    return null;
 }
 
 fn matchWorkspaceRule(wm: *WM, win: u32) ?usize {
