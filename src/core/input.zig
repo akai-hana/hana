@@ -1,21 +1,17 @@
 //! Input handling: keyboard, mouse, and motion event processing.
 
-const std        = @import("std");
-const defs       = @import("defs");
-const xkbcommon  = @import("xkbcommon");
-const utils      = @import("utils");
-const tiling     = @import("tiling");
+const std = @import("std");
+const defs = @import("defs");
+const xkbcommon = @import("xkbcommon");
+const utils = @import("utils");
+const tiling = @import("tiling");
 const workspaces = @import("workspaces");
-const focus      = @import("focus");
-const log        = @import("logging");
-const errors     = @import("error_handling");
-const xcb        = defs.xcb;
-const WM         = defs.WM;
+const focus = @import("focus");
+const xcb = defs.xcb;
+const WM = defs.WM;
 
 const c = @cImport(@cInclude("unistd.h"));
 extern "c" fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
-
-const COALESCE_MOTION_EVENTS = true;
 
 // Keybind system
 var keybind_map: std.AutoHashMap(u64, *const defs.Action) = undefined;
@@ -112,9 +108,7 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
     if (!@import("cursor-window-drag").isDragging()) return;
 
     // Coalesce motion events for smoother dragging
-    if (COALESCE_MOTION_EVENTS and hasQueuedMotionEvents(wm.conn)) {
-        return;
-    }
+    if (hasQueuedMotionEvents(wm.conn)) return;
 
     @import("cursor-window-drag").updateDrag(wm, event.root_x, event.root_y);
 }
@@ -133,63 +127,33 @@ fn hasQueuedMotionEvents(conn: *xcb.xcb_connection_t) bool {
 
 inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
-        .toggle_fullscreen => {
-            if (wm.focused_window) |win| {
-                log.actionToggleFullscreen(win);
-            }
-            @import("fullscreen").toggleFullscreen(wm);
-        },
+        .toggle_fullscreen => @import("fullscreen").toggleFullscreen(wm),
         .close_window => {
             if (wm.focused_window) |win| {
-                log.debugDestroyWindow(win, wm.root, wm.windows.count(), true);
-                
-                // Validate before destroying
-                errors.validateWindowDestroy(wm, win) catch |err| {
-                    std.log.err("[ERROR] Cannot destroy window: {}", .{err});
+                if (win == wm.root) {
+                    std.log.err("[CRITICAL] Attempted to destroy ROOT window! Aborting.", .{});
                     return;
-                };
-
-                log.actionCloseWindow(win);
-                
-                // Use kill client instead of destroy window to be safer
+                }
                 _ = xcb.xcb_kill_client(wm.conn, win);
                 utils.flush(wm.conn);
-                
-                log.debugDestroyWindowComplete(win);
-            } else {
-                log.debugNoFocusedWindow();
             }
         },
         .reload_config => wm.should_reload_config.store(true, .release),
-        .toggle_layout => {
-            log.actionToggleLayout();
-            tiling.toggleLayout(wm);
-        },
+        .toggle_layout => tiling.toggleLayout(wm),
         .increase_master => tiling.increaseMasterWidth(wm),
         .decrease_master => tiling.decreaseMasterWidth(wm),
         .increase_master_count => tiling.increaseMasterCount(wm),
         .decrease_master_count => tiling.decreaseMasterCount(wm),
-        .toggle_tiling => {
-            log.actionToggleTiling();
-            tiling.toggleTiling(wm);
-        },
+        .toggle_tiling => tiling.toggleTiling(wm),
         .dump_state => dumpState(wm),
         .emergency_recover => emergencyRecover(wm),
-        .exec => |cmd| {
-            log.actionExec(cmd);
-            try executeShellCommand(wm, cmd);
-        },
-        .switch_workspace => |ws| {
-            log.actionSwitchWorkspace(ws);
-            workspaces.switchTo(wm, ws);
-        },
+        .exec => |cmd| try executeShellCommand(wm, cmd),
+        .switch_workspace => |ws| workspaces.switchTo(wm, ws),
         .move_to_workspace => |ws| {
             if (wm.focused_window) |win| {
-                log.actionMoveToWorkspace(win, ws);
                 workspaces.moveWindowTo(wm, win, ws);
             }
         },
-        .focus_next, .focus_prev => {},
     }
 }
 
@@ -216,25 +180,25 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
 }
 
 fn dumpState(wm: *WM) void {
-    log.dumpStateSeparator();
-    log.dumpStateFocused(wm.focused_window);
-    log.dumpStateTotalWindows(wm.windows.count());
+    std.log.info("========== STATE ==========", .{});
+    std.log.info("Focused: {?x}", .{wm.focused_window});
+    std.log.info("Total windows: {}", .{wm.windows.count()});
 
     if (workspaces.getState()) |ws_state| {
-        log.dumpStateCurrentWorkspace(ws_state.current);
+        std.log.info("Current workspace: {}", .{ws_state.current + 1});
         for (ws_state.workspaces, 0..) |*ws, i| {
-            log.dumpStateWorkspace(i, ws.windows.items.len);
+            std.log.info("  WS{}: {} windows", .{ i + 1, ws.windows.items.len });
         }
     }
 
     if (tiling.getState()) |t_state| {
-        log.dumpStateTiling(t_state.enabled, t_state.tiled_windows.items.len);
+        std.log.info("Tiling: {} ({} windows)", .{ t_state.enabled, t_state.tiled_windows.items.len });
     }
-    log.dumpStateEnd();
+    std.log.info("===========================", .{});
 }
 
 fn emergencyRecover(wm: *WM) void {
-    log.emergencyRecoveryStart();
+    std.log.warn("========== RECOVERY ==========", .{});
 
     if (workspaces.getState()) |ws_state| {
         for (ws_state.workspaces) |*ws| {
@@ -249,5 +213,5 @@ fn emergencyRecover(wm: *WM) void {
     }
 
     utils.flush(wm.conn);
-    log.emergencyRecoveryComplete();
+    std.log.warn("Recovery complete", .{});
 }

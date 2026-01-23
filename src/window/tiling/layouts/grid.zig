@@ -18,12 +18,10 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
     const cell_w = (screen_w -| (dims.cols + 1) * m.gap) / dims.cols;
     const cell_h = (screen_h -| (dims.rows + 1) * m.gap) / dims.rows;
 
-    // Pre-calculate window dimensions
     const border_margin = 2 * m.border;
     const win_w = if (cell_w > border_margin) cell_w - border_margin else utils.MIN_WINDOW_DIM;
     const win_h = if (cell_h > border_margin) cell_h - border_margin else utils.MIN_WINDOW_DIM;
 
-    // Pre-calculate cell spacing
     const cell_spacing_w = cell_w + m.gap;
     const cell_spacing_h = cell_h + m.gap;
 

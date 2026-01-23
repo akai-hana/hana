@@ -3,8 +3,6 @@
 const std = @import("std");
 const defs = @import("defs");
 const tiling = @import("tiling");
-const log = @import("logging");
-const errors = @import("error_handling");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -21,15 +19,15 @@ var layout_timer: ?std.time.Timer = null;
 
 pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     // CRITICAL: Never focus the root window
-    errors.validateFocusTarget(wm.root, win, @tagName(reason)) catch return;
+    if (win == wm.root) {
+        std.log.err("[CRITICAL] Attempted to focus ROOT window (0x{x})! Reason: {s}. Aborting.", .{ win, @tagName(reason) });
+        return;
+    }
 
     if (wm.focused_window == win) return;
 
     const old = wm.focused_window;
     wm.focused_window = win;
-
-    log.focusAttempt(old, win, @tagName(reason));
-    log.focusChanged(old, win, @tagName(reason));
 
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, xcb.XCB_CURRENT_TIME);
 
@@ -48,8 +46,6 @@ pub fn clearFocus(wm: *WM) void {
     if (old) |old_win| {
         tiling.updateWindowFocus(wm, old_win, null);
     }
-    
-    log.focusClear();
 }
 
 /// Check if mouse focus should be suppressed (during layout operations)
@@ -57,7 +53,6 @@ pub inline fn shouldSuppressMouseFocus() bool {
     if (layout_timer) |*timer| {
         const elapsed = timer.read();
         if (elapsed < defs.FOCUS_PROTECTION_GRACE_NS) {
-            log.focusSuppressed(elapsed / std.time.ns_per_ms);
             return true;
         }
         layout_timer = null;
@@ -71,5 +66,4 @@ pub inline fn markLayoutOperation() void {
         layout_timer = null;
         return;
     };
-    log.focusLayoutMarked();
 }

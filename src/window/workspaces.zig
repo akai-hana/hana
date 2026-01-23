@@ -97,18 +97,15 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
 
     if (target_ws >= s.workspaces.len) return;
 
-    // Find which workspace the window is currently on
     const from_ws = for (s.workspaces, 0..) |*ws, i| {
         if (ws.contains(win)) break i;
     } else {
-        // Window not in any workspace, just add it
         s.workspaces[target_ws].windows.append(s.workspaces[target_ws].allocator, win) catch return;
         return;
     };
 
     if (from_ws == target_ws) return;
 
-    // Use atomic move operation
     atomic.atomicMoveWindow(wm, win, from_ws, target_ws) catch |err| {
         std.log.err("[workspace] Failed to move window atomically: {}", .{err});
     };
@@ -119,23 +116,17 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
 
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
 
-    // Prevent concurrent workspace switches
-    if (s.switching.swap(true, .acq_rel)) {
-        std.log.debug("[workspace] Switch already in progress, ignoring", .{});
-        return;
-    }
+    if (s.switching.swap(true, .acq_rel)) return;
 
     const old_ws = s.current;
-    s.current = ws_id; // Update current workspace immediately for UI consistency
+    s.current = ws_id;
 
-    // Submit async workspace switch job
     async.submitGlobal(
         .workspace_switch,
         .{ .workspace_switch = .{ .from = old_ws, .to = ws_id } },
-        9, // High priority
+        9,
     ) catch |err| {
         std.log.err("[workspace] Failed to submit async switch: {}", .{err});
-        // Fallback to synchronous
         s.switching.store(false, .release);
         switchToImmediate(wm, ws_id);
     };
@@ -148,21 +139,19 @@ pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
 
     if (ws_id >= s.workspaces.len) return;
 
-    // Find the old workspace (before current was updated)
-    var old_ws: usize = 0;
+    var old_ws: usize = s.current;
     for (s.workspaces, 0..) |*ws, i| {
         if (i != ws_id and ws.windows.items.len > 0) {
-            // Check if any window is currently mapped
             for (ws.windows.items) |win| {
                 if (utils.isWindowMapped(wm.conn, win)) {
                     old_ws = i;
                     break;
                 }
             }
+            if (old_ws != s.current) break;
         }
     }
 
-    // Use atomic switch operation
     atomic.atomicSwitchWorkspace(wm, old_ws, ws_id) catch |err| {
         std.log.err("[workspace] Failed to switch workspace atomically: {}", .{err});
         return;
@@ -170,7 +159,6 @@ pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
 
     focus.markLayoutOperation();
 
-    // Trigger retile after workspace switch
     if (wm.config.tiling.enabled) {
         tiling.retileCurrentWorkspace(wm);
     }

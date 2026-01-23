@@ -1,6 +1,4 @@
 //! Atomic operation wrapper for window manager state changes.
-//! Provides transaction-based operations to ensure consistency across
-//! window, workspace, and tiling state modifications.
 
 const std = @import("std");
 const defs = @import("defs");
@@ -15,7 +13,6 @@ const XcbOp = union(enum) {
     set_border: struct { win: u32, color: u32 },
     set_focus: u32,
     raise: u32,
-    destroy: u32,
 };
 
 const StateOp = union(enum) {
@@ -46,9 +43,6 @@ pub const Transaction = struct {
     }
 
     pub fn deinit(self: *Transaction) void {
-        if (!self.committed) {
-            std.log.warn("[transaction] Transaction destroyed without commit/rollback", .{});
-        }
         self.xcb_ops.deinit(self.allocator);
         self.state_ops.deinit(self.allocator);
     }
@@ -107,10 +101,7 @@ pub const Transaction = struct {
     pub fn commit(self: *Transaction) !void {
         if (self.committed) return error.AlreadyCommitted;
 
-        // Phase 1: Validate all operations
-        try self.validate();
-
-        // Phase 2: Execute all XCB operations (batched)
+        // Execute all XCB operations (batched)
         for (self.xcb_ops.items) |op| {
             switch (op) {
                 .map => |win| _ = xcb.xcb_map_window(self.wm.conn, win),
@@ -140,11 +131,10 @@ pub const Transaction = struct {
                         &[_]u32{xcb.XCB_STACK_MODE_ABOVE},
                     );
                 },
-                .destroy => |win| _ = xcb.xcb_destroy_window(self.wm.conn, win),
             }
         }
 
-        // Phase 3: Execute all state operations
+        // Execute all state operations
         for (self.state_ops.items) |op| {
             switch (op) {
                 .add_window => |aw| {
@@ -199,57 +189,15 @@ pub const Transaction = struct {
             }
         }
 
-        // Phase 4: Single flush at the end
+        // Single flush at the end
         utils.flush(self.wm.conn);
-
         self.committed = true;
-    }
-
-    fn validate(self: *Transaction) !void {
-        // Validate windows exist and aren't root
-        for (self.xcb_ops.items) |op| {
-            const win: ?u32 = switch (op) {
-                .map, .unmap, .set_focus, .raise, .destroy => |w| w,
-                .configure => |cfg| cfg.win,
-                .set_border => |sb| sb.win,
-            };
-
-            if (win) |w| {
-                if (w == self.wm.root) {
-                    std.log.err("[transaction] Attempted operation on root window", .{});
-                    return error.InvalidWindow;
-                }
-            }
-        }
-
-        // Validate workspace indices
-        for (self.state_ops.items) |op| {
-            switch (op) {
-                .add_window => |aw| {
-                    const workspaces = @import("workspaces");
-                    if (workspaces.getState()) |ws_state| {
-                        if (aw.ws >= ws_state.workspaces.len) {
-                            return error.InvalidWorkspace;
-                        }
-                    }
-                },
-                .remove_window => |rw| {
-                    const workspaces = @import("workspaces");
-                    if (workspaces.getState()) |ws_state| {
-                        if (rw.ws >= ws_state.workspaces.len) {
-                            return error.InvalidWorkspace;
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
     }
 
     pub fn rollback(self: *Transaction) void {
         self.xcb_ops.clearRetainingCapacity();
         self.state_ops.clearRetainingCapacity();
-        self.committed = true; // Mark as "handled"
+        self.committed = true;
     }
 };
 
@@ -276,7 +224,6 @@ pub fn atomicDestroyWindow(wm: *WM, win: u32) !void {
 
     const was_focused = wm.focused_window == win;
 
-    // Remove from tiling
     try tx.removeTiledWindow(win);
 
     // Remove from all workspaces
@@ -292,8 +239,6 @@ pub fn atomicDestroyWindow(wm: *WM, win: u32) !void {
     // Handle focus
     if (was_focused) {
         try tx.updateFocus(null);
-
-        // Try to focus another window
         if (workspaces.getCurrentWindowsView()) |ws_windows| {
             if (ws_windows.len > 0) {
                 try tx.setFocus(ws_windows[0]);
@@ -315,13 +260,9 @@ pub fn atomicMoveWindow(wm: *WM, win: u32, from_ws: usize, to_ws: usize) !void {
 
     const is_focused = wm.focused_window == win;
 
-    // Remove from source workspace
     try tx.removeWindowFromWorkspace(from_ws, win);
-
-    // Add to target workspace
     try tx.addWindowToWorkspace(to_ws, win);
 
-    // If moving away from current workspace, unmap
     const workspaces = @import("workspaces");
     if (workspaces.getCurrentWorkspace()) |current| {
         if (from_ws == current and to_ws != current) {
@@ -329,8 +270,6 @@ pub fn atomicMoveWindow(wm: *WM, win: u32, from_ws: usize, to_ws: usize) !void {
 
             if (is_focused) {
                 try tx.updateFocus(null);
-
-                // Focus another window on current workspace
                 if (workspaces.getCurrentWindowsView()) |ws_windows| {
                     if (ws_windows.len > 0) {
                         try tx.setFocus(ws_windows[0]);
@@ -354,17 +293,14 @@ pub fn atomicSwitchWorkspace(wm: *WM, from: usize, to: usize) !void {
 
     const workspaces = @import("workspaces");
     if (workspaces.getState()) |ws_state| {
-        // Unmap all windows from old workspace
         for (ws_state.workspaces[from].windows.items) |win| {
             try tx.unmapWindow(win);
         }
 
-        // Map all windows from new workspace
         for (ws_state.workspaces[to].windows.items) |win| {
             try tx.mapWindow(win);
         }
 
-        // Focus first window on new workspace
         if (ws_state.workspaces[to].windows.items.len > 0) {
             const win = ws_state.workspaces[to].windows.items[0];
             try tx.setFocus(win);

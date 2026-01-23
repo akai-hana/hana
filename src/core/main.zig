@@ -10,7 +10,6 @@ const xkbcommon = @import("xkbcommon");
 const events = @import("events");
 const input = @import("input");
 const utils = @import("utils");
-const log = @import("logging");
 const async = @import("async");
 
 const xcb = defs.xcb;
@@ -129,7 +128,7 @@ fn handleConfigReload(wm: *WM) !void {
     try input.rebuildKeybindMap(wm);
     @import("tiling").reloadConfig(wm);
 
-    log.configReloaded();
+    std.log.info("[config] Reloaded", .{});
 }
 
 pub fn main() !void {
@@ -171,7 +170,6 @@ pub fn main() !void {
     };
     defer wm.deinit();
 
-    // Initialize async queue
     try async.initGlobal(allocator);
     defer async.deinitGlobal(allocator);
 
@@ -183,22 +181,20 @@ pub fn main() !void {
     setupExistingWindows(conn, root);
     utils.flush(conn);
 
-    log.wmStarted();
+    std.log.info("[hana] Started", .{});
 
     // Main event loop with async job processing
     var batch_count: usize = 0;
     const MAX_BATCH_SIZE: usize = 10;
 
     while (true) {
-        // Process async jobs first (non-blocking)
         async.processPending(&wm);
 
-        // Poll for X events with timeout to allow async processing
         const event = xcb.xcb_poll_for_event(conn);
-        
+
         if (event) |ev| {
             defer std.c.free(ev);
-            
+
             const event_type = @as(*u8, @ptrCast(ev)).*;
 
             // Fast path for focus events
@@ -210,7 +206,7 @@ pub fn main() !void {
 
             if (should_reload.swap(false, .acq_rel)) {
                 handleConfigReload(&wm) catch |err| {
-                    log.configReloadFailed(err);
+                    std.log.err("[config] Reload failed: {}", .{err});
                 };
             }
 
@@ -232,9 +228,7 @@ pub fn main() !void {
                 batch_count = 0;
             }
         } else {
-            // No events - check for async jobs or sleep briefly
             if (!async.getGlobal().?.hasPending()) {
-                // Sleep for 1ms to avoid busy-waiting
                 std.posix.nanosleep(0, 1 * std.time.ns_per_ms);
             }
         }

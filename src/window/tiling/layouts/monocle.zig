@@ -4,7 +4,6 @@ const std = @import("std");
 const defs = @import("defs");
 const utils = @import("utils");
 const atomic = @import("atomic");
-const xcb = defs.xcb;
 
 const tiling = @import("tiling");
 const State = tiling.State;
@@ -18,6 +17,5 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
         tx.configureWindow(win, inner) catch continue;
     }
 
-    // Bring most recent window to top
     tx.raiseWindow(windows[windows.len - 1]) catch {};
 }

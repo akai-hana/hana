@@ -10,7 +10,6 @@ const focus = @import("focus");
 const atomic = @import("atomic");
 const async = @import("async");
 
-// Import layout implementations
 const master_layout = @import("master");
 const monocle_layout = @import("monocle");
 const grid_layout = @import("grid");
@@ -21,7 +20,7 @@ pub const State = struct {
     enabled: bool,
     layout: Layout,
     master_side: []const u8,
-    master_side_owned: bool = false,  // Track if we own the string
+    master_side_owned: bool = false,
     master_width_factor: f32,
     master_count: usize,
     gaps: u16,
@@ -43,10 +42,9 @@ var state: ?*State = null;
 
 pub fn init(wm: *WM) void {
     const s = wm.allocator.create(State) catch return;
-    
-    // Duplicate master_side to ensure we own it
+
     const master_side_copy = wm.allocator.dupe(u8, wm.config.tiling.master_side) catch "left";
-    
+
     s.* = .{
         .enabled = wm.config.tiling.enabled,
         .layout = parseLayout(wm.config.tiling.layout),
@@ -131,7 +129,6 @@ pub fn notifyWindowDestroyed(wm: *WM, win: u32) void {
     }
 }
 
-/// Update border colors when focus changes
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     const s = state orelse return;
     if (!s.enabled) return;
@@ -158,20 +155,10 @@ pub fn isWindowTiled(win: u32) bool {
     return false;
 }
 
-/// Submit retile operation asynchronously
 fn retileAsync(wm: *WM, s: *State) void {
-    // If retile is already pending, don't queue another
-    if (s.retile_pending.swap(true, .acq_rel)) {
-        return;
-    }
+    if (s.retile_pending.swap(true, .acq_rel)) return;
 
-    // Submit async job with high priority
-    async.submitGlobal(
-        .retile,
-        .{ .retile = {} },
-        10, // High priority
-    ) catch {
-        // If submission fails, do it synchronously
+    async.submitGlobal(.retile, .{ .retile = {} }, 10) catch {
         s.retile_pending.store(false, .release);
         retile(wm, s);
     };
@@ -179,11 +166,10 @@ fn retileAsync(wm: *WM, s: *State) void {
 
 fn retile(wm: *WM, s: *State) void {
     defer s.retile_pending.store(false, .release);
-    
+
     if (!s.needs_retile) return;
     s.needs_retile = false;
 
-    // Start transaction for all window operations
     var tx = atomic.Transaction.begin(wm) catch {
         std.log.err("[tiling] Failed to begin retile transaction", .{});
         return;
@@ -209,19 +195,16 @@ fn retile(wm: *WM, s: *State) void {
 
     const screen = wm.screen;
 
-    // Delegate to layout-specific implementations
     switch (s.layout) {
         .master => master_layout.tile(&tx, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
         .monocle => monocle_layout.tile(&tx, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
         .grid => grid_layout.tile(&tx, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
     }
 
-    // Update borders atomically
     if (wm.focused_window) |focused| {
-        updateBordersInTransaction(&tx, s, focused);
+        updateBorders(&tx, s, focused);
     }
 
-    // Commit all changes at once
     tx.commit() catch |err| {
         std.log.err("[tiling] Retile transaction failed: {}", .{err});
         tx.rollback();
@@ -231,10 +214,9 @@ fn retile(wm: *WM, s: *State) void {
     focus.markLayoutOperation();
 }
 
-fn updateBordersInTransaction(tx: *atomic.Transaction, s: *State, focused: u32) void {
+fn updateBorders(tx: *atomic.Transaction, s: *State, focused: u32) void {
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
 
-    // Direct linear search - faster than HashMap for typical window counts (<50)
     for (s.tiled_windows.items) |win| {
         const on_workspace = for (ws_windows) |w| {
             if (w == win) break true;
@@ -245,24 +227,6 @@ fn updateBordersInTransaction(tx: *atomic.Transaction, s: *State, focused: u32) 
         const color = if (win == focused) s.border_focused else s.border_normal;
         tx.setBorder(win, color) catch continue;
     }
-}
-
-fn updateBorders(wm: *WM, s: *State, focused: u32) void {
-    const ws_windows = workspaces.getCurrentWindowsView() orelse return;
-
-    // Direct linear search - faster than HashMap for typical window counts (<50)
-    for (s.tiled_windows.items) |win| {
-        const on_workspace = for (ws_windows) |w| {
-            if (w == win) break true;
-        } else false;
-
-        if (!on_workspace) continue;
-
-        const color = if (win == focused) s.border_focused else s.border_normal;
-        _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
-    }
-
-    utils.flush(wm.conn);
 }
 
 pub fn retileCurrentWorkspace(wm: *WM) void {
@@ -282,13 +246,8 @@ pub fn toggleLayout(wm: *WM) void {
         .grid => .master,
     };
     s.needs_retile = true;
-    
-    // Submit layout change asynchronously
-    async.submitGlobal(
-        .layout_change,
-        .{ .layout_change = {} },
-        8, // Medium-high priority
-    ) catch {
+
+    async.submitGlobal(.layout_change, .{ .layout_change = {} }, 8) catch {
         retile(wm, s);
     };
 }
@@ -332,15 +291,13 @@ pub fn toggleTiling(wm: *WM) void {
 
 pub fn reloadConfig(wm: *WM) void {
     const s = state orelse return;
-    
-    // Free old master_side if we own it
+
     if (s.master_side_owned) {
         s.allocator.free(s.master_side);
     }
-    
-    // Duplicate new master_side
+
     const new_master_side = s.allocator.dupe(u8, wm.config.tiling.master_side) catch "left";
-    
+
     s.enabled = wm.config.tiling.enabled;
     s.layout = parseLayout(wm.config.tiling.layout);
     s.master_side = new_master_side;
@@ -355,6 +312,6 @@ pub fn reloadConfig(wm: *WM) void {
     if (s.enabled) retileAsync(wm, s);
 }
 
-pub fn getState() ?*State {
+pub inline fn getState() ?*State {
     return state;
 }

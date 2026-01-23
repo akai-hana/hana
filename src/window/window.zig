@@ -40,13 +40,12 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         }
     }
 
-    // Map to current workspace atomically (fast path)
+    // Map to current workspace atomically
     atomic.atomicMapWindow(wm, win, target_ws orelse current_ws) catch |err| {
         std.log.err("[window] Failed to map window atomically: {}", .{err});
         return;
     };
 
-    // Configure borders if tiling is enabled
     if (wm.config.tiling.enabled) {
         const attrs = utils.WindowAttrs{
             .border_width = wm.config.tiling.border_width,
@@ -54,8 +53,6 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
             .event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW,
         };
         attrs.configure(wm.conn, win);
-        
-        // Update focused window and trigger async retile
         wm.focused_window = win;
         tiling.retileCurrentWorkspace(wm);
     }
@@ -98,23 +95,14 @@ fn hasQueuedEnterEvents(conn: *xcb.xcb_connection_t) bool {
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
     const win = event.window;
 
-    // DEBUG logging
-    std.log.warn("[DEBUG DestroyNotify] Window 0x{x} destroyed", .{win});
-    std.log.warn("[DEBUG DestroyNotify] Was focused: {}", .{wm.focused_window == win});
-    std.log.warn("[DEBUG DestroyNotify] Total windows before: {}", .{wm.windows.count()});
-
-    // Use atomic operation for destruction
     atomic.atomicDestroyWindow(wm, win) catch |err| {
         std.log.err("[window] Failed to destroy window atomically: {}", .{err});
     };
 
     wm.removeWindow(win);
-
-    std.log.warn("[DEBUG DestroyNotify] Total windows after: {}", .{wm.windows.count()});
 }
 
 fn matchWorkspaceRule(wm: *WM, win: u32) ?usize {
-    // Early return if no rules configured
     if (wm.config.workspaces.rules.items.len == 0) return null;
 
     const wm_class = utils.getWMClass(wm.conn, win, wm.allocator) orelse return null;
