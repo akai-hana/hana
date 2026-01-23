@@ -7,6 +7,8 @@ const WM = defs.WM;
 const utils = @import("utils");
 const tiling = @import("tiling");
 const focus = @import("focus");
+const atomic = @import("atomic");
+const async = @import("async");
 
 pub const Workspace = struct {
     id: usize,
@@ -14,14 +16,14 @@ pub const Workspace = struct {
     name: []const u8,
     allocator: std.mem.Allocator,
 
-    fn contains(self: *const Workspace, win: u32) bool {
+    pub fn contains(self: *const Workspace, win: u32) bool {
         for (self.windows.items) |w| {
             if (w == win) return true;
         }
         return false;
     }
 
-    fn remove(self: *Workspace, win: u32) bool {
+    pub fn remove(self: *Workspace, win: u32) bool {
         for (self.windows.items, 0..) |w, i| {
             if (w == win) {
                 _ = self.windows.orderedRemove(i);
@@ -36,6 +38,7 @@ pub const State = struct {
     workspaces: []Workspace,
     current: usize,
     allocator: std.mem.Allocator,
+    switching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 var state: ?*State = null;
@@ -91,55 +94,85 @@ pub fn removeWindow(win: u32) void {
 
 pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
     const s = state orelse return;
-    if (target_ws >= s.workspaces.len or target_ws == s.current) return;
 
-    const is_focused = wm.focused_window == win;
+    if (target_ws >= s.workspaces.len) return;
 
-    for (s.workspaces) |*ws| _ = ws.remove(win);
+    // Find which workspace the window is currently on
+    const from_ws = for (s.workspaces, 0..) |*ws, i| {
+        if (ws.contains(win)) break i;
+    } else {
+        // Window not in any workspace, just add it
+        s.workspaces[target_ws].windows.append(s.workspaces[target_ws].allocator, win) catch return;
+        return;
+    };
 
-    s.workspaces[target_ws].windows.append(s.workspaces[target_ws].allocator, win) catch return;
+    if (from_ws == target_ws) return;
 
-    if (is_focused) {
-        _ = xcb.xcb_unmap_window(wm.conn, win);
-        if (s.workspaces[s.current].windows.items.len > 0) {
-            focus.setFocus(wm, s.workspaces[s.current].windows.items[0], .window_destroyed);
-        } else {
-            focus.clearFocus(wm);
-        }
-    }
-
-    focus.markLayoutOperation();
-    utils.flush(wm.conn);
-    tiling.retileCurrentWorkspace(wm);
+    // Use atomic move operation
+    atomic.atomicMoveWindow(wm, win, from_ws, target_ws) catch |err| {
+        std.log.err("[workspace] Failed to move window atomically: {}", .{err});
+    };
 }
 
 pub fn switchTo(wm: *WM, ws_id: usize) void {
     const s = state orelse return;
+
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
 
-    @import("fullscreen").notifyWorkspaceSwitch(wm);
-
-    const old_ws = &s.workspaces[s.current];
-    const new_ws = &s.workspaces[ws_id];
-
-    utils.batchUnmap(wm.conn, old_ws.windows.items);
-    s.current = ws_id;
-    utils.batchMap(wm.conn, new_ws.windows.items);
-
-    focus.markLayoutOperation();
-    utils.flush(wm.conn);
-
-    if (wm.config.tiling.enabled) {
-        for (new_ws.windows.items) |win| {
-            tiling.notifyWindowMapped(wm, win);
-        }
-        tiling.retileCurrentWorkspace(wm);
+    // Prevent concurrent workspace switches
+    if (s.switching.swap(true, .acq_rel)) {
+        std.log.debug("[workspace] Switch already in progress, ignoring", .{});
+        return;
     }
 
-    if (new_ws.windows.items.len > 0) {
-        focus.setFocus(wm, new_ws.windows.items[0], .workspace_switch);
-    } else {
-        focus.clearFocus(wm);
+    const old_ws = s.current;
+    s.current = ws_id; // Update current workspace immediately for UI consistency
+
+    // Submit async workspace switch job
+    async.submitGlobal(
+        .workspace_switch,
+        .{ .workspace_switch = .{ .from = old_ws, .to = ws_id } },
+        9, // High priority
+    ) catch |err| {
+        std.log.err("[workspace] Failed to submit async switch: {}", .{err});
+        // Fallback to synchronous
+        s.switching.store(false, .release);
+        switchToImmediate(wm, ws_id);
+    };
+}
+
+/// Immediate workspace switch (called by async processor or as fallback)
+pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
+    const s = state orelse return;
+    defer s.switching.store(false, .release);
+
+    if (ws_id >= s.workspaces.len) return;
+
+    // Find the old workspace (before current was updated)
+    var old_ws: usize = 0;
+    for (s.workspaces, 0..) |*ws, i| {
+        if (i != ws_id and ws.windows.items.len > 0) {
+            // Check if any window is currently mapped
+            for (ws.windows.items) |win| {
+                if (utils.isWindowMapped(wm.conn, win)) {
+                    old_ws = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Use atomic switch operation
+    atomic.atomicSwitchWorkspace(wm, old_ws, ws_id) catch |err| {
+        std.log.err("[workspace] Failed to switch workspace atomically: {}", .{err});
+        return;
+    };
+
+    focus.markLayoutOperation();
+
+    // Trigger retile after workspace switch
+    if (wm.config.tiling.enabled) {
+        tiling.retileCurrentWorkspace(wm);
     }
 }
 

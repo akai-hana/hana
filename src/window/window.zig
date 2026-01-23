@@ -8,14 +8,13 @@ const utils = @import("utils");
 const tiling = @import("tiling");
 const workspaces = @import("workspaces");
 const focus = @import("focus");
-const log = @import("logging");
+const atomic = @import("atomic");
 
 pub fn init(_: *WM) void {}
 pub fn deinit(_: *WM) void {}
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win = event.window;
-    log.windowMapped(win);
 
     const target_ws = if (wm.config.workspaces.rules.items.len > 0)
         matchWorkspaceRule(wm, win)
@@ -41,11 +40,24 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         }
     }
 
-    workspaces.addWindowToCurrentWorkspace(wm, win);
-    _ = xcb.xcb_map_window(wm.conn, win);
+    // Map to current workspace atomically (fast path)
+    atomic.atomicMapWindow(wm, win, target_ws orelse current_ws) catch |err| {
+        std.log.err("[window] Failed to map window atomically: {}", .{err});
+        return;
+    };
 
+    // Configure borders if tiling is enabled
     if (wm.config.tiling.enabled) {
-        tiling.notifyWindowMapped(wm, win);
+        const attrs = utils.WindowAttrs{
+            .border_width = wm.config.tiling.border_width,
+            .border_color = wm.config.tiling.border_focused,
+            .event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW,
+        };
+        attrs.configure(wm.conn, win);
+        
+        // Update focused window and trigger async retile
+        wm.focused_window = win;
+        tiling.retileCurrentWorkspace(wm);
     }
 
     focus.markLayoutOperation();
@@ -53,8 +65,6 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 }
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
-    log.windowConfigureRequest(event.window, event.x, event.y, event.width, event.height);
-    
     if (wm.config.tiling.enabled and tiling.isWindowTiled(event.window)) return;
 
     _ = xcb.xcb_configure_window(wm.conn, event.window, event.value_mask, &[_]u32{
@@ -87,66 +97,20 @@ fn hasQueuedEnterEvents(conn: *xcb.xcb_connection_t) bool {
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
     const win = event.window;
-    const was_focused = wm.focused_window == win;
-    const total_before = wm.windows.count();
 
-    @import("fullscreen").notifyWindowDestroyed(wm, win);
-    tiling.notifyWindowDestroyed(wm, win);
-    workspaces.removeWindow(win);
+    // DEBUG logging
+    std.log.warn("[DEBUG DestroyNotify] Window 0x{x} destroyed", .{win});
+    std.log.warn("[DEBUG DestroyNotify] Was focused: {}", .{wm.focused_window == win});
+    std.log.warn("[DEBUG DestroyNotify] Total windows before: {}", .{wm.windows.count()});
+
+    // Use atomic operation for destruction
+    atomic.atomicDestroyWindow(wm, win) catch |err| {
+        std.log.err("[window] Failed to destroy window atomically: {}", .{err});
+    };
+
     wm.removeWindow(win);
 
-    const total_after = wm.windows.count();
-    
-    log.debugWindowDestroyNotify(win, was_focused, total_before, total_after);
-    log.windowDestroyed(win);
-
-    if (was_focused) {
-        wm.focused_window = null;
-
-        if (workspaces.getCurrentWindowsView()) |ws_windows| {
-            if (ws_windows.len > 0) {
-                // Retile first so windows are in their new positions
-                tiling.retileCurrentWorkspace(wm);
-                utils.flush(wm.conn);
-                
-                // Now find which window the cursor is over
-                const cursor_win = getWindowUnderCursor(wm) orelse ws_windows[0];
-                focus.setFocus(wm, cursor_win, .window_destroyed);
-                return;
-            }
-        }
-
-        focus.clearFocus(wm);
-    }
-}
-
-fn getWindowUnderCursor(wm: *WM) ?u32 {
-    const cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
-    const reply = xcb.xcb_query_pointer_reply(wm.conn, cookie, null) orelse return null;
-    defer std.c.free(reply);
-    
-    const child = reply.*.child;
-    
-    if (log.isDebug()) {
-        log.debugCursorQuery(reply.*.root_x, reply.*.root_y, child);
-    }
-    
-    // Check if the child window is in our current workspace
-    if (child != 0 and child != wm.root) {
-        if (workspaces.getCurrentWindowsView()) |ws_windows| {
-            for (ws_windows) |ws_win| {
-                if (ws_win == child) {
-                    return child;
-                }
-            }
-        }
-    }
-    
-    if (log.isDebug()) {
-        log.debugCursorNoWindow();
-    }
-    
-    return null;
+    std.log.warn("[DEBUG DestroyNotify] Total windows after: {}", .{wm.windows.count()});
 }
 
 fn matchWorkspaceRule(wm: *WM, win: u32) ?usize {

@@ -235,7 +235,7 @@ pub fn main() !void {
             // No events - check for async jobs or sleep briefly
             if (!async.getGlobal().?.hasPending()) {
                 // Sleep for 1ms to avoid busy-waiting
-                std.posix.nanosleep(0, 1 * std.time.ns_per_ms);
+                std.time.sleep(1 * std.time.ns_per_ms);
             }
         }
     }

@@ -1,0 +1,9 @@
+@@ -235,7 +235,7 @@
+         } else {
+             // No events - check for async jobs or sleep briefly
+             if (!async.getGlobal().?.hasPending()) {
+-                std.time.sleep(1 * std.time.ns_per_ms);
++                std.Thread.sleep(1 * std.time.ns_per_ms);
+             }
+         }
+     }
