@@ -8,6 +8,7 @@ const tiling     = @import("tiling");
 const workspaces = @import("workspaces");
 const focus      = @import("focus");
 const log        = @import("logging");
+const errors     = @import("error_handling");
 const xcb        = defs.xcb;
 const WM         = defs.WM;
 
@@ -132,40 +133,59 @@ fn hasQueuedMotionEvents(conn: *xcb.xcb_connection_t) bool {
 
 inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
-        .toggle_fullscreen => @import("fullscreen").toggleFullscreen(wm),
-        .close_window => {
-
+        .toggle_fullscreen => {
             if (wm.focused_window) |win| {
-                // DEBUG: Log what we're about to destroy
-                std.log.warn("[DEBUG] Attempting to destroy focused window: 0x{x}", .{win});
-                std.log.warn("[DEBUG] Root window is: 0x{x}", .{wm.root});
-                std.log.warn("[DEBUG] Total managed windows: {}", .{wm.windows.count()});
+                log.actionToggleFullscreen(win);
+            }
+            @import("fullscreen").toggleFullscreen(wm);
+        },
+        .close_window => {
+            if (wm.focused_window) |win| {
+                log.debugDestroyWindow(win, wm.root, wm.windows.count(), true);
                 
-                // Check if we're accidentally trying to destroy the root window
-                if (win == wm.root) {
-                    std.log.err("[CRITICAL] Attempted to destroy ROOT window! Aborting.", .{});
+                // Validate before destroying
+                errors.validateWindowDestroy(wm, win) catch |err| {
+                    std.log.err("[ERROR] Cannot destroy window: {}", .{err});
                     return;
-                }
+                };
+
+                log.actionCloseWindow(win);
                 
-                _ = xcb.xcb_destroy_window(wm.conn, win);
-                std.log.warn("[DEBUG] xcb_destroy_window called for 0x{x}", .{win});
+                // Use kill client instead of destroy window to be safer
+                _ = xcb.xcb_kill_client(wm.conn, win);
+                utils.flush(wm.conn);
+                
+                log.debugDestroyWindowComplete(win);
             } else {
-                std.log.warn("[DEBUG] close_window called but no focused window", .{});
+                log.debugNoFocusedWindow();
             }
         },
         .reload_config => wm.should_reload_config.store(true, .release),
-        .toggle_layout => tiling.toggleLayout(wm),
+        .toggle_layout => {
+            log.actionToggleLayout();
+            tiling.toggleLayout(wm);
+        },
         .increase_master => tiling.increaseMasterWidth(wm),
         .decrease_master => tiling.decreaseMasterWidth(wm),
         .increase_master_count => tiling.increaseMasterCount(wm),
         .decrease_master_count => tiling.decreaseMasterCount(wm),
-        .toggle_tiling => tiling.toggleTiling(wm),
+        .toggle_tiling => {
+            log.actionToggleTiling();
+            tiling.toggleTiling(wm);
+        },
         .dump_state => dumpState(wm),
         .emergency_recover => emergencyRecover(wm),
-        .exec => |cmd| try executeShellCommand(wm, cmd),
-        .switch_workspace => |ws| workspaces.switchTo(wm, ws),
+        .exec => |cmd| {
+            log.actionExec(cmd);
+            try executeShellCommand(wm, cmd);
+        },
+        .switch_workspace => |ws| {
+            log.actionSwitchWorkspace(ws);
+            workspaces.switchTo(wm, ws);
+        },
         .move_to_workspace => |ws| {
             if (wm.focused_window) |win| {
+                log.actionMoveToWorkspace(win, ws);
                 workspaces.moveWindowTo(wm, win, ws);
             }
         },

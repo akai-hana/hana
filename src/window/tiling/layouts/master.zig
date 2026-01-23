@@ -23,12 +23,12 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
     else
         screen_w;
 
-    std.log.debug("[master_layout] master_side value: '{s}' (len={})", .{ state.master_side, state.master_side.len });
+    log.debugMasterSide(state.master_side);
 
     // Determine if master is on right side
     const master_on_right = std.mem.eql(u8, state.master_side, "right");
 
-    std.log.debug("[master_layout] master_on_right={}, master_x will be: {}", .{ master_on_right, if (master_on_right) screen_w - master_w else 0 });
+    log.debugMasterPosition(master_on_right, if (master_on_right) screen_w - master_w else 0);
 
     const master_x: u16 = if (master_on_right) screen_w - master_w else 0;
     const stack_x: u16 = if (master_on_right) 0 else master_w;
@@ -83,9 +83,7 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
         // Overflow: progressively split rows as needed
         const s_layout = utils.calcColumnLayout(screen_h, max_fit, m);
 
-        if (log.isDebug()) {
-            std.log.debug("[layout:master_left] Overflow mode: max_fit={}", .{max_fit});
-        }
+        log.debugLayoutOverflow(max_fit);
 
         // Tile stack windows row by row
         var row: u16 = 0;
@@ -106,9 +104,7 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
             else
                 utils.MIN_WINDOW_DIM;
 
-            if (log.isDebug()) {
-                std.log.debug("[layout:master_left] Row {} has {} columns", .{ row, cols_in_row });
-            }
+            log.debugLayoutRow(row, cols_in_row);
 
             // Place all windows in this row
             var col: u16 = 0;
@@ -123,9 +119,7 @@ pub fn tile(wm: *WM, state: *State, windows: []const u32, screen_w: u16, screen_
                     .height = s_layout.item_h,
                 });
 
-                if (log.isDebug()) {
-                    std.log.debug("[layout:master_left] Window idx={} -> row={} col={}", .{ win_idx, row, col });
-                }
+                log.debugLayoutWindowIndex(win_idx, row, col);
 
                 col += 1;
             }

@@ -8,12 +8,14 @@ const utils = @import("utils");
 const tiling = @import("tiling");
 const workspaces = @import("workspaces");
 const focus = @import("focus");
+const log = @import("logging");
 
 pub fn init(_: *WM) void {}
 pub fn deinit(_: *WM) void {}
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win = event.window;
+    log.windowMapped(win);
 
     const target_ws = if (wm.config.workspaces.rules.items.len > 0)
         matchWorkspaceRule(wm, win)
@@ -51,6 +53,8 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 }
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
+    log.windowConfigureRequest(event.window, event.x, event.y, event.width, event.height);
+    
     if (wm.config.tiling.enabled and tiling.isWindowTiled(event.window)) return;
 
     _ = xcb.xcb_configure_window(wm.conn, event.window, event.value_mask, &[_]u32{
@@ -83,20 +87,18 @@ fn hasQueuedEnterEvents(conn: *xcb.xcb_connection_t) bool {
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
     const win = event.window;
-
-    // DEBUG logging
-    std.log.warn("[DEBUG DestroyNotify] Window 0x{x} destroyed", .{win});
-    std.log.warn("[DEBUG DestroyNotify] Was focused: {}", .{wm.focused_window == win});
-    std.log.warn("[DEBUG DestroyNotify] Total windows before: {}", .{wm.windows.count()});
-
     const was_focused = wm.focused_window == win;
+    const total_before = wm.windows.count();
 
     @import("fullscreen").notifyWindowDestroyed(wm, win);
     tiling.notifyWindowDestroyed(wm, win);
     workspaces.removeWindow(win);
     wm.removeWindow(win);
 
-    std.log.warn("[DEBUG DestroyNotify] Total windows after: {}", .{wm.windows.count()});
+    const total_after = wm.windows.count();
+    
+    log.debugWindowDestroyNotify(win, was_focused, total_before, total_after);
+    log.windowDestroyed(win);
 
     if (was_focused) {
         wm.focused_window = null;
@@ -106,7 +108,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
                 // Retile first so windows are in their new positions
                 tiling.retileCurrentWorkspace(wm);
                 utils.flush(wm.conn);
-
+                
                 // Now find which window the cursor is over
                 const cursor_win = getWindowUnderCursor(wm) orelse ws_windows[0];
                 focus.setFocus(wm, cursor_win, .window_destroyed);
@@ -122,9 +124,13 @@ fn getWindowUnderCursor(wm: *WM) ?u32 {
     const cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
     const reply = xcb.xcb_query_pointer_reply(wm.conn, cookie, null) orelse return null;
     defer std.c.free(reply);
-
+    
     const child = reply.*.child;
-
+    
+    if (log.isDebug()) {
+        log.debugCursorQuery(reply.*.root_x, reply.*.root_y, child);
+    }
+    
     // Check if the child window is in our current workspace
     if (child != 0 and child != wm.root) {
         if (workspaces.getCurrentWindowsView()) |ws_windows| {
@@ -135,7 +141,11 @@ fn getWindowUnderCursor(wm: *WM) ?u32 {
             }
         }
     }
-
+    
+    if (log.isDebug()) {
+        log.debugCursorNoWindow();
+    }
+    
     return null;
 }
 
