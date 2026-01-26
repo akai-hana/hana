@@ -11,7 +11,7 @@
 //!   defer tx.deinit();
 //!   try tx.mapWindow(win);
 //!   try tx.addWindowToWorkspace(ws, win);
-//!   try tx.commit(); // All or nothing
+//!   try tx.commit();
 
 const std = @import("std");
 const defs = @import("defs");
@@ -64,7 +64,7 @@ pub const Transaction = struct {
     snapshot: ?StateSnapshot = null,
 
     pub fn begin(wm: *WM) !Transaction {
-        return .{
+        var tx = Transaction{
             .wm = wm,
             .xcb_ops = .{},
             .state_ops = .{},
@@ -74,6 +74,12 @@ pub const Transaction = struct {
             .allocator = wm.allocator,
             .snapshot = null,
         };
+
+        try tx.xcb_ops.ensureTotalCapacity(wm.allocator, 32);
+        try tx.state_ops.ensureTotalCapacity(wm.allocator, 16);
+        try tx.configured_rects.ensureTotalCapacity(16);
+
+        return tx;
     }
 
     pub fn deinit(self: *Transaction) void {
@@ -86,52 +92,88 @@ pub const Transaction = struct {
     }
 
     pub fn mapWindow(self: *Transaction, win: u32) !void {
-        try self.xcb_ops.append(self.allocator, .{ .map = win });
+        if (self.xcb_ops.items.len >= self.xcb_ops.capacity) {
+            try self.xcb_ops.ensureUnusedCapacity(self.allocator, 8);
+        }
+        self.xcb_ops.appendAssumeCapacity(.{ .map = win });
     }
 
     pub fn unmapWindow(self: *Transaction, win: u32) !void {
-        try self.xcb_ops.append(self.allocator, .{ .unmap = win });
+        if (self.xcb_ops.items.len >= self.xcb_ops.capacity) {
+            try self.xcb_ops.ensureUnusedCapacity(self.allocator, 8);
+        }
+        self.xcb_ops.appendAssumeCapacity(.{ .unmap = win });
     }
 
     pub fn configureWindow(self: *Transaction, win: u32, rect: utils.Rect) !void {
         try self.configured_rects.put(win, rect);
-        try self.xcb_ops.append(self.allocator, .{ .configure = .{ .win = win, .rect = rect } });
+        if (self.xcb_ops.items.len >= self.xcb_ops.capacity) {
+            try self.xcb_ops.ensureUnusedCapacity(self.allocator, 8);
+        }
+        self.xcb_ops.appendAssumeCapacity(.{ .configure = .{ .win = win, .rect = rect } });
     }
 
     pub fn setBorder(self: *Transaction, win: u32, color: u32) !void {
-        try self.xcb_ops.append(self.allocator, .{ .set_border = .{ .win = win, .color = color } });
+        if (self.xcb_ops.items.len >= self.xcb_ops.capacity) {
+            try self.xcb_ops.ensureUnusedCapacity(self.allocator, 8);
+        }
+        self.xcb_ops.appendAssumeCapacity(.{ .set_border = .{ .win = win, .color = color } });
     }
 
     pub fn setFocus(self: *Transaction, win: u32) !void {
-        try self.xcb_ops.append(self.allocator, .{ .set_focus = win });
+        if (self.xcb_ops.items.len >= self.xcb_ops.capacity) {
+            try self.xcb_ops.ensureUnusedCapacity(self.allocator, 8);
+        }
+        self.xcb_ops.appendAssumeCapacity(.{ .set_focus = win });
     }
 
     pub fn raiseWindow(self: *Transaction, win: u32) !void {
-        try self.xcb_ops.append(self.allocator, .{ .raise = win });
+        if (self.xcb_ops.items.len >= self.xcb_ops.capacity) {
+            try self.xcb_ops.ensureUnusedCapacity(self.allocator, 8);
+        }
+        self.xcb_ops.appendAssumeCapacity(.{ .raise = win });
     }
 
     pub fn addWindowToWorkspace(self: *Transaction, ws: usize, win: u32) !void {
-        try self.state_ops.append(self.allocator, .{ .add_window = .{ .ws = ws, .win = win } });
+        if (self.state_ops.items.len >= self.state_ops.capacity) {
+            try self.state_ops.ensureUnusedCapacity(self.allocator, 4);
+        }
+        self.state_ops.appendAssumeCapacity(.{ .add_window = .{ .ws = ws, .win = win } });
     }
 
     pub fn removeWindowFromWorkspace(self: *Transaction, ws: usize, win: u32) !void {
-        try self.state_ops.append(self.allocator, .{ .remove_window = .{ .ws = ws, .win = win } });
+        if (self.state_ops.items.len >= self.state_ops.capacity) {
+            try self.state_ops.ensureUnusedCapacity(self.allocator, 4);
+        }
+        self.state_ops.appendAssumeCapacity(.{ .remove_window = .{ .ws = ws, .win = win } });
     }
 
     pub fn addTiledWindow(self: *Transaction, win: u32) !void {
-        try self.state_ops.append(self.allocator, .{ .add_tiled = win });
+        if (self.state_ops.items.len >= self.state_ops.capacity) {
+            try self.state_ops.ensureUnusedCapacity(self.allocator, 4);
+        }
+        self.state_ops.appendAssumeCapacity(.{ .add_tiled = win });
     }
 
     pub fn removeTiledWindow(self: *Transaction, win: u32) !void {
-        try self.state_ops.append(self.allocator, .{ .remove_tiled = win });
+        if (self.state_ops.items.len >= self.state_ops.capacity) {
+            try self.state_ops.ensureUnusedCapacity(self.allocator, 4);
+        }
+        self.state_ops.appendAssumeCapacity(.{ .remove_tiled = win });
     }
 
     pub fn updateFocus(self: *Transaction, win: ?u32) !void {
-        try self.state_ops.append(self.allocator, .{ .set_focused = win });
+        if (self.state_ops.items.len >= self.state_ops.capacity) {
+            try self.state_ops.ensureUnusedCapacity(self.allocator, 4);
+        }
+        self.state_ops.appendAssumeCapacity(.{ .set_focused = win });
     }
 
     pub fn markRetile(self: *Transaction) !void {
-        try self.state_ops.append(self.allocator, .{ .mark_retile = {} });
+        if (self.state_ops.items.len >= self.state_ops.capacity) {
+            try self.state_ops.ensureUnusedCapacity(self.allocator, 4);
+        }
+        self.state_ops.appendAssumeCapacity(.{ .mark_retile = {} });
     }
 
     pub fn getConfiguredRect(self: *const Transaction, win: u32) ?utils.Rect {
@@ -303,11 +345,14 @@ pub const Transaction = struct {
                 .add_tiled => |win| {
                     const tiling = @import("tiling");
                     if (tiling.getState()) |t_state| {
-                        for (t_state.tiled_windows.items) |w| {
-                            if (w == win) break;
-                        } else {
+                        if (!t_state.tiled_set.contains(win)) {
                             t_state.tiled_windows.insert(t_state.allocator, 0, win) catch |err| {
                                 std.log.err("[atomic] Failed to add tiled window: {}", .{err});
+                                return err;
+                            };
+                            t_state.tiled_set.put(win, {}) catch |err| {
+                                std.log.err("[atomic] Failed to add to tiled set: {}", .{err});
+                                _ = t_state.tiled_windows.orderedRemove(0);
                                 return err;
                             };
                         }
@@ -316,6 +361,7 @@ pub const Transaction = struct {
                 .remove_tiled => |win| {
                     const tiling = @import("tiling");
                     if (tiling.getState()) |t_state| {
+                        _ = t_state.tiled_set.remove(win);
                         for (t_state.tiled_windows.items, 0..) |w, i| {
                             if (w == win) {
                                 _ = t_state.tiled_windows.orderedRemove(i);

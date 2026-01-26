@@ -28,7 +28,9 @@ pub const State = struct {
     border_focused: u32,
     border_normal: u32,
     tiled_windows: std.ArrayList(u32),
+    tiled_set: std.AutoHashMap(u32, void),
     visible_cache: std.ArrayList(u32),
+    window_borders: std.AutoHashMap(u32, u32),
     needs_retile: bool = true,
     retile_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     allocator: std.mem.Allocator,
@@ -58,7 +60,9 @@ pub fn init(wm: *WM) void {
         .border_focused = wm.config.tiling.border_focused,
         .border_normal = wm.config.tiling.border_normal,
         .tiled_windows = std.ArrayList(u32){},
+        .tiled_set = std.AutoHashMap(u32, void).init(wm.allocator),
         .visible_cache = std.ArrayList(u32){},
+        .window_borders = std.AutoHashMap(u32, u32).init(wm.allocator),
         .allocator = wm.allocator,
     };
 
@@ -73,7 +77,9 @@ pub fn deinit(wm: *WM) void {
 
     if (state) |s| {
         s.tiled_windows.deinit(s.allocator);
+        s.tiled_set.deinit();
         s.visible_cache.deinit(s.allocator);
+        s.window_borders.deinit();
         wm.allocator.destroy(s);
         state = null;
     }
@@ -98,16 +104,19 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
         return;
     }
 
-    for (s.tiled_windows.items) |w| {
-        if (w == win) {
-            s.needs_retile = true;
-            retileAsync(wm, s);
-            return;
-        }
+    if (s.tiled_set.contains(win)) {
+        s.needs_retile = true;
+        retileAsync(wm, s);
+        return;
     }
 
     s.tiled_windows.insert(s.allocator, 0, win) catch |err| {
         std.log.err("[tiling] Failed to add tiled window: {}", .{err});
+        return;
+    };
+    s.tiled_set.put(win, {}) catch |err| {
+        std.log.err("[tiling] Failed to add to tiled set: {}", .{err});
+        _ = s.tiled_windows.orderedRemove(0);
         return;
     };
 
@@ -119,6 +128,7 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
     attrs.configure(wm.conn, win);
 
     wm.focused_window = win;
+    s.window_borders.put(win, s.border_focused) catch {};
     s.needs_retile = true;
     retileAsync(wm, s);
 }
@@ -127,27 +137,37 @@ pub fn addWindowToTiling(wm: *WM, win: u32) void {
     const s = state orelse return;
     if (!s.enabled) return;
 
-    for (s.tiled_windows.items) |w| {
-        if (w == win) return;
-    }
+    if (s.tiled_set.contains(win)) return;
 
     s.tiled_windows.insert(s.allocator, 0, win) catch |err| {
         std.log.err("[tiling] Failed to add window to tiling: {}", .{err});
         return;
     };
+    s.tiled_set.put(win, {}) catch |err| {
+        std.log.err("[tiling] Failed to add to tiled set: {}", .{err});
+        _ = s.tiled_windows.orderedRemove(0);
+        return;
+    };
+
+    const is_focused = wm.focused_window == win;
+    const border_color = if (is_focused) s.border_focused else s.border_normal;
 
     const attrs = utils.WindowAttrs{
         .border_width = s.border_width,
-        .border_color = if (wm.focused_window == win) s.border_focused else s.border_normal,
+        .border_color = border_color,
         .event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW,
     };
     attrs.configure(wm.conn, win);
 
+    s.window_borders.put(win, border_color) catch {};
     s.needs_retile = true;
 }
 
 pub fn notifyWindowDestroyed(wm: *WM, win: u32) void {
     const s = state orelse return;
+
+    _ = s.window_borders.remove(win);
+    _ = s.tiled_set.remove(win);
 
     for (s.tiled_windows.items, 0..) |w, i| {
         if (w == win) {
@@ -165,32 +185,35 @@ pub fn notifyWindowDestroyed(wm: *WM, win: u32) void {
     }
 }
 
-pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
+pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     const s = state orelse return;
     if (!s.enabled) return;
 
     if (old_focused) |old_win| {
-        if (isWindowTiled(old_win) and wm.fullscreen_window != old_win) {
+        if (s.tiled_set.contains(old_win) and wm.fullscreen_window != old_win) {
             _ = xcb.xcb_change_window_attributes(wm.conn, old_win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{s.border_normal});
+            s.window_borders.put(old_win, s.border_normal) catch {};
         }
     }
 
     if (new_focused) |new_win| {
-        if (isWindowTiled(new_win) and wm.fullscreen_window != new_win) {
+        if (s.tiled_set.contains(new_win) and wm.fullscreen_window != new_win) {
             _ = xcb.xcb_change_window_attributes(wm.conn, new_win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{s.border_focused});
+            s.window_borders.put(new_win, s.border_focused) catch {};
         }
     }
 
     bar.update() catch {};
 }
 
+pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
+    updateWindowFocusFast(wm, old_focused, new_focused);
+}
+
 pub fn isWindowTiled(win: u32) bool {
     const s = state orelse return false;
     if (!s.enabled) return false;
-    for (s.tiled_windows.items) |w| {
-        if (w == win) return true;
-    }
-    return false;
+    return s.tiled_set.contains(win);
 }
 
 fn retileAsync(wm: *WM, s: *State) void {
@@ -219,14 +242,17 @@ fn retile(wm: *WM, s: *State) void {
 
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
 
+    var ws_set = std.AutoHashMap(u32, void).init(s.allocator);
+    defer ws_set.deinit();
+    ws_set.ensureTotalCapacity(@intCast(ws_windows.len)) catch {};
+    for (ws_windows) |w| {
+        ws_set.putAssumeCapacity(w, {});
+    }
+
     for (s.tiled_windows.items) |win| {
         if (wm.fullscreen_window == win) continue;
 
-        const on_ws = for (ws_windows) |w| {
-            if (w == win) break true;
-        } else false;
-
-        if (on_ws) {
+        if (ws_set.contains(win)) {
             s.visible_cache.append(s.allocator, win) catch |err| {
                 std.log.err("[tiling] Failed to add window to visible cache: {}", .{err});
                 continue;
@@ -251,7 +277,7 @@ fn retile(wm: *WM, s: *State) void {
     }
 
     if (wm.focused_window) |focused| {
-        updateBorders(&tx, s, focused);
+        updateBordersInTransaction(&tx, s, focused, &ws_set);
     }
 
     saveWindowPositionsFromTransaction(wm, s, &tx);
@@ -264,24 +290,32 @@ fn retile(wm: *WM, s: *State) void {
         return;
     };
 
+    if (wm.focused_window) |focused| {
+        updateBorderCacheAfterCommit(s, focused, &ws_set);
+    }
+
     bar.update() catch {};
 }
 
-fn updateBorders(tx: *atomic.Transaction, s: *State, focused: u32) void {
-    const ws_windows = workspaces.getCurrentWindowsView() orelse return;
-
-    for (s.tiled_windows.items) |win| {
-        const on_workspace = for (ws_windows) |w| {
-            if (w == win) break true;
-        } else false;
-
-        if (!on_workspace) continue;
+fn updateBordersInTransaction(tx: *atomic.Transaction, s: *State, focused: u32, ws_set: *const std.AutoHashMap(u32, void)) void {
+    for (s.visible_cache.items) |win| {
+        if (!ws_set.contains(win)) continue;
 
         const color = if (win == focused) s.border_focused else s.border_normal;
+        
         tx.setBorder(win, color) catch |err| {
             std.log.err("[tiling] Failed to set border for window {}: {}", .{ win, err });
             continue;
         };
+    }
+}
+
+fn updateBorderCacheAfterCommit(s: *State, focused: u32, ws_set: *const std.AutoHashMap(u32, void)) void {
+    for (s.visible_cache.items) |win| {
+        if (!ws_set.contains(win)) continue;
+
+        const color = if (win == focused) s.border_focused else s.border_normal;
+        s.window_borders.put(win, color) catch {};
     }
 }
 
@@ -320,6 +354,7 @@ pub fn restoreWindowPositions(wm: *WM) bool {
 
             if (ws.getWindowBorder(win)) |border_color| {
                 _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{border_color});
+                s.window_borders.put(win, border_color) catch {};
             }
         }
     }
@@ -421,6 +456,7 @@ pub fn reloadConfig(wm: *WM) void {
     s.border_normal = wm.config.tiling.border_normal;
     s.needs_retile = true;
 
+    s.window_borders.clearRetainingCapacity();
     workspaces.clearAllPositions();
 
     if (s.enabled) retileAsync(wm, s);

@@ -27,7 +27,6 @@ const EventFlags = packed struct {
     batchable: bool = false,
 };
 
-/// Compile-time event classification for flush strategy
 const EVENT_FLAGS = blk: {
     var flags = [_]EventFlags{.{}} ** 128;
     flags[xcb.XCB_MAP_REQUEST] = .{ .critical = true };
@@ -228,6 +227,8 @@ pub fn main() !void {
     var batch_count: usize = 0;
     var idle_count: usize = 0;
     var last_bar_update: i64 = 0;
+    var last_flush_time: i64 = 0;
+    const FLUSH_INTERVAL_NS: i64 = 16 * std.time.ns_per_ms;
 
     while (true) {
         async.processPending(&wm);
@@ -248,12 +249,6 @@ pub fn main() !void {
 
             const event_type = @as(*u8, @ptrCast(ev)).*;
 
-            if (event_type == xcb.XCB_ENTER_NOTIFY or event_type == xcb.XCB_FOCUS_IN) {
-                events.dispatch(event_type, ev, &wm);
-                utils.flush(conn);
-                continue;
-            }
-
             if (should_reload.swap(false, .acq_rel)) {
                 handleConfigReload(&wm) catch |err| {
                     std.log.err("[config] Reload failed: {}", .{err});
@@ -266,17 +261,40 @@ pub fn main() !void {
             if (flags.critical) {
                 utils.flush(conn);
                 batch_count = 0;
+                if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
+                    last_flush_time = ts.sec * std.time.ns_per_s + ts.nsec;
+                } else |_| {}
             } else if (flags.batchable) {
                 batch_count += 1;
-                if (batch_count >= defs.MAX_EVENT_BATCH_SIZE) {
+
+                const now = if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts|
+                    ts.sec * std.time.ns_per_s + ts.nsec
+                else |_|
+                    last_flush_time;
+
+                if (batch_count >= defs.MAX_EVENT_BATCH_SIZE or
+                    (now - last_flush_time) >= FLUSH_INTERVAL_NS)
+                {
                     utils.flush(conn);
                     batch_count = 0;
+                    last_flush_time = now;
                 }
             } else {
                 utils.flush(conn);
                 batch_count = 0;
+                if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
+                    last_flush_time = ts.sec * std.time.ns_per_s + ts.nsec;
+                } else |_| {}
             }
         } else {
+            if (batch_count > 0) {
+                utils.flush(conn);
+                batch_count = 0;
+                if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
+                    last_flush_time = ts.sec * std.time.ns_per_s + ts.nsec;
+                } else |_| {}
+            }
+
             if (!async.getGlobal().?.hasPending()) {
                 idle_count += 1;
                 const sleep_ns = if (idle_count < defs.IDLE_THRESHOLD_SHORT)

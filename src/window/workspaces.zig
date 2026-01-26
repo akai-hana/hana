@@ -86,6 +86,7 @@ pub const Workspace = struct {
 pub const State = struct {
     workspaces: []Workspace,
     current: usize,
+    window_to_workspace: std.AutoHashMap(u32, usize),
     allocator: std.mem.Allocator,
     switching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
@@ -99,6 +100,7 @@ pub fn init(wm: *WM) void {
     };
     s.allocator = wm.allocator;
     s.current = 0;
+    s.window_to_workspace = std.AutoHashMap(u32, usize).init(wm.allocator);
 
     const count = wm.config.workspaces.count;
     s.workspaces = wm.allocator.alloc(Workspace, count) catch {
@@ -131,6 +133,7 @@ pub fn deinit(wm: *WM) void {
             wm.allocator.free(ws.name);
         }
         wm.allocator.free(s.workspaces);
+        s.window_to_workspace.deinit();
         wm.allocator.destroy(s);
         state = null;
     }
@@ -144,14 +147,28 @@ pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
     const ws = &s.workspaces[s.current];
     ws.add(win) catch |err| {
         std.log.err("[workspaces] Failed to add window {} to workspace {}: {}", .{ win, s.current, err });
+        return;
     };
+    s.window_to_workspace.put(win, s.current) catch {};
     bar.update() catch {};
 }
 
 pub fn removeWindow(win: u32) void {
     const s = state orelse return;
+    
+    if (s.window_to_workspace.get(win)) |ws_idx| {
+        if (ws_idx < s.workspaces.len) {
+            if (s.workspaces[ws_idx].remove(win)) {
+                _ = s.window_to_workspace.remove(win);
+                bar.update() catch {};
+            }
+        }
+        return;
+    }
+    
     for (s.workspaces) |*ws| {
         if (ws.remove(win)) {
+            _ = s.window_to_workspace.remove(win);
             bar.update() catch {};
             return;
         }
@@ -169,22 +186,32 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
         return;
     }
 
-    const from_ws = for (s.workspaces, 0..) |*ws, i| {
-        if (ws.contains(win)) break i;
-    } else {
-        s.workspaces[target_ws].add(win) catch |err| {
-            std.log.err("[workspaces] Failed to add window to workspace: {}", .{err});
-        };
-        bar.update() catch {};
-        return;
+    const from_ws = if (s.window_to_workspace.get(win)) |ws_idx|
+        ws_idx
+    else blk: {
+        for (s.workspaces, 0..) |*ws, i| {
+            if (ws.contains(win)) {
+                s.window_to_workspace.put(win, i) catch {};
+                break :blk i;
+            }
+        } else {
+            s.workspaces[target_ws].add(win) catch |err| {
+                std.log.err("[workspaces] Failed to add window to workspace: {}", .{err});
+            };
+            s.window_to_workspace.put(win, target_ws) catch {};
+            bar.update() catch {};
+            return;
+        }
     };
 
     if (from_ws == target_ws) return;
 
     atomic.atomicMoveWindow(wm, win, from_ws, target_ws) catch |err| {
         std.log.err("[workspace] Failed to move window atomically: {}", .{err});
+        return;
     };
-    
+
+    s.window_to_workspace.put(win, target_ws) catch {};
     bar.update() catch {};
 }
 
@@ -241,7 +268,7 @@ pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
     s.current = ws_id;
 
     const tiling = @import("tiling");
-    
+
     for (s.workspaces[ws_id].windows.items) |win| {
         if (!tiling.isWindowTiled(win) and wm.config.tiling.enabled) {
             tiling.addWindowToTiling(wm, win);
