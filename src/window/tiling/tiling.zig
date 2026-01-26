@@ -313,7 +313,9 @@ fn retile(wm: *WM, s: *State) void {
         return;
     };
 
-    bar.scheduleUpdate();
+    bar.update(wm) catch |err| {
+        std.log.err("[tiling] Failed to update bar: {}", .{err});
+    };
 }
 
 pub fn restoreWindowPositions(wm: *WM) bool {

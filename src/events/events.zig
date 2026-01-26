@@ -1,14 +1,4 @@
 //! Event system with compile-time dispatch table for zero-overhead routing.
-//!
-//! This module provides the core event dispatching mechanism for the window manager.
-//! It uses a compile-time generated lookup table for O(1) event routing with zero
-//! runtime overhead.
-//!
-//! Design:
-//! - Events are normalized to their base type (masking response bit)
-//! - Dispatch table is generated at compile time
-//! - Type-safe wrapper functions ensure correct event types
-//! - Module initialization order is carefully controlled
 
 const std = @import("std");
 const defs = @import("defs");
@@ -57,11 +47,7 @@ fn handleExposeEvent(event: *const xcb.xcb_expose_event_t, wm: *WM) void {
 }
 
 fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *WM) void {
-    if (event.window == wm.root and event.atom == xcb.XCB_ATOM_WM_NAME) {
-        bar.updateStatus(wm) catch |err| {
-            std.log.err("[events] Failed to update bar status: {}", .{err});
-        };
-    }
+    bar.handlePropertyNotify(event, wm);
 }
 
 const handlers = blk: {

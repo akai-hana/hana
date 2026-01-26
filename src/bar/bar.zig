@@ -1,4 +1,4 @@
-//! Status bar implementation
+//! Status bar implementation - Event-based
 
 const std = @import("std");
 const defs = @import("defs");
@@ -166,6 +166,15 @@ pub fn getBar() ?*BarState {
     return null;
 }
 
+/// Check if a window is the bar window
+pub fn isBarWindow(win: u32) bool {
+    if (bar_state) |state| {
+        return state.window == win;
+    }
+    return false;
+}
+
+/// Update bar immediately (called on property changes or workspace switches)
 pub fn update(wm: *WM) !void {
     if (getBar()) |state| {
         state.invalidateTitleCache();
@@ -173,33 +182,37 @@ pub fn update(wm: *WM) !void {
     }
 }
 
-pub fn scheduleUpdate() void {
+/// Handle expose events (redraw when necessary)
+pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *WM) void {
     if (getBar()) |state| {
-        state.requestUpdate();
-    }
-}
-
-pub fn processPendingUpdates(wm: *WM) void {
-    if (getBar()) |state| {
-        if (state.hasPendingUpdate()) {
-            state.clearPendingUpdate();
-            state.invalidateTitleCache();
-            render.draw(state, wm) catch |err| {
-                if (err == error.BarNotAlive or err == error.RenderFormatQueryFailed) {
-                    std.log.warn("[bar] Bar is no longer alive, shutting down", .{});
-                    deinit();
-                    return;
-                }
-                std.log.err("[bar] Failed to draw: {}", .{err});
-            };
+        if (event.window == state.window) {
+            // Only redraw if this is the last expose event in the sequence
+            if (event.count == 0) {
+                render.draw(state, wm) catch |err| {
+                    if (err == error.BarNotAlive or err == error.RenderFormatQueryFailed) {
+                        std.log.warn("[bar] Bar is no longer alive during expose, shutting down", .{});
+                        deinit();
+                        return;
+                    }
+                    std.log.err("[bar] Failed to handle expose: {}", .{err});
+                };
+            }
         }
     }
 }
 
-pub fn updateStatus(wm: *WM) !void {
+/// Handle property notify events (update status text when root WM_NAME changes)
+pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *WM) void {
     if (getBar()) |state| {
-        try render.updateStatus(state, wm);
-        try render.draw(state, wm);
+        // Check if this is a root window WM_NAME property change
+        if (event.window == wm.root and event.atom == xcb.XCB_ATOM_WM_NAME) {
+            render.updateStatus(state, wm) catch |err| {
+                std.log.err("[bar] Failed to update status: {}", .{err});
+            };
+            render.draw(state, wm) catch |err| {
+                std.log.err("[bar] Failed to draw after status update: {}", .{err});
+            };
+        }
     }
 }
 
@@ -225,21 +238,6 @@ fn handleClick(state: *BarState, wm: *WM, x: i16) void {
         const clicked_ws: usize = @intCast(@divFloor(x, ws_width));
         if (clicked_ws < ws_state.workspaces.len) {
             workspaces.switchTo(wm, clicked_ws);
-        }
-    }
-}
-
-pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *WM) void {
-    if (getBar()) |state| {
-        if (event.window == state.window) {
-            render.draw(state, wm) catch |err| {
-                if (err == error.BarNotAlive or err == error.RenderFormatQueryFailed) {
-                    std.log.warn("[bar] Bar is no longer alive during expose, shutting down", .{});
-                    deinit();
-                    return;
-                }
-                std.log.err("[bar] Failed to handle expose: {}", .{err});
-            };
         }
     }
 }

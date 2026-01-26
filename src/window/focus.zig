@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const defs = @import("defs");
 const tiling = @import("tiling");
 const utils = @import("utils");
+const bar = @import("bar");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -29,6 +30,11 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
         return;
     }
 
+    // Don't focus the bar window
+    if (bar.isBarWindow(win)) {
+        return;
+    }
+
     if (wm.focused_window == win) return;
 
     const old = wm.focused_window;
@@ -42,6 +48,11 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
 
     tiling.updateWindowFocusFast(wm, old, win);
     utils.flush(wm.conn);
+    
+    // Update bar to reflect new focused window
+    bar.update(wm) catch |err| {
+        std.log.err("[focus] Failed to update bar: {}", .{err});
+    };
 }
 
 pub fn clearFocus(wm: *WM) void {
@@ -53,4 +64,9 @@ pub fn clearFocus(wm: *WM) void {
         tiling.updateWindowFocusFast(wm, old_win, null);
     }
     utils.flush(wm.conn);
+    
+    // Update bar to reflect no focused window
+    bar.update(wm) catch |err| {
+        std.log.err("[focus] Failed to update bar: {}", .{err});
+    };
 }

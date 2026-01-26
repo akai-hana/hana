@@ -152,7 +152,11 @@ pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
         return;
     };
     s.window_to_workspace.put(win, s.current) catch {};
-    bar.scheduleUpdate();
+    
+    // Update bar to show new window count
+    bar.update(s.wm) catch |err| {
+        std.log.err("[workspaces] Failed to update bar: {}", .{err});
+    };
 }
 
 pub fn removeWindow(win: u32) void {
@@ -162,7 +166,11 @@ pub fn removeWindow(win: u32) void {
         const ws_idx = entry.value;
         if (ws_idx < s.workspaces.len) {
             _ = s.workspaces[ws_idx].remove(win);
-            bar.scheduleUpdate();
+            
+            // Update bar to show new window count
+            bar.update(s.wm) catch |err| {
+                std.log.err("[workspaces] Failed to update bar: {}", .{err});
+            };
         }
         return;
     }
@@ -190,7 +198,11 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
                 std.log.err("[workspaces] Failed to add window to workspace: {}", .{err});
             };
             s.window_to_workspace.put(win, target_ws) catch {};
-            bar.scheduleUpdate();
+            
+            // Update bar
+            bar.update(wm) catch |err| {
+                std.log.err("[workspaces] Failed to update bar: {}", .{err});
+            };
             return;
         }
     };
@@ -203,7 +215,11 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
     };
 
     s.window_to_workspace.put(win, target_ws) catch {};
-    bar.scheduleUpdate();
+    
+    // Update bar
+    bar.update(wm) catch |err| {
+        std.log.err("[workspaces] Failed to update bar: {}", .{err});
+    };
 }
 
 pub fn switchTo(wm: *WM, ws_id: usize) void {
@@ -270,6 +286,7 @@ pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
         tiling.retileCurrentWorkspace(wm);
     }
 
+    // Update bar to show new workspace
     bar.update(wm) catch |err| {
         std.log.err("[workspaces] Failed to update bar after workspace switch: {}", .{err});
     };
@@ -303,11 +320,5 @@ pub fn clearAllPositions() void {
     const s = state orelse return;
     for (s.workspaces) |*ws| {
         ws.clearPositions();
-    }
-}
-
-pub fn flushBarUpdate() void {
-    if (state) |s| {
-        bar.processPendingUpdates(s.wm);
     }
 }

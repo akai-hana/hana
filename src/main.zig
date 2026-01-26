@@ -14,6 +14,8 @@ const async = @import("async");
 const bar = @import("bar");
 const workspaces = @import("workspaces");
 
+// Note: bar state module removed from polling system
+
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -240,21 +242,12 @@ pub fn main() !void {
 
     var batch_count: usize = 0;
     var idle_count: usize = 0;
-    var last_bar_update: i64 = 0;
     var last_flush_time: i64 = 0;
     const FLUSH_INTERVAL_NS: i64 = 16 * std.time.ns_per_ms;
 
     while (running.load(.acquire)) {
+        // Process async jobs
         async.processPending(&wm);
-        workspaces.flushBarUpdate();
-
-        if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
-            const current_time = ts.sec;
-            if (current_time - last_bar_update >= 1) {
-                bar.scheduleUpdate();
-                last_bar_update = current_time;
-            }
-        } else |_| {}
 
         const event = xcb.xcb_poll_for_event(conn);
 
@@ -329,8 +322,6 @@ pub fn main() !void {
                 idle_count = 0;
             }
         }
-
-        bar.processPendingUpdates(&wm);
     }
 
     std.log.info("[hana] Shutting down gracefully", .{});
