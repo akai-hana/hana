@@ -48,20 +48,32 @@ inline fn getEventFlags(event_type: u8) EventFlags {
 }
 
 var should_reload = std.atomic.Value(bool).init(false);
+var running = std.atomic.Value(bool).init(true);
 
 fn setupSignalHandler() void {
     const handler = struct {
-        fn h(_: posix.SIG) callconv(.c) void {
+        fn reload(_: posix.SIG) callconv(.c) void {
             should_reload.store(true, .release);
         }
-    }.h;
+        fn terminate(_: posix.SIG) callconv(.c) void {
+            running.store(false, .release);
+        }
+    };
 
-    var sa = posix.Sigaction{
-        .handler = .{ .handler = handler },
+    var sa_reload = posix.Sigaction{
+        .handler = .{ .handler = handler.reload },
         .mask = std.mem.zeroes(posix.sigset_t),
         .flags = posix.SA.RESTART,
     };
-    posix.sigaction(posix.SIG.HUP, &sa, null);
+    posix.sigaction(posix.SIG.HUP, &sa_reload, null);
+
+    var sa_term = posix.Sigaction{
+        .handler = .{ .handler = handler.terminate },
+        .mask = std.mem.zeroes(posix.sigset_t),
+        .flags = posix.SA.RESTART,
+    };
+    posix.sigaction(posix.SIG.TERM, &sa_term, null);
+    posix.sigaction(posix.SIG.INT, &sa_term, null);
 }
 
 fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
@@ -202,6 +214,7 @@ pub fn main() !void {
         .focused_window = null,
         .xkb_state = xkb_state,
         .should_reload_config = &should_reload,
+        .running = &running,
     };
     defer wm.deinit();
 
@@ -231,18 +244,24 @@ pub fn main() !void {
     var last_flush_time: i64 = 0;
     const FLUSH_INTERVAL_NS: i64 = 16 * std.time.ns_per_ms;
 
-    while (true) {
+    while (running.load(.acquire)) {
         async.processPending(&wm);
+        workspaces.flushBarUpdate();
 
         if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
             const current_time = ts.sec;
-            if (current_time - last_bar_update >= 30) {
-                workspaces.flushBarUpdate();
+            if (current_time - last_bar_update >= 1) {
+                bar.scheduleUpdate();
                 last_bar_update = current_time;
             }
         } else |_| {}
 
         const event = xcb.xcb_poll_for_event(conn);
+
+        if (xcb.xcb_connection_has_error(conn) != 0) {
+            std.log.err("[main] X11 connection error detected, shutting down", .{});
+            break;
+        }
 
         if (event) |ev| {
             defer std.c.free(ev);
@@ -310,5 +329,9 @@ pub fn main() !void {
                 idle_count = 0;
             }
         }
+
+        bar.processPendingUpdates(&wm);
     }
+
+    std.log.info("[hana] Shutting down gracefully", .{});
 }

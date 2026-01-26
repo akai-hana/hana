@@ -89,7 +89,7 @@ pub const State = struct {
     window_to_workspace: std.AutoHashMap(u32, usize),
     allocator: std.mem.Allocator,
     switching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    needs_bar_update: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    wm: *WM,
 };
 
 var state: ?*State = null;
@@ -102,6 +102,7 @@ pub fn init(wm: *WM) void {
     s.allocator = wm.allocator;
     s.current = 0;
     s.window_to_workspace = std.AutoHashMap(u32, usize).init(wm.allocator);
+    s.wm = wm;
 
     const count = wm.config.workspaces.count;
     s.workspaces = wm.allocator.alloc(Workspace, count) catch {
@@ -151,7 +152,7 @@ pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
         return;
     };
     s.window_to_workspace.put(win, s.current) catch {};
-    s.needs_bar_update.store(true, .release);
+    bar.scheduleUpdate();
 }
 
 pub fn removeWindow(win: u32) void {
@@ -161,7 +162,7 @@ pub fn removeWindow(win: u32) void {
         const ws_idx = entry.value;
         if (ws_idx < s.workspaces.len) {
             _ = s.workspaces[ws_idx].remove(win);
-            s.needs_bar_update.store(true, .release);
+            bar.scheduleUpdate();
         }
         return;
     }
@@ -189,7 +190,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
                 std.log.err("[workspaces] Failed to add window to workspace: {}", .{err});
             };
             s.window_to_workspace.put(win, target_ws) catch {};
-            s.needs_bar_update.store(true, .release);
+            bar.scheduleUpdate();
             return;
         }
     };
@@ -202,7 +203,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
     };
 
     s.window_to_workspace.put(win, target_ws) catch {};
-    s.needs_bar_update.store(true, .release);
+    bar.scheduleUpdate();
 }
 
 pub fn switchTo(wm: *WM, ws_id: usize) void {
@@ -269,7 +270,9 @@ pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
         tiling.retileCurrentWorkspace(wm);
     }
 
-    s.needs_bar_update.store(true, .release);
+    bar.update(wm) catch |err| {
+        std.log.err("[workspaces] Failed to update bar after workspace switch: {}", .{err});
+    };
 }
 
 pub fn getCurrentWindowsView() ?[]const u32 {
@@ -304,8 +307,7 @@ pub fn clearAllPositions() void {
 }
 
 pub fn flushBarUpdate() void {
-    const s = state orelse return;
-    if (s.needs_bar_update.swap(false, .acq_rel)) {
-        bar.update() catch {};
+    if (state) |s| {
+        bar.processPendingUpdates(s.wm);
     }
 }

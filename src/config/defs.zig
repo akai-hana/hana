@@ -105,6 +105,7 @@ pub const BarConfig = struct {
     show: bool = true,
     height: u16 = 24,
     font: []const u8 = "monospace:size=10",
+    font_size: u16 = 10,
     bg: u32 = 0x222222,
     fg: u32 = 0xBBBBBB,
     selected_bg: u32 = 0x005577,
@@ -112,6 +113,9 @@ pub const BarConfig = struct {
     occupied_fg: u32 = 0xEEEEEE,
     urgent_bg: u32 = 0xFF0000,
     urgent_fg: u32 = 0xFFFFFF,
+    workspace_chars: []const u8 = "123456789",
+    indicator_size: u16 = 4,
+    title_accent: bool = true,
 };
 
 pub const Rule = struct {
@@ -148,6 +152,10 @@ pub const Config = struct {
     workspaces: WorkspaceConfig = .{},
     bar: BarConfig = .{},
 
+    allocated_font: ?[]const u8 = null,
+    allocated_layout: ?[]const u8 = null,
+    allocated_workspace_chars: ?[]const u8 = null,
+
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         for (self.keybindings.items) |*kb| {
             kb.action.deinit(allocator);
@@ -158,6 +166,10 @@ pub const Config = struct {
             rule.deinit(allocator);
         }
         self.workspaces.rules.deinit(allocator);
+
+        if (self.allocated_font) |f| allocator.free(f);
+        if (self.allocated_layout) |l| allocator.free(l);
+        if (self.allocated_workspace_chars) |w| allocator.free(w);
     }
 };
 
@@ -179,6 +191,7 @@ pub const WM = struct {
     } = null,
     xkb_state: ?*xkbcommon.XkbState,
     should_reload_config: *std.atomic.Value(bool),
+    running: *std.atomic.Value(bool),
 
     pub fn deinit(self: *WM) void {
         var iter = self.windows.valueIterator();

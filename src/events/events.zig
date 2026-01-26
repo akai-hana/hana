@@ -36,8 +36,6 @@ const EventHandlers = struct {
     property_notify: HandlerFn,
 };
 
-/// Wrap a typed handler into generic HandlerFn
-/// This provides type safety at compile time while allowing uniform storage
 fn wrapHandler(
     comptime EventType: type,
     comptime handler: fn (*const EventType, *WM) void,
@@ -50,23 +48,22 @@ fn wrapHandler(
 }
 
 fn handleButtonPressWithBar(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
-    bar.handleButtonPress(event);
+    bar.handleButtonPress(event, wm);
     input.handleButtonPress(event, wm);
 }
 
-fn handleExposeEvent(event: *const xcb.xcb_expose_event_t, _: *WM) void {
-    bar.handleExpose(event);
+fn handleExposeEvent(event: *const xcb.xcb_expose_event_t, wm: *WM) void {
+    bar.handleExpose(event, wm);
 }
 
 fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *WM) void {
     if (event.window == wm.root and event.atom == xcb.XCB_ATOM_WM_NAME) {
-        bar.updateStatus() catch |err| {
+        bar.updateStatus(wm) catch |err| {
             std.log.err("[events] Failed to update bar status: {}", .{err});
         };
     }
 }
 
-/// Compile-time handler configuration
 const handlers = blk: {
     break :blk EventHandlers{
         .map_request = wrapHandler(xcb.xcb_map_request_event_t, window.handleMapRequest),
@@ -84,7 +81,6 @@ const handlers = blk: {
 
 const MAX_EVENT_TYPE = 35;
 
-/// Compile-time dispatch table for O(1) event routing
 const handler_table = blk: {
     var table: [MAX_EVENT_TYPE + 1]?HandlerFn = [_]?HandlerFn{null} ** (MAX_EVENT_TYPE + 1);
     table[xcb.XCB_MAP_REQUEST] = handlers.map_request;
@@ -100,7 +96,6 @@ const handler_table = blk: {
     break :blk table;
 };
 
-/// Route event to appropriate handler
 pub inline fn dispatch(event_type: u8, event: *anyopaque, wm: *WM) void {
     const normalized = event_type & 0x7F;
     if (normalized <= MAX_EVENT_TYPE) {
@@ -110,7 +105,6 @@ pub inline fn dispatch(event_type: u8, event: *anyopaque, wm: *WM) void {
     }
 }
 
-/// Initialize all subsystem modules in the correct order
 pub fn initModules(wm: *WM) void {
     workspaces.init(wm);
     window.init(wm);
@@ -118,7 +112,6 @@ pub fn initModules(wm: *WM) void {
     tiling.init(wm);
 }
 
-/// Deinitialize modules in reverse order
 pub fn deinitModules(wm: *WM) void {
     tiling.deinit(wm);
     input.deinit(wm);

@@ -27,6 +27,7 @@ pub const DrawContext = struct {
         alpha: u16,
     },
     pictformat: u32,
+    alpha_format: ?u32,
 
     pub fn init(allocator: std.mem.Allocator, conn: *defs.xcb.xcb_connection_t, screen: *defs.xcb.xcb_screen_t, drawable: u32, width: u16, height: u16) !*DrawContext {
         const dc = try allocator.create(DrawContext);
@@ -37,6 +38,7 @@ pub const DrawContext = struct {
 
         var ft_lib: c.FT_Library = undefined;
         if (c.FT_Init_FreeType(&ft_lib) != 0) {
+            std.log.err("[drawing] FT_Init_FreeType failed", .{});
             return error.FreeTypeInitFailed;
         }
         errdefer _ = c.FT_Done_FreeType(ft_lib);
@@ -52,6 +54,11 @@ pub const DrawContext = struct {
             0,
             null,
         );
+
+        const alpha_format = findAlphaFormat(c_conn) catch |err| {
+            std.log.warn("[drawing] No alpha format found: {}, text rendering may fail", .{err});
+            return error.NoAlphaFormat;
+        };
 
         dc.* = .{
             .allocator = allocator,
@@ -71,6 +78,7 @@ pub const DrawContext = struct {
                 .alpha = 0xFFFF,
             },
             .pictformat = pictformat,
+            .alpha_format = alpha_format,
         };
 
         return dc;
@@ -88,6 +96,7 @@ pub const DrawContext = struct {
     fn findRGBFormat(conn: *c.xcb_connection_t, screen: *c.xcb_screen_t) !u32 {
         const formats_cookie = c.xcb_render_query_pict_formats(conn);
         const formats_reply = c.xcb_render_query_pict_formats_reply(conn, formats_cookie, null) orelse {
+            std.log.err("[drawing] RENDER extension query failed - check X server RENDER support", .{});
             return error.RenderFormatQueryFailed;
         };
         defer std.c.free(formats_reply);
@@ -136,13 +145,17 @@ pub const DrawContext = struct {
         const font_path_z = try self.allocator.dupeZ(u8, font_path);
         defer self.allocator.free(font_path_z);
 
+        std.log.info("[drawing] Loading font from: {s} at size {}", .{font_path, size});
+
         var face: c.FT_Face = undefined;
         if (c.FT_New_Face(self.ft_library, font_path_z.ptr, 0, &face) != 0) {
+            std.log.err("[drawing] FT_New_Face failed for: {s}", .{font_path});
             return error.FontLoadFailed;
         }
         errdefer _ = c.FT_Done_Face(face);
 
         if (c.FT_Set_Pixel_Sizes(face, 0, size) != 0) {
+            std.log.err("[drawing] FT_Set_Pixel_Sizes failed", .{});
             return error.FontSizeFailed;
         }
 
@@ -151,7 +164,10 @@ pub const DrawContext = struct {
         }
 
         self.ft_face = face;
-        self.font_height = @intCast((face.*.size.*.metrics.height >> 6));
+        const height_64 = face.*.size.*.metrics.height >> 6;
+        self.font_height = @intCast(@max(8, height_64));
+        
+        std.log.info("[drawing] Font loaded successfully, height: {}", .{self.font_height});
     }
 
     fn findFontFile(self: *DrawContext, font_name: []const u8) ![]const u8 {
@@ -205,6 +221,7 @@ pub const DrawContext = struct {
             const fd = std.posix.open(path_z, .{ .ACCMODE = .RDONLY }, 0) catch continue;
             std.posix.close(fd);
 
+            std.log.info("[drawing] Using fallback font: {s}", .{path});
             return try self.allocator.dupe(u8, path);
         }
 
@@ -250,13 +267,19 @@ pub const DrawContext = struct {
     }
 
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8) !void {
-        const face = self.ft_face orelse return error.NoFont;
+        const face = self.ft_face orelse {
+            std.log.err("[drawing] drawText called but no font loaded", .{});
+            return error.NoFont;
+        };
 
         var cursor_x: i16 = @intCast(x);
         const baseline_y: i16 = @intCast(y);
 
         for (text) |ch| {
-            if (c.FT_Load_Char(face, ch, c.FT_LOAD_RENDER) != 0) continue;
+            if (c.FT_Load_Char(face, ch, c.FT_LOAD_RENDER) != 0) {
+                std.log.warn("[drawing] Failed to load char: {c}", .{ch});
+                continue;
+            }
 
             const glyph = face.*.glyph;
             const bitmap = &glyph.*.bitmap;
@@ -269,7 +292,9 @@ pub const DrawContext = struct {
             const glyph_x = cursor_x + @as(i16, @intCast(glyph.*.bitmap_left));
             const glyph_y = baseline_y - @as(i16, @intCast(glyph.*.bitmap_top));
 
-            try self.drawGlyph(glyph_x, glyph_y, bitmap);
+            self.drawGlyph(glyph_x, glyph_y, bitmap) catch |err| {
+                std.log.warn("[drawing] Failed to draw glyph for '{c}': {}", .{ch, err});
+            };
 
             cursor_x += @intCast(glyph.*.advance.x >> 6);
         }
@@ -277,6 +302,11 @@ pub const DrawContext = struct {
 
     fn drawGlyph(self: *DrawContext, x: i16, y: i16, bitmap: *const c.FT_Bitmap) !void {
         if (bitmap.width == 0 or bitmap.rows == 0) return;
+
+        const alpha_fmt = self.alpha_format orelse {
+            std.log.err("[drawing] No alpha format available for glyph rendering", .{});
+            return error.NoAlphaFormat;
+        };
 
         const pixmap = c.xcb_generate_id(self.conn);
         defer _ = c.xcb_free_pixmap(self.conn, pixmap);
@@ -293,13 +323,11 @@ pub const DrawContext = struct {
         const glyph_picture = c.xcb_generate_id(self.conn);
         defer _ = c.xcb_render_free_picture(self.conn, glyph_picture);
 
-        const alpha_format = try self.findAlphaFormat();
-
         _ = c.xcb_render_create_picture(
             self.conn,
             glyph_picture,
             pixmap,
-            alpha_format,
+            alpha_fmt,
             0,
             null,
         );
@@ -353,9 +381,9 @@ pub const DrawContext = struct {
         );
     }
 
-    fn findAlphaFormat(self: *DrawContext) !u32 {
-        const formats_cookie = c.xcb_render_query_pict_formats(self.conn);
-        const formats_reply = c.xcb_render_query_pict_formats_reply(self.conn, formats_cookie, null) orelse {
+    fn findAlphaFormat(conn: *c.xcb_connection_t) !u32 {
+        const formats_cookie = c.xcb_render_query_pict_formats(conn);
+        const formats_reply = c.xcb_render_query_pict_formats_reply(conn, formats_cookie, null) orelse {
             return error.RenderFormatQueryFailed;
         };
         defer std.c.free(formats_reply);

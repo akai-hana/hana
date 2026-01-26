@@ -35,6 +35,7 @@ pub const State = struct {
     needs_retile: bool = true,
     retile_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     allocator: std.mem.Allocator,
+    pending_windows: std.ArrayList(u32),
 
     pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.gaps, .border = self.border_width };
@@ -66,6 +67,7 @@ pub fn init(wm: *WM) void {
         .window_borders = std.AutoHashMap(u32, u32).init(wm.allocator),
         .ws_set_cache = std.AutoHashMap(u32, void).init(wm.allocator),
         .allocator = wm.allocator,
+        .pending_windows = std.ArrayList(u32){},
     };
 
     state_mutex.lock();
@@ -83,6 +85,7 @@ pub fn deinit(wm: *WM) void {
         s.visible_cache.deinit(s.allocator);
         s.window_borders.deinit();
         s.ws_set_cache.deinit();
+        s.pending_windows.deinit(s.allocator);
         wm.allocator.destroy(s);
         state = null;
     }
@@ -103,13 +106,13 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
 
     if (wm.fullscreen_window == win) {
         s.needs_retile = true;
-        retileAsync(wm, s);
+        scheduleRetile(wm);
         return;
     }
 
     if (s.tiled_set.contains(win)) {
         s.needs_retile = true;
-        retileAsync(wm, s);
+        scheduleRetile(wm);
         return;
     }
 
@@ -133,7 +136,7 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
     wm.focused_window = win;
     s.window_borders.put(win, s.border_focused) catch {};
     s.needs_retile = true;
-    retileAsync(wm, s);
+    scheduleRetile(wm);
 }
 
 pub fn addWindowToTiling(wm: *WM, win: u32) void {
@@ -182,7 +185,7 @@ pub fn notifyWindowDestroyed(wm: *WM, win: u32) void {
                 _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, next, xcb.XCB_CURRENT_TIME);
                 wm.focused_window = next;
             }
-            retileAsync(wm, s);
+            scheduleRetile(wm);
             return;
         }
     }
@@ -217,7 +220,10 @@ pub fn isWindowTiled(win: u32) bool {
     return s.tiled_set.contains(win);
 }
 
-fn retileAsync(wm: *WM, s: *State) void {
+pub fn scheduleRetile(wm: *WM) void {
+    const s = state orelse return;
+    if (!s.enabled) return;
+
     if (s.retile_pending.swap(true, .acq_rel)) return;
 
     _ = async.submitGlobal(.retile, .{ .retile = {} }, 10) catch |err| {
@@ -306,6 +312,8 @@ fn retile(wm: *WM, s: *State) void {
         };
         return;
     };
+
+    bar.scheduleUpdate();
 }
 
 pub fn restoreWindowPositions(wm: *WM) bool {
@@ -376,7 +384,7 @@ pub fn increaseMasterWidth(wm: *WM) void {
 
     workspaces.clearAllPositions();
 
-    retileAsync(wm, s);
+    scheduleRetile(wm);
 }
 
 pub fn decreaseMasterWidth(wm: *WM) void {
@@ -386,7 +394,7 @@ pub fn decreaseMasterWidth(wm: *WM) void {
 
     workspaces.clearAllPositions();
 
-    retileAsync(wm, s);
+    scheduleRetile(wm);
 }
 
 pub fn increaseMasterCount(wm: *WM) void {
@@ -396,7 +404,7 @@ pub fn increaseMasterCount(wm: *WM) void {
 
     workspaces.clearAllPositions();
 
-    retileAsync(wm, s);
+    scheduleRetile(wm);
 }
 
 pub fn decreaseMasterCount(wm: *WM) void {
@@ -406,7 +414,7 @@ pub fn decreaseMasterCount(wm: *WM) void {
 
     workspaces.clearAllPositions();
 
-    retileAsync(wm, s);
+    scheduleRetile(wm);
 }
 
 pub fn toggleTiling(wm: *WM) void {
@@ -414,7 +422,7 @@ pub fn toggleTiling(wm: *WM) void {
     s.enabled = !s.enabled;
     if (s.enabled) {
         s.needs_retile = true;
-        retileAsync(wm, s);
+        scheduleRetile(wm);
     }
 }
 
@@ -435,7 +443,7 @@ pub fn reloadConfig(wm: *WM) void {
     s.window_borders.clearRetainingCapacity();
     workspaces.clearAllPositions();
 
-    if (s.enabled) retileAsync(wm, s);
+    if (s.enabled) scheduleRetile(wm);
 }
 
 pub inline fn getState() ?*State {

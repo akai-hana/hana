@@ -102,8 +102,8 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
 
     parseWorkspaces(&doc, &cfg);
     try parseKeybindings(allocator, &doc, &cfg);
-    parseTiling(&doc, &cfg);
-    parseBar(&doc, &cfg);
+    try parseTiling(allocator, &doc, &cfg);
+    try parseBar(allocator, &doc, &cfg);
     try parseRules(allocator, &doc, &cfg);
     try validateConfig(allocator, &cfg);
 
@@ -272,11 +272,14 @@ fn parseColorString(str: []const u8) !u32 {
     return color;
 }
 
-fn parseTiling(doc: *const parser.Document, cfg: *defs.Config) void {
+fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
     const section = doc.getSection("tiling") orelse return;
 
     cfg.tiling.enabled = get(bool, section, "enabled", true, null);
-    cfg.tiling.layout = get([]const u8, section, "layout", "master_left", null);
+
+    const layout_str = get([]const u8, section, "layout", "master_left", null);
+    cfg.allocated_layout = try allocator.dupe(u8, layout_str);
+    cfg.tiling.layout = cfg.allocated_layout.?;
 
     if (section.getString("master_side")) |side_str| {
         cfg.tiling.master_side = defs.MasterSide.fromString(side_str) orelse .left;
@@ -307,7 +310,7 @@ fn parseTiling(doc: *const parser.Document, cfg: *defs.Config) void {
     cfg.tiling.border_normal = getColor(section, "border_normal", 0x383C4A);
 }
 
-fn parseBar(doc: *const parser.Document, cfg: *defs.Config) void {
+fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
     const section = doc.getSection("bar") orelse return;
 
     cfg.bar.show = get(bool, section, "show", true, null);
@@ -316,7 +319,16 @@ fn parseBar(doc: *const parser.Document, cfg: *defs.Config) void {
             return n >= 16 and n <= 100;
         }
     }.v);
-    cfg.bar.font = get([]const u8, section, "font", "monospace:size=10", null);
+
+    const font_str = get([]const u8, section, "font", "monospace:size=10", null);
+    cfg.allocated_font = try allocator.dupe(u8, font_str);
+    cfg.bar.font = cfg.allocated_font.?;
+
+    cfg.bar.font_size = get(u16, section, "font_size", 10, struct {
+        fn v(n: u16) bool {
+            return n >= 6 and n <= 72;
+        }
+    }.v);
 
     cfg.bar.bg = getColor(section, "bg", 0x222222);
     cfg.bar.fg = getColor(section, "fg", 0xBBBBBB);
@@ -325,6 +337,18 @@ fn parseBar(doc: *const parser.Document, cfg: *defs.Config) void {
     cfg.bar.occupied_fg = getColor(section, "occupied_fg", 0xEEEEEE);
     cfg.bar.urgent_bg = getColor(section, "urgent_bg", 0xFF0000);
     cfg.bar.urgent_fg = getColor(section, "urgent_fg", 0xFFFFFF);
+
+    const ws_chars = get([]const u8, section, "workspace_chars", "123456789", null);
+    cfg.allocated_workspace_chars = try allocator.dupe(u8, ws_chars);
+    cfg.bar.workspace_chars = cfg.allocated_workspace_chars.?;
+
+    cfg.bar.indicator_size = get(u16, section, "indicator_size", 4, struct {
+        fn v(n: u16) bool {
+            return n >= 2 and n <= 10;
+        }
+    }.v);
+
+    cfg.bar.title_accent = get(bool, section, "title_accent", true, null);
 }
 
 fn parseWorkspaces(doc: *const parser.Document, cfg: *defs.Config) void {
@@ -344,8 +368,7 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *d
             const ws_num = entry.value_ptr.*.asInt() orelse continue;
 
             if (ws_num < 1 or ws_num > cfg.workspaces.count) {
-                std.log.warn("[config] Rule workspace {} for '{s}' exceeds workspace count {}, skipping",
-                    .{ ws_num, entry.key_ptr.*, cfg.workspaces.count });
+                std.log.warn("[config] Rule workspace {} for '{s}' exceeds workspace count {}, skipping", .{ ws_num, entry.key_ptr.*, cfg.workspaces.count });
                 continue;
             }
 
@@ -370,8 +393,7 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *d
         const ws_num = std.fmt.parseInt(usize, ws_str, 10) catch continue;
 
         if (ws_num < 1 or ws_num > cfg.workspaces.count) {
-            std.log.warn("[config] Section '{s}' workspace {} exceeds workspace count {}, skipping",
-                .{ name, ws_num, cfg.workspaces.count });
+            std.log.warn("[config] Section '{s}' workspace {} exceeds workspace count {}, skipping", .{ name, ws_num, cfg.workspaces.count });
             continue;
         }
 

@@ -168,27 +168,19 @@ fn closeWindow(wm: *WM, win: u32) void {
         return;
     }
 
-    const wm_protocols_cookie = xcb.xcb_intern_atom(wm.conn, 0, 12, "WM_PROTOCOLS");
-    const wm_protocols_reply = xcb.xcb_intern_atom_reply(wm.conn, wm_protocols_cookie, null);
-    if (wm_protocols_reply == null) {
+    const wm_protocols_atom = getAtom(wm.conn, "WM_PROTOCOLS") catch {
         std.log.warn("[input] Failed to get WM_PROTOCOLS atom, force destroying window", .{});
         _ = xcb.xcb_destroy_window(wm.conn, win);
         utils.flush(wm.conn);
         return;
-    }
-    defer std.c.free(wm_protocols_reply);
-    const wm_protocols_atom = wm_protocols_reply.*.atom;
+    };
 
-    const wm_delete_cookie = xcb.xcb_intern_atom(wm.conn, 0, 16, "WM_DELETE_WINDOW");
-    const wm_delete_reply = xcb.xcb_intern_atom_reply(wm.conn, wm_delete_cookie, null);
-    if (wm_delete_reply == null) {
+    const wm_delete_atom = getAtom(wm.conn, "WM_DELETE_WINDOW") catch {
         std.log.warn("[input] Failed to get WM_DELETE_WINDOW atom, force destroying window", .{});
         _ = xcb.xcb_destroy_window(wm.conn, win);
         utils.flush(wm.conn);
         return;
-    }
-    defer std.c.free(wm_delete_reply);
-    const wm_delete_atom = wm_delete_reply.*.atom;
+    };
 
     const prop_cookie = xcb.xcb_get_property(wm.conn, 0, win, wm_protocols_atom, xcb.XCB_ATOM_ATOM, 0, 1024);
     const prop_reply = xcb.xcb_get_property_reply(wm.conn, prop_cookie, null);
@@ -230,6 +222,13 @@ fn closeWindow(wm: *WM, win: u32) void {
     std.log.debug("[input] Window 0x{x} doesn't support WM_DELETE_WINDOW, force destroying", .{win});
     _ = xcb.xcb_destroy_window(wm.conn, win);
     utils.flush(wm.conn);
+}
+
+fn getAtom(conn: *xcb.xcb_connection_t, name: []const u8) !u32 {
+    const cookie = xcb.xcb_intern_atom(conn, 0, @intCast(name.len), name.ptr);
+    const reply = xcb.xcb_intern_atom_reply(conn, cookie, null) orelse return error.AtomFailed;
+    defer std.c.free(reply);
+    return reply.*.atom;
 }
 
 inline fn executeAction(action: *const defs.Action, wm: *WM) !void {
