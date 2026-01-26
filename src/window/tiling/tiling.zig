@@ -31,6 +31,7 @@ pub const State = struct {
     tiled_set: std.AutoHashMap(u32, void),
     visible_cache: std.ArrayList(u32),
     window_borders: std.AutoHashMap(u32, u32),
+    ws_set_cache: std.AutoHashMap(u32, void),
     needs_retile: bool = true,
     retile_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     allocator: std.mem.Allocator,
@@ -63,6 +64,7 @@ pub fn init(wm: *WM) void {
         .tiled_set = std.AutoHashMap(u32, void).init(wm.allocator),
         .visible_cache = std.ArrayList(u32){},
         .window_borders = std.AutoHashMap(u32, u32).init(wm.allocator),
+        .ws_set_cache = std.AutoHashMap(u32, void).init(wm.allocator),
         .allocator = wm.allocator,
     };
 
@@ -80,6 +82,7 @@ pub fn deinit(wm: *WM) void {
         s.tiled_set.deinit();
         s.visible_cache.deinit(s.allocator);
         s.window_borders.deinit();
+        s.ws_set_cache.deinit();
         wm.allocator.destroy(s);
         state = null;
     }
@@ -202,8 +205,6 @@ pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void
             s.window_borders.put(new_win, s.border_focused) catch {};
         }
     }
-
-    bar.update() catch {};
 }
 
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
@@ -242,17 +243,16 @@ fn retile(wm: *WM, s: *State) void {
 
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
 
-    var ws_set = std.AutoHashMap(u32, void).init(s.allocator);
-    defer ws_set.deinit();
-    ws_set.ensureTotalCapacity(@intCast(ws_windows.len)) catch {};
+    s.ws_set_cache.clearRetainingCapacity();
+    s.ws_set_cache.ensureTotalCapacity(@intCast(ws_windows.len)) catch {};
     for (ws_windows) |w| {
-        ws_set.putAssumeCapacity(w, {});
+        s.ws_set_cache.putAssumeCapacity(w, {});
     }
 
     for (s.tiled_windows.items) |win| {
         if (wm.fullscreen_window == win) continue;
 
-        if (ws_set.contains(win)) {
+        if (s.ws_set_cache.contains(win)) {
             s.visible_cache.append(s.allocator, win) catch |err| {
                 std.log.err("[tiling] Failed to add window to visible cache: {}", .{err});
                 continue;
@@ -264,7 +264,6 @@ fn retile(wm: *WM, s: *State) void {
         tx.commit() catch |err| {
             std.log.err("[tiling] Failed to commit empty retile transaction: {}", .{err});
         };
-        bar.update() catch {};
         return;
     }
 
@@ -276,11 +275,29 @@ fn retile(wm: *WM, s: *State) void {
         .grid => grid_layout.tile(&tx, s, s.visible_cache.items, screen.width_in_pixels, screen.height_in_pixels),
     }
 
-    if (wm.focused_window) |focused| {
-        updateBordersInTransaction(&tx, s, focused, &ws_set);
-    }
+    const focused = wm.focused_window;
+    const ws = workspaces.getCurrentWorkspaceObject();
 
-    saveWindowPositionsFromTransaction(wm, s, &tx);
+    for (s.visible_cache.items) |win| {
+        if (!s.ws_set_cache.contains(win)) continue;
+
+        const color = if (focused != null and win == focused.?) s.border_focused else s.border_normal;
+
+        tx.setBorder(win, color) catch |err| {
+            std.log.err("[tiling] Failed to set border for window {}: {}", .{ win, err });
+            continue;
+        };
+
+        s.window_borders.put(win, color) catch {};
+
+        if (ws) |workspace| {
+            if (tx.getConfiguredRect(win)) |rect| {
+                workspace.saveWindowState(win, rect, color) catch |err| {
+                    std.log.err("[tiling] Failed to save window position: {}", .{err});
+                };
+            }
+        }
+    }
 
     tx.commit() catch |err| {
         std.log.err("[tiling] Retile transaction failed: {}", .{err});
@@ -289,47 +306,6 @@ fn retile(wm: *WM, s: *State) void {
         };
         return;
     };
-
-    if (wm.focused_window) |focused| {
-        updateBorderCacheAfterCommit(s, focused, &ws_set);
-    }
-
-    bar.update() catch {};
-}
-
-fn updateBordersInTransaction(tx: *atomic.Transaction, s: *State, focused: u32, ws_set: *const std.AutoHashMap(u32, void)) void {
-    for (s.visible_cache.items) |win| {
-        if (!ws_set.contains(win)) continue;
-
-        const color = if (win == focused) s.border_focused else s.border_normal;
-        
-        tx.setBorder(win, color) catch |err| {
-            std.log.err("[tiling] Failed to set border for window {}: {}", .{ win, err });
-            continue;
-        };
-    }
-}
-
-fn updateBorderCacheAfterCommit(s: *State, focused: u32, ws_set: *const std.AutoHashMap(u32, void)) void {
-    for (s.visible_cache.items) |win| {
-        if (!ws_set.contains(win)) continue;
-
-        const color = if (win == focused) s.border_focused else s.border_normal;
-        s.window_borders.put(win, color) catch {};
-    }
-}
-
-fn saveWindowPositionsFromTransaction(wm: *WM, s: *State, tx: *atomic.Transaction) void {
-    const ws = workspaces.getCurrentWorkspaceObject() orelse return;
-
-    for (s.visible_cache.items) |win| {
-        if (tx.getConfiguredRect(win)) |rect| {
-            const border_color = if (wm.focused_window == win) s.border_focused else s.border_normal;
-            ws.saveWindowState(win, rect, border_color) catch |err| {
-                std.log.err("[tiling] Failed to save window position: {}", .{err});
-            };
-        }
-    }
 }
 
 pub fn restoreWindowPositions(wm: *WM) bool {

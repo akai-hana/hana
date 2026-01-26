@@ -44,7 +44,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
                 .event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW,
             };
             attrs.configure(wm.conn, win);
-            
+
             if (tiling.getState()) |t_state| {
                 t_state.window_borders.put(win, wm.config.tiling.border_normal) catch {};
             }
@@ -68,16 +68,16 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
             .event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW,
         };
         attrs.configure(wm.conn, win);
-        
+
         if (tiling.getState()) |t_state| {
             t_state.window_borders.put(win, wm.config.tiling.border_focused) catch {};
         }
 
         focus.setFocus(wm, win, .tiling_operation);
         tiling.retileCurrentWorkspace(wm);
+    } else {
+        utils.flush(wm.conn);
     }
-
-    utils.flush(wm.conn);
 }
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {

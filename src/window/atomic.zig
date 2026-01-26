@@ -3,7 +3,7 @@
 //! This module provides a transaction-based system for grouping XCB and state
 //! operations into atomic units. Transactions support:
 //! - Validation before execution
-//! - Snapshotting for rollback
+//! - Snapshotting for rollback (optional)
 //! - Batched XCB operations for efficiency
 //!
 //! Usage:
@@ -62,6 +62,7 @@ pub const Transaction = struct {
     rolled_back: bool = false,
     allocator: std.mem.Allocator,
     snapshot: ?StateSnapshot = null,
+    enable_snapshot: bool = true,
 
     pub fn begin(wm: *WM) !Transaction {
         var tx = Transaction{
@@ -73,12 +74,19 @@ pub const Transaction = struct {
             .rolled_back = false,
             .allocator = wm.allocator,
             .snapshot = null,
+            .enable_snapshot = true,
         };
 
         try tx.xcb_ops.ensureTotalCapacity(wm.allocator, 32);
         try tx.state_ops.ensureTotalCapacity(wm.allocator, 16);
         try tx.configured_rects.ensureTotalCapacity(16);
 
+        return tx;
+    }
+
+    pub fn beginFast(wm: *WM) !Transaction {
+        var tx = try begin(wm);
+        tx.enable_snapshot = false;
         return tx;
     }
 
@@ -205,6 +213,8 @@ pub const Transaction = struct {
     }
 
     fn createSnapshot(self: *Transaction) !void {
+        if (!self.enable_snapshot) return;
+
         const workspaces = @import("workspaces");
         const tiling = @import("tiling");
 
@@ -261,12 +271,14 @@ pub const Transaction = struct {
 
         try self.validate();
 
-        try self.createSnapshot();
-        errdefer {
-            if (self.snapshot) |*snap| snap.deinit(self.allocator);
-            self.rollback() catch |err| {
-                std.log.err("[atomic] Rollback after commit failure also failed: {}", .{err});
-            };
+        if (self.enable_snapshot) {
+            try self.createSnapshot();
+            errdefer {
+                if (self.snapshot) |*snap| snap.deinit(self.allocator);
+                self.rollback() catch |err| {
+                    std.log.err("[atomic] Rollback after commit failure also failed: {}", .{err});
+                };
+            }
         }
 
         var had_xcb_errors = false;
@@ -315,7 +327,7 @@ pub const Transaction = struct {
             }
         }
 
-        if (had_xcb_errors) {
+        if (had_xcb_errors and self.enable_snapshot) {
             std.log.err("[atomic] XCB operations failed, rolling back transaction", .{});
             try self.rollback();
             return error.XcbOperationsFailed;
@@ -329,7 +341,7 @@ pub const Transaction = struct {
                         if (aw.ws < ws_state.workspaces.len) {
                             ws_state.workspaces[aw.ws].add(aw.win) catch |err| {
                                 std.log.err("[atomic] Failed to add window to workspace: {}", .{err});
-                                return err;
+                                if (self.enable_snapshot) return err;
                             };
                         }
                     }
@@ -348,12 +360,12 @@ pub const Transaction = struct {
                         if (!t_state.tiled_set.contains(win)) {
                             t_state.tiled_windows.insert(t_state.allocator, 0, win) catch |err| {
                                 std.log.err("[atomic] Failed to add tiled window: {}", .{err});
-                                return err;
+                                if (self.enable_snapshot) return err;
                             };
                             t_state.tiled_set.put(win, {}) catch |err| {
                                 std.log.err("[atomic] Failed to add to tiled set: {}", .{err});
                                 _ = t_state.tiled_windows.orderedRemove(0);
-                                return err;
+                                if (self.enable_snapshot) return err;
                             };
                         }
                     }
@@ -413,7 +425,7 @@ pub const Transaction = struct {
 };
 
 pub fn atomicMapWindow(wm: *WM, win: u32, workspace: usize) !void {
-    var tx = try Transaction.begin(wm);
+    var tx = try Transaction.beginFast(wm);
     defer tx.deinit();
 
     try tx.addWindowToWorkspace(workspace, win);
@@ -428,7 +440,7 @@ pub fn atomicMapWindow(wm: *WM, win: u32, workspace: usize) !void {
 }
 
 pub fn atomicDestroyWindow(wm: *WM, win: u32) !void {
-    var tx = try Transaction.begin(wm);
+    var tx = try Transaction.beginFast(wm);
     defer tx.deinit();
 
     const was_focused = wm.focused_window == win;
@@ -437,10 +449,8 @@ pub fn atomicDestroyWindow(wm: *WM, win: u32) !void {
 
     const workspaces = @import("workspaces");
     if (workspaces.getState()) |ws_state| {
-        for (ws_state.workspaces, 0..) |*ws, i| {
-            if (ws.contains(win)) {
-                try tx.removeWindowFromWorkspace(i, win);
-            }
+        if (ws_state.window_to_workspace.get(win)) |ws_idx| {
+            try tx.removeWindowFromWorkspace(ws_idx, win);
         }
     }
 
@@ -461,7 +471,7 @@ pub fn atomicDestroyWindow(wm: *WM, win: u32) !void {
 pub fn atomicMoveWindow(wm: *WM, win: u32, from_ws: usize, to_ws: usize) !void {
     if (from_ws == to_ws) return;
 
-    var tx = try Transaction.begin(wm);
+    var tx = try Transaction.beginFast(wm);
     defer tx.deinit();
 
     const is_focused = wm.focused_window == win;
@@ -500,7 +510,7 @@ pub fn atomicMoveWindow(wm: *WM, win: u32, from_ws: usize, to_ws: usize) !void {
 pub fn atomicSwitchWorkspace(wm: *WM, from: usize, to: usize) !void {
     if (from == to) return;
 
-    var tx = try Transaction.begin(wm);
+    var tx = try Transaction.beginFast(wm);
     defer tx.deinit();
 
     const workspaces = @import("workspaces");

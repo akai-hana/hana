@@ -12,6 +12,7 @@ const input = @import("input");
 const utils = @import("utils");
 const async = @import("async");
 const bar = @import("bar");
+const workspaces = @import("workspaces");
 
 const xcb = defs.xcb;
 const WM = defs.WM;
@@ -213,7 +214,7 @@ pub fn main() !void {
 
     bar.init(&wm) catch |err| {
         if (err != error.BarDisabled) {
-            std.log.warn("[bar] Failed to initialize: {}", .{err});
+            std.log.err("[bar] Failed to initialize: {}", .{err});
         }
     };
     defer bar.deinit();
@@ -235,8 +236,8 @@ pub fn main() !void {
 
         if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
             const current_time = ts.sec;
-            if (current_time - last_bar_update >= 5) {
-                bar.update() catch {};
+            if (current_time - last_bar_update >= 30) {
+                workspaces.flushBarUpdate();
                 last_bar_update = current_time;
             }
         } else |_| {}

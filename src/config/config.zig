@@ -13,7 +13,6 @@ fn isValidColor(val: u32) bool {
     return val <= 0xFFFFFF;
 }
 
-/// Generic config value getter with validation
 fn get(
     comptime T: type,
     section: *const parser.Section,
@@ -317,8 +316,8 @@ fn parseBar(doc: *const parser.Document, cfg: *defs.Config) void {
             return n >= 16 and n <= 100;
         }
     }.v);
-    cfg.bar.font = get([]const u8, section, "font", "FiraCode Nerd Font Ret", null);
-    
+    cfg.bar.font = get([]const u8, section, "font", "monospace:size=10", null);
+
     cfg.bar.bg = getColor(section, "bg", 0x222222);
     cfg.bar.fg = getColor(section, "fg", 0xBBBBBB);
     cfg.bar.selected_bg = getColor(section, "selected_bg", 0x005577);

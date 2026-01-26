@@ -23,9 +23,12 @@ pub const Bar = struct {
     height: u16,
     dc: *drawing.DrawContext,
     config: BarConfig,
-    status_text: std.ArrayList(u8),
+    status_text: std.array_list.Managed(u8),
     wm: *WM,
     allocator: std.mem.Allocator,
+    cached_title: std.ArrayList(u8),
+    cached_title_window: ?u32,
+    last_draw_time: i64,
 
     pub fn init(wm: *WM, config: BarConfig) !*Bar {
         if (!config.show) return error.BarDisabled;
@@ -67,7 +70,10 @@ pub const Bar = struct {
         const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, screen, window, width, height);
         errdefer dc.deinit();
 
-        try dc.loadFont(config.font);
+        dc.loadFont(config.font) catch |err| {
+            std.log.err("[bar] Failed to load font '{s}': {}", .{ config.font, err });
+            return err;
+        };
 
         b.* = .{
             .window = window,
@@ -75,20 +81,27 @@ pub const Bar = struct {
             .height = height,
             .dc = dc,
             .config = config,
-            .status_text = std.ArrayList(u8){},
+            .status_text = std.array_list.Managed(u8).init(wm.allocator),
             .wm = wm,
             .allocator = wm.allocator,
+            .cached_title = std.ArrayList(u8){},
+            .cached_title_window = null,
+            .last_draw_time = 0,
         };
 
-        try b.status_text.appendSlice(wm.allocator, "hana");
+        try b.status_text.appendSlice("hana");
 
-        try b.draw();
+        b.draw() catch |err| {
+            std.log.err("[bar] Initial draw failed: {}", .{err});
+            return err;
+        };
 
         return b;
     }
 
     pub fn deinit(self: *Bar) void {
-        self.status_text.deinit(self.allocator);
+        self.status_text.deinit();
+        self.cached_title.deinit(self.allocator);
         self.dc.deinit();
         _ = xcb.xcb_destroy_window(self.wm.conn, self.window);
         self.allocator.destroy(self);
@@ -169,6 +182,16 @@ pub const Bar = struct {
     }
 
     pub fn draw(self: *Bar) !void {
+        const now = if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts|
+            ts.sec
+        else |_|
+            0;
+
+        if (now - self.last_draw_time < 1) {
+            return;
+        }
+        self.last_draw_time = now;
+
         self.dc.setColor(self.config.bg);
         self.dc.fillRect(0, 0, self.width, self.height);
 
@@ -344,7 +367,7 @@ pub const Bar = struct {
 
     fn drawTitle(self: *Bar, start_x: u16, width: u16) !void {
         const title = try self.getFocusedWindowTitle();
-        defer if (title.len > 0) self.allocator.free(title);
+        defer if (title.len > 0 and self.cached_title.items.ptr != title.ptr) self.allocator.free(title);
 
         self.dc.setColor(self.config.bg);
         self.dc.fillRect(start_x, 0, width, self.height);
@@ -358,7 +381,14 @@ pub const Bar = struct {
     }
 
     fn getFocusedWindowTitle(self: *Bar) ![]const u8 {
-        const win = self.wm.focused_window orelse return "";
+        const win = self.wm.focused_window orelse {
+            self.cached_title_window = null;
+            return "";
+        };
+
+        if (self.cached_title_window == win and self.cached_title.items.len > 0) {
+            return self.cached_title.items;
+        }
 
         const cookie = xcb.xcb_get_property(
             self.wm.conn,
@@ -370,15 +400,25 @@ pub const Bar = struct {
             256,
         );
 
-        const reply = xcb.xcb_get_property_reply(self.wm.conn, cookie, null) orelse return "";
+        const reply = xcb.xcb_get_property_reply(self.wm.conn, cookie, null) orelse {
+            self.cached_title_window = null;
+            return "";
+        };
         defer std.c.free(reply);
 
-        if (reply.*.value_len == 0) return "";
+        if (reply.*.value_len == 0) {
+            self.cached_title_window = null;
+            return "";
+        }
 
         const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
         const len: usize = @intCast(xcb.xcb_get_property_value_length(reply));
 
-        return try self.allocator.dupe(u8, data[0..len]);
+        self.cached_title.clearRetainingCapacity();
+        try self.cached_title.appendSlice(self.allocator, data[0..len]);
+        self.cached_title_window = win;
+
+        return self.cached_title.items;
     }
 
     pub fn updateStatus(self: *Bar) !void {
@@ -394,7 +434,7 @@ pub const Bar = struct {
 
         const reply = xcb.xcb_get_property_reply(self.wm.conn, cookie, null) orelse {
             self.status_text.clearRetainingCapacity();
-            try self.status_text.appendSlice(self.allocator, "hana");
+            try self.status_text.appendSlice("hana");
             return;
         };
         defer std.c.free(reply);
@@ -404,9 +444,9 @@ pub const Bar = struct {
         if (reply.*.value_len > 0) {
             const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
             const len: usize = @intCast(xcb.xcb_get_property_value_length(reply));
-            try self.status_text.appendSlice(self.allocator, data[0..len]);
+            try self.status_text.appendSlice(data[0..len]);
         } else {
-            try self.status_text.appendSlice(self.allocator, "hana");
+            try self.status_text.appendSlice("hana");
         }
     }
 
@@ -428,6 +468,10 @@ pub const Bar = struct {
 
     pub fn handleExpose(self: *Bar) !void {
         try self.draw();
+    }
+
+    pub fn invalidateTitleCache(self: *Bar) void {
+        self.cached_title_window = null;
     }
 };
 
@@ -452,6 +496,7 @@ pub fn getBar() ?*Bar {
 
 pub fn update() !void {
     if (bar) |b| {
+        b.invalidateTitleCache();
         try b.draw();
     }
 }

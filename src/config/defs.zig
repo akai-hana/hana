@@ -8,7 +8,6 @@ pub const xcb = @cImport({
 
 pub const xkbcommon = @import("xkbcommon");
 
-// Modifier key masks
 pub const MOD_SHIFT: u16 = xcb.XCB_MOD_MASK_SHIFT;
 pub const MOD_LOCK: u16 = xcb.XCB_MOD_MASK_LOCK;
 pub const MOD_CONTROL: u16 = xcb.XCB_MOD_MASK_CONTROL;
@@ -18,27 +17,22 @@ pub const MOD_SUPER: u16 = xcb.XCB_MOD_MASK_4;
 
 pub const MOD_MASK_RELEVANT: u16 = MOD_SHIFT | MOD_CONTROL | MOD_ALT | MOD_SUPER;
 
-// Window dimension constants
 pub const MIN_WINDOW_DIM: u16 = 50;
 pub const MAX_WINDOW_DIM: u16 = 65535;
 
-// Timing constants
 pub const FOCUS_PROTECTION_GRACE_NS: u64 = 50 * std.time.ns_per_ms;
 pub const XKB_RETRY_DELAY_MS: u64 = 20;
 pub const XKB_MAX_RETRIES: usize = 50;
 
-// Event loop constants
 pub const MAX_EVENT_BATCH_SIZE: usize = 10;
 pub const EVENT_POLL_SLEEP_NS: u64 = 1 * std.time.ns_per_ms;
 pub const ASYNC_JOBS_PER_ITERATION: usize = 5;
 
-// Idle detection thresholds for exponential backoff
 pub const IDLE_THRESHOLD_SHORT: usize = 10;
 pub const IDLE_THRESHOLD_LONG: usize = 50;
 pub const SLEEP_MULTIPLIER_MEDIUM: u64 = 2;
 pub const SLEEP_MULTIPLIER_LONG: u64 = 5;
 
-// Configuration validation limits
 pub const MAX_WORKSPACES: usize = 20;
 pub const MIN_WORKSPACES: usize = 1;
 pub const MAX_BORDER_WIDTH: u16 = 100;

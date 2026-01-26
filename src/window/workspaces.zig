@@ -89,6 +89,7 @@ pub const State = struct {
     window_to_workspace: std.AutoHashMap(u32, usize),
     allocator: std.mem.Allocator,
     switching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    needs_bar_update: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 var state: ?*State = null;
@@ -150,28 +151,19 @@ pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
         return;
     };
     s.window_to_workspace.put(win, s.current) catch {};
-    bar.update() catch {};
+    s.needs_bar_update.store(true, .release);
 }
 
 pub fn removeWindow(win: u32) void {
     const s = state orelse return;
-    
-    if (s.window_to_workspace.get(win)) |ws_idx| {
+
+    if (s.window_to_workspace.fetchRemove(win)) |entry| {
+        const ws_idx = entry.value;
         if (ws_idx < s.workspaces.len) {
-            if (s.workspaces[ws_idx].remove(win)) {
-                _ = s.window_to_workspace.remove(win);
-                bar.update() catch {};
-            }
+            _ = s.workspaces[ws_idx].remove(win);
+            s.needs_bar_update.store(true, .release);
         }
         return;
-    }
-    
-    for (s.workspaces) |*ws| {
-        if (ws.remove(win)) {
-            _ = s.window_to_workspace.remove(win);
-            bar.update() catch {};
-            return;
-        }
     }
 }
 
@@ -186,9 +178,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
         return;
     }
 
-    const from_ws = if (s.window_to_workspace.get(win)) |ws_idx|
-        ws_idx
-    else blk: {
+    const from_ws = s.window_to_workspace.get(win) orelse blk: {
         for (s.workspaces, 0..) |*ws, i| {
             if (ws.contains(win)) {
                 s.window_to_workspace.put(win, i) catch {};
@@ -199,7 +189,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
                 std.log.err("[workspaces] Failed to add window to workspace: {}", .{err});
             };
             s.window_to_workspace.put(win, target_ws) catch {};
-            bar.update() catch {};
+            s.needs_bar_update.store(true, .release);
             return;
         }
     };
@@ -212,7 +202,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
     };
 
     s.window_to_workspace.put(win, target_ws) catch {};
-    bar.update() catch {};
+    s.needs_bar_update.store(true, .release);
 }
 
 pub fn switchTo(wm: *WM, ws_id: usize) void {
@@ -279,7 +269,7 @@ pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
         tiling.retileCurrentWorkspace(wm);
     }
 
-    bar.update() catch {};
+    s.needs_bar_update.store(true, .release);
 }
 
 pub fn getCurrentWindowsView() ?[]const u32 {
@@ -310,5 +300,12 @@ pub fn clearAllPositions() void {
     const s = state orelse return;
     for (s.workspaces) |*ws| {
         ws.clearPositions();
+    }
+}
+
+pub fn flushBarUpdate() void {
+    const s = state orelse return;
+    if (s.needs_bar_update.swap(false, .acq_rel)) {
+        bar.update() catch {};
     }
 }
