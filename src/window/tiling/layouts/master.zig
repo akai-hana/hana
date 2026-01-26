@@ -31,10 +31,13 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
     const stack_x: u16 = if (master_on_right) 0 else master_w;
     const stack_w = screen_w - master_w;
 
-    const master_inner_w = if (master_w > 2 * m.gap + 2 * m.border) 
-        master_w - 2 * m.gap - 2 * m.border 
-    else 
-        utils.MIN_WINDOW_DIM;
+    const master_inner_w = if (s_count > 0) blk: {
+        const total_margin = m.gap + m.gap / 2 + 2 * m.border;
+        break :blk if (master_w > total_margin) master_w - total_margin else utils.MIN_WINDOW_DIM;
+    } else blk: {
+        const total_margin = 2 * m.gap + 2 * m.border;
+        break :blk if (master_w > total_margin) master_w - total_margin else utils.MIN_WINDOW_DIM;
+    };
 
     const m_layout = utils.calcColumnLayout(usable_h, m_count, m);
     for (windows[0..m_count], 0..) |win, i| {
@@ -59,8 +62,9 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
     const available: u32 = @as(u32, usable_h) - @as(u32, m.gap);
     const max_fit: u16 = @intCast(@max(1, available / space_per_window));
 
-    const stack_inner_w = if (stack_w > 2 * m.gap + 2 * m.border)
-        @max(utils.MIN_WINDOW_DIM, stack_w - 2 * m.gap - 2 * m.border)
+    const total_stack_margin = m.gap / 2 + m.gap + 2 * m.border;
+    const stack_inner_w = if (stack_w > total_stack_margin)
+        @max(utils.MIN_WINDOW_DIM, stack_w - total_stack_margin)
     else
         utils.MIN_WINDOW_DIM;
 
@@ -70,7 +74,7 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
         for (stack_windows, 0..) |win, i| {
             const row: u16 = @intCast(i);
             const rect = utils.Rect{
-                .x = @intCast(stack_x + m.gap),
+                .x = @intCast(stack_x + m.gap / 2),
                 .y = @intCast(bar_height + m.gap + row * s_layout.spacing),
                 .width = stack_inner_w,
                 .height = s_layout.item_h,
@@ -93,7 +97,7 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
 
             if (cols_in_row == 0) break;
 
-            const row_total_w = stack_w - m.gap * (cols_in_row + 1);
+            const row_total_w = stack_w - m.gap / 2 - m.gap - m.gap * (cols_in_row - 1);
             const row_col_w = row_total_w / cols_in_row;
             const y_pos = bar_height + m.gap + row * s_layout.spacing;
             const row_inner_w = if (row_col_w > 2 * m.border)
@@ -106,7 +110,7 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
             while (win_idx < s_count) : (win_idx += max_fit) {
                 const win = stack_windows[win_idx];
 
-                const x_pos = stack_x + m.gap + col * (row_col_w + m.gap);
+                const x_pos = stack_x + m.gap / 2 + col * (row_col_w + m.gap);
 
                 const rect = utils.Rect{
                     .x = @intCast(x_pos),

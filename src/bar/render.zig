@@ -11,16 +11,24 @@ const tiling = @import("tiling");
 pub fn draw(bar_state: *BarState, wm: *defs.WM) !void {
     if (!bar_state.isAlive()) return error.BarNotAlive;
 
+    std.log.info("[render] Starting bar draw, width={}, height={}", .{bar_state.width, bar_state.height});
+
     bar_state.dc.setColor(bar_state.config.bg);
     bar_state.dc.fillRect(0, 0, bar_state.width, bar_state.height);
 
     var x: u16 = 0;
 
     x = try drawWorkspaces(bar_state, x);
+    std.log.info("[render] After workspaces, x={}", .{x});
+    
     x = try drawLayout(bar_state, x);
+    std.log.info("[render] After layout, x={}", .{x});
 
     const right_width = calculateRightWidth(bar_state);
+    std.log.info("[render] Right width calculated: {}", .{right_width});
+    
     const title_width = if (bar_state.width > x + right_width) bar_state.width - x - right_width else 0;
+    std.log.info("[render] Title width: {}", .{title_width});
 
     if (title_width > 0) {
         try drawTitle(bar_state, wm, x, title_width);
@@ -41,6 +49,8 @@ fn drawWorkspaces(bar_state: *BarState, start_x: u16) !u16 {
     const ws_state = workspaces.getState() orelse return start_x;
     const current = ws_state.current;
 
+    std.log.info("[render] Drawing {} workspaces, current={}", .{ws_state.workspaces.len, current});
+
     var x = start_x;
     const ws_width: u16 = 30;
 
@@ -56,16 +66,21 @@ fn drawWorkspaces(bar_state: *BarState, start_x: u16) !u16 {
         else
             bar_state.config.fg;
 
+        std.log.info("[render] WS{}: x={}, bg=0x{x}, fg=0x{x}, is_current={}, has_windows={}", .{i+1, x, bg, fg, is_current, has_windows});
+
         bar_state.dc.setColor(bg);
         bar_state.dc.fillRect(x, 0, ws_width, bar_state.height);
 
         var label_buf: [8]u8 = undefined;
         const label = getWorkspaceLabel(bar_state, i, &label_buf);
+        std.log.info("[render] WS{} label: '{s}'", .{i+1, label});
 
         bar_state.dc.setColor(fg);
         const text_w = bar_state.dc.textWidth(label);
         const text_x = x + (ws_width - text_w) / 2;
         const text_y = (bar_state.height + bar_state.dc.font_height) / 2 - 2;
+
+        std.log.info("[render] WS{} text: w={}, x={}, y={}, font_height={}", .{i+1, text_w, text_x, text_y, bar_state.dc.font_height});
 
         try bar_state.dc.drawText(text_x, text_y, label);
 
@@ -113,9 +128,13 @@ fn drawLayout(bar_state: *BarState, start_x: u16) !u16 {
         .grid => "[+]",
     };
 
+    std.log.info("[render] Drawing layout: '{s}'", .{layout_str});
+
     const padding: u16 = 8;
     const text_w = bar_state.dc.textWidth(layout_str);
     const width = text_w + padding * 2;
+
+    std.log.info("[render] Layout: text_w={}, width={}, x={}", .{text_w, width, start_x});
 
     bar_state.dc.setColor(bar_state.config.bg);
     bar_state.dc.fillRect(start_x, 0, width, bar_state.height);
@@ -131,6 +150,8 @@ fn drawTitle(bar_state: *BarState, wm: *defs.WM, start_x: u16, width: u16) !void
     const title = try getFocusedWindowTitle(bar_state, wm);
     defer if (title.len > 0 and bar_state.cached_title.items.ptr != title.ptr) bar_state.allocator.free(title);
 
+    std.log.info("[render] Drawing title: '{s}', len={}, x={}, width={}", .{title, title.len, start_x, width});
+
     const is_focused = wm.focused_window != null;
     const bg = if (is_focused and bar_state.config.title_accent)
         bar_state.config.selected_bg
@@ -140,6 +161,8 @@ fn drawTitle(bar_state: *BarState, wm: *defs.WM, start_x: u16, width: u16) !void
         bar_state.config.selected_fg
     else
         bar_state.config.fg;
+
+    std.log.info("[render] Title colors: bg=0x{x}, fg=0x{x}", .{bg, fg});
 
     bar_state.dc.setColor(bg);
     bar_state.dc.fillRect(start_x, 0, width, bar_state.height);
@@ -256,10 +279,14 @@ fn calculateRightWidth(bar_state: *BarState) u16 {
 fn drawRightSegments(bar_state: *BarState) !void {
     var x = bar_state.width;
 
+    std.log.info("[render] Drawing right segments from x={}", .{x});
+
     x = try drawTimeAt(bar_state, x);
+    std.log.info("[render] After time, x={}", .{x});
 
     if (bar_state.status_text.items.len > 0) {
         _ = try drawStatusAt(bar_state, x);
+        std.log.info("[render] Drew status text", .{});
     }
 }
 
@@ -267,16 +294,23 @@ fn drawTimeAt(bar_state: *BarState, end_x: u16) !u16 {
     var time_buf: [64]u8 = undefined;
     const time_str = try getTimeString(&time_buf);
 
+    std.log.info("[render] Drawing time: '{s}'", .{time_str});
+
     const padding: u16 = 8;
     const text_w = bar_state.dc.textWidth(time_str);
     const width = text_w + padding * 2;
     const x = end_x - width;
+
+    std.log.info("[render] Time: text_w={}, width={}, x={}, end_x={}", .{text_w, width, x, end_x});
 
     bar_state.dc.setColor(bar_state.config.bg);
     bar_state.dc.fillRect(x, 0, width, bar_state.height);
 
     bar_state.dc.setColor(bar_state.config.fg);
     const text_y = (bar_state.height + bar_state.dc.font_height) / 2 - 2;
+    
+    std.log.info("[render] Time text y={}, fg=0x{x}", .{text_y, bar_state.config.fg});
+    
     try bar_state.dc.drawText(x + padding, text_y, time_str);
 
     return x;
@@ -289,6 +323,8 @@ fn drawStatusAt(bar_state: *BarState, end_x: u16) !u16 {
     const text_w = bar_state.dc.textWidth(bar_state.status_text.items);
     const width = text_w + sep_w + padding * 2;
     const x = end_x - width;
+
+    std.log.info("[render] Drawing status: '{s}'", .{bar_state.status_text.items});
 
     bar_state.dc.setColor(bar_state.config.bg);
     bar_state.dc.fillRect(x, 0, width, bar_state.height);
