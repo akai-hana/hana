@@ -132,17 +132,12 @@ pub const WorkspaceConfig = struct {
     rules: std.ArrayListUnmanaged(Rule) = .{},
 };
 
-pub const WindowProperties = std.StringHashMap([]const u8);
-
+// OPTIMIZED: Removed unused WindowProperties HashMap
 pub const Window = struct {
     id: u32,
-    properties: WindowProperties,
 
-    pub fn init(allocator: std.mem.Allocator, id: u32) Window {
-        return .{
-            .id = id,
-            .properties = WindowProperties.init(allocator),
-        };
+    pub fn init(_: std.mem.Allocator, id: u32) Window {
+        return .{ .id = id };
     }
 };
 
@@ -194,11 +189,7 @@ pub const WM = struct {
     running: *std.atomic.Value(bool),
 
     pub fn deinit(self: *WM) void {
-        var iter = self.windows.valueIterator();
-        while (iter.next()) |win| {
-            var w = win.*;
-            w.properties.deinit();
-        }
+        // OPTIMIZED: No need to deinit window properties
         self.windows.deinit();
         self.config.deinit(self.allocator);
     }
@@ -212,10 +203,8 @@ pub const WM = struct {
     }
 
     pub fn removeWindow(self: *WM, window_id: u32) void {
-        if (self.windows.fetchRemove(window_id)) |kv| {
-            var win = kv.value;
-            win.properties.deinit();
-        }
+        // OPTIMIZED: Just remove, no properties to deinit
+        _ = self.windows.remove(window_id);
     }
 
     pub fn getFocusedWindow(self: *WM) ?*Window {

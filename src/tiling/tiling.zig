@@ -9,7 +9,6 @@ const workspaces = @import("workspaces");
 const focus = @import("focus");
 const atomic = @import("atomic");
 const bar = @import("bar");
-const common = @import("common");
 
 const master_layout = @import("master");
 const monocle_layout = @import("monocle");
@@ -107,7 +106,7 @@ pub fn notifyWindowMapped(wm: *WM, win: u32) void {
         return;
     };
 
-    common.configureBorder(wm.conn, win, s.border_width, s.border_focused);
+    utils.configureBorder(wm.conn, win, s.border_width, s.border_focused);
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, 
         &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
 
@@ -134,7 +133,7 @@ pub fn addWindowToTiling(wm: *WM, win: u32) void {
     const is_focused = wm.focused_window == win;
     const border_color = if (is_focused) s.border_focused else s.border_normal;
     
-    common.configureBorder(wm.conn, win, s.border_width, border_color);
+    utils.configureBorder(wm.conn, win, s.border_width, border_color);
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK,
         &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
 
@@ -168,14 +167,14 @@ pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void
 
     if (old_focused) |old_win| {
         if (s.tiled_set.contains(old_win) and wm.fullscreen_window != old_win) {
-            common.setBorder(wm.conn, old_win, s.border_normal);
+            utils.setBorder(wm.conn, old_win, s.border_normal);
             s.window_borders.put(old_win, s.border_normal) catch {};
         }
     }
 
     if (new_focused) |new_win| {
         if (s.tiled_set.contains(new_win) and wm.fullscreen_window != new_win) {
-            common.setBorder(wm.conn, new_win, s.border_focused);
+            utils.setBorder(wm.conn, new_win, s.border_focused);
             s.window_borders.put(new_win, s.border_focused) catch {};
         }
     }
@@ -280,14 +279,14 @@ pub fn restoreWindowPositions(wm: *WM) bool {
             restored_count += 1;
 
             if (ws.getWindowBorder(win)) |border_color| {
-                common.setBorder(wm.conn, win, border_color);
+                utils.setBorder(wm.conn, win, border_color);
                 s.window_borders.put(win, border_color) catch {};
             }
         }
     }
 
     if (tiled_count > 0 and restored_count == tiled_count) {
-        common.flush(wm.conn);
+        utils.flush(wm.conn);
         return true;
     }
 

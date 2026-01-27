@@ -33,10 +33,10 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
 
     const master_inner_w = if (s_count > 0) blk: {
         const total_margin = m.gap + m.gap / 2 + 2 * m.border;
-        break :blk if (master_w > total_margin) master_w - total_margin else utils.MIN_WINDOW_DIM;
+        break :blk if (master_w > total_margin) master_w - total_margin else defs.MIN_WINDOW_DIM;
     } else blk: {
         const total_margin = 2 * m.gap + 2 * m.border;
-        break :blk if (master_w > total_margin) master_w - total_margin else utils.MIN_WINDOW_DIM;
+        break :blk if (master_w > total_margin) master_w - total_margin else defs.MIN_WINDOW_DIM;
     };
 
     const m_layout = utils.calcColumnLayout(usable_h, m_count, m);
@@ -58,15 +58,15 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
 
     const stack_windows = windows[m_count..];
 
-    const space_per_window: u32 = utils.MIN_WINDOW_DIM + 2 * @as(u32, m.border) + @as(u32, m.gap);
+    const space_per_window: u32 = defs.MIN_WINDOW_DIM + 2 * @as(u32, m.border) + @as(u32, m.gap);
     const available: u32 = @as(u32, usable_h) - @as(u32, m.gap);
     const max_fit: u16 = @intCast(@max(1, available / space_per_window));
 
     const total_stack_margin = m.gap / 2 + m.gap + 2 * m.border;
     const stack_inner_w = if (stack_w > total_stack_margin)
-        @max(utils.MIN_WINDOW_DIM, stack_w - total_stack_margin)
+        @max(defs.MIN_WINDOW_DIM, stack_w - total_stack_margin)
     else
-        utils.MIN_WINDOW_DIM;
+        defs.MIN_WINDOW_DIM;
 
     if (s_count <= max_fit) {
         const s_layout = utils.calcColumnLayout(usable_h, s_count, m);
@@ -101,9 +101,9 @@ pub fn tile(tx: *atomic.Transaction, state: *State, windows: []const u32, screen
             const row_col_w = row_total_w / cols_in_row;
             const y_pos = bar_height + m.gap + row * s_layout.spacing;
             const row_inner_w = if (row_col_w > 2 * m.border)
-                @max(utils.MIN_WINDOW_DIM, row_col_w - 2 * m.border)
+                @max(defs.MIN_WINDOW_DIM, row_col_w - 2 * m.border)
             else
-                utils.MIN_WINDOW_DIM;
+                defs.MIN_WINDOW_DIM;
 
             var col: u16 = 0;
             win_idx = row;

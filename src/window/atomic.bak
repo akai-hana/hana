@@ -6,7 +6,6 @@ const defs = @import("defs");
 const xcb = defs.xcb;
 const WM = defs.WM;
 const utils = @import("utils");
-const common = @import("common");
 
 const XcbOp = union(enum) {
     map: u32,
@@ -147,7 +146,7 @@ pub const Transaction = struct {
                 .map => |win| _ = xcb.xcb_map_window(self.wm.conn, win),
                 .unmap => |win| _ = xcb.xcb_unmap_window(self.wm.conn, win),
                 .configure => |cfg| utils.configureWindow(self.wm.conn, cfg.win, cfg.rect),
-                .set_border => |sb| common.setBorder(self.wm.conn, sb.win, sb.color),
+                .set_border => |sb| utils.setBorder(self.wm.conn, sb.win, sb.color),
                 .set_focus => |win| _ = xcb.xcb_set_input_focus(
                     self.wm.conn,
                     xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
@@ -217,7 +216,7 @@ pub const Transaction = struct {
             }
         }
 
-        common.flush(self.wm.conn);
+        utils.flush(self.wm.conn);
         self.committed = true;
     }
 

@@ -1,12 +1,10 @@
-//! Centralized focus management
+//! Focus management
 
 const std = @import("std");
-const builtin = @import("builtin");
 const defs = @import("defs");
 const tiling = @import("tiling");
 const utils = @import("utils");
 const bar = @import("bar");
-const common = @import("common");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -19,34 +17,25 @@ pub const Reason = enum {
     tiling_operation,
 };
 
-// Track last explicit focus change to prevent mouse stealing focus
-var last_explicit_focus_time: i64 = 0;
-const FOCUS_GRACE_PERIOD_NS: i64 = 150 * std.time.ns_per_ms;
+// Simplified focus protection - no separate timestamp, just a counter
+var focus_protection_active: bool = false;
 
 pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     if (win == wm.root) {
-        std.log.err("[CRITICAL] Attempted to focus ROOT window (0x{x})! Reason: {s}. Aborting.", .{ win, @tagName(reason) });
-        if (builtin.mode == .Debug) {
-            @panic("Root window focus attempted - this is a bug!");
-        }
+        std.log.err("[CRITICAL] Attempted to focus ROOT window!", .{});
         return;
     }
 
     if (bar.isBarWindow(win)) return;
 
-    // Ignore mouse_enter during grace period
-    if (reason == .mouse_enter) {
-        const now = common.getTimestampNs();
-        if (now > 0 and now - last_explicit_focus_time < FOCUS_GRACE_PERIOD_NS) {
-            return;
-        }
-    }
+    // Simplified grace period - just block mouse_enter briefly after explicit focus
+    if (reason == .mouse_enter and focus_protection_active) return;
 
     if (wm.focused_window == win) return;
 
-    // Record timestamp for explicit focus changes
+    // Set protection for explicit focus changes
     if (reason != .mouse_enter) {
-        last_explicit_focus_time = common.getTimestampNs();
+        focus_protection_active = true;
     }
 
     const old = wm.focused_window;
@@ -59,7 +48,9 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     }
 
     tiling.updateWindowFocusFast(wm, old, win);
-    common.flush(wm.conn);
+    utils.flush(wm.conn);
+
+    bar.markDirty();
 }
 
 pub fn clearFocus(wm: *WM) void {
@@ -70,7 +61,12 @@ pub fn clearFocus(wm: *WM) void {
     if (old) |old_win| {
         tiling.updateWindowFocusFast(wm, old_win, null);
     }
-    common.flush(wm.conn);
+    utils.flush(wm.conn);
 
     bar.markDirty();
+}
+
+// Called from main loop to release focus protection after events settle
+pub fn releaseProtection() void {
+    focus_protection_active = false;
 }

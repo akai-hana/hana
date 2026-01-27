@@ -1,4 +1,4 @@
-//! Main entry point and event loop - Optimized
+//! Main entry point - optimized event loop
 
 const std = @import("std");
 const posix = std.posix;
@@ -11,8 +11,8 @@ const events = @import("events");
 const input = @import("input");
 const utils = @import("utils");
 const bar = @import("bar");
+const focus = @import("focus");
 const workspaces = @import("workspaces");
-const common = @import("common");
 
 const xcb = defs.xcb;
 const WM = defs.WM;
@@ -103,7 +103,7 @@ fn grabKeybindings(wm: *WM) !void {
         }
     }
 
-    common.flush(wm.conn);
+    utils.flush(wm.conn);
 }
 
 fn handleConfigReload(wm: *WM) !void {
@@ -193,7 +193,7 @@ pub fn main() !void {
 
     try grabKeybindings(&wm);
     setupExistingWindows(conn, root);
-    common.flush(conn);
+    utils.flush(conn);
 
     std.log.info("[hana] Started", .{});
 
@@ -203,7 +203,7 @@ pub fn main() !void {
         var events_processed: usize = 0;
         const max_events_per_batch: usize = 32;
 
-        // Process all available events in a batch
+        // Process event batch
         while (events_processed < max_events_per_batch) : (events_processed += 1) {
             const event = xcb.xcb_poll_for_event(conn);
             if (event == null) break;
@@ -222,23 +222,23 @@ pub fn main() !void {
             events.dispatch(event_type, event.?, &wm);
         }
 
-        // Check connection health
-        if (xcb.xcb_connection_has_error(conn) != 0) {
-            std.log.err("[main] X11 connection error detected, shutting down", .{});
-            break;
-        }
-
-        // Single flush per event loop iteration
+        // After batch: release focus protection, flush, update bar
         if (events_processed > 0) {
-            common.flush(conn);
-
-            // Update bar once at end if needed
+            focus.releaseProtection(); // NEW: Allow mouse focus after batch
+            utils.flush(conn);
+            
             bar.updateIfDirty(&wm) catch |err| {
                 std.log.err("[main] Failed to update bar: {}", .{err});
             };
         }
 
-        // Adaptive sleep if no events
+        // Connection health check
+        if (xcb.xcb_connection_has_error(conn) != 0) {
+            std.log.err("[main] X11 connection error detected, shutting down", .{});
+            break;
+        }
+
+        // Adaptive sleep
         if (events_processed == 0) {
             idle_count += 1;
             const sleep_ns = if (idle_count < defs.IDLE_THRESHOLD_SHORT)
@@ -248,7 +248,7 @@ pub fn main() !void {
             else
                 defs.EVENT_POLL_SLEEP_NS * defs.SLEEP_MULTIPLIER_LONG;
 
-            common.sleepNs(sleep_ns);
+            utils.sleepNs(sleep_ns);
         }
     }
 
