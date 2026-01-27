@@ -48,11 +48,9 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
 
     tiling.updateWindowFocusFast(wm, old, win);
     utils.flush(wm.conn);
-    
-    // Update bar to reflect new focused window
-    bar.update(wm) catch |err| {
-        std.log.err("[focus] Failed to update bar: {}", .{err});
-    };
+
+    // Don't update bar on focus changes - reduces flicker and update frequency
+    // Bar only needs to update on workspace switches or window creation/destruction
 }
 
 pub fn clearFocus(wm: *WM) void {
@@ -64,9 +62,7 @@ pub fn clearFocus(wm: *WM) void {
         tiling.updateWindowFocusFast(wm, old_win, null);
     }
     utils.flush(wm.conn);
-    
-    // Update bar to reflect no focused window
-    bar.update(wm) catch |err| {
-        std.log.err("[focus] Failed to update bar: {}", .{err});
-    };
+
+    // Mark bar dirty on focus clear (window destroyed)
+    bar.markDirty();
 }

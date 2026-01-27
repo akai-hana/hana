@@ -516,12 +516,14 @@ pub fn atomicSwitchWorkspace(wm: *WM, from: usize, to: usize) !void {
     const workspaces = @import("workspaces");
 
     if (workspaces.getState()) |ws_state| {
-        for (ws_state.workspaces[to].windows.items) |win| {
-            try tx.mapWindow(win);
-        }
-
+        // UNMAP OLD WORKSPACE WINDOWS FIRST to prevent flicker
         for (ws_state.workspaces[from].windows.items) |win| {
             try tx.unmapWindow(win);
+        }
+
+        // THEN map new workspace windows
+        for (ws_state.workspaces[to].windows.items) |win| {
+            try tx.mapWindow(win);
         }
 
         if (wm.fullscreen_window) |fs_win| {

@@ -152,11 +152,8 @@ pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
         return;
     };
     s.window_to_workspace.put(win, s.current) catch {};
-    
-    // Update bar to show new window count
-    bar.update(s.wm) catch |err| {
-        std.log.err("[workspaces] Failed to update bar: {}", .{err});
-    };
+
+    // Don't mark bar dirty here - reduces update frequency
 }
 
 pub fn removeWindow(win: u32) void {
@@ -166,11 +163,8 @@ pub fn removeWindow(win: u32) void {
         const ws_idx = entry.value;
         if (ws_idx < s.workspaces.len) {
             _ = s.workspaces[ws_idx].remove(win);
-            
-            // Update bar to show new window count
-            bar.update(s.wm) catch |err| {
-                std.log.err("[workspaces] Failed to update bar: {}", .{err});
-            };
+
+            // Don't mark bar dirty here - reduces update frequency
         }
         return;
     }
@@ -198,11 +192,8 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
                 std.log.err("[workspaces] Failed to add window to workspace: {}", .{err});
             };
             s.window_to_workspace.put(win, target_ws) catch {};
-            
-            // Update bar
-            bar.update(wm) catch |err| {
-                std.log.err("[workspaces] Failed to update bar: {}", .{err});
-            };
+
+            // Don't mark bar dirty here - reduces update frequency
             return;
         }
     };
@@ -215,11 +206,8 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
     };
 
     s.window_to_workspace.put(win, target_ws) catch {};
-    
-    // Update bar
-    bar.update(wm) catch |err| {
-        std.log.err("[workspaces] Failed to update bar: {}", .{err});
-    };
+
+    // Don't mark bar dirty here - reduces update frequency
 }
 
 pub fn switchTo(wm: *WM, ws_id: usize) void {
@@ -240,17 +228,8 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
         return;
     }
 
-    const old_ws = s.current;
-
-    _ = async.submitGlobal(
-        .workspace_switch,
-        .{ .workspace_switch = .{ .from = old_ws, .to = ws_id } },
-        9,
-    ) catch |err| {
-        std.log.err("[workspace] Failed to submit async switch: {}", .{err});
-        s.switching.store(false, .release);
-        switchToImmediate(wm, ws_id);
-    };
+    // Do switch immediately - no async queue overhead
+    switchToImmediate(wm, ws_id);
 }
 
 pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
@@ -286,10 +265,11 @@ pub fn switchToImmediate(wm: *WM, ws_id: usize) void {
         tiling.retileCurrentWorkspace(wm);
     }
 
-    // Update bar to show new workspace
-    bar.update(wm) catch |err| {
-        std.log.err("[workspaces] Failed to update bar after workspace switch: {}", .{err});
-    };
+    // Raise bar after workspace switch to ensure it stays on top
+    bar.raiseBar();
+
+    // Mark bar as dirty ONCE per workspace switch
+    bar.markDirty();
 }
 
 pub fn getCurrentWindowsView() ?[]const u32 {

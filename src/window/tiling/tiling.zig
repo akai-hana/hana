@@ -224,13 +224,10 @@ pub fn scheduleRetile(wm: *WM) void {
     const s = state orelse return;
     if (!s.enabled) return;
 
+    // Skip async queue - retile immediately for faster response
     if (s.retile_pending.swap(true, .acq_rel)) return;
 
-    _ = async.submitGlobal(.retile, .{ .retile = {} }, 10) catch |err| {
-        std.log.err("[tiling] Failed to submit async retile: {}", .{err});
-        s.retile_pending.store(false, .release);
-        retile(wm, s);
-    };
+    retile(wm, s);
 }
 
 fn retile(wm: *WM, s: *State) void {
@@ -313,9 +310,7 @@ fn retile(wm: *WM, s: *State) void {
         return;
     };
 
-    bar.update(wm) catch |err| {
-        std.log.err("[tiling] Failed to update bar: {}", .{err});
-    };
+    // Don't mark bar dirty here - reduces update frequency
 }
 
 pub fn restoreWindowPositions(wm: *WM) bool {
@@ -373,10 +368,8 @@ pub fn toggleLayout(wm: *WM) void {
 
     workspaces.clearAllPositions();
 
-    _ = async.submitGlobal(.layout_change, .{ .layout_change = {} }, 8) catch |err| {
-        std.log.err("[tiling] Failed to submit async layout change: {}", .{err});
-        retile(wm, s);
-    };
+    // Retile immediately instead of using async queue
+    retile(wm, s);
 }
 
 pub fn increaseMasterWidth(wm: *WM) void {

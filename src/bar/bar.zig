@@ -174,11 +174,32 @@ pub fn isBarWindow(win: u32) bool {
     return false;
 }
 
-/// Update bar immediately (called on property changes or workspace switches)
-pub fn update(wm: *WM) !void {
+/// Mark bar as dirty (needs redraw)
+pub fn markDirty() void {
     if (getBar()) |state| {
-        state.invalidateTitleCache();
-        try render.draw(state, wm);
+        state.markDirty();
+    }
+}
+
+/// Raise bar window to top of stack - only call when needed (e.g., workspace switches)
+/// Does NOT flush - caller controls when to flush
+pub fn raiseBar() void {
+    if (getBar()) |state| {
+        const c_conn: *@import("defs").xcb.xcb_connection_t = @ptrCast(state.dc.conn);
+        _ = xcb.xcb_configure_window(
+            c_conn,
+            state.window,
+            xcb.XCB_CONFIG_WINDOW_STACK_MODE,
+            &[_]u32{xcb.XCB_STACK_MODE_ABOVE},
+        );
+        // Don't flush here - let caller control when to flush
+    }
+}
+
+/// Update bar if dirty (called from main event loop)
+pub fn updateIfDirty(wm: *WM) !void {
+    if (getBar()) |state| {
+        try state.updateIfDirty(wm);
     }
 }
 
@@ -209,9 +230,7 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
             render.updateStatus(state, wm) catch |err| {
                 std.log.err("[bar] Failed to update status: {}", .{err});
             };
-            render.draw(state, wm) catch |err| {
-                std.log.err("[bar] Failed to draw after status update: {}", .{err});
-            };
+            state.markDirty();
         }
     }
 }

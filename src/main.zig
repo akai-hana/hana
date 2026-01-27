@@ -14,8 +14,6 @@ const async = @import("async");
 const bar = @import("bar");
 const workspaces = @import("workspaces");
 
-// Note: bar state module removed from polling system
-
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -24,30 +22,6 @@ const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
     xcb.XCB_EVENT_MASK_KEY_PRESS |
     xcb.XCB_EVENT_MASK_ENTER_WINDOW |
     xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
-
-const EventFlags = packed struct {
-    critical: bool = false,
-    batchable: bool = false,
-};
-
-const EVENT_FLAGS = blk: {
-    var flags = [_]EventFlags{.{}} ** 128;
-    flags[xcb.XCB_MAP_REQUEST] = .{ .critical = true };
-    flags[xcb.XCB_CONFIGURE_REQUEST] = .{ .critical = true };
-    flags[xcb.XCB_KEY_PRESS] = .{ .critical = true };
-    flags[xcb.XCB_BUTTON_PRESS] = .{ .critical = true };
-    flags[xcb.XCB_BUTTON_RELEASE] = .{ .critical = true };
-    flags[xcb.XCB_ENTER_NOTIFY] = .{ .batchable = true };
-    flags[xcb.XCB_LEAVE_NOTIFY] = .{ .batchable = true };
-    flags[xcb.XCB_FOCUS_IN] = .{ .batchable = true };
-    flags[xcb.XCB_FOCUS_OUT] = .{ .batchable = true };
-    flags[xcb.XCB_EXPOSE] = .{ .batchable = true };
-    break :blk flags;
-};
-
-inline fn getEventFlags(event_type: u8) EventFlags {
-    return if (event_type < 128) EVENT_FLAGS[event_type] else .{};
-}
 
 var should_reload = std.atomic.Value(bool).init(false);
 var running = std.atomic.Value(bool).init(true);
@@ -240,27 +214,24 @@ pub fn main() !void {
 
     std.log.info("[hana] Started", .{});
 
-    var batch_count: usize = 0;
     var idle_count: usize = 0;
-    var last_flush_time: i64 = 0;
-    const FLUSH_INTERVAL_NS: i64 = 16 * std.time.ns_per_ms;
 
     while (running.load(.acquire)) {
         // Process async jobs
         async.processPending(&wm);
 
-        const event = xcb.xcb_poll_for_event(conn);
+        // Process all available events in a batch
+        var events_processed: usize = 0;
+        const max_events_per_batch: usize = 32;
 
-        if (xcb.xcb_connection_has_error(conn) != 0) {
-            std.log.err("[main] X11 connection error detected, shutting down", .{});
-            break;
-        }
+        while (events_processed < max_events_per_batch) : (events_processed += 1) {
+            const event = xcb.xcb_poll_for_event(conn);
+            if (event == null) break;
+            defer std.c.free(event.?);
 
-        if (event) |ev| {
-            defer std.c.free(ev);
             idle_count = 0;
 
-            const event_type = @as(*u8, @ptrCast(ev)).*;
+            const event_type = @as(*u8, @ptrCast(event.?)).*;
 
             if (should_reload.swap(false, .acq_rel)) {
                 handleConfigReload(&wm) catch |err| {
@@ -268,46 +239,27 @@ pub fn main() !void {
                 };
             }
 
-            events.dispatch(event_type, ev, &wm);
+            events.dispatch(event_type, event.?, &wm);
+        }
 
-            const flags = getEventFlags(event_type);
-            if (flags.critical) {
-                utils.flush(conn);
-                batch_count = 0;
-                if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
-                    last_flush_time = ts.sec * std.time.ns_per_s + ts.nsec;
-                } else |_| {}
-            } else if (flags.batchable) {
-                batch_count += 1;
+        // Check connection health
+        if (xcb.xcb_connection_has_error(conn) != 0) {
+            std.log.err("[main] X11 connection error detected, shutting down", .{});
+            break;
+        }
 
-                const now = if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts|
-                    ts.sec * std.time.ns_per_s + ts.nsec
-                else |_|
-                    last_flush_time;
+        // Single flush per event loop iteration
+        if (events_processed > 0) {
+            utils.flush(conn);
 
-                if (batch_count >= defs.MAX_EVENT_BATCH_SIZE or
-                    (now - last_flush_time) >= FLUSH_INTERVAL_NS)
-                {
-                    utils.flush(conn);
-                    batch_count = 0;
-                    last_flush_time = now;
-                }
-            } else {
-                utils.flush(conn);
-                batch_count = 0;
-                if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
-                    last_flush_time = ts.sec * std.time.ns_per_s + ts.nsec;
-                } else |_| {}
-            }
-        } else {
-            if (batch_count > 0) {
-                utils.flush(conn);
-                batch_count = 0;
-                if (std.posix.clock_gettime(std.posix.CLOCK.REALTIME)) |ts| {
-                    last_flush_time = ts.sec * std.time.ns_per_s + ts.nsec;
-                } else |_| {}
-            }
+            // Update bar once at end if needed
+            bar.updateIfDirty(&wm) catch |err| {
+                std.log.err("[main] Failed to update bar: {}", .{err});
+            };
+        }
 
+        // Sleep if no events
+        if (events_processed == 0) {
             if (!async.getGlobal().?.hasPending()) {
                 idle_count += 1;
                 const sleep_ns = if (idle_count < defs.IDLE_THRESHOLD_SHORT)
