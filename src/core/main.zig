@@ -1,4 +1,4 @@
-//! Main entry point and event loop.
+//! Main entry point and event loop - Optimized
 
 const std = @import("std");
 const posix = std.posix;
@@ -10,9 +10,9 @@ const xkbcommon = @import("xkbcommon");
 const events = @import("events");
 const input = @import("input");
 const utils = @import("utils");
-const async = @import("async");
 const bar = @import("bar");
 const workspaces = @import("workspaces");
+const common = @import("common");
 
 const xcb = defs.xcb;
 const WM = defs.WM;
@@ -103,25 +103,11 @@ fn grabKeybindings(wm: *WM) !void {
         }
     }
 
-    utils.flush(wm.conn);
+    common.flush(wm.conn);
 }
 
 fn handleConfigReload(wm: *WM) !void {
-    std.log.info("[config] Reload requested, waiting for pending jobs...", .{});
-
-    const queue = async.getGlobal() orelse return error.AsyncQueueNotInitialized;
-
-    var wait_iterations: usize = 0;
-    const max_wait_iterations: usize = 100;
-    while (queue.hasPending() and wait_iterations < max_wait_iterations) : (wait_iterations += 1) {
-        async.processPending(wm);
-        std.posix.nanosleep(0, 1 * std.time.ns_per_ms);
-    }
-
-    if (queue.hasPending()) {
-        std.log.warn("[config] Timeout waiting for jobs to complete, clearing queue", .{});
-        queue.clear();
-    }
+    std.log.info("[config] Reload requested", .{});
 
     var new_config = config.loadConfigDefault(wm.allocator) catch |err| {
         std.log.err("[config] Failed to load new config: {}, keeping old config", .{err});
@@ -194,9 +180,6 @@ pub fn main() !void {
     };
     defer wm.deinit();
 
-    try async.initGlobal(allocator);
-    defer async.deinitGlobal(allocator);
-
     setupSignalHandler();
     events.initModules(&wm);
     defer events.deinitModules(&wm);
@@ -210,20 +193,17 @@ pub fn main() !void {
 
     try grabKeybindings(&wm);
     setupExistingWindows(conn, root);
-    utils.flush(conn);
+    common.flush(conn);
 
     std.log.info("[hana] Started", .{});
 
     var idle_count: usize = 0;
 
     while (running.load(.acquire)) {
-        // Process async jobs
-        async.processPending(&wm);
-
-        // Process all available events in a batch
         var events_processed: usize = 0;
         const max_events_per_batch: usize = 32;
 
+        // Process all available events in a batch
         while (events_processed < max_events_per_batch) : (events_processed += 1) {
             const event = xcb.xcb_poll_for_event(conn);
             if (event == null) break;
@@ -250,7 +230,7 @@ pub fn main() !void {
 
         // Single flush per event loop iteration
         if (events_processed > 0) {
-            utils.flush(conn);
+            common.flush(conn);
 
             // Update bar once at end if needed
             bar.updateIfDirty(&wm) catch |err| {
@@ -258,21 +238,17 @@ pub fn main() !void {
             };
         }
 
-        // Sleep if no events
+        // Adaptive sleep if no events
         if (events_processed == 0) {
-            if (!async.getGlobal().?.hasPending()) {
-                idle_count += 1;
-                const sleep_ns = if (idle_count < defs.IDLE_THRESHOLD_SHORT)
-                    defs.EVENT_POLL_SLEEP_NS
-                else if (idle_count < defs.IDLE_THRESHOLD_LONG)
-                    defs.EVENT_POLL_SLEEP_NS * defs.SLEEP_MULTIPLIER_MEDIUM
-                else
-                    defs.EVENT_POLL_SLEEP_NS * defs.SLEEP_MULTIPLIER_LONG;
+            idle_count += 1;
+            const sleep_ns = if (idle_count < defs.IDLE_THRESHOLD_SHORT)
+                defs.EVENT_POLL_SLEEP_NS
+            else if (idle_count < defs.IDLE_THRESHOLD_LONG)
+                defs.EVENT_POLL_SLEEP_NS * defs.SLEEP_MULTIPLIER_MEDIUM
+            else
+                defs.EVENT_POLL_SLEEP_NS * defs.SLEEP_MULTIPLIER_LONG;
 
-                std.posix.nanosleep(0, sleep_ns);
-            } else {
-                idle_count = 0;
-            }
+            common.sleepNs(sleep_ns);
         }
     }
 

@@ -1,7 +1,4 @@
-//! Centralized focus management for window manager.
-//!
-//! This module provides a single point of control for window focus changes,
-//! ensuring consistent border updates and proper XCB focus commands.
+//! Centralized focus management
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -9,6 +6,7 @@ const defs = @import("defs");
 const tiling = @import("tiling");
 const utils = @import("utils");
 const bar = @import("bar");
+const common = @import("common");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -21,6 +19,10 @@ pub const Reason = enum {
     tiling_operation,
 };
 
+// Track last explicit focus change to prevent mouse stealing focus
+var last_explicit_focus_time: i64 = 0;
+const FOCUS_GRACE_PERIOD_NS: i64 = 150 * std.time.ns_per_ms;
+
 pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     if (win == wm.root) {
         std.log.err("[CRITICAL] Attempted to focus ROOT window (0x{x})! Reason: {s}. Aborting.", .{ win, @tagName(reason) });
@@ -30,12 +32,22 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
         return;
     }
 
-    // Don't focus the bar window
-    if (bar.isBarWindow(win)) {
-        return;
+    if (bar.isBarWindow(win)) return;
+
+    // Ignore mouse_enter during grace period
+    if (reason == .mouse_enter) {
+        const now = common.getTimestampNs();
+        if (now > 0 and now - last_explicit_focus_time < FOCUS_GRACE_PERIOD_NS) {
+            return;
+        }
     }
 
     if (wm.focused_window == win) return;
+
+    // Record timestamp for explicit focus changes
+    if (reason != .mouse_enter) {
+        last_explicit_focus_time = common.getTimestampNs();
+    }
 
     const old = wm.focused_window;
     wm.focused_window = win;
@@ -47,10 +59,7 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     }
 
     tiling.updateWindowFocusFast(wm, old, win);
-    utils.flush(wm.conn);
-
-    // Don't update bar on focus changes - reduces flicker and update frequency
-    // Bar only needs to update on workspace switches or window creation/destruction
+    common.flush(wm.conn);
 }
 
 pub fn clearFocus(wm: *WM) void {
@@ -61,8 +70,7 @@ pub fn clearFocus(wm: *WM) void {
     if (old) |old_win| {
         tiling.updateWindowFocusFast(wm, old_win, null);
     }
-    utils.flush(wm.conn);
+    common.flush(wm.conn);
 
-    // Mark bar dirty on focus clear (window destroyed)
     bar.markDirty();
 }

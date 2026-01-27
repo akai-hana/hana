@@ -9,6 +9,7 @@ const tiling = @import("tiling");
 const workspaces = @import("workspaces");
 const focus = @import("focus");
 const atomic = @import("atomic");
+const bar = @import("bar");
 
 pub fn init(_: *WM) void {}
 pub fn deinit(_: *WM) void {}
@@ -75,8 +76,12 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
         focus.setFocus(wm, win, .tiling_operation);
         tiling.retileCurrentWorkspace(wm);
+        
+        // Mark bar dirty to update with new window title
+        bar.markDirty();
     } else {
         utils.flush(wm.conn);
+        bar.markDirty();
     }
 }
 

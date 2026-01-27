@@ -1,12 +1,12 @@
 #!/bin/sh
-echo "ls src/bar"
-ls
+echo "ls src"
+ls src
 
-echo "tree src/bar"
-tree src/bar
+echo "tree src"
+tree src
 
-find ./src/bar -type f -name "*.zig" | while read -r file; do
-    echo "=== Printing file "$file" ==="
+find ./src -type f -name "*.zig" | while read -r file; do
+    echo "Printing file "$file""
     cat "$file"
     echo ""
 done
