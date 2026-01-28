@@ -22,6 +22,7 @@ pub const DrawContext = struct {
     ft_face: ?c.FT_Face,
     font_height: u16,
     font_ascender: i16,
+    font_descender: i16,
     current_color: struct {
         red: u16,
         green: u16,

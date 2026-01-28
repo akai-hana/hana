@@ -56,6 +56,8 @@ Mod+Shift+s = "pkill equibop"
 Mod+d       = "ghostty"
 Mod+Shift+d = "pkill ghostty"
 
+Mod+x = "~/Games/t-client/DDNet"
+
 Mod+v       = "flatpak run com.github.th_ch.youtube_music"
 Mod+Shift+v = "pkill youtube-music"
 
