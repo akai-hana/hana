@@ -1,4 +1,4 @@
-//! Tiling system - FIXED: borders and instant retiling
+//! Tiling system - MINIMAL: Immediate retiling, immediate flushing
 
 const std = @import("std");
 const defs = @import("defs");
@@ -117,9 +117,7 @@ pub fn addWindow(wm: *WM, win: u32) void {
         return;
     };
 
-    // FIXED: Set both border width AND color
     var b = batch.Batch.begin(wm) catch {
-        // Fallback: configure border directly
         utils.configureBorder(wm.conn, win, s.border_width, s.borderColor(wm, win));
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK,
             &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
@@ -133,7 +131,7 @@ pub fn addWindow(wm: *WM, win: u32) void {
     b.setBorderWidth(win, s.border_width) catch {};
     b.setBorder(win, color) catch {};
     b.setFocus(win) catch {};
-    b.execute();
+    b.execute();  // Flushes immediately
 
     wm.focused_window = win;
     s.markDirty();
@@ -180,7 +178,7 @@ pub inline fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) v
         }
     }
 
-    b.executeNoFlush();
+    b.execute();  // Flushes immediately
 }
 
 fn updateWindowFocusSlow(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
@@ -197,6 +195,8 @@ fn updateWindowFocusSlow(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
             utils.setBorder(wm.conn, new_win, s.borderColor(wm, new_win));
         }
     }
+
+    utils.flush(wm.conn);  // Flush immediately
 }
 
 pub inline fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
@@ -208,28 +208,23 @@ pub inline fn isWindowTiled(win: u32) bool {
     return s.enabled and s.tiled_set.contains(win);
 }
 
-// FIXED: Removed debouncing - always retile immediately when dirty
+// IMMEDIATE retiling when dirty
 pub fn retileIfDirty(wm: *WM) void {
     const s = state orelse return;
     if (!s.isDirty()) return;
-    
+
     s.clearDirty();
-    retileCurrentWorkspaceNoFlush(wm);
+    retileCurrentWorkspace(wm);  // This flushes
 }
 
 pub fn retileCurrentWorkspace(wm: *WM) void {
-    retileCurrentWorkspaceNoFlush(wm);
-    utils.flush(wm.conn);
-}
-
-pub fn retileCurrentWorkspaceNoFlush(wm: *WM) void {
     const s = state orelse return;
     if (!s.enabled) return;
 
     const ws_windows = workspaces.getCurrentWindowsView() orelse return;
     if (s.tiled_windows.items.len == 0) return;
 
-    var visible_buf: [64]u32 = undefined;
+    var visible_buf: [128]u32 = undefined;
     var visible_count: usize = 0;
 
     for (s.tiled_windows.items) |win| {
@@ -252,8 +247,8 @@ pub fn retileCurrentWorkspaceNoFlush(wm: *WM) void {
     const visible = visible_buf[0..visible_count];
     const screen = wm.screen;
 
-    var geometries: [64]utils.Rect = undefined;
-    var borders: [64]u32 = undefined;
+    var geometries: [128]utils.Rect = undefined;
+    var borders: [128]u32 = undefined;
 
     switch (s.layout) {
         .master => calculateMasterLayout(s, visible, screen.width_in_pixels, screen.height_in_pixels, &geometries),
@@ -281,10 +276,10 @@ pub fn retileCurrentWorkspaceNoFlush(wm: *WM) void {
         b.raise(visible[visible.len - 1]) catch {};
     }
 
-    b.executeNoFlush();
+    b.execute();  // Flushes immediately
 }
 
-fn retileDirect(wm: *WM, visible: []const u32, geometries: *[64]utils.Rect, borders: *[64]u32, border_width: u16) void {
+fn retileDirect(wm: *WM, visible: []const u32, geometries: *[128]utils.Rect, borders: *[128]u32, border_width: u16) void {
     const conn = wm.conn;
 
     for (visible, 0..) |win, i| {
@@ -302,9 +297,11 @@ fn retileDirect(wm: *WM, visible: []const u32, geometries: *[64]utils.Rect, bord
         _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{border_width});
         _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borders[i]});
     }
+
+    utils.flush(conn);  // Flush immediately
 }
 
-fn calculateMasterLayout(s: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[64]utils.Rect) void {
+fn calculateMasterLayout(s: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[128]utils.Rect) void {
     const bar_height = bar.getHeight();
     const usable_h = screen_h - bar_height;
 
@@ -371,7 +368,7 @@ fn calculateMasterLayout(s: *const State, windows: []const u32, screen_w: u16, s
     }
 }
 
-fn calculateMonocleLayout(_: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[64]utils.Rect) void {
+fn calculateMonocleLayout(_: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[128]utils.Rect) void {
     const bar_height = bar.getHeight();
     const usable_h = screen_h - bar_height;
 
@@ -387,7 +384,7 @@ fn calculateMonocleLayout(_: *const State, windows: []const u32, screen_w: u16, 
     }
 }
 
-fn calculateGridLayout(s: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[64]utils.Rect) void {
+fn calculateGridLayout(s: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[128]utils.Rect) void {
     const bar_height = bar.getHeight();
     const usable_h = screen_h - bar_height;
 
@@ -424,38 +421,38 @@ pub fn toggleLayout(wm: *WM) void {
         .monocle => .grid,
         .grid => .master,
     };
-    retileCurrentWorkspace(wm);
+    retileCurrentWorkspace(wm);  // Flushes immediately
 }
 
 pub fn increaseMasterWidth(wm: *WM) void {
     const s = state orelse return;
     s.master_width_factor = @min(defs.MAX_MASTER_WIDTH, s.master_width_factor + 0.05);
-    retileCurrentWorkspace(wm);
+    retileCurrentWorkspace(wm);  // Flushes immediately
 }
 
 pub fn decreaseMasterWidth(wm: *WM) void {
     const s = state orelse return;
     s.master_width_factor = @max(defs.MIN_MASTER_WIDTH, s.master_width_factor - 0.05);
-    retileCurrentWorkspace(wm);
+    retileCurrentWorkspace(wm);  // Flushes immediately
 }
 
 pub fn increaseMasterCount(wm: *WM) void {
     const s = state orelse return;
     s.master_count = @min(s.tiled_windows.items.len, s.master_count + 1);
-    retileCurrentWorkspace(wm);
+    retileCurrentWorkspace(wm);  // Flushes immediately
 }
 
 pub fn decreaseMasterCount(wm: *WM) void {
     const s = state orelse return;
     s.master_count = @max(1, s.master_count -| 1);
-    retileCurrentWorkspace(wm);
+    retileCurrentWorkspace(wm);  // Flushes immediately
 }
 
 pub fn toggleTiling(wm: *WM) void {
     const s = state orelse return;
     s.enabled = !s.enabled;
     if (s.enabled) {
-        retileCurrentWorkspace(wm);
+        retileCurrentWorkspace(wm);  // Flushes immediately
     }
 }
 
@@ -472,7 +469,7 @@ pub fn reloadConfig(wm: *WM) void {
     s.border_focused = wm.config.tiling.border_focused;
     s.border_normal = wm.config.tiling.border_normal;
 
-    if (s.enabled) retileCurrentWorkspace(wm);
+    if (s.enabled) retileCurrentWorkspace(wm);  // Flushes immediately
 }
 
 pub inline fn getState() ?*State {

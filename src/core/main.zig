@@ -1,4 +1,4 @@
-//! Main entry point
+// Main event loop - MINIMAL: Maximum responsiveness, zero artificial delays
 
 const std = @import("std");
 const posix = std.posix;
@@ -11,7 +11,6 @@ const events = @import("events");
 const input = @import("input");
 const utils = @import("utils");
 const bar = @import("bar");
-const workspaces = @import("workspaces");
 
 const xcb = defs.xcb;
 const WM = defs.WM;
@@ -196,21 +195,17 @@ pub fn main() !void {
 
     std.log.info("[hana] Started", .{});
 
-    var idle_count: usize = 0;
-
+    // MINIMAL LOOP: Process events → flush → repeat
     while (running.load(.acquire)) {
-        var events_processed: usize = 0;
-        const max_events_per_batch: usize = 256; // INCREASED from 128
+        var events_handled = false;
 
-        // OPTIMIZED: Process larger batches of events
-        while (events_processed < max_events_per_batch) : (events_processed += 1) {
+        // Process ALL available events
+        while (true) {
             const event = xcb.xcb_poll_for_event(conn);
             if (event == null) break;
             defer std.c.free(event.?);
 
-            idle_count = 0;
-
-            const event_type = @as(*u8, @ptrCast(event.?)).*;
+            events_handled = true;
 
             if (should_reload.swap(false, .acq_rel)) {
                 handleConfigReload(&wm) catch |err| {
@@ -218,33 +213,26 @@ pub fn main() !void {
                 };
             }
 
+            const event_type = @as(*u8, @ptrCast(event.?)).*;
             events.dispatch(event_type, event.?, &wm);
         }
 
-        if (events_processed > 0) {
+        if (events_handled) {
+            // Events were handled - do any resulting work
             utils.releaseProtection();
 
-            // CRITICAL: Retile once after ALL events processed
             const tiling_mod = @import("tiling");
             tiling_mod.retileIfDirty(&wm);
 
-            // Update bar if needed
             bar.updateIfDirty(&wm) catch |err| {
                 std.log.err("[main] Failed to update bar: {}", .{err});
             };
 
-            // OPTIMIZED: Single flush after all work
+            // FLUSH IMMEDIATELY - no throttling!
             utils.flush(conn);
-
-            idle_count = 0;
         } else {
-            // NO EVENTS - yield CPU
-            idle_count += 1;
-
-            // OPTIMIZED: More aggressive idle detection
-            if (idle_count > 30) { // Reduced from 50
-                std.posix.nanosleep(0, 30 * std.time.ns_per_us); // 0.03ms
-            }
+            // No events - sleep briefly to avoid spinning
+            std.posix.nanosleep(0, 1 * std.time.ns_per_ms);
         }
 
         if (xcb.xcb_connection_has_error(conn) != 0) {

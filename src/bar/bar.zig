@@ -8,10 +8,6 @@ const utils = @import("utils");
 const workspaces = @import("workspaces");
 const tiling = @import("tiling");
 
-// PERFORMANCE FIX: Debouncing for bar updates
-var last_dirty_time: i64 = 0;
-const DIRTY_INTERVAL_NS = 16_000_000; // 16ms = 60fps max
-
 const State = struct {
     window: u32,
     width: u16,
@@ -177,20 +173,8 @@ pub inline fn isBarWindow(win: u32) bool {
     return if (state) |s| s.window == win else false;
 }
 
-// PERFORMANCE FIX: Debounced markDirty using MONOTONIC clock
+// NO DEBOUNCING - mark dirty immediately
 pub inline fn markDirty() void {
-    const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch {
-        // Fallback if clock fails - just mark dirty
-        if (state) |s| s.markDirty();
-        return;
-    };
-    const now = @as(i64, ts.sec) * std.time.ns_per_s + ts.nsec;
-    
-    if (now - last_dirty_time < DIRTY_INTERVAL_NS) {
-        return; // Skip if updated recently
-    }
-    last_dirty_time = now;
-
     if (state) |s| s.markDirty();
 }
 

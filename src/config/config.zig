@@ -1,4 +1,4 @@
-//! Configuration - optimized with consolidated color parsing
+//! Configuration interpreter
 
 const std = @import("std");
 const defs = @import("defs");

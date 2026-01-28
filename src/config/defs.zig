@@ -1,5 +1,4 @@
-//! Core type definitions - OPTIMIZED
-//! Changes: Removed Window struct entirely (was just wrapping u32 with unused properties)
+//! Core type definitions
 
 const std = @import("std");
 

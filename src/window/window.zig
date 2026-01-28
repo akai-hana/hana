@@ -1,4 +1,4 @@
-//! Window event handlers - FIXED: instant spawning
+//! Window event handlers - MINIMAL: Instant spawning, immediate flushing
 
 const std = @import("std");
 const defs = @import("defs");
@@ -18,6 +18,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
     if (bar.isBarWindow(win)) {
         _ = xcb.xcb_map_window(wm.conn, win);
+        utils.flush(wm.conn);  // Flush immediately
         return;
     }
 
@@ -31,47 +32,13 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     const validated_target_ws = if (target_ws) |ws| blk: {
         const ws_state = workspaces.getState() orelse break :blk current_ws;
         if (ws >= ws_state.workspaces.len) {
-            std.log.warn("[window] Rule workspace {} exceeds count, using current", .{ws});
+            std.log.warn("[window] Rule workspace {} exceeds count, using current {}", .{ ws, current_ws });
             break :blk current_ws;
         }
         break :blk ws;
     } else current_ws;
 
-    var b = batch.Batch.begin(wm) catch {
-        handleMapRequestSlow(wm, win, validated_target_ws, current_ws);
-        return;
-    };
-    defer b.deinit();
-
-    b.map(win) catch {};
-    wm.addWindow(win) catch {};
-
-    if (validated_target_ws == current_ws) {
-        workspaces.addWindowToCurrentWorkspace(wm, win);
-    } else {
-        workspaces.moveWindowTo(wm, win, validated_target_ws);
-    }
-
-    if (wm.config.tiling.enabled) {
-        if (validated_target_ws == current_ws) {
-            b.setBorderWidth(win, wm.config.tiling.border_width) catch {};
-            b.setBorder(win, wm.config.tiling.border_normal) catch {};
-        }
-    }
-
-    b.execute();
-
-    // FIXED: Add to tiling and retile immediately
-    if (wm.config.tiling.enabled and validated_target_ws == current_ws) {
-        tiling.addWindow(wm, win);
-        // Immediately retile instead of waiting for event loop
-        tiling.retileCurrentWorkspace(wm);
-    }
-
-    bar.markDirty();
-}
-
-fn handleMapRequestSlow(wm: *WM, win: u32, validated_target_ws: usize, current_ws: usize) void {
+    // Map window immediately
     _ = xcb.xcb_map_window(wm.conn, win);
     wm.addWindow(win) catch {};
 
@@ -81,22 +48,18 @@ fn handleMapRequestSlow(wm: *WM, win: u32, validated_target_ws: usize, current_w
         workspaces.moveWindowTo(wm, win, validated_target_ws);
     }
 
-    if (wm.config.tiling.enabled) {
-        const attrs = utils.WindowAttrs{
-            .border_width = wm.config.tiling.border_width,
-            .event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW,
-        };
-        attrs.configure(wm.conn, win);
-
-        if (validated_target_ws == current_ws) {
-            tiling.addWindow(wm, win);
-            tiling.retileCurrentWorkspace(wm);
-        }
-    } else {
-        utils.flush(wm.conn);
+    // Set up tiling immediately
+    if (wm.config.tiling.enabled and validated_target_ws == current_ws) {
+        _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, 
+            &[_]u32{wm.config.tiling.border_width});
+        _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, 
+            &[_]u32{wm.config.tiling.border_normal});
+        
+        tiling.addWindow(wm, win);  // This marks dirty and will retile in main loop
     }
 
     bar.markDirty();
+    utils.flush(wm.conn);  // Flush immediately
 }
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
@@ -109,6 +72,7 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
         @intCast(event.height),
         @intCast(event.border_width),
     });
+    utils.flush(wm.conn);  // Flush immediately
 }
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
@@ -119,7 +83,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     const old_focus = wm.focused_window;
     utils.setFocus(wm, event.event, false);
 
-    tiling.updateWindowFocus(wm, old_focus, event.event);
+    tiling.updateWindowFocus(wm, old_focus, event.event);  // This flushes
 }
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
@@ -139,6 +103,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     }
 
     bar.markDirty();
+    utils.flush(wm.conn);  // Flush immediately
 }
 
 fn matchWorkspaceRule(wm: *WM, win: u32) ?usize {

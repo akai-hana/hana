@@ -251,7 +251,7 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
     };
 }
 
-// Focus helpers - INLINED from focus.zig
+// Focus helpers - MINIMAL VERSION
 
 var focus_protection_active: bool = false;
 
@@ -269,11 +269,17 @@ pub inline fn setFocus(wm: *defs.WM, win: u32, protect: bool) void {
     if (protect) {
         focus_protection_active = true;
     }
+    
+    // Flush immediately - focus changes need to be instant
+    flush(wm.conn);
 }
 
 pub inline fn clearFocus(wm: *defs.WM) void {
     wm.focused_window = null;
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, wm.root, xcb.XCB_CURRENT_TIME);
+    
+    // Flush immediately
+    flush(wm.conn);
 }
 
 pub inline fn isProtected() bool {

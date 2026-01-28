@@ -1,4 +1,4 @@
-//! Workspace management - FIXED: instant switching
+// Workspace management - FIXED: Immediate, event-driven switching
 
 const std = @import("std");
 const defs = @import("defs");
@@ -162,25 +162,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
     s.window_to_workspace.put(win, target_ws) catch {};
 
     if (from_ws == s.current) {
-        const screen = wm.screen;
-        const off_screen_x: i16 = @intCast(screen.width_in_pixels * 2);
-
-        var b = batch.Batch.begin(wm) catch {
-            _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_X,
-                &[_]u32{@bitCast(@as(i32, off_screen_x))});
-            utils.flush(wm.conn);
-            return;
-        };
-        defer b.deinit();
-
-        const rect = utils.Rect{
-            .x = off_screen_x,
-            .y = 0,
-            .width = 100,
-            .height = 100,
-        };
-        b.configure(win, rect) catch {};
-        b.execute();
+        _ = xcb.xcb_unmap_window(wm.conn, win);
 
         if (wm.focused_window == win) {
             utils.clearFocus(wm);
@@ -195,69 +177,57 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
     }
 }
 
-// FIXED: Immediately retile after workspace switch, no waiting for debounce
+// IMMEDIATE execution - no queuing, no delays
 pub fn switchTo(wm: *WM, ws_id: usize) void {
     const s = state orelse return;
 
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
 
-    const old_ws = s.current;
+    executeSwitch(wm, s.current, ws_id);
     s.current = ws_id;
+}
 
-    var b = batch.Batch.begin(wm) catch {
-        switchToSlow(wm, old_ws, ws_id);
-        return;
-    };
-    defer b.deinit();
+// Fast execution with minimal XCB calls
+fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
+    const s = state orelse return;
 
-    const screen = wm.screen;
-    const off_screen_x: i16 = @intCast(screen.width_in_pixels * 2);
+    // OPTIMIZATION: Use stack arrays for speed
+    var unmapped: [128]u32 = undefined;
+    var unmapped_count: usize = 0;
+    var mapped: [128]u32 = undefined;
+    var mapped_count: usize = 0;
 
-    // Hide old workspace windows
+    // Collect windows to unmap
     for (s.workspaces[old_ws].windows.items) |win| {
-        const rect = utils.Rect{
-            .x = off_screen_x,
-            .y = 0,
-            .width = 100,
-            .height = 100,
-        };
-        b.configure(win, rect) catch continue;
+        if (unmapped_count < unmapped.len) {
+            unmapped[unmapped_count] = win;
+            unmapped_count += 1;
+        }
+    }
+
+    // Collect windows to map
+    for (s.workspaces[new_ws].windows.items) |win| {
+        if (mapped_count < mapped.len) {
+            mapped[mapped_count] = win;
+            mapped_count += 1;
+        }
+    }
+
+    const conn = wm.conn;
+
+    // Unmap old workspace (fast!)
+    for (unmapped[0..unmapped_count]) |win| {
+        _ = xcb.xcb_unmap_window(conn, win);
+    }
+
+    // Map new workspace (fast!)
+    for (mapped[0..mapped_count]) |win| {
+        _ = xcb.xcb_map_window(conn, win);
     }
 
     // Set focus
-    if (s.workspaces[ws_id].windows.items.len > 0) {
-        const win = s.workspaces[ws_id].windows.items[0];
-        b.setFocus(win) catch {};
-        wm.focused_window = win;
-    } else {
-        b.setFocus(wm.root) catch {};
-        wm.focused_window = null;
-    }
-
-    b.execute();
-
-    // FIXED: Immediately retile the new workspace, don't wait for dirty flag
-    if (wm.config.tiling.enabled) {
-        const tiling_mod = @import("tiling");
-        tiling_mod.retileCurrentWorkspace(wm);
-    }
-
-    @import("bar").markDirty();
-}
-
-fn switchToSlow(wm: *WM, old_ws: usize, ws_id: usize) void {
-    const s = state orelse return;
-    const conn = wm.conn;
-    const screen = wm.screen;
-    const off_screen_x: i32 = screen.width_in_pixels * 2;
-
-    for (s.workspaces[old_ws].windows.items) |win| {
-        _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X,
-            &[_]u32{@bitCast(off_screen_x)});
-    }
-
-    if (s.workspaces[ws_id].windows.items.len > 0) {
-        const win = s.workspaces[ws_id].windows.items[0];
+    if (mapped_count > 0) {
+        const win = mapped[0];
         _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, xcb.XCB_CURRENT_TIME);
         wm.focused_window = win;
     } else {
@@ -265,11 +235,12 @@ fn switchToSlow(wm: *WM, old_ws: usize, ws_id: usize) void {
         wm.focused_window = null;
     }
 
-    _ = xcb.xcb_flush(conn);
-
+    // Mark dirty for retiling (happens later in main loop)
     if (wm.config.tiling.enabled) {
         const tiling_mod = @import("tiling");
-        tiling_mod.retileCurrentWorkspace(wm);
+        if (tiling_mod.getState()) |ts| {
+            ts.markDirty();
+        }
     }
 
     @import("bar").markDirty();

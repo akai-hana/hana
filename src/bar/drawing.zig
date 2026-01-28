@@ -1,4 +1,5 @@
 //! XCB drawing context with proper baseline positioning
+
 const std = @import("std");
 const defs = @import("defs");
 const c = @cImport({
