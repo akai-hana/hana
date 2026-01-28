@@ -385,20 +385,51 @@ pub const DrawContext = struct {
 
         _ = c.xcb_create_gc(self.conn, gc, pixmap, 0, null);
 
-        _ = c.xcb_put_image(
-            self.conn,
-            c.XCB_IMAGE_FORMAT_Z_PIXMAP,
-            pixmap,
-            gc,
-            @intCast(bitmap.width),
-            @intCast(bitmap.rows),
-            0,
-            0,
-            0,
-            8,
-            @intCast(bitmap.width * bitmap.rows),
-            bitmap.buffer,
-        );
+        // CRITICAL FIX: Account for bitmap pitch (stride) when copying data
+        // The pitch may be larger than width due to alignment padding
+        const width = bitmap.width;
+        const height = bitmap.rows;
+        const pitch: u32 = @intCast(@abs(bitmap.pitch));
+        
+        if (pitch == width) {
+            // Fast path: no padding, copy directly
+            _ = c.xcb_put_image(
+                self.conn,
+                c.XCB_IMAGE_FORMAT_Z_PIXMAP,
+                pixmap,
+                gc,
+                @intCast(width),
+                @intCast(height),
+                0,
+                0,
+                0,
+                8,
+                @intCast(width * height),
+                bitmap.buffer,
+            );
+        } else {
+            // Slow path: copy row by row to handle stride
+            var row: u32 = 0;
+            while (row < height) : (row += 1) {
+                const row_offset = row * pitch;
+                const src_ptr = bitmap.buffer + row_offset;
+                
+                _ = c.xcb_put_image(
+                    self.conn,
+                    c.XCB_IMAGE_FORMAT_Z_PIXMAP,
+                    pixmap,
+                    gc,
+                    @intCast(width),
+                    1, // One row at a time
+                    0,
+                    @intCast(row),
+                    0,
+                    8,
+                    width,
+                    src_ptr,
+                );
+            }
+        }
 
         const color = c.xcb_render_color_t{
             .red = self.current_color.red,
