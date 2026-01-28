@@ -1,4 +1,4 @@
-//! Main entry point - optimized event loop
+//! Main entry point
 
 const std = @import("std");
 const posix = std.posix;
@@ -11,7 +11,6 @@ const events = @import("events");
 const input = @import("input");
 const utils = @import("utils");
 const bar = @import("bar");
-const focus = @import("focus");
 const workspaces = @import("workspaces");
 
 const xcb = defs.xcb;
@@ -110,7 +109,7 @@ fn handleConfigReload(wm: *WM) !void {
     std.log.info("[config] Reload requested", .{});
 
     var new_config = config.loadConfigDefault(wm.allocator) catch |err| {
-        std.log.err("[config] Failed to load new config: {}, keeping old config", .{err});
+        std.log.err("[config] Failed to load: {}, keeping old config", .{err});
         return err;
     };
     errdefer new_config.deinit(wm.allocator);
@@ -121,7 +120,7 @@ fn handleConfigReload(wm: *WM) !void {
     wm.config = new_config;
 
     grabKeybindings(wm) catch |err| {
-        std.log.err("[config] Failed to grab keybindings: {}, reverting to old config", .{err});
+        std.log.err("[config] Failed to grab keybindings: {}, reverting", .{err});
         new_config.deinit(wm.allocator);
         wm.config = old_config;
         try grabKeybindings(wm);
@@ -172,7 +171,7 @@ pub fn main() !void {
         .screen = screen,
         .root = root,
         .config = user_config,
-        .windows = std.AutoHashMap(u32, defs.Window).init(allocator),
+        .windows = std.AutoHashMap(u32, void).init(allocator),
         .focused_window = null,
         .xkb_state = xkb_state,
         .should_reload_config = &should_reload,
@@ -201,9 +200,9 @@ pub fn main() !void {
 
     while (running.load(.acquire)) {
         var events_processed: usize = 0;
-        const max_events_per_batch: usize = 32;
+        const max_events_per_batch: usize = 256; // INCREASED from 128
 
-        // Process event batch
+        // OPTIMIZED: Process larger batches of events
         while (events_processed < max_events_per_batch) : (events_processed += 1) {
             const event = xcb.xcb_poll_for_event(conn);
             if (event == null) break;
@@ -222,33 +221,35 @@ pub fn main() !void {
             events.dispatch(event_type, event.?, &wm);
         }
 
-        // After batch: release focus protection, flush, update bar
         if (events_processed > 0) {
-            focus.releaseProtection(); // NEW: Allow mouse focus after batch
-            utils.flush(conn);
-            
+            utils.releaseProtection();
+
+            // CRITICAL: Retile once after ALL events processed
+            const tiling_mod = @import("tiling");
+            tiling_mod.retileIfDirty(&wm);
+
+            // Update bar if needed
             bar.updateIfDirty(&wm) catch |err| {
                 std.log.err("[main] Failed to update bar: {}", .{err});
             };
-        }
 
-        // Connection health check
-        if (xcb.xcb_connection_has_error(conn) != 0) {
-            std.log.err("[main] X11 connection error detected, shutting down", .{});
-            break;
-        }
+            // OPTIMIZED: Single flush after all work
+            utils.flush(conn);
 
-        // Adaptive sleep
-        if (events_processed == 0) {
+            idle_count = 0;
+        } else {
+            // NO EVENTS - yield CPU
             idle_count += 1;
-            const sleep_ns = if (idle_count < defs.IDLE_THRESHOLD_SHORT)
-                defs.EVENT_POLL_SLEEP_NS
-            else if (idle_count < defs.IDLE_THRESHOLD_LONG)
-                defs.EVENT_POLL_SLEEP_NS * defs.SLEEP_MULTIPLIER_MEDIUM
-            else
-                defs.EVENT_POLL_SLEEP_NS * defs.SLEEP_MULTIPLIER_LONG;
 
-            utils.sleepNs(sleep_ns);
+            // OPTIMIZED: More aggressive idle detection
+            if (idle_count > 30) { // Reduced from 50
+                std.posix.nanosleep(0, 30 * std.time.ns_per_us); // 0.03ms
+            }
+        }
+
+        if (xcb.xcb_connection_has_error(conn) != 0) {
+            std.log.err("[main] X11 connection error, shutting down", .{});
+            break;
         }
     }
 

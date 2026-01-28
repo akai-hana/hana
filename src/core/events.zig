@@ -1,4 +1,4 @@
-//! Event dispatch
+//! Event dispatch - OPTIMIZED (no focus module, uses utils)
 
 const std = @import("std");
 const defs = @import("defs");

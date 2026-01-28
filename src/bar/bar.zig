@@ -8,7 +8,9 @@ const utils = @import("utils");
 const workspaces = @import("workspaces");
 const tiling = @import("tiling");
 
-// State struct (was state.zig)
+// PERFORMANCE FIX: Debouncing for bar updates
+var last_dirty_time: i64 = 0;
+const DIRTY_INTERVAL_NS = 16_000_000; // 16ms = 60fps max
 
 const State = struct {
     window: u32,
@@ -25,8 +27,8 @@ const State = struct {
 
     fn init(allocator: std.mem.Allocator, window: u32, width: u16, height: u16,
             dc: *drawing.DrawContext, config: defs.BarConfig) !*State {
-        const new_state = try allocator.create(State);
-        new_state.* = .{
+        const s = try allocator.create(State);
+        s.* = .{
             .window = window,
             .width = width,
             .height = height,
@@ -39,8 +41,8 @@ const State = struct {
             .alive = true,
             .allocator = allocator,
         };
-        try new_state.status_text.appendSlice(allocator, "hana");
-        return new_state;
+        try s.status_text.appendSlice(allocator, "hana");
+        return s;
     }
 
     fn deinit(self: *State) void {
@@ -57,8 +59,6 @@ const State = struct {
 };
 
 var state: ?*State = null;
-
-// Initialization
 
 pub fn init(wm: *defs.WM) !void {
     if (!wm.config.bar.show) return error.BarDisabled;
@@ -92,18 +92,44 @@ pub fn init(wm: *defs.WM) !void {
     const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, screen, window, width, height);
     errdefer dc.deinit();
 
-    const font_str = if (wm.config.bar.font_size > 0)
-        try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
-    else
-        wm.config.bar.font;
-    defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
+    const font_loaded = blk: {
+        const font_str = if (wm.config.bar.font_size > 0)
+            try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
+        else
+            wm.config.bar.font;
+        defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
 
-    var attempts: u8 = 0;
-    while (attempts < 3) : (attempts += 1) {
-        if (attempts > 0) std.posix.nanosleep(0, 100 * std.time.ns_per_ms);
-        dc.loadFont(font_str) catch continue;
-        break;
-    } else return error.FontLoadFailed;
+        var attempts: u8 = 0;
+        while (attempts < 3) : (attempts += 1) {
+            if (attempts > 0) std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
+            if (dc.loadFont(font_str)) {
+                break :blk true;
+            } else |_| {}
+        }
+
+        const fallback_fonts = [_][]const u8{
+            "monospace:size=10",
+            "DejaVu Sans Mono:size=10",
+            "Liberation Mono:size=10",
+            "Courier New:size=10",
+            "fixed",
+            "6x13",
+        };
+
+        for (fallback_fonts) |fallback| {
+            std.log.warn("[bar] Failed to load '{s}', trying fallback: {s}", .{ font_str, fallback });
+            if (dc.loadFont(fallback)) {
+                break :blk true;
+            } else |_| {}
+        }
+
+        break :blk false;
+    };
+
+    if (!font_loaded) {
+        std.log.err("[bar] Could not load any font", .{});
+        return error.FontLoadFailed;
+    }
 
     const s = try State.init(wm.allocator, window, width, height, dc, wm.config.bar);
     try draw(s, wm);
@@ -143,13 +169,28 @@ fn setWindowProperties(conn: *xcb.xcb_connection_t, window: u32, height: u16) !v
         wm_state, xcb.XCB_ATOM_ATOM, 32, 2, &state_values);
 }
 
-// Public API
+pub inline fn getBarWindow() u32 {
+    return if (state) |s| s.window else 0;
+}
 
 pub inline fn isBarWindow(win: u32) bool {
     return if (state) |s| s.window == win else false;
 }
 
+// PERFORMANCE FIX: Debounced markDirty using MONOTONIC clock
 pub inline fn markDirty() void {
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch {
+        // Fallback if clock fails - just mark dirty
+        if (state) |s| s.markDirty();
+        return;
+    };
+    const now = @as(i64, ts.sec) * std.time.ns_per_s + ts.nsec;
+    
+    if (now - last_dirty_time < DIRTY_INTERVAL_NS) {
+        return; // Skip if updated recently
+    }
+    last_dirty_time = now;
+
     if (state) |s| s.markDirty();
 }
 
@@ -172,8 +213,6 @@ pub fn updateIfDirty(wm: *defs.WM) !void {
 pub inline fn getHeight() u16 {
     return if (state) |s| s.height else 0;
 }
-
-// Event Handlers
 
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
     if (state) |s| {
@@ -212,8 +251,6 @@ fn handleClick(s: *State, wm: *defs.WM, x: i16) void {
         s.markDirty();
     }
 }
-
-// Rendering (inline from render.zig)
 
 fn draw(s: *State, wm: *defs.WM) !void {
     if (!s.isAlive()) return error.BarNotAlive;

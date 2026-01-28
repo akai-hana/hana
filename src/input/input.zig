@@ -1,4 +1,4 @@
-//! Mouse & keyboard input handling
+//! Input handling - OPTIMIZED (uses utils.setFocus instead of focus module)
 
 const std = @import("std");
 const defs = @import("defs");
@@ -6,14 +6,12 @@ const xkbcommon = @import("xkbcommon");
 const utils = @import("utils");
 const tiling = @import("tiling");
 const workspaces = @import("workspaces");
-const focus = @import("focus");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
 const c = @cImport(@cInclude("unistd.h"));
 extern "c" fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
 
-// Simplified keybind state
 const KeybindState = struct {
     map: std.AutoHashMap(u64, *const defs.Action),
     allocator: std.mem.Allocator,
@@ -124,7 +122,8 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     if (has_super and (event.detail == 1 or event.detail == 3)) {
         @import("drag").startDrag(wm, event.child, event.detail, event.root_x, event.root_y);
     } else {
-        focus.setFocus(wm, event.child, .mouse_click);
+        utils.setFocus(wm, event.child, true);
+        tiling.updateWindowFocus(wm, null, event.child);
     }
 }
 
@@ -140,10 +139,9 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
     }
 }
 
-// OPTIMIZED: Use utils.getAtomCached instead of inline atom fetching
 fn closeWindow(wm: *WM, win: u32) void {
     if (win == wm.root) {
-        std.log.err("[CRITICAL] Attempted to close ROOT window! Aborting.", .{});
+        std.log.err("[CRITICAL] Attempted to close ROOT window!", .{});
         return;
     }
 

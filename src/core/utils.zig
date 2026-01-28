@@ -4,18 +4,7 @@ const std = @import("std");
 const defs = @import("defs");
 const xcb = defs.xcb;
 
-// Time utilities
-
-pub inline fn getTimestampNs() i64 {
-    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return 0;
-    return ts.sec * std.time.ns_per_s + ts.nsec;
-}
-
-pub inline fn sleepNs(ns: u64) void {
-    std.posix.nanosleep(0, ns);
-}
-
-// XCB utilities - consolidated
+// XCB utilities
 
 pub inline fn flush(conn: *xcb.xcb_connection_t) void {
     _ = xcb.xcb_flush(conn);
@@ -163,31 +152,13 @@ pub fn getGeometry(conn: *xcb.xcb_connection_t, win: u32) ?Rect {
     return Rect.fromXcb(reply);
 }
 
-// Layout calculations
-
-pub inline fn calcGridDims(n: usize) struct { cols: u16, rows: u16 } {
-    if (n == 0) return .{ .cols = 1, .rows = 1 };
-    const cols = @as(u16, @intFromFloat(@ceil(@sqrt(@as(f32, @floatFromInt(n))))));
-    return .{ .cols = cols, .rows = @intCast((n + cols - 1) / cols) };
-}
-
-pub inline fn calcColumnLayout(total_h: u16, count: u16, margins: Margins) struct { item_h: u16, spacing: u16 } {
-    if (count == 0) return .{ .item_h = 0, .spacing = 0 };
-
-    const overhead = margins.gap * (count + 1) + margins.border * 2 * count;
-    const available = if (total_h > overhead) total_h - overhead else count * defs.MIN_WINDOW_DIM;
-    const item_h = @max(defs.MIN_WINDOW_DIM, available / count);
-
-    return .{ .item_h = item_h, .spacing = item_h + 2 * margins.border + margins.gap };
-}
-
 // Modifier utilities
 
 pub inline fn normalizeModifiers(state: u16) u16 {
     return state & defs.MOD_MASK_RELEVANT;
 }
 
-// Atom cache (reduce repeated queries)
+// Atom cache
 
 const AtomCache = struct {
     wm_protocols: ?u32 = null,
@@ -252,7 +223,6 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
     const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
     const len: usize = @intCast(reply.*.value_len);
 
-    // WM_CLASS format: instance\0class\0
     var instance_end: usize = 0;
     while (instance_end < len and data[instance_end] != 0) : (instance_end += 1) {}
 
@@ -279,4 +249,37 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
         .instance = instance,
         .class = class,
     };
+}
+
+// Focus helpers - INLINED from focus.zig
+
+var focus_protection_active: bool = false;
+
+pub inline fn setFocus(wm: *defs.WM, win: u32, protect: bool) void {
+    if (win == wm.root) {
+        std.log.err("[CRITICAL] Attempted to focus ROOT window!", .{});
+        return;
+    }
+
+    if (wm.focused_window == win) return;
+
+    wm.focused_window = win;
+    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, xcb.XCB_CURRENT_TIME);
+
+    if (protect) {
+        focus_protection_active = true;
+    }
+}
+
+pub inline fn clearFocus(wm: *defs.WM) void {
+    wm.focused_window = null;
+    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, wm.root, xcb.XCB_CURRENT_TIME);
+}
+
+pub inline fn isProtected() bool {
+    return focus_protection_active;
+}
+
+pub inline fn releaseProtection() void {
+    focus_protection_active = false;
 }
