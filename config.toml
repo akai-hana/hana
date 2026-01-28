@@ -1,4 +1,4 @@
-# hana WM config
+# hana WM config - Enhanced with configurable bar!
 
 [tiling]
 enabled     = true     # Enable tiling on startup
@@ -78,12 +78,12 @@ Mod+Shift+Escape = "emergency_recover"  # Emergency recovery mode
 [bar]
 show = true
 
-# Bar height auto-adapts to font size by default.
+# Bar height - NEW: Auto-adapts to font size by default!
 # Uncomment to set a fixed height instead:
 # height = 24
 
 # Font configuration
-font = "FiraCode Nerd Font Ret"
+font = "FiraCode NF:size=10"
 font_size = 10
 
 # NEW: Spacing configuration for better readability!

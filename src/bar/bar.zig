@@ -18,6 +18,8 @@ const State = struct {
     cached_title: std.ArrayList(u8),
     cached_title_window: ?u32,
     dirty: bool,
+    dirty_clock: bool,
+    last_second: i64,
     alive: bool,
     allocator: std.mem.Allocator,
 
@@ -34,6 +36,8 @@ const State = struct {
             .cached_title = std.ArrayList(u8){},
             .cached_title_window = null,
             .dirty = false,
+            .dirty_clock = false,
+            .last_second = 0,
             .alive = true,
             .allocator = allocator,
         };
@@ -49,8 +53,12 @@ const State = struct {
     }
 
     inline fn markDirty(self: *State) void { self.dirty = true; }
-    inline fn clearDirty(self: *State) void { self.dirty = false; }
-    inline fn isDirty(self: *State) bool { return self.dirty; }
+    inline fn markClockDirty(self: *State) void { self.dirty_clock = true; }
+    inline fn clearDirty(self: *State) void { 
+        self.dirty = false;
+        self.dirty_clock = false;
+    }
+    inline fn isDirty(self: *State) bool { return self.dirty or self.dirty_clock; }
     inline fn isAlive(self: *State) bool { return self.alive; }
 };
 
@@ -204,11 +212,62 @@ pub inline fn raiseBar() void {
 
 pub fn updateIfDirty(wm: *defs.WM) !void {
     if (state) |s| {
+        // Check if clock needs updating (once per second)
+        checkClockUpdate(s);
+        
         if (s.isDirty()) {
-            try draw(s, wm);
+            if (s.dirty) {
+                // Full redraw
+                try draw(s, wm);
+            } else if (s.dirty_clock) {
+                // Only redraw clock
+                try drawClockOnly(s, wm);
+            }
             s.clearDirty();
         }
     }
+}
+
+fn checkClockUpdate(s: *State) void {
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
+    const current_second = ts.sec;
+    
+    if (current_second != s.last_second) {
+        s.last_second = current_second;
+        s.markClockDirty();
+    }
+}
+
+fn drawClockOnly(s: *State, wm: *defs.WM) !void {
+    // Find clock position and redraw only that segment
+    for (s.config.layout.items) |layout| {
+        if (layout.position == .right) {
+            // Calculate right segments to find clock position
+            var right_x: u16 = s.width;
+            var i: usize = layout.segments.items.len;
+            while (i > 0) {
+                i -= 1;
+                const segment = layout.segments.items[i];
+                const seg_width = calculateSegmentWidth(s, wm, segment);
+                right_x -= seg_width;
+                
+                if (segment == .clock) {
+                    // Redraw only the clock segment
+                    _ = try drawClock(s, right_x);
+                    s.dc.flush();
+                    return;
+                }
+                
+                if (i > 0) {
+                    right_x -= s.config.spacing;
+                }
+            }
+        }
+    }
+    
+    // If clock not found in right, check other positions
+    // For now, fall back to full draw if clock position is complex
+    try draw(s, wm);
 }
 
 pub inline fn getHeight() u16 {
@@ -598,14 +657,14 @@ fn formatTime(s: *State, buf: []u8) ![]const u8 {
     const year_day = civil_day.calculateYearDay();
     const month_day = year_day.calculateMonthDay();
 
-    const hours = @divFloor(day_seconds, std.time.s_per_hour);
-    const minutes = @divFloor(@mod(day_seconds, std.time.s_per_hour), std.time.s_per_min);
-    const seconds = @mod(day_seconds, std.time.s_per_min);
+    const hours: u32 = @intCast(@divFloor(day_seconds, std.time.s_per_hour));
+    const minutes: u32 = @intCast(@divFloor(@mod(day_seconds, std.time.s_per_hour), std.time.s_per_min));
+    const seconds: u32 = @intCast(@mod(day_seconds, std.time.s_per_min));
 
     // Simple format string parsing - only supports basic patterns
     _ = s; // config available if needed for format
     
-    // For now, just use YYYY-MM-DD HH:MM:SS format
+    // YYYY-MM-DD HH:MM:SS format with unsigned integers (no + symbols)
     return try std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
         year_day.year,
         month_day.month.numeric(),
