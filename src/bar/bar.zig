@@ -260,83 +260,94 @@ fn draw(s: *State, wm: *defs.WM) !void {
     // Clear background
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
-    // Draw segments according to layout configuration
-    var left_x: u16 = 0;
-    var center_segments: std.ArrayList(SegmentInfo) = .{};
-    defer center_segments.deinit(s.allocator);
-    var right_segments: std.ArrayList(SegmentInfo) = .{};
-    defer right_segments.deinit(s.allocator);
-
-    // First pass: render left segments and collect center/right segments
+    // Calculate widths for all segments first
+    var left_width: u16 = 0;
+    var right_width: u16 = 0;
+    
+    // Calculate left segments width
     for (s.config.layout.items) |layout| {
-        switch (layout.position) {
-            .left => {
-                for (layout.segments.items) |segment| {
-                    left_x = try drawSegment(s, wm, segment, left_x, s.config.getWorkspaceAccent());
-                    left_x += s.config.spacing;
-                }
-            },
-            .center => {
-                for (layout.segments.items) |segment| {
-                    const width = calculateSegmentWidth(s, wm, segment);
-                    try center_segments.append(s.allocator, .{
-                        .segment = segment,
-                        .width = width,
-                        .accent = s.config.getTitleAccent(),
-                    });
-                }
-            },
-            .right => {
-                for (layout.segments.items) |segment| {
-                    const width = calculateSegmentWidth(s, wm, segment);
-                    try right_segments.append(s.allocator, .{
-                        .segment = segment,
-                        .width = width,
-                        .accent = s.config.getClockAccent(),
-                    });
-                }
-            },
+        if (layout.position == .left) {
+            for (layout.segments.items) |segment| {
+                left_width += calculateSegmentWidth(s, wm, segment);
+                left_width += s.config.spacing;
+            }
+            if (layout.segments.items.len > 0) {
+                left_width -= s.config.spacing; // Remove last spacing
+            }
+        }
+    }
+    
+    // Calculate right segments width
+    for (s.config.layout.items) |layout| {
+        if (layout.position == .right) {
+            for (layout.segments.items) |segment| {
+                right_width += calculateSegmentWidth(s, wm, segment);
+                right_width += s.config.spacing;
+            }
+            if (layout.segments.items.len > 0) {
+                right_width -= s.config.spacing; // Remove last spacing
+            }
         }
     }
 
-    // Draw center segments
-    if (center_segments.items.len > 0) {
-        var total_center_width: u16 = 0;
-        for (center_segments.items) |info| {
-            total_center_width += info.width;
+    // Draw left segments
+    var left_x: u16 = 0;
+    for (s.config.layout.items) |layout| {
+        if (layout.position == .left) {
+            for (layout.segments.items) |segment| {
+                left_x = try drawSegment(s, wm, segment, left_x, s.config.getWorkspaceAccent(), null);
+                left_x += s.config.spacing;
+            }
         }
-        total_center_width += @intCast((center_segments.items.len - 1) * s.config.spacing);
+    }
 
-        var center_x: u16 = (s.width - total_center_width) / 2;
-        for (center_segments.items) |info| {
-            center_x = try drawSegment(s, wm, info.segment, center_x, info.accent);
-            center_x += s.config.spacing;
+    // Draw center segments (title gets remaining space)
+    for (s.config.layout.items) |layout| {
+        if (layout.position == .center) {
+            // Calculate remaining space for center
+            // left_x already includes left segments + their spacing
+            // Subtract space needed for right segments and spacing before them
+            const space_for_right = if (right_width > 0) right_width + s.config.spacing else 0;
+            const remaining_width = if (s.width > left_x + space_for_right) 
+                s.width - left_x - space_for_right 
+            else 
+                100;
+            
+            var center_x = left_x;
+            for (layout.segments.items) |segment| {
+                if (segment == .title) {
+                    // Title gets all remaining space
+                    _ = try drawSegment(s, wm, segment, center_x, s.config.getTitleAccent(), remaining_width);
+                } else {
+                    // Other center segments use calculated width
+                    const seg_width = calculateSegmentWidth(s, wm, segment);
+                    _ = try drawSegment(s, wm, segment, center_x, s.config.getTitleAccent(), seg_width);
+                    center_x += seg_width + s.config.spacing;
+                }
+            }
         }
     }
 
     // Draw right segments (from right to left)
-    if (right_segments.items.len > 0) {
-        var right_x: u16 = s.width;
-        var i: usize = right_segments.items.len;
-        while (i > 0) {
-            i -= 1;
-            const info = right_segments.items[i];
-            right_x -= info.width;
-            _ = try drawSegment(s, wm, info.segment, right_x, info.accent);
-            if (i > 0) {
-                right_x -= s.config.spacing;
+    var right_x: u16 = s.width;
+    for (s.config.layout.items) |layout| {
+        if (layout.position == .right) {
+            var i: usize = layout.segments.items.len;
+            while (i > 0) {
+                i -= 1;
+                const segment = layout.segments.items[i];
+                const seg_width = calculateSegmentWidth(s, wm, segment);
+                right_x -= seg_width;
+                _ = try drawSegment(s, wm, segment, right_x, s.config.getClockAccent(), seg_width);
+                if (i > 0) {
+                    right_x -= s.config.spacing;
+                }
             }
         }
     }
 
     s.dc.flush();
 }
-
-const SegmentInfo = struct {
-    segment: defs.BarSegment,
-    width: u16,
-    accent: u32,
-};
 
 fn calculateSegmentWidth(s: *State, wm: *defs.WM, segment: defs.BarSegment) u16 {
     _ = wm; // May be needed for future dynamic width calculations
@@ -346,10 +357,7 @@ fn calculateSegmentWidth(s: *State, wm: *defs.WM, segment: defs.BarSegment) u16 
             break :blk @intCast(ws_state.workspaces.len * 40); // 40px per workspace
         },
         .layout => 60,
-        .title => blk: {
-            const available = s.width - 600; // Reserve space for other segments
-            break :blk @max(200, @min(800, available));
-        },
+        .title => 100, // Minimal default - will be overridden by remaining space
         .clock => blk: {
             var buf: [64]u8 = undefined;
             const time_str = formatTime(s, &buf) catch "0000-00-00 00:00:00";
@@ -359,11 +367,12 @@ fn calculateSegmentWidth(s: *State, wm: *defs.WM, segment: defs.BarSegment) u16 
     };
 }
 
-fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, accent: u32) !u16 {
+fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, accent: u32, width: ?u16) !u16 {
+    const seg_width = width orelse calculateSegmentWidth(s, wm, segment);
     return switch (segment) {
         .workspaces => try drawWorkspaces(s, x, accent),
         .layout => try drawLayout(s, x),
-        .title => try drawTitle(s, wm, x, calculateSegmentWidth(s, wm, .title)),
+        .title => try drawTitle(s, wm, x, seg_width),
         .clock => try drawClock(s, x),
     };
 }
