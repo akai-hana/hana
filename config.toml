@@ -83,7 +83,7 @@ show = true
 # height = 24
 
 # Font configuration
-font = "FiraCode NF:size=10"
+font = "FiraCode Nerd Font Ret:size=10"
 font_size = 10
 
 # NEW: Spacing configuration for better readability!
