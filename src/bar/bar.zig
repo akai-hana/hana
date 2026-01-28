@@ -300,10 +300,17 @@ fn drawWorkspaces(s: *State, start_x: u16) !u16 {
 
 fn calculateTextY(s: *State) u16 {
     const ascender: i32 = s.dc.getAscender();
-    const half_height: i32 = @divTrunc(@as(i32, s.height), 2);
-    const half_ascender: i32 = @divTrunc(ascender, 2);
-    const text_y: i32 = half_height + half_ascender;
-    return @intCast(@max(ascender, text_y));
+    const descender: i32 = s.dc.getDescender();
+    
+    // Calculate total font height (descender is typically negative)
+    const font_height: i32 = ascender - descender;
+    
+    // Center the text vertically in the bar
+    const vertical_padding: i32 = @divTrunc(@as(i32, s.height) - font_height, 2);
+    const baseline_y: i32 = vertical_padding + ascender;
+    
+    // Ensure baseline is at least ascender pixels from top to avoid clipping
+    return @intCast(@max(ascender, baseline_y));
 }
 
 fn getWorkspaceLabel(s: *State, index: usize, buf: []u8) []const u8 {

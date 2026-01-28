@@ -75,6 +75,7 @@ pub const DrawContext = struct {
             .ft_face = null,
             .font_height = 14,
             .font_ascender = 11,
+            .font_descender = -3,
             .current_color = .{
                 .red = 0xBBBB,
                 .green = 0xBBBB,
@@ -168,11 +169,13 @@ pub const DrawContext = struct {
         self.ft_face = face;
         const height_64 = face.*.size.*.metrics.height >> 6;
         const ascender_64 = face.*.size.*.metrics.ascender >> 6;
+        const descender_64 = face.*.size.*.metrics.descender >> 6;
         self.font_height = @intCast(@max(8, height_64));
         self.font_ascender = @intCast(ascender_64);
+        self.font_descender = @intCast(descender_64);
         self.font_loaded = true;
 
-        std.log.info("[drawing] Font loaded: height={}, ascender={}", .{ self.font_height, self.font_ascender });
+        std.log.info("[drawing] Font loaded: height={}, ascender={}, descender={}", .{ self.font_height, self.font_ascender, self.font_descender });
     }
 
     fn findFontFile(self: *DrawContext, font_name: []const u8) ![]const u8 {
@@ -288,6 +291,10 @@ pub const DrawContext = struct {
         return self.font_ascender;
     }
 
+    pub fn getDescender(self: *DrawContext) i16 {
+        return self.font_descender;
+    }
+
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8) !void {
         if (!self.font_loaded) {
             std.log.warn("[drawing] drawText called but font not loaded", .{});
@@ -298,7 +305,7 @@ pub const DrawContext = struct {
             std.log.warn("[drawing] drawText called but no face", .{});
             return error.NoFont;
         };
-        
+
         if (self.alpha_format == null) {
             std.log.warn("[drawing] drawText called but no alpha format", .{});
             return;
@@ -326,7 +333,7 @@ pub const DrawContext = struct {
             const glyph_y = baseline_y - @as(i16, @intCast(glyph.*.bitmap_top));
 
             // More lenient clipping - allow partial glyphs
-            if (glyph_x + @as(i16, @intCast(bitmap.width)) <= 0 or 
+            if (glyph_x + @as(i16, @intCast(bitmap.width)) <= 0 or
                 glyph_x >= self.width or
                 glyph_y + @as(i16, @intCast(bitmap.rows)) <= 0 or
                 glyph_y >= self.height) {
