@@ -1,4 +1,4 @@
-//! Status bar
+//! Status bar using simple Xft rendering
 
 const std = @import("std");
 const defs = @import("defs");
@@ -88,44 +88,16 @@ pub fn init(wm: *defs.WM) !void {
     const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, screen, window, width, height);
     errdefer dc.deinit();
 
-    const font_loaded = blk: {
-        const font_str = if (wm.config.bar.font_size > 0)
-            try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
-        else
-            wm.config.bar.font;
-        defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
+    const font_str = if (wm.config.bar.font_size > 0)
+        try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
+    else
+        wm.config.bar.font;
+    defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
 
-        var attempts: u8 = 0;
-        while (attempts < 3) : (attempts += 1) {
-            if (attempts > 0) std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
-            if (dc.loadFont(font_str)) {
-                break :blk true;
-            } else |_| {}
-        }
-
-        const fallback_fonts = [_][]const u8{
-            "monospace:size=10",
-            "DejaVu Sans Mono:size=10",
-            "Liberation Mono:size=10",
-            "Courier New:size=10",
-            "fixed",
-            "6x13",
-        };
-
-        for (fallback_fonts) |fallback| {
-            std.log.warn("[bar] Failed to load '{s}', trying fallback: {s}", .{ font_str, fallback });
-            if (dc.loadFont(fallback)) {
-                break :blk true;
-            } else |_| {}
-        }
-
-        break :blk false;
+    dc.loadFont(font_str) catch |err| {
+        std.log.err("[bar] Failed to load font '{s}': {}", .{ font_str, err });
+        return err;
     };
-
-    if (!font_loaded) {
-        std.log.err("[bar] Could not load any font", .{});
-        return error.FontLoadFailed;
-    }
 
     const s = try State.init(wm.allocator, window, width, height, dc, wm.config.bar);
     try draw(s, wm);
@@ -136,12 +108,11 @@ pub fn init(wm: *defs.WM) !void {
 
 pub fn deinit() void {
     if (state) |s| {
-        const conn = s.dc.conn;
+        const conn = s.dc.display;
         const window = s.window;
         s.dc.deinit();
         s.deinit();
         _ = xcb.xcb_destroy_window(@ptrCast(conn), window);
-        utils.flush(@ptrCast(conn));
         state = null;
     }
 }
@@ -173,14 +144,13 @@ pub inline fn isBarWindow(win: u32) bool {
     return if (state) |s| s.window == win else false;
 }
 
-// NO DEBOUNCING - mark dirty immediately
 pub inline fn markDirty() void {
     if (state) |s| s.markDirty();
 }
 
 pub inline fn raiseBar() void {
     if (state) |s| {
-        _ = xcb.xcb_configure_window(@ptrCast(s.dc.conn), s.window,
+        _ = xcb.xcb_configure_window(@ptrCast(s.dc.display), s.window,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
 }
@@ -239,8 +209,8 @@ fn handleClick(s: *State, wm: *defs.WM, x: i16) void {
 fn draw(s: *State, wm: *defs.WM) !void {
     if (!s.isAlive()) return error.BarNotAlive;
 
-    s.dc.setColor(s.config.bg);
-    s.dc.fillRect(0, 0, s.width, s.height);
+    // Clear background
+    s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
     var x: u16 = 0;
     x = try drawWorkspaces(s, x);
@@ -275,18 +245,16 @@ fn drawWorkspaces(s: *State, start_x: u16) !u16 {
         else
             s.config.fg;
 
-        s.dc.setColor(bg);
-        s.dc.fillRect(x, 0, ws_width, s.height);
+        s.dc.fillRect(x, 0, ws_width, s.height, bg);
 
         var label_buf: [8]u8 = undefined;
         const label = getWorkspaceLabel(s, i, &label_buf);
 
-        s.dc.setColor(fg);
         const text_w = s.dc.textWidth(label);
         const text_x = x + (ws_width - text_w) / 2;
         const text_y = calculateTextY(s);
 
-        try s.dc.drawText(text_x, text_y, label);
+        try s.dc.drawText(text_x, text_y, label, fg);
 
         if (has_windows) {
             try drawIndicator(s, x, is_current, fg);
@@ -302,14 +270,10 @@ fn calculateTextY(s: *State) u16 {
     const ascender: i32 = s.dc.getAscender();
     const descender: i32 = s.dc.getDescender();
     
-    // Calculate total font height (descender is typically negative)
     const font_height: i32 = ascender - descender;
-    
-    // Center the text vertically in the bar
     const vertical_padding: i32 = @divTrunc(@as(i32, s.height) - font_height, 2);
     const baseline_y: i32 = vertical_padding + ascender;
     
-    // Ensure baseline is at least ascender pixels from top to avoid clipping
     return @intCast(@max(ascender, baseline_y));
 }
 
@@ -328,15 +292,13 @@ fn drawIndicator(s: *State, ws_x: u16, is_current: bool, color: u32) !void {
     const x = ws_x + 2;
     const y: u16 = 2;
 
-    s.dc.setColor(color);
-
     if (is_current) {
-        s.dc.fillRect(x, y, size, size);
+        s.dc.fillRect(x, y, size, size, color);
     } else {
-        s.dc.fillRect(x, y, size, 1);
-        s.dc.fillRect(x, y + size - 1, size, 1);
-        s.dc.fillRect(x, y, 1, size);
-        s.dc.fillRect(x + size - 1, y, 1, size);
+        s.dc.fillRect(x, y, size, 1, color);
+        s.dc.fillRect(x, y + size - 1, size, 1, color);
+        s.dc.fillRect(x, y, 1, size, color);
+        s.dc.fillRect(x + size - 1, y, 1, size, color);
     }
 }
 
@@ -353,13 +315,10 @@ fn drawLayout(s: *State, start_x: u16) !u16 {
     const text_w = s.dc.textWidth(layout_str);
     const width = text_w + padding * 2;
 
-    s.dc.setColor(s.config.bg);
-    s.dc.fillRect(start_x, 0, width, s.height);
+    s.dc.fillRect(start_x, 0, width, s.height, s.config.bg);
 
-    s.dc.setColor(s.config.fg);
     const text_y = calculateTextY(s);
-
-    try s.dc.drawText(start_x + padding, text_y, layout_str);
+    try s.dc.drawText(start_x + padding, text_y, layout_str, s.config.fg);
 
     return start_x + width;
 }
@@ -378,18 +337,16 @@ fn drawTitle(s: *State, wm: *defs.WM, start_x: u16, width: u16) !void {
     else
         s.config.fg;
 
-    s.dc.setColor(bg);
-    s.dc.fillRect(start_x, 0, width, s.height);
+    s.dc.fillRect(start_x, 0, width, s.height, bg);
 
     if (has_windows) {
         const title = try getFocusedWindowTitle(s, wm);
         defer if (title.len > 0 and s.cached_title.items.ptr != title.ptr) s.allocator.free(title);
 
         if (title.len > 0) {
-            s.dc.setColor(fg);
             const text_y = calculateTextY(s);
             const padding: u16 = 8;
-            try s.dc.drawTextEllipsis(start_x + padding, text_y, title, width - padding * 2);
+            try s.dc.drawTextEllipsis(start_x + padding, text_y, title, width - padding * 2, fg);
         }
     }
 }
@@ -501,13 +458,10 @@ fn drawTimeAt(s: *State, end_x: u16) !u16 {
     const width = text_w + padding * 2;
     const x = end_x - width;
 
-    s.dc.setColor(s.config.bg);
-    s.dc.fillRect(x, 0, width, s.height);
+    s.dc.fillRect(x, 0, width, s.height, s.config.bg);
 
-    s.dc.setColor(s.config.fg);
     const text_y = calculateTextY(s);
-
-    try s.dc.drawText(x + padding, text_y, time_str);
+    try s.dc.drawText(x + padding, text_y, time_str, s.config.fg);
 
     return x;
 }
@@ -520,13 +474,11 @@ fn drawStatusAt(s: *State, end_x: u16) !u16 {
     const width = text_w + sep_w + padding * 2;
     const x = end_x - width;
 
-    s.dc.setColor(s.config.bg);
-    s.dc.fillRect(x, 0, width, s.height);
+    s.dc.fillRect(x, 0, width, s.height, s.config.bg);
 
-    s.dc.setColor(s.config.fg);
     const text_y = calculateTextY(s);
-    try s.dc.drawText(x + padding, text_y, s.status_text.items);
-    try s.dc.drawText(x + padding + text_w, text_y, separator);
+    try s.dc.drawText(x + padding, text_y, s.status_text.items, s.config.fg);
+    try s.dc.drawText(x + padding + text_w, text_y, separator, s.config.fg);
 
     return x;
 }
