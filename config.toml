@@ -80,7 +80,7 @@ show = true
 
 # Bar height - NEW: Auto-adapts to font size by default!
 # Uncomment to set a fixed height instead:
-height = 32
+#height = 32
 
 # Font configuration
 font = "FiraCode Nerd Font Ret"
@@ -88,7 +88,7 @@ font_size = 12
 
 # NEW: Spacing configuration for better readability!
 padding = 0     # Padding inside segments (around text)
-spacing = 0     # Space between segments
+spacing = 6     # Space between segments
 
 # Colors - matching your dwm config!
 # col_gray1 = #0d0d14 (dark background)
