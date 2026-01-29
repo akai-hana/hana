@@ -80,7 +80,7 @@ show = true
 
 # Bar height - NEW: Auto-adapts to font size by default!
 # Uncomment to set a fixed height instead:
-height = 16
+height = 32
 
 # Font configuration
 font = "FiraCode Nerd Font Ret"
