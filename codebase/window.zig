@@ -5,6 +5,7 @@ const defs = @import("defs");
 const xcb = defs.xcb;
 const WM = defs.WM;
 const utils = @import("utils");
+const focus = @import("focus");
 const tiling = @import("tiling");
 const workspaces = @import("workspaces");
 const bar = @import("bar");
@@ -91,7 +92,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     if (bar.isBarWindow(event.event)) return;
     
     // Respect focus protection (prevents focus stealing during explicit focus changes)
-    if (utils.isProtected()) return;
+    if (focus.isProtected()) return;
     
     // Filter spurious EnterNotify events
     // X11 generates EnterNotify in many scenarios beyond "mouse entered window":
@@ -107,7 +108,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
         event.detail == xcb.XCB_NOTIFY_DETAIL_NONLINEAR_VIRTUAL) return;
 
     const old_focus = wm.focused_window;
-    utils.setFocus(wm, event.event, false);
+    focus.setFocus(wm, event.event, .mouse_enter);
 
     tiling.updateWindowFocus(wm, old_focus, event.event);
 }
@@ -125,7 +126,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     wm.removeWindow(win);
 
     if (wm.focused_window == win) {
-        utils.clearFocus(wm);
+        focus.clearFocus(wm);
     }
 
     bar.markDirty();

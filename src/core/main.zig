@@ -11,6 +11,7 @@ const events    = @import("events");
 const input     = @import("input");
 const utils     = @import("utils");
 const bar       = @import("bar");
+const focus     = @import("focus");
 const tiling    = @import("tiling");
 
 const xcb = defs.xcb;
@@ -252,7 +253,7 @@ pub fn main() !void {
 
         // After processing events, do any resulting work
         if (events_handled) {
-            utils.releaseProtection();
+            focus.releaseProtection();
 
             tiling.retileIfDirty(&wm);
 

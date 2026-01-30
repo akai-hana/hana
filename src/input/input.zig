@@ -4,6 +4,7 @@ const std = @import("std");
 const defs = @import("defs");
 const xkbcommon = @import("xkbcommon");
 const utils = @import("utils");
+const focus = @import("focus");
 const tiling = @import("tiling");
 const workspaces = @import("workspaces");
 const drag = @import("drag");
@@ -124,7 +125,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     if (has_super and (event.detail == 1 or event.detail == 3)) {
         drag.startDrag(wm, event.child, event.detail, event.root_x, event.root_y);
     } else {
-        utils.setFocus(wm, event.child, true);
+        focus.setFocus(wm, event.child, .mouse_click);
         tiling.updateWindowFocus(wm, null, event.child);
     }
 }

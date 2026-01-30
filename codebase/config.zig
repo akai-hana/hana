@@ -43,7 +43,7 @@ fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
     return default;
 }
 
-// Simplified getter with inline validation
+// Simplified getter with inline validation and logging
 fn get(
     comptime T: type,
     section: *const parser.Section,
@@ -68,13 +68,27 @@ fn get(
         else => @compileError("Unsupported type"),
     };
 
+    // Validate bounds and warn if out of range
     if (comptime min != null or max != null) {
+        var out_of_bounds = false;
+        
         if (comptime min) |m| {
-            if (value < m) return default;
+            if (value < m) {
+                std.log.warn("[config] Value for '{s}' ({any}) below minimum ({any}), using default ({any})", 
+                    .{key, value, m, default});
+                out_of_bounds = true;
+            }
         }
+        
         if (comptime max) |m| {
-            if (value > m) return default;
+            if (value > m) {
+                std.log.warn("[config] Value for '{s}' ({any}) above maximum ({any}), using default ({any})", 
+                    .{key, value, m, default});
+                out_of_bounds = true;
+            }
         }
+        
+        if (out_of_bounds) return default;
     }
 
     return value;
@@ -291,8 +305,34 @@ fn parseAction(allocator: std.mem.Allocator, cmd: []const u8) !defs.Action {
 }
 
 pub fn resolveKeybindings(keybindings: anytype, xkb_state: *xkb.XkbState) void {
+    // First pass: resolve keycodes
     for (keybindings) |*kb| {
         kb.keycode = xkb_state.keysymToKeycode(kb.keysym);
+    }
+    
+    // Second pass: detect conflicts
+    // Map of (modifiers + keycode) -> binding index for conflict detection
+    var seen = std.AutoHashMap(u64, usize).init(std.heap.c_allocator);
+    defer seen.deinit();
+    
+    for (keybindings, 0..) |*kb, i| {
+        const keycode = kb.keycode orelse continue;
+        
+        // Create unique key from modifiers and keycode
+        const key: u64 = (@as(u64, kb.modifiers) << 32) | keycode;
+        
+        if (seen.get(key)) |first_index| {
+            std.log.warn("[config] Keybinding conflict detected!", .{});
+            std.log.warn("  Binding #{}: mods=0x{x:0>4} key={} (first)", .{
+                first_index + 1, keybindings[first_index].modifiers, keycode
+            });
+            std.log.warn("  Binding #{}: mods=0x{x:0>4} key={} (duplicate)", .{
+                i + 1, kb.modifiers, keycode
+            });
+            std.log.warn("  The second binding will override the first!", .{});
+        } else {
+            seen.put(key, i) catch {};
+        }
     }
 }
 

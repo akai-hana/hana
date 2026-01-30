@@ -70,3 +70,8 @@ pub fn clearFocus(wm: *WM) void {
 pub fn releaseProtection() void {
     focus_protection_active = false;
 }
+
+// Check if focus protection is currently active
+pub fn isProtected() bool {
+    return focus_protection_active;
+}

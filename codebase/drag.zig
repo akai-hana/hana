@@ -5,6 +5,7 @@ const defs = @import("defs");
 const xcb = defs.xcb;
 const WM = defs.WM;
 const utils = @import("utils");
+const focus = @import("focus");
 const tiling = @import("tiling");
 
 pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
@@ -24,7 +25,7 @@ pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
         .start_win_height = geom.height,
     };
 
-    utils.setFocus(wm, win, true);
+    focus.setFocus(wm, win, .user_command);
 
     // Remove window from tiling if it's tiled
     if (tiling.isWindowTiled(win) and wm.config.tiling.enabled) {

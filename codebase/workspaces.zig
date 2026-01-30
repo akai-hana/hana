@@ -5,6 +5,7 @@ const defs = @import("defs");
 const xcb = defs.xcb;
 const WM = defs.WM;
 const utils = @import("utils");
+const focus = @import("focus");
 const bar = @import("bar");
 const batch = @import("batch");
 
@@ -179,7 +180,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
         _ = xcb.xcb_unmap_window(wm.conn, win);
 
         if (wm.focused_window == win) {
-            utils.clearFocus(wm);
+            focus.clearFocus(wm);
         }
     } else if (target_ws == s.current) {
         // Moving to current workspace - mark tiling dirty

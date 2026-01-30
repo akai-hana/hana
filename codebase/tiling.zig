@@ -1,10 +1,11 @@
-//! Tiling system
+//! Tiling system - Delegates to layout modules
 
 const std        = @import("std");
 const defs       = @import("defs");
 const xcb        = defs.xcb;
 const WM         = defs.WM;
 const utils      = @import("utils");
+const focus      = @import("focus");
 const workspaces = @import("workspaces");
 const batch      = @import("batch");
 const bar        = @import("bar");
@@ -121,7 +122,7 @@ pub fn addWindow(wm: *WM, win: u32) void {
         utils.configureBorder(wm.conn, win, s.border_width, s.borderColor(wm, win));
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK,
             &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
-        utils.setFocus(wm, win, true);
+        focus.setFocus(wm, win, .tiling_operation);
         s.markDirty();
         return;
     };
@@ -148,7 +149,7 @@ pub fn removeWindow(wm: *WM, win: u32) void {
 
             if (s.tiled_windows.items.len > 0 and wm.focused_window == win) {
                 const next = s.tiled_windows.items[0];
-                utils.setFocus(wm, next, false);
+                focus.setFocus(wm, next, .tiling_operation);
             }
             s.markDirty();
             return;
@@ -199,6 +200,11 @@ fn updateWindowFocusDirect(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     utils.flush(wm.conn);
 }
 
+// Alias for compatibility (if anything calls it)
+pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
+    updateWindowFocus(wm, old_focused, new_focused);
+}
+
 pub fn isWindowTiled(win: u32) bool {
     const s = state orelse return false;
     return s.enabled and s.tiled_set.contains(win);
@@ -221,7 +227,7 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
     
     if (s.tiled_windows.items.len == 0) return;
 
-    // Optimize: Use workspace window_set for O(1) lookups instead of O(n²) nested loop
+    // Collect visible windows (O(1) lookup using workspace HashSet)
     var visible_buf: [128]u32 = undefined;
     var visible_count: usize = 0;
 
@@ -229,7 +235,6 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
         if (wm.fullscreen.window == win) continue;
         if (!s.tiled_set.contains(win)) continue;
         
-        // Fast lookup using HashSet
         if (current_ws.contains(win)) {
             if (visible_count < visible_buf.len) {
                 visible_buf[visible_count] = win;
@@ -243,195 +248,27 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
     const visible = visible_buf[0..visible_count];
     const screen = wm.screen;
 
-    var geometries: [128]utils.Rect = undefined;
-    var borders: [128]u32 = undefined;
-
-    switch (s.layout) {
-        .master => calculateMasterLayout(s, visible, screen.width_in_pixels, screen.height_in_pixels, &geometries),
-        .monocle => calculateMonocleLayout(s, visible, screen.width_in_pixels, screen.height_in_pixels, &geometries),
-        .grid => calculateGridLayout(s, visible, screen.width_in_pixels, screen.height_in_pixels, &geometries),
-    }
-
-    for (visible, 0..) |win, i| {
-        borders[i] = s.borderColor(wm, win);
-    }
-
+    // Use new layout modules for tiling
     var b = batch.Batch.begin(wm) catch {
-        retileDirect(wm, visible, &geometries, &borders, s.border_width);
+        std.log.err("[tiling] Failed to create batch, skipping retile", .{});
         return;
     };
     defer b.deinit();
 
-    for (visible, 0..) |win, i| {
-        b.configure(win, geometries[i]) catch continue;
-        b.setBorderWidth(win, s.border_width) catch continue;
-        b.setBorder(win, borders[i]) catch continue;
+    switch (s.layout) {
+        .master => master_layout.tile(&b, s, visible, screen.width_in_pixels, screen.height_in_pixels),
+        .monocle => monocle_layout.tile(&b, s, visible, screen.width_in_pixels, screen.height_in_pixels),
+        .grid => grid_layout.tile(&b, s, visible, screen.width_in_pixels, screen.height_in_pixels),
     }
 
-    if (s.layout == .monocle and visible.len > 0) {
-        b.raise(visible[visible.len - 1]) catch {};
+    // Set borders
+    for (visible) |win| {
+        const color = s.borderColor(wm, win);
+        b.setBorderWidth(win, s.border_width) catch {};
+        b.setBorder(win, color) catch {};
     }
 
     b.execute();
-}
-
-fn retileDirect(wm: *WM, visible: []const u32, geometries: *[128]utils.Rect, borders: *[128]u32, border_width: u16) void {
-    const conn = wm.conn;
-
-    for (visible, 0..) |win, i| {
-        const rect = geometries[i].clamp();
-        const values = [_]u32{
-            @bitCast(@as(i32, rect.x)),
-            @bitCast(@as(i32, rect.y)),
-            rect.width,
-            rect.height,
-        };
-        _ = xcb.xcb_configure_window(conn, win,
-            xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
-                xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
-            &values);
-        _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{border_width});
-        _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borders[i]});
-    }
-
-    utils.flush(conn);
-}
-
-// Common geometry calculations shared across layouts
-
-const LayoutContext = struct {
-    screen_w: u16,
-    screen_h: u16,
-    usable_h: u16,
-    margins: utils.Margins,
-};
-
-fn getLayoutContext(s: *const State, screen_w: u16, screen_h: u16) LayoutContext {
-    const bar_height = bar.getHeight();
-    return .{
-        .screen_w = screen_w,
-        .screen_h = screen_h,
-        .usable_h = screen_h - bar_height,
-        .margins = s.margins(),
-    };
-}
-
-fn calculateWindowHeight(ctx: LayoutContext, count: u16) u16 {
-    if (count == 0) return defs.MIN_WINDOW_DIM;
-    const overhead = ctx.margins.gap * (count + 1) + ctx.margins.border * 2 * count;
-    const available = if (ctx.usable_h > overhead) ctx.usable_h - overhead else count * defs.MIN_WINDOW_DIM;
-    return @max(defs.MIN_WINDOW_DIM, available / count);
-}
-
-fn calculateMasterLayout(s: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[128]utils.Rect) void {
-    const ctx = getLayoutContext(s, screen_w, screen_h);
-    const bar_height = screen_h - ctx.usable_h;
-    const n = windows.len;
-    const m = ctx.margins;
-    const m_count: u16 = @intCast(@min(s.master_count, n));
-    const s_count: u16 = @intCast(if (n > m_count) n - m_count else 0);
-
-    // Master area width
-    const master_w: u16 = if (s_count > 0)
-        @intFromFloat(@as(f32, @floatFromInt(screen_w)) * s.master_width_factor)
-    else
-        screen_w;
-
-    const master_on_right = s.master_side == .right;
-    const master_x: u16 = if (master_on_right) screen_w - master_w else 0;
-    const stack_x: u16 = if (master_on_right) 0 else master_w;
-
-    // Master window height
-    const master_h = calculateWindowHeight(ctx, m_count);
-
-    // Master inner width (accounting for gaps between master and stack)
-    const master_inner_w = if (s_count > 0) blk: {
-        const total_margin = m.gap + m.gap / 2 + 2 * m.border;
-        break :blk if (master_w > total_margin) master_w - total_margin else defs.MIN_WINDOW_DIM;
-    } else blk: {
-        const total_margin = 2 * m.gap + 2 * m.border;
-        break :blk if (master_w > total_margin) master_w - total_margin else defs.MIN_WINDOW_DIM;
-    };
-
-    // Layout master windows
-    var i: usize = 0;
-    while (i < m_count) : (i += 1) {
-        geometries[i] = utils.Rect{
-            .x = @intCast(master_x + m.gap),
-            .y = @intCast(bar_height + m.gap + i * (master_h + 2 * m.border + m.gap)),
-            .width = master_inner_w,
-            .height = master_h,
-        };
-    }
-
-    if (s_count == 0) return;
-
-    // Stack area
-    const stack_w = screen_w - master_w;
-    const stack_h = calculateWindowHeight(ctx, s_count);
-
-    const stack_inner_w = if (stack_w > m.gap / 2 + m.gap + 2 * m.border)
-        @max(defs.MIN_WINDOW_DIM, stack_w - (m.gap / 2 + m.gap + 2 * m.border))
-    else
-        defs.MIN_WINDOW_DIM;
-
-    // Layout stack windows
-    i = 0;
-    while (i < s_count) : (i += 1) {
-        geometries[m_count + i] = utils.Rect{
-            .x = @intCast(stack_x + m.gap / 2),
-            .y = @intCast(bar_height + m.gap + i * (stack_h + 2 * m.border + m.gap)),
-            .width = stack_inner_w,
-            .height = stack_h,
-        };
-    }
-}
-
-fn calculateMonocleLayout(_: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[128]utils.Rect) void {
-    const bar_height = bar.getHeight();
-    const usable_h = screen_h - bar_height;
-
-    const rect = utils.Rect{
-        .x = 0,
-        .y = @intCast(bar_height),
-        .width = screen_w,
-        .height = usable_h,
-    };
-
-    for (0..windows.len) |i| {
-        geometries[i] = rect;
-    }
-}
-
-fn calculateGridLayout(s: *const State, windows: []const u32, screen_w: u16, screen_h: u16, geometries: *[128]utils.Rect) void {
-    if (windows.len == 0) return; // Safety: avoid division by zero
-    
-    const ctx = getLayoutContext(s, screen_w, screen_h);
-    const bar_height = screen_h - ctx.usable_h;
-    const n = windows.len;
-    const m = ctx.margins;
-
-    const cols = @as(u16, @intFromFloat(@ceil(@sqrt(@as(f32, @floatFromInt(n))))));
-    const rows: u16 = @intCast((n + cols - 1) / cols);
-
-    const cell_w = (screen_w -| (cols + 1) * m.gap) / cols;
-    const cell_h = (ctx.usable_h -| (rows + 1) * m.gap) / rows;
-
-    const border_margin = 2 * m.border;
-    const win_w = if (cell_w > border_margin) cell_w - border_margin else defs.MIN_WINDOW_DIM;
-    const win_h = if (cell_h > border_margin) cell_h - border_margin else defs.MIN_WINDOW_DIM;
-
-    for (0..windows.len) |idx| {
-        const col: u16 = @intCast(idx % cols);
-        const row: u16 = @intCast(idx / cols);
-
-        geometries[idx] = utils.Rect{
-            .x = @intCast(m.gap + col * (cell_w + m.gap)),
-            .y = @intCast(bar_height + m.gap + row * (cell_h + m.gap)),
-            .width = win_w,
-            .height = win_h,
-        };
-    }
 }
 
 pub fn toggleLayout(wm: *WM) void {

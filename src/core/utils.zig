@@ -1,4 +1,4 @@
-//! Core utilities
+//! Core utilities - Focus moved to focus.zig for better API
 
 const std = @import("std");
 const defs = @import("defs");
@@ -121,7 +121,6 @@ pub fn getAtom(conn: *xcb.xcb_connection_t, name: []const u8) !u32 {
 pub fn getAtomCached(comptime name: []const u8) !u32 {
     const cache = atom_cache orelse return error.AtomCacheNotInitialized;
     
-    // Use switch to select the correct field at compile time
     return switch (comptime std.meta.stringToEnum(enum { 
         WM_PROTOCOLS, 
         WM_DELETE_WINDOW, 
@@ -194,63 +193,6 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
     };
 }
 
-// Focus helpers with timeout-based protection
-
-const FocusProtection = struct {
-    active: bool = false,
-    started_at: i64 = 0,
-};
-
-var focus_protection: FocusProtection = .{};
-
-pub fn setFocus(wm: *defs.WM, win: u32, protect: bool) void {
-    if (win == wm.root) {
-        std.log.err("[CRITICAL] Attempted to focus ROOT window!", .{});
-        return;
-    }
-
-    if (wm.focused_window == win) return;
-
-    wm.focused_window = win;
-    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, xcb.XCB_CURRENT_TIME);
-
-    if (protect) {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch {
-            focus_protection = .{ .active = true, .started_at = 0 };
-            return;
-        };
-        const now = ts.sec * 1000 + @divFloor(ts.nsec, 1_000_000);
-        focus_protection = .{
-            .active = true,
-            .started_at = now,
-        };
-    }
-
-    flush(wm.conn);
-}
-
-pub fn clearFocus(wm: *defs.WM) void {
-    wm.focused_window = null;
-    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, wm.root, xcb.XCB_CURRENT_TIME);
-    flush(wm.conn);
-}
-
-pub fn isProtected() bool {
-    if (!focus_protection.active) return false;
-    
-    // Auto-expire protection after timeout
-    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return false;
-    const now = ts.sec * 1000 + @divFloor(ts.nsec, 1_000_000);
-    const elapsed = now - focus_protection.started_at;
-    
-    if (elapsed > defs.FOCUS_PROTECTION_TIMEOUT_MS) {
-        focus_protection.active = false;
-        return false;
-    }
-    
-    return true;
-}
-
-pub fn releaseProtection() void {
-    focus_protection.active = false;
-}
+// NOTE: Focus management moved to focus.zig!
+// Use @import("focus") for: setFocus(), clearFocus(), releaseProtection()
+// focus.zig has better API with semantic Reason enum instead of bool
