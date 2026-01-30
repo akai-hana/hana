@@ -141,6 +141,7 @@ title_accent = true
 # Available segments: "workspaces", "title", "clock", "layout"
 
 # Default layout (workspaces left, title center, clock right):
+# You can anchor any segments to left, right or center.
 [bar.layout.left]
 segments = ["workspaces", "layout"]
 

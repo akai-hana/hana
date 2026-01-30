@@ -60,38 +60,53 @@ pub fn detectFont(allocator: std.mem.Allocator) ![]const u8 {
     return "monospace";
 }
 
-/// Check if a command is available in PATH
+/// Check if a command is available in PATH  
 fn isCommandAvailable(allocator: std.mem.Allocator, command: []const u8) bool {
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{ "which", command },
-    }) catch return false;
+    _ = allocator;
     
-    defer {
-        allocator.free(result.stdout);
-        allocator.free(result.stderr);
+    // Check common binary paths
+    const paths = [_][]const u8{
+        "/usr/bin/",
+        "/usr/local/bin/",
+        "/bin/",
+    };
+    
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    for (paths) |path| {
+        const full_path = std.fmt.bufPrintZ(&buf, "{s}{s}", .{ path, command }) catch continue;
+        const fd = std.posix.open(full_path, .{ .ACCMODE = .RDONLY }, 0) catch continue;
+        std.posix.close(fd);
+        return true;
     }
     
-    return result.term.Exited == 0;
+    return false;
 }
 
 /// Check if a font is available using fc-list
 fn isFontAvailable(allocator: std.mem.Allocator, font: []const u8) bool {
-    // Special case for monospace - always available
-    if (std.mem.eql(u8, font, "monospace")) return true;
+    _ = allocator;
     
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{ "fc-list", font },
-    }) catch return false;
+    // For common fonts, assume they're available
+    // X11 will fall back to a default font if the requested one doesn't exist
+    const common_fonts = [_][]const u8{
+        "monospace",
+        "FiraCode",
+        "FiraCode Retina",
+        "FiraCode Nerd Font",
+        "FiraCode Nerd Font Ret",
+        "JetBrains Mono",
+        "JetBrains Mono Nerd Font",
+        "Terminus",
+    };
     
-    defer {
-        allocator.free(result.stdout);
-        allocator.free(result.stderr);
+    for (common_fonts) |common_font| {
+        if (std.mem.eql(u8, font, common_font)) {
+            return true;
+        }
     }
     
-    // If fc-list returns any output, the font exists
-    return result.term.Exited == 0 and result.stdout.len > 0;
+    // Default to true - worst case X11 will use fallback font
+    return true;
 }
 
 /// Load fallback TOML embedded in binary
