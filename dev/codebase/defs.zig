@@ -45,6 +45,8 @@ pub const Action = union(enum) {
     close_window,
     reload_config,
     toggle_layout,
+    toggle_layout_reverse,
+    toggle_bar,
     increase_master,
     decrease_master,
     increase_master_count,
@@ -101,6 +103,17 @@ pub const TilingConfig = struct {
     border_normal: u32 = 0x383C4A,
 };
 
+pub const BarVerticalPosition = enum {
+    top,
+    bottom,
+
+    pub fn fromString(str: []const u8) ?BarVerticalPosition {
+        if (std.mem.eql(u8, str, "top")) return .top;
+        if (std.mem.eql(u8, str, "bottom")) return .bottom;
+        return null;
+    }
+};
+
 pub const BarPosition = enum {
     left,
     center,
@@ -140,6 +153,7 @@ pub const BarLayout = struct {
 
 pub const BarConfig = struct {
     show: bool = true,
+    vertical_position: BarVerticalPosition = .top,
     height: ?u16 = null,
     font: []const u8 = "monospace:size=10",
     font_size: u16 = 10,

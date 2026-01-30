@@ -92,7 +92,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     if (bar.isBarWindow(event.event)) return;
     
     // Respect focus protection (prevents focus stealing during explicit focus changes)
-    if (focus.isProtected()) return;
+    if (utils.isProtected()) return;
     
     // Filter spurious EnterNotify events
     // X11 generates EnterNotify in many scenarios beyond "mouse entered window":

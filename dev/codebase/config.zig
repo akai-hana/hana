@@ -95,26 +95,34 @@ fn get(
 }
 
 pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
-    const cwd = try std.process.getCwdAlloc(allocator);
-    defer allocator.free(cwd);
+    // First, try ~/.config/hana/config.toml (XDG_CONFIG_HOME or ~/.config)
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else ".";
+    const config_home = if (std.c.getenv("XDG_CONFIG_HOME")) |ch|
+        std.mem.span(ch)
+    else
+        try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
+    defer if (std.c.getenv("XDG_CONFIG_HOME") == null) allocator.free(config_home);
 
-    const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
-    defer allocator.free(local);
+    const xdg_path = try std.fs.path.join(allocator, &.{ config_home, "hana", "config.toml" });
+    defer allocator.free(xdg_path);
 
-    if (loadConfig(allocator, local)) |cfg| {
+    if (loadConfig(allocator, xdg_path)) |cfg| {
         return cfg;
     } else |_| {
-        const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else ".";
-        const config_home = if (std.c.getenv("XDG_CONFIG_HOME")) |ch|
-            std.mem.span(ch)
-        else
-            try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
-        defer if (std.c.getenv("XDG_CONFIG_HOME") == null) allocator.free(config_home);
+        // Second, try ./config.toml in current directory
+        const cwd = try std.process.getCwdAlloc(allocator);
+        defer allocator.free(cwd);
 
-        const xdg_path = try std.fs.path.join(allocator, &.{ config_home, "hana", "config.toml" });
-        defer allocator.free(xdg_path);
+        const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
+        defer allocator.free(local);
 
-        return loadConfig(allocator, xdg_path);
+        if (loadConfig(allocator, local)) |cfg| {
+            return cfg;
+        } else |_| {
+            // Finally, use embedded fallback with auto-detection
+            std.log.info("[config] No config.toml found, using fallback with auto-detection", .{});
+            return try loadFallbackConfig(allocator);
+        }
     }
 }
 
@@ -124,8 +132,8 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
 
     const fd = std.posix.open(path_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| {
         if (err == error.FileNotFound) {
-            std.log.info("[config] Not found: {s}, using defaults", .{path});
-            return getDefaultConfig(allocator);
+            std.log.info("[config] Not found: {s}", .{path});
+            return err;
         }
         return err;
     };
@@ -143,6 +151,12 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
         if (content.items.len > 1024 * 1024) return error.FileTooLarge;
     }
 
+    // Check if file is empty
+    if (content.items.len == 0) {
+        std.log.info("[config] Empty config file: {s}, using fallback", .{path});
+        return try loadFallbackConfig(allocator);
+    }
+
     var doc = try parser.parse(allocator, content.items);
     defer doc.deinit();
 
@@ -155,6 +169,45 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
     try parseRules(allocator, &doc, &cfg);
 
     std.log.info("[config] Loaded: {s}", .{path});
+    return cfg;
+}
+
+/// Load fallback configuration with auto-detection of terminal and font
+fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
+    const fallback = @import("fallback");
+    const fallback_toml = fallback.getFallbackToml();
+    
+    var doc = try parser.parse(allocator, fallback_toml);
+    defer doc.deinit();
+
+    var cfg = getDefaultConfig(allocator);
+
+    parseWorkspaces(&doc, &cfg);
+    try parseKeybindings(allocator, &doc, &cfg);
+    try parseTiling(allocator, &doc, &cfg);
+    try parseBar(allocator, &doc, &cfg);
+    try parseRules(allocator, &doc, &cfg);
+
+    // Auto-detect terminal and replace "auto_terminal" action
+    const terminal = try fallback.detectTerminal(allocator);
+    for (cfg.keybindings.items) |*kb| {
+        if (kb.action == .exec) {
+            if (std.mem.eql(u8, kb.action.exec, "auto_terminal")) {
+                allocator.free(kb.action.exec);
+                kb.action.exec = try allocator.dupe(u8, terminal);
+            }
+        }
+    }
+
+    // Auto-detect font if set to "auto"
+    if (std.mem.eql(u8, cfg.bar.font, "auto")) {
+        const detected_font = try fallback.detectFont(allocator);
+        const font_with_size = try std.fmt.allocPrint(allocator, "{s}:size={}", .{detected_font, cfg.bar.font_size});
+        // Note: the default font string will be freed by Config.deinit, so we don't allocate it in getDefaultConfig
+        cfg.bar.font = font_with_size;
+    }
+
+    std.log.info("[config] Loaded fallback configuration with auto-detection", .{});
     return cfg;
 }
 
@@ -208,6 +261,8 @@ const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
     .{ "reload", .reload_config },
     .{ "reload_config", .reload_config },
     .{ "toggle_layout", .toggle_layout },
+    .{ "toggle_layout_reverse", .toggle_layout_reverse },
+    .{ "toggle_bar", .toggle_bar },
     .{ "increase_master", .increase_master },
     .{ "decrease_master", .decrease_master },
     .{ "increase_master_count", .increase_master_count },
@@ -362,6 +417,11 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     const section = doc.getSection("bar") orelse return;
 
     cfg.bar.show = get(bool, section, "show", true, null, null);
+    
+    // Parse vertical position (top/bottom)
+    if (section.getString("position")) |pos_str| {
+        cfg.bar.vertical_position = defs.BarVerticalPosition.fromString(pos_str) orelse .top;
+    }
     
     // Height can be null for auto-adapt
     if (section.getInt("height")) |h| {

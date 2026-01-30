@@ -121,16 +121,12 @@ pub fn getAtom(conn: *xcb.xcb_connection_t, name: []const u8) !u32 {
 pub fn getAtomCached(comptime name: []const u8) !u32 {
     const cache = atom_cache orelse return error.AtomCacheNotInitialized;
     
-    const atom_type = comptime std.meta.stringToEnum(enum { 
+    return inline switch (comptime std.meta.stringToEnum(enum { 
         WM_PROTOCOLS, 
         WM_DELETE_WINDOW, 
         _NET_WM_NAME, 
         UTF8_STRING 
-    }, name) orelse {
-        @compileError(std.fmt.comptimePrint("Atom not in cache: {s}", .{name}));
-    };
-    
-    return switch (atom_type) {
+    }, name) orelse @compileError("Atom not in cache: " ++ name)) {
         .WM_PROTOCOLS => cache.wm_protocols,
         .WM_DELETE_WINDOW => cache.wm_delete,
         ._NET_WM_NAME => cache.net_wm_name,

@@ -248,6 +248,14 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
     const visible = visible_buf[0..visible_count];
     const screen = wm.screen;
 
+    // Calculate available space accounting for bar
+    const bar_height = if (wm.config.bar.show) bar.getBarHeight() else 0;
+    const available_height = screen.height_in_pixels - bar_height;
+    const y_offset: u16 = if (wm.config.bar.show and wm.config.bar.vertical_position == .top) 
+        bar_height 
+    else 
+        0;
+
     // Use new layout modules for tiling
     var b = batch.Batch.begin(wm) catch {
         std.log.err("[tiling] Failed to create batch, skipping retile", .{});
@@ -255,10 +263,11 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
     };
     defer b.deinit();
 
+    // Pass adjusted height and offset to layout functions
     switch (s.layout) {
-        .master => master_layout.tile(&b, s, visible, screen.width_in_pixels, screen.height_in_pixels),
-        .monocle => monocle_layout.tile(&b, s, visible, screen.width_in_pixels, screen.height_in_pixels),
-        .grid => grid_layout.tile(&b, s, visible, screen.width_in_pixels, screen.height_in_pixels),
+        .master => master_layout.tileWithOffset(&b, s, visible, screen.width_in_pixels, available_height, y_offset),
+        .monocle => monocle_layout.tileWithOffset(&b, s, visible, screen.width_in_pixels, available_height, y_offset),
+        .grid => grid_layout.tileWithOffset(&b, s, visible, screen.width_in_pixels, available_height, y_offset),
     }
 
     // Set borders
@@ -277,6 +286,18 @@ pub fn toggleLayout(wm: *WM) void {
         .master => .monocle,
         .monocle => .grid,
         .grid => .master,
+    };
+
+    bar.markDirty();
+    retileCurrentWorkspace(wm);
+}
+
+pub fn toggleLayoutReverse(wm: *WM) void {
+    const s = state orelse return;
+    s.layout = switch (s.layout) {
+        .master => .grid,
+        .grid => .monocle,
+        .monocle => .master,
     };
 
     bar.markDirty();

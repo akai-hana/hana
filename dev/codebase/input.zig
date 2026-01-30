@@ -210,6 +210,8 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         },
         .reload_config => wm.should_reload_config.store(true, .release),
         .toggle_layout => tiling.toggleLayout(wm),
+        .toggle_layout_reverse => tiling.toggleLayoutReverse(wm),
+        .toggle_bar => @import("bar").toggleBar(wm),
         .increase_master => tiling.increaseMasterWidth(wm),
         .decrease_master => tiling.decreaseMasterWidth(wm),
         .increase_master_count => tiling.increaseMasterCount(wm),
