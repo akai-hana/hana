@@ -20,6 +20,7 @@ const State = struct {
     width: u16,
     height: u16,
     dc: *drawing.DrawContext,
+    conn: *xcb.xcb_connection_t,  // CRITICAL FIX: Store real XCB connection
     config: defs.BarConfig,
     status_text: std.ArrayList(u8),
     cached_title: std.ArrayList(u8),
@@ -30,7 +31,7 @@ const State = struct {
     alive: bool,
     allocator: std.mem.Allocator,
 
-    fn init(allocator: std.mem.Allocator, window: u32, width: u16, height: u16,
+    fn init(allocator: std.mem.Allocator, conn: *xcb.xcb_connection_t, window: u32, width: u16, height: u16,
             dc: *drawing.DrawContext, config: defs.BarConfig) !*State {
         const s = try allocator.create(State);
         s.* = .{
@@ -38,6 +39,7 @@ const State = struct {
             .width = width,
             .height = height,
             .dc = dc,
+            .conn = conn,  // Store the real connection
             .config = config,
             .status_text = std.ArrayList(u8){},
             .cached_title = std.ArrayList(u8){},
@@ -122,7 +124,7 @@ pub fn init(wm: *defs.WM) !void {
         return err;
     };
 
-    const s = try State.init(wm.allocator, window, width, height, dc, wm.config.bar);
+    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar);
     try draw(s, wm);
     utils.flush(wm.conn);
 
@@ -176,11 +178,11 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
 
 pub fn deinit() void {
     if (state) |s| {
-        const conn = s.dc.display;
+        const conn = s.conn;  // Use real XCB connection
         const window = s.window;
         s.dc.deinit();
         s.deinit();
-        _ = xcb.xcb_destroy_window(@ptrCast(conn), window);
+        _ = xcb.xcb_destroy_window(conn, window);
         state = null;
     }
 }
@@ -218,7 +220,7 @@ pub inline fn markDirty() void {
 
 pub inline fn raiseBar() void {
     if (state) |s| {
-        _ = xcb.xcb_configure_window(@ptrCast(s.dc.display), s.window,
+        _ = xcb.xcb_configure_window(s.conn, s.window,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
 }
@@ -230,11 +232,11 @@ pub fn toggleBar(wm: *defs.WM) void {
         
         if (wm.config.bar.show) {
             // Show the bar
-            _ = xcb.xcb_map_window(@ptrCast(s.dc.display), s.window);
+            _ = xcb.xcb_map_window(s.conn, s.window);
             std.log.info("[bar] Bar shown", .{});
         } else {
             // Hide the bar
-            _ = xcb.xcb_unmap_window(@ptrCast(s.dc.display), s.window);
+            _ = xcb.xcb_unmap_window(s.conn, s.window);
             std.log.info("[bar] Bar hidden", .{});
         }
         

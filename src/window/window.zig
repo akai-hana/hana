@@ -76,6 +76,11 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 }
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
+    // Block fullscreen window from reconfiguring itself
+    if (wm.fullscreen.window) |fs_win| {
+        if (fs_win == event.window) return;
+    }
+    
     // Tiled windows ignore configure requests - WM controls their geometry
     if (wm.config.tiling.enabled and tiling.isWindowTiled(event.window)) return;
 

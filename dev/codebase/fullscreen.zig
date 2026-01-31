@@ -23,39 +23,7 @@ pub fn toggleFullscreen(wm: *WM) void {
         enterFullscreen(wm, win);
     }
     
-    // CRITICAL FIX: Re-grab keys after fullscreen transition to prevent keyboard lock
-    // Fullscreen windows can steal keyboard input, so we need to re-establish our grabs
-    regrabKeys(wm);
     utils.flush(wm.conn);
-}
-
-// Re-grab all keybindings - critical for preventing keyboard lock after fullscreen
-fn regrabKeys(wm: *WM) void {
-    const input = @import("input");
-    _ = @import("defs").xcb.xcb_ungrab_key(wm.conn, @import("defs").xcb.XCB_GRAB_ANY, wm.root, @import("defs").xcb.XCB_MOD_MASK_ANY);
-    
-    for (wm.config.keybindings.items) |kb| {
-        const keycode = kb.keycode orelse continue;
-        
-        // Grab with all combinations of NumLock and CapsLock to ignore their state
-        for ([_]u16{ 0, @import("defs").MOD_LOCK, @import("defs").MOD_2, @import("defs").MOD_LOCK | @import("defs").MOD_2 }) |lock| {
-            const cookie = @import("defs").xcb.xcb_grab_key_checked(
-                wm.conn, 
-                0, 
-                wm.root, 
-                @intCast(kb.modifiers | lock), 
-                keycode, 
-                @import("defs").xcb.XCB_GRAB_MODE_ASYNC, 
-                @import("defs").xcb.XCB_GRAB_MODE_ASYNC
-            );
-            if (@import("defs").xcb.xcb_request_check(wm.conn, cookie)) |err| {
-                std.c.free(err);
-            }
-        }
-    }
-    
-    // Also re-establish button grabs for mouse
-    input.setupGrabs(wm.conn, wm.root);
 }
 
 fn enterFullscreen(wm: *WM, win: u32) void {
