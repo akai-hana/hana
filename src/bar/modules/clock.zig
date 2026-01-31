@@ -80,11 +80,11 @@ fn formatTime(buf: []u8) ![]const u8 {
 
     // Use localtime which respects system timezone
     return try std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-        local_ts.tm_year + 1900,
-        local_ts.tm_mon + 1,
-        local_ts.tm_mday,
-        local_ts.tm_hour,
-        local_ts.tm_min,
-        local_ts.tm_sec,
+        @as(u32, @intCast(local_ts.tm_year + 1900)),
+        @as(u32, @intCast(local_ts.tm_mon + 1)),
+        @as(u32, @intCast(local_ts.tm_mday)),
+        @as(u32, @intCast(local_ts.tm_hour)),
+        @as(u32, @intCast(local_ts.tm_min)),
+        @as(u32, @intCast(local_ts.tm_sec)),
     });
 }
