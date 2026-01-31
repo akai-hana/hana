@@ -77,9 +77,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     // Block fullscreen window from reconfiguring itself
-    if (wm.fullscreen.window) |fs_win| {
-        if (fs_win == event.window) return;
-    }
+    if (wm.fullscreen.isFullscreen(event.window)) return;
     
     // Tiled windows ignore configure requests - WM controls their geometry
     if (wm.config.tiling.enabled and tiling.isWindowTiled(event.window)) return;
@@ -128,6 +126,18 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     const win = event.window;
 
     if (bar.isBarWindow(win)) return;
+
+    // Clean up fullscreen state if this window was fullscreened
+    if (wm.fullscreen.isFullscreen(win)) {
+        // Find which workspace this window was fullscreened on and remove it
+        var it = wm.fullscreen.per_workspace.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.window == win) {
+                wm.fullscreen.removeForWorkspace(entry.key_ptr.*);
+                break;
+            }
+        }
+    }
 
     if (wm.config.tiling.enabled) {
         tiling.removeWindow(wm, win);
