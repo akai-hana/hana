@@ -4,6 +4,19 @@ const std = @import("std");
 const defs = @import("defs");
 const drawing = @import("drawing");
 
+const struct_tm = extern struct {
+    tm_sec: c_int,
+    tm_min: c_int,
+    tm_hour: c_int,
+    tm_mday: c_int,
+    tm_mon: c_int,
+    tm_year: c_int,
+    tm_wday: c_int,
+    tm_yday: c_int,
+    tm_isdst: c_int,
+};
+extern "c" fn localtime(timep: *const c_long) ?*const struct_tm;
+
 pub fn draw(
     dc: *drawing.DrawContext,
     config: defs.BarConfig,
@@ -41,7 +54,7 @@ fn formatTime(buf: []u8) ![]const u8 {
     };
 
     // Get local timezone offset
-    const local_ts = std.c.localtime(&ts.sec) orelse {
+    const local_ts = localtime(&ts.sec) orelse {
         // Fallback to UTC if localtime fails
         const epoch_seconds: i64 = ts.sec;
         const epoch_day = @divFloor(epoch_seconds, std.time.s_per_day);
