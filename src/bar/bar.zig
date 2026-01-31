@@ -246,6 +246,8 @@ pub fn toggleBar(wm: *defs.WM) void {
         if (wm.config.bar.show) {
             // Show the bar
             _ = xcb.xcb_map_window(s.conn, s.window);
+            // CRITICAL FIX: Immediately redraw to avoid blank bar during Expose event delay
+            draw(s, wm) catch {};
             std.log.info("[bar] Bar shown", .{});
         } else {
             // Hide the bar
@@ -262,6 +264,33 @@ pub fn toggleBar(wm: *defs.WM) void {
 
 pub fn isBarVisible() bool {
     return if (state) |_| true else false;
+}
+
+/// Hide bar temporarily (e.g., for fullscreen) without changing config
+pub fn hideForFullscreen(wm: *defs.WM) void {
+    if (state) |s| {
+        _ = xcb.xcb_unmap_window(s.conn, s.window);
+        utils.flush(wm.conn);
+        std.log.info("[bar] Bar hidden (fullscreen)", .{});
+        
+        // Retile to use full screen space
+        @import("tiling").retileCurrentWorkspace(wm);
+    }
+}
+
+/// Show bar after exiting fullscreen (only if bar is enabled in config)
+pub fn showForFullscreen(wm: *defs.WM) void {
+    if (state) |s| {
+        if (wm.config.bar.show) {  // Only show if bar is enabled in config
+            _ = xcb.xcb_map_window(s.conn, s.window);
+            draw(s, wm) catch {};
+            utils.flush(wm.conn);
+            std.log.info("[bar] Bar shown (exit fullscreen)", .{});
+            
+            // Retile to account for bar space
+            @import("tiling").retileCurrentWorkspace(wm);
+        }
+    }
 }
 
 pub fn getBarHeight() u16 {
