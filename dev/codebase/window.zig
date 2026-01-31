@@ -61,13 +61,18 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         workspaces.moveWindowTo(wm, win, validated_target_ws);
     }
 
-    // Set up tiling if enabled and on current workspace
-    if (wm.config.tiling.enabled and validated_target_ws == current_ws and should_map) {
-        _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, 
-            &[_]u32{wm.config.tiling.border_width});
-        _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, 
-            &[_]u32{wm.config.tiling.border_normal});
-        
+    // Set up tiling if enabled.
+    // Border pre-configuration only runs when the window is mapped on the
+    // current workspace.  tiling.addWindow is called unconditionally so that
+    // windows bound to a different workspace are still registered in the tiling
+    // lists and will be laid out correctly when that workspace is switched to.
+    if (wm.config.tiling.enabled) {
+        if (validated_target_ws == current_ws and should_map) {
+            _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, 
+                &[_]u32{wm.config.tiling.border_width});
+            _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, 
+                &[_]u32{wm.config.tiling.border_normal});
+        }
         tiling.addWindow(wm, win);
     }
 
