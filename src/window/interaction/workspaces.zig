@@ -7,7 +7,6 @@ const WM = defs.WM;
 const utils = @import("utils");
 const focus = @import("focus");
 const bar = @import("bar");
-const batch = @import("batch");
 
 pub const Workspace = struct {
     id: usize,
@@ -206,87 +205,65 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
 
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
 
-    executeSwitch(wm, s.current, ws_id);
+    const old_ws = s.current;
+    // Advance current *before* the switch so that retileCurrentWorkspace,
+    // called inside executeSwitch, lays out the new workspace's windows
+    // while they are still unmapped.
     s.current = ws_id;
+    executeSwitch(wm, old_ws, ws_id);
 }
 
-// Optimized workspace switching with batch operations
+// Two-phase workspace switch that avoids any intermediate visual state.
+//
+// Phase 1 – retile:  retileCurrentWorkspace configures the new workspace's
+//   windows while they are still unmapped.  xcb_configure_window on an
+//   unmapped window silently updates its stored geometry; nothing is drawn.
+//   The flush inside retileCurrentWorkspace is therefore invisible.
+//
+// Phase 2 – map/unmap/focus:  all three are queued into XCB's output buffer
+//   and flushed with a single xcb_flush.  The X server processes them in
+//   order — map (window appears at the geometry set in phase 1), unmap
+//   (old window disappears), set-focus — before it paints the next frame.
+//   No intermediate layout is ever rendered, so no wallpaper flash is
+//   visible.
 fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     const s = state orelse return;
 
     const old_workspace = &s.workspaces[old_ws];
     const new_workspace = &s.workspaces[new_ws];
 
-    // Use batch for efficient map/unmap operations
-    var b = batch.Batch.begin(wm) catch {
-        executeSwitchDirect(wm, old_workspace, new_workspace);
-        return;
-    };
-    defer b.deinit();
-
-    // Map new workspace windows FIRST to prevent flicker
-    for (new_workspace.windows.items) |win| {
-        b.map(win) catch {};
-    }
-
-    // Then unmap old workspace windows
-    for (old_workspace.windows.items) |win| {
-        b.unmap(win) catch {};
-    }
-
-    // Set focus to first window or root
+    // Pre-set focused_window so the retile assigns the correct border
+    // colour to the about-to-be-focused window.
     if (new_workspace.windows.items.len > 0) {
-        const win = new_workspace.windows.items[0];
-        b.setFocus(win) catch {};
-        wm.focused_window = win;
+        wm.focused_window = new_workspace.windows.items[0];
     } else {
         wm.focused_window = null;
     }
 
-    b.execute();
-
-    // Mark tiling dirty for retiling on new workspace
+    // --- Phase 1: configure new workspace while still unmapped -----------
     if (wm.config.tiling.enabled) {
         const tiling_mod = @import("tiling");
-        if (tiling_mod.getState()) |ts| {
-            ts.markDirty();
-        }
+        tiling_mod.retileCurrentWorkspace(wm);
     }
 
-    bar.markDirty();
-}
-
-// Fallback direct implementation without batch
-fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Workspace) void {
-    // Map new workspace FIRST to prevent flicker
+    // --- Phase 2: atomic map / unmap / focus -------------------------------
     for (new_workspace.windows.items) |win| {
         _ = xcb.xcb_map_window(wm.conn, win);
     }
 
-    // Then unmap old workspace
     for (old_workspace.windows.items) |win| {
         _ = xcb.xcb_unmap_window(wm.conn, win);
     }
 
-    // Set focus
     if (new_workspace.windows.items.len > 0) {
-        const win = new_workspace.windows.items[0];
-        _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, xcb.XCB_CURRENT_TIME);
-        wm.focused_window = win;
+        _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
+            wm.focused_window.?, xcb.XCB_CURRENT_TIME);
     } else {
-        _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, wm.root, xcb.XCB_CURRENT_TIME);
-        wm.focused_window = null;
+        _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
+            wm.root, xcb.XCB_CURRENT_TIME);
     }
 
-    utils.flush(wm.conn);
-
-    // Mark tiling dirty
-    if (wm.config.tiling.enabled) {
-        const tiling_mod = @import("tiling");
-        if (tiling_mod.getState()) |ts| {
-            ts.markDirty();
-        }
-    }
+    utils.flush(wm.conn); // single flush — map + unmap + focus travel together
 
     bar.markDirty();
 }
