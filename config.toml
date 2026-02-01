@@ -88,8 +88,18 @@ position = "bottom" # Bar vertical position: "top" or "bottom"
 #height = 32
 
 # Font configuration
-font = "FiraCode Nerd Font Ret"
+# NEW: Multi-font support for proper CJK rendering!
+# List fonts in priority order - first font is primary, others are fallbacks
+# This allows Latin text to use FiraCode while Japanese uses Noto Sans CJK
+fonts = [
+    "FiraCode Nerd Font Ret",
+    "Noto Sans CJK JP",
+]
 font_size = 12
+
+# Legacy single font option (used if fonts array is not set):
+#font = "FiraCode Nerd Font Ret"
+#font_size = 12
 
 # NEW: Spacing configuration for better readability!
 padding = 99    # Padding inside segments (around text)
