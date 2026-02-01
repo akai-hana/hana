@@ -120,27 +120,22 @@ pub fn init(wm: *defs.WM) !void {
 
     // Load fonts - support multi-font for CJK characters
     if (wm.config.bar.fonts.items.len > 0) {
-        // Build Fontconfig pattern from font array with size
-        // Pattern format: "Font1,Font2,Font3:size=X"
-        var pattern = std.ArrayList(u8){};
-        defer pattern.deinit(wm.allocator);
-        
-        for (wm.config.bar.fonts.items, 0..) |font_name, i| {
-            if (i > 0) try pattern.append(wm.allocator, ',');
-            try pattern.appendSlice(wm.allocator, font_name);
+        // Build per-font sized name array and call loadFonts for true per-glyph fallback
+        var sized_fonts = std.ArrayList([]const u8){};
+        defer {
+            for (sized_fonts.items) |s| wm.allocator.free(s);
+            sized_fonts.deinit(wm.allocator);
         }
         
-        // Add size if specified
-        if (wm.config.bar.font_size > 0) {
-            const size_str = try std.fmt.allocPrint(wm.allocator, ":size={}", .{wm.config.bar.font_size});
-            defer wm.allocator.free(size_str);
-            try pattern.appendSlice(wm.allocator, size_str);
+        for (wm.config.bar.fonts.items) |font_name| {
+            const sized = if (wm.config.bar.font_size > 0)
+                try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ font_name, wm.config.bar.font_size })
+            else
+                try wm.allocator.dupe(u8, font_name);
+            try sized_fonts.append(wm.allocator, sized);
         }
         
-        dc.loadFont(pattern.items) catch |err| {
-            std.log.err("[bar] Failed to load fonts pattern '{s}': {}", .{ pattern.items, err });
-            return err;
-        };
+        try dc.loadFonts(sized_fonts.items);
     } else {
         // Fallback to single font (backwards compatibility)
         const font_str = if (wm.config.bar.font_size > 0)
@@ -189,23 +184,23 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
     
     // Load fonts for measurement - use same logic as main bar
     if (wm.config.bar.fonts.items.len > 0) {
-        var pattern = std.ArrayList(u8){};
-        defer pattern.deinit(wm.allocator);
-        
-        for (wm.config.bar.fonts.items, 0..) |font_name, i| {
-            if (i > 0) pattern.append(wm.allocator, ',') catch {};
-            pattern.appendSlice(wm.allocator, font_name) catch {};
+        var sized_fonts = std.ArrayList([]const u8){};
+        defer {
+            for (sized_fonts.items) |s| wm.allocator.free(s);
+            sized_fonts.deinit(wm.allocator);
         }
         
-        if (wm.config.bar.font_size > 0) {
-            const size_str = std.fmt.allocPrint(wm.allocator, ":size={}", .{wm.config.bar.font_size}) catch {
+        for (wm.config.bar.fonts.items) |font_name| {
+            const sized = std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ font_name, wm.config.bar.font_size }) catch {
                 return 24;
             };
-            defer wm.allocator.free(size_str);
-            pattern.appendSlice(wm.allocator, size_str) catch {};
+            sized_fonts.append(wm.allocator, sized) catch {
+                wm.allocator.free(sized);
+                return 24;
+            };
         }
         
-        temp_dc.loadFont(pattern.items) catch {
+        temp_dc.loadFonts(sized_fonts.items) catch {
             return 24; // Fallback
         };
     } else {
