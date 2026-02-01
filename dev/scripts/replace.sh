@@ -74,7 +74,7 @@ maybe_drop_text() {
   return 1
 }
 
-# First pass: non-optimized files
+# First pass: non-optimized / non-compact files
 for f in "$FILES_DIR"/* "$FILES_DIR"/.*; do
   [ -e "$f" ] || continue
   case "$(basename "$f")" in
@@ -86,13 +86,13 @@ for f in "$FILES_DIR"/* "$FILES_DIR"/.*; do
 
   bn="$(basename "$f")"
   case "$bn" in
-    *_optimized.*|*_optimized) continue ;;
+    *_optimized.*|*_optimized|*_compact.*|*_compact) continue ;;
   esac
 
   write_to_codebase "$f" "$bn"
 done
 
-# Second pass: optimized files
+# Second pass: optimized and compact files
 for f in "$FILES_DIR"/* "$FILES_DIR"/.*; do
   [ -e "$f" ] || continue
   case "$(basename "$f")" in
@@ -104,11 +104,19 @@ for f in "$FILES_DIR"/* "$FILES_DIR"/.*; do
 
   bn="$(basename "$f")"
   case "$bn" in
-    *_optimized.*)
-      dest="${bn%_optimized.*}.${bn##*.}"
+    *_optimized.*|*_compact.*)
+      case "$bn" in
+        *_optimized.*) strip="_optimized" ;;
+        *_compact.*) strip="_compact" ;;
+      esac
+      dest="${bn%$strip.*}.${bn##*.}"
       ;;
-    *_optimized)
-      dest="${bn%_optimized}"
+    *_optimized|*_compact)
+      case "$bn" in
+        *_optimized) strip="_optimized" ;;
+        *_compact) strip="_compact" ;;
+      esac
+      dest="${bn%$strip}"
       ;;
     *)
       continue
@@ -117,4 +125,3 @@ for f in "$FILES_DIR"/* "$FILES_DIR"/.*; do
 
   write_to_codebase "$f" "$dest"
 done
-
