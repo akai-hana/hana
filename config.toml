@@ -93,7 +93,7 @@ position = "bottom" # Bar vertical position: "top" or "bottom"
 # This allows Latin text to use FiraCode while Japanese uses Noto Sans CJK
 fonts = [
     "FiraCode Nerd Font Ret",
-    "Noto Sans CJK JP Medium",
+    "Noto Sans CJK JP",
 ]
 font_size = 12
 
