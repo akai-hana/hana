@@ -5,6 +5,9 @@ const defs = @import("defs");
 const xcb = defs.xcb;
 const drawing = @import("drawing");
 
+// OPTIMIZATION: Share default status string constant
+const DEFAULT_STATUS = "hana";
+
 pub fn draw(
     dc: *drawing.DrawContext,
     config: defs.BarConfig,
@@ -32,7 +35,7 @@ pub fn update(wm: *defs.WM, status_text: *std.ArrayList(u8), allocator: std.mem.
 
     const reply = xcb.xcb_get_property_reply(wm.conn, cookie, null) orelse {
         status_text.clearRetainingCapacity();
-        try status_text.appendSlice(allocator, "hana");
+        try status_text.appendSlice(allocator, DEFAULT_STATUS);
         return;
     };
     defer std.c.free(reply);
@@ -44,6 +47,6 @@ pub fn update(wm: *defs.WM, status_text: *std.ArrayList(u8), allocator: std.mem.
         const len: usize = @intCast(xcb.xcb_get_property_value_length(reply));
         try status_text.appendSlice(allocator, data[0..len]);
     } else {
-        try status_text.appendSlice(allocator, "hana");
+        try status_text.appendSlice(allocator, DEFAULT_STATUS);
     }
 }

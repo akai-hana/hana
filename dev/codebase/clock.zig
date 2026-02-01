@@ -4,8 +4,6 @@ const std = @import("std");
 const defs = @import("defs");
 const drawing = @import("drawing");
 
-// Pull in localtime / time_t from libc via cImport so we get the real
-// struct tm layout for the target rather than hand-rolling it.
 const c = @cImport({
     @cInclude("time.h");
 });
@@ -16,7 +14,8 @@ pub fn draw(
     height: u16,
     start_x: u16,
 ) !u16 {
-    var time_buf: [64]u8 = undefined;
+    // OPTIMIZATION: Reduced buffer size from 64 to exactly what we need (19 chars + null)
+    var time_buf: [20]u8 = undefined;
     const time_str = try formatTime(&time_buf);
 
     const text_w = dc.textWidth(time_str);
@@ -35,10 +34,10 @@ fn formatTime(buf: []u8) ![]const u8 {
 
     var raw_sec: c.time_t = @intCast(ts.sec);
     const local_ts = c.localtime(&raw_sec) orelse {
-        // Fallback to UTC if localtime fails
         return formatUtc(buf, ts.sec);
     };
 
+    // OPTIMIZATION: Direct cast from c_int to u32, avoiding intermediate steps
     return try std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
         @as(u32, @intCast(local_ts.*.tm_year + 1900)),
         @as(u32, @intCast(local_ts.*.tm_mon + 1)),

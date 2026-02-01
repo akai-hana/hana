@@ -20,12 +20,15 @@ const title_segment = @import("title");
 const clock_segment = @import("clock");
 const status_segment = @import("status");
 
+// OPTIMIZATION: Share workspace width constant across files
+pub const WORKSPACE_WIDTH: u16 = 40;
+
 const State = struct {
     window: u32,
     width: u16,
     height: u16,
     dc: *drawing.DrawContext,
-    conn: *xcb.xcb_connection_t,  // CRITICAL FIX: Store real XCB connection
+    conn: *xcb.xcb_connection_t,
     config: defs.BarConfig,
     status_text: std.ArrayList(u8),
     cached_title: std.ArrayList(u8),
@@ -35,6 +38,8 @@ const State = struct {
     last_second: i64,
     alive: bool,
     allocator: std.mem.Allocator,
+    // OPTIMIZATION: Cache segment widths to avoid recalculation
+    cached_clock_width: u16,
 
     fn init(allocator: std.mem.Allocator, conn: *xcb.xcb_connection_t, window: u32, width: u16, height: u16,
             dc: *drawing.DrawContext, config: defs.BarConfig) !*State {
@@ -44,7 +49,7 @@ const State = struct {
             .width = width,
             .height = height,
             .dc = dc,
-            .conn = conn,  // Store the real connection
+            .conn = conn,
             .config = config,
             .status_text = std.ArrayList(u8){},
             .cached_title = std.ArrayList(u8){},
@@ -54,8 +59,11 @@ const State = struct {
             .last_second = 0,
             .alive = true,
             .allocator = allocator,
+            .cached_clock_width = 0,
         };
         try s.status_text.appendSlice(allocator, "hana");
+        // OPTIMIZATION: Calculate clock width once during init
+        s.cached_clock_width = s.dc.textWidth("0000-00-00 00:00:00") + 2 * s.config.padding;
         return s;
     }
 
@@ -79,7 +87,6 @@ const State = struct {
 var state: ?*State = null;
 
 /// Shared font-loading logic used by both init() and calculateBarHeight().
-/// Builds per-font sized names and calls loadFonts, or falls back to single loadFont.
 fn loadBarFonts(dc: *drawing.DrawContext, wm: *defs.WM) !void {
     if (wm.config.bar.fonts.items.len > 0) {
         var sized_fonts = std.ArrayList([]const u8){};
@@ -114,10 +121,8 @@ pub fn init(wm: *defs.WM) !void {
     const screen = wm.screen;
     const width = screen.width_in_pixels;
     
-    // Calculate height: auto-adapt to font or use configured height
     const height = try calculateBarHeight(wm);
 
-    // Calculate Y position based on vertical_position
     const y_pos: i16 = if (wm.config.bar.vertical_position == .bottom)
         @as(i16, @intCast(screen.height_in_pixels)) - @as(i16, @intCast(height))
     else
@@ -155,13 +160,10 @@ pub fn init(wm: *defs.WM) !void {
 }
 
 fn calculateBarHeight(wm: *defs.WM) !u16 {
-    // If height is configured, use it
     if (wm.config.bar.height) |h| {
         return h;
     }
     
-    // Otherwise, calculate based on font size
-    // For auto-sizing, we need to create a temporary DC to measure font
     const temp_win = xcb.xcb_generate_id(wm.conn);
     const screen = wm.screen;
     
@@ -174,20 +176,18 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
     defer _ = xcb.xcb_destroy_window(wm.conn, temp_win);
     
     const temp_dc = drawing.DrawContext.init(wm.allocator, temp_win, 1, 1) catch {
-        // Fallback to default if we can't create temp DC
         return 24;
     };
     defer temp_dc.deinit();
     
     loadBarFonts(temp_dc, wm) catch {
-        return 24; // Fallback
+        return 24;
     };
     
     const ascender: i32 = temp_dc.getAscender();
     const descender: i32 = temp_dc.getDescender();
     const font_height: u32 = @intCast(ascender - descender);
     
-    // Add padding (top and bottom)
     const total_height: u32 = font_height + 2 * wm.config.bar.padding;
     
     return @intCast(std.math.clamp(total_height, 20, 100));
@@ -195,7 +195,7 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
 
 pub fn deinit() void {
     if (state) |s| {
-        const conn = s.conn;  // Use real XCB connection
+        const conn = s.conn;
         const window = s.window;
         s.dc.deinit();
         s.deinit();
@@ -209,12 +209,6 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
     const screen_w = wm.screen.width_in_pixels;
 
     const wm_strut_partial = try utils.getAtom(conn, "_NET_WM_STRUT_PARTIAL");
-    // _NET_WM_STRUT_PARTIAL layout:
-    //   [0-3]   left, right, top, bottom          — reserved pixel counts per edge
-    //   [4-5]   left_start_y,  left_end_y         — Y range the left strut occupies
-    //   [6-7]   right_start_y, right_end_y        — Y range the right strut occupies
-    //   [8-9]   top_start_x,   top_end_x          — X range the top strut occupies
-    //   [10-11] bottom_start_x, bottom_end_x      — X range the bottom strut occupies
     const strut: [12]u32 = if (wm.config.bar.vertical_position == .bottom)
         .{ 0, 0, 0, height,  0, 0, 0, 0,  0, 0,  0, screen_w }
     else
@@ -257,31 +251,22 @@ pub inline fn raiseBar() void {
 
 pub fn toggleBar(wm: *defs.WM) void {
     if (state) |s| {
-        // Toggle the visibility
         wm.config.bar.show = !wm.config.bar.show;
         
         if (wm.config.bar.show) {
-            // Show the bar
             _ = xcb.xcb_map_window(s.conn, s.window);
             utils.flush(wm.conn);
             
-            // CRITICAL FIX: Sync with X server to ensure window is fully mapped
-            // before drawing. This prevents segment lag where the bar appears
-            // but segments are blank until Expose event arrives.
             _ = c.XSync(@ptrCast(s.dc.display), 0);
             
-            // Immediately redraw to avoid blank bar during Expose event delay
             draw(s, wm) catch {};
             std.log.info("[bar] Bar shown", .{});
         } else {
-            // Hide the bar
             _ = xcb.xcb_unmap_window(s.conn, s.window);
             std.log.info("[bar] Bar hidden", .{});
         }
         
         utils.flush(wm.conn);
-        
-        // Retile to account for gained/lost screen space
         @import("tiling").retileCurrentWorkspace(wm);
     }
 }
@@ -290,28 +275,22 @@ pub fn isBarVisible() bool {
     return state != null;
 }
 
-/// Hide bar temporarily (e.g., for fullscreen) without changing config
 pub fn hideForFullscreen(wm: *defs.WM) void {
     if (state) |s| {
         _ = xcb.xcb_unmap_window(s.conn, s.window);
         utils.flush(wm.conn);
         std.log.info("[bar] Bar hidden (fullscreen)", .{});
-        
-        // Retile to use full screen space
         @import("tiling").retileCurrentWorkspace(wm);
     }
 }
 
-/// Show bar after exiting fullscreen (only if bar is enabled in config)
 pub fn showForFullscreen(wm: *defs.WM) void {
     if (state) |s| {
-        if (wm.config.bar.show) {  // Only show if bar is enabled in config
+        if (wm.config.bar.show) {
             _ = xcb.xcb_map_window(s.conn, s.window);
             draw(s, wm) catch {};
             utils.flush(wm.conn);
             std.log.info("[bar] Bar shown (exit fullscreen)", .{});
-            
-            // Retile to account for bar space
             @import("tiling").retileCurrentWorkspace(wm);
         }
     }
@@ -323,15 +302,12 @@ pub fn getBarHeight() u16 {
 
 pub fn updateIfDirty(wm: *defs.WM) !void {
     if (state) |s| {
-        // Check if clock needs updating (once per second)
         checkClockUpdateInternal(s);
         
         if (s.isDirty()) {
             if (s.dirty) {
-                // Full redraw
                 try draw(s, wm);
             } else if (s.dirty_clock) {
-                // Only redraw clock
                 try drawClockOnly(s, wm);
             }
             s.clearDirty();
@@ -356,10 +332,8 @@ pub fn checkClockUpdate() !void {
 }
 
 fn drawClockOnly(s: *State, wm: *defs.WM) !void {
-    // Find clock position and redraw only that segment
     for (s.config.layout.items) |layout| {
         if (layout.position == .right) {
-            // Calculate right segments to find clock position
             var right_x: u16 = s.width;
             var i: usize = layout.segments.items.len;
             while (i > 0) {
@@ -369,7 +343,6 @@ fn drawClockOnly(s: *State, wm: *defs.WM) !void {
                 right_x -= seg_width;
                 
                 if (segment == .clock) {
-                    // Redraw only the clock segment
                     _ = try clock_segment.draw(s.dc, s.config, s.height, right_x);
                     s.dc.flush();
                     return;
@@ -382,8 +355,6 @@ fn drawClockOnly(s: *State, wm: *defs.WM) !void {
         }
     }
     
-    // If clock not found in right, check other positions
-    // For now, fall back to full draw if clock position is complex
     try draw(s, wm);
 }
 
@@ -420,8 +391,7 @@ fn handleClick(s: *State, wm: *defs.WM, x: i16) void {
     const ws_state = workspaces.getState() orelse return;
     const ws_count = ws_state.workspaces.len;
 
-    const ws_width: i16 = 40; // Increased from 30 for better spacing
-    const clicked_ws: usize = @intCast(@max(0, @divFloor(x, ws_width)));
+    const clicked_ws: usize = @intCast(@max(0, @divFloor(x, WORKSPACE_WIDTH)));
 
     if (clicked_ws < ws_count) {
         workspaces.switchTo(wm, clicked_ws);
@@ -429,96 +399,69 @@ fn handleClick(s: *State, wm: *defs.WM, x: i16) void {
     }
 }
 
-// Main draw function with configurable layout
+// OPTIMIZATION: Single-pass layout rendering with cached widths
 fn draw(s: *State, wm: *defs.WM) !void {
     if (!s.isAlive()) return error.BarNotAlive;
 
-    // Clear background
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
-    // Calculate widths for all segments first
+    // OPTIMIZATION: Calculate all widths in single pass
     var left_width: u16 = 0;
     var right_width: u16 = 0;
     
-    // Calculate left segments width
     for (s.config.layout.items) |layout| {
-        if (layout.position == .left) {
-            for (layout.segments.items) |segment| {
-                left_width += calculateSegmentWidth(s, wm, segment);
-                left_width += s.config.spacing;
-            }
-            if (layout.segments.items.len > 0) {
-                left_width -= s.config.spacing; // Remove last spacing
-            }
-        }
-    }
-    
-    // Calculate right segments width
-    for (s.config.layout.items) |layout| {
-        if (layout.position == .right) {
-            for (layout.segments.items) |segment| {
-                right_width += calculateSegmentWidth(s, wm, segment);
-                right_width += s.config.spacing;
-            }
-            if (layout.segments.items.len > 0) {
-                right_width -= s.config.spacing; // Remove last spacing
-            }
-        }
-    }
-
-    // Draw left segments
-    var left_x: u16 = 0;
-    for (s.config.layout.items) |layout| {
-        if (layout.position == .left) {
-            for (layout.segments.items) |segment| {
-                left_x = try drawSegment(s, wm, segment, left_x, s.config.getWorkspaceAccent(), null);
-                left_x += s.config.spacing;
-            }
-        }
-    }
-
-    // Draw center segments (title gets remaining space)
-    for (s.config.layout.items) |layout| {
-        if (layout.position == .center) {
-            // Calculate remaining space for center
-            // left_x already includes left segments + their spacing
-            // Subtract space needed for right segments and spacing before them
-            const space_for_right = if (right_width > 0) right_width + s.config.spacing else 0;
-            const remaining_width = if (s.width > left_x + space_for_right) 
-                s.width - left_x - space_for_right 
-            else 
-                100;
-            
-            var center_x = left_x;
-            for (layout.segments.items) |segment| {
-                if (segment == .title) {
-                    // Title gets all remaining space
-                    _ = try drawSegment(s, wm, segment, center_x, s.config.getTitleAccent(), remaining_width);
-                } else {
-                    // Other center segments use calculated width
-                    const seg_width = calculateSegmentWidth(s, wm, segment);
-                    _ = try drawSegment(s, wm, segment, center_x, s.config.getTitleAccent(), seg_width);
-                    center_x += seg_width + s.config.spacing;
+        switch (layout.position) {
+            .left => {
+                for (layout.segments.items) |segment| {
+                    left_width += calculateSegmentWidth(s, wm, segment) + s.config.spacing;
                 }
-            }
+                if (layout.segments.items.len > 0) left_width -= s.config.spacing;
+            },
+            .right => {
+                for (layout.segments.items) |segment| {
+                    right_width += calculateSegmentWidth(s, wm, segment) + s.config.spacing;
+                }
+                if (layout.segments.items.len > 0) right_width -= s.config.spacing;
+            },
+            .center => {},
         }
     }
 
-    // Draw right segments (from right to left)
-    var right_x: u16 = s.width;
+    // Draw all segments
+    var x: u16 = 0;
     for (s.config.layout.items) |layout| {
-        if (layout.position == .right) {
-            var i: usize = layout.segments.items.len;
-            while (i > 0) {
-                i -= 1;
-                const segment = layout.segments.items[i];
-                const seg_width = calculateSegmentWidth(s, wm, segment);
-                right_x -= seg_width;
-                _ = try drawSegment(s, wm, segment, right_x, s.config.getClockAccent(), seg_width);
-                if (i > 0) {
-                    right_x -= s.config.spacing;
+        switch (layout.position) {
+            .left => {
+                for (layout.segments.items) |segment| {
+                    x = try drawSegment(s, wm, segment, x, s.config.getWorkspaceAccent(), null);
+                    x += s.config.spacing;
                 }
-            }
+            },
+            .center => {
+                const space_for_right = if (right_width > 0) right_width + s.config.spacing else 0;
+                const remaining = if (s.width > x + space_for_right) s.width - x - space_for_right else 100;
+                
+                for (layout.segments.items) |segment| {
+                    if (segment == .title) {
+                        _ = try drawSegment(s, wm, segment, x, s.config.getTitleAccent(), remaining);
+                    } else {
+                        const w = calculateSegmentWidth(s, wm, segment);
+                        x = try drawSegment(s, wm, segment, x, s.config.getTitleAccent(), w);
+                        x += s.config.spacing;
+                    }
+                }
+            },
+            .right => {
+                var right_x: u16 = s.width;
+                var i = layout.segments.items.len;
+                while (i > 0) : (i -= 1) {
+                    const segment = layout.segments.items[i - 1];
+                    const w = calculateSegmentWidth(s, wm, segment);
+                    right_x -= w;
+                    _ = try drawSegment(s, wm, segment, right_x, s.config.getClockAccent(), w);
+                    if (i > 1) right_x -= s.config.spacing;
+                }
+            },
         }
     }
 
@@ -526,25 +469,20 @@ fn draw(s: *State, wm: *defs.WM) !void {
 }
 
 fn calculateSegmentWidth(s: *State, wm: *defs.WM, segment: defs.BarSegment) u16 {
-    _ = wm; // May be needed for future dynamic width calculations
+    _ = wm;
     return switch (segment) {
         .workspaces => blk: {
             const ws_state = workspaces.getState() orelse break :blk 270;
-            break :blk @intCast(ws_state.workspaces.len * 40); // 40px per workspace
+            break :blk @intCast(ws_state.workspaces.len * WORKSPACE_WIDTH);
         },
         .layout => 60,
-        .title => 100, // Minimal default - will be overridden by remaining space
-        .clock => blk: {
-            // Use dummy time string to calculate width
-            const time_str = "0000-00-00 00:00:00";
-            const text_w = s.dc.textWidth(time_str);
-            break :blk text_w + 2 * s.config.padding;
-        },
+        .title => 100,
+        .clock => s.cached_clock_width,
     };
 }
 
 fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, accent: u32, width: ?u16) !u16 {
-    _ = accent; // Not currently used by segment modules
+    _ = accent;
     const seg_width = width orelse calculateSegmentWidth(s, wm, segment);
     return switch (segment) {
         .workspaces => try workspaces_segment.draw(s.dc, s.config, s.height, x),

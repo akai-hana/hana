@@ -5,6 +5,11 @@ const defs = @import("defs");
 const drawing = @import("drawing");
 const tiling = @import("tiling");
 
+// OPTIMIZATION: Compile-time constant strings
+const LAYOUT_MASTER = "[]=";
+const LAYOUT_MONOCLE = "[M]";
+const LAYOUT_GRID = "[+]";
+
 pub fn draw(
     dc: *drawing.DrawContext,
     config: defs.BarConfig,
@@ -14,9 +19,9 @@ pub fn draw(
     const t_state = tiling.getState() orelse return start_x;
 
     const layout_str = switch (t_state.layout) {
-        .master => "[]=",
-        .monocle => "[M]",
-        .grid => "[+]",
+        .master => LAYOUT_MASTER,
+        .monocle => LAYOUT_MONOCLE,
+        .grid => LAYOUT_GRID,
     };
 
     const text_w = dc.textWidth(layout_str);

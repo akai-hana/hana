@@ -7,6 +7,10 @@ const drawing = @import("drawing");
 const workspaces = @import("workspaces");
 const utils = @import("utils");
 
+// OPTIMIZATION: Cache commonly used atoms to avoid repeated getAtom calls
+var cached_net_wm_name: ?u32 = null;
+var cached_utf8_string: ?u32 = null;
+
 pub fn draw(
     dc: *drawing.DrawContext,
     config: defs.BarConfig,
@@ -44,7 +48,6 @@ pub fn draw(
     return start_x + width;
 }
 
-/// Fetch a single X property into cached_title, returning the slice on success or "" on failure.
 fn fetchProperty(
     conn: *xcb.xcb_connection_t,
     win: u32,
@@ -80,17 +83,26 @@ fn getFocusedWindowTitle(
         return "";
     };
 
-    // Cache hit: same window, non-empty title already stored
+    // OPTIMIZATION: Cache hit - avoid any X calls
     if (cached_title_window.* == win and cached_title.items.len > 0) {
         return cached_title.items;
     }
 
-    // Try _NET_WM_NAME (UTF-8) first, fall back to WM_NAME (Latin-1)
-    if (utils.getAtom(wm.conn, "_NET_WM_NAME")) |net_wm_name| {
-        const utf8_atom = utils.getAtom(wm.conn, "UTF8_STRING") catch xcb.XCB_ATOM_STRING;
+    // OPTIMIZATION: Lazy atom initialization - only look up once
+    if (cached_net_wm_name == null) {
+        cached_net_wm_name = utils.getAtom(wm.conn, "_NET_WM_NAME") catch null;
+    }
+    if (cached_utf8_string == null) {
+        cached_utf8_string = utils.getAtom(wm.conn, "UTF8_STRING") catch xcb.XCB_ATOM_STRING;
+    }
+
+    // Try _NET_WM_NAME (UTF-8) first
+    if (cached_net_wm_name) |net_wm_name| {
+        const utf8_atom = cached_utf8_string orelse xcb.XCB_ATOM_STRING;
         const title = try fetchProperty(wm.conn, win, net_wm_name, utf8_atom, cached_title, cached_title_window, allocator);
         if (title.len > 0) return title;
-    } else |_| {}
+    }
 
+    // Fall back to WM_NAME (Latin-1)
     return try fetchProperty(wm.conn, win, xcb.XCB_ATOM_WM_NAME, xcb.XCB_ATOM_STRING, cached_title, cached_title_window, allocator);
 }
