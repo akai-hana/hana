@@ -8,6 +8,11 @@ const utils = @import("utils");
 const workspaces = @import("workspaces");
 const tiling = @import("tiling");
 
+// X11 for XSync (to fix bar toggle lag)
+const c = @cImport({
+    @cInclude("X11/Xlib.h");
+});
+
 // Segment modules
 const workspaces_segment = @import("tags");
 const layout_segment = @import("layout");
@@ -113,16 +118,42 @@ pub fn init(wm: *defs.WM) !void {
     const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, screen, window, width, height);
     errdefer dc.deinit();
 
-    const font_str = if (wm.config.bar.font_size > 0)
-        try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
-    else
-        wm.config.bar.font;
-    defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
+    // Load fonts - support multi-font for CJK characters
+    if (wm.config.bar.fonts.items.len > 0) {
+        // Build Fontconfig pattern from font array with size
+        // Pattern format: "Font1,Font2,Font3:size=X"
+        var pattern = std.ArrayList(u8){};
+        defer pattern.deinit(wm.allocator);
+        
+        for (wm.config.bar.fonts.items, 0..) |font_name, i| {
+            if (i > 0) try pattern.append(wm.allocator, ',');
+            try pattern.appendSlice(wm.allocator, font_name);
+        }
+        
+        // Add size if specified
+        if (wm.config.bar.font_size > 0) {
+            const size_str = try std.fmt.allocPrint(wm.allocator, ":size={}", .{wm.config.bar.font_size});
+            defer wm.allocator.free(size_str);
+            try pattern.appendSlice(wm.allocator, size_str);
+        }
+        
+        dc.loadFont(pattern.items) catch |err| {
+            std.log.err("[bar] Failed to load fonts pattern '{s}': {}", .{ pattern.items, err });
+            return err;
+        };
+    } else {
+        // Fallback to single font (backwards compatibility)
+        const font_str = if (wm.config.bar.font_size > 0)
+            try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
+        else
+            wm.config.bar.font;
+        defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
 
-    dc.loadFont(font_str) catch |err| {
-        std.log.err("[bar] Failed to load font '{s}': {}", .{ font_str, err });
-        return err;
-    };
+        dc.loadFont(font_str) catch |err| {
+            std.log.err("[bar] Failed to load font '{s}': {}", .{ font_str, err });
+            return err;
+        };
+    }
 
     const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar);
     try draw(s, wm);
@@ -156,15 +187,38 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
     };
     defer temp_dc.deinit();
     
-    const font_str = if (wm.config.bar.font_size > 0)
-        try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
-    else
-        wm.config.bar.font;
-    defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
-    
-    temp_dc.loadFont(font_str) catch {
-        return 24; // Fallback
-    };
+    // Load fonts for measurement - use same logic as main bar
+    if (wm.config.bar.fonts.items.len > 0) {
+        var pattern = std.ArrayList(u8){};
+        defer pattern.deinit(wm.allocator);
+        
+        for (wm.config.bar.fonts.items, 0..) |font_name, i| {
+            if (i > 0) pattern.append(wm.allocator, ',') catch {};
+            pattern.appendSlice(wm.allocator, font_name) catch {};
+        }
+        
+        if (wm.config.bar.font_size > 0) {
+            const size_str = std.fmt.allocPrint(wm.allocator, ":size={}", .{wm.config.bar.font_size}) catch {
+                return 24;
+            };
+            defer wm.allocator.free(size_str);
+            pattern.appendSlice(wm.allocator, size_str) catch {};
+        }
+        
+        temp_dc.loadFont(pattern.items) catch {
+            return 24; // Fallback
+        };
+    } else {
+        const font_str = if (wm.config.bar.font_size > 0)
+            try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
+        else
+            wm.config.bar.font;
+        defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
+        
+        temp_dc.loadFont(font_str) catch {
+            return 24; // Fallback
+        };
+    }
     
     const ascender: i32 = temp_dc.getAscender();
     const descender: i32 = temp_dc.getDescender();
@@ -246,7 +300,14 @@ pub fn toggleBar(wm: *defs.WM) void {
         if (wm.config.bar.show) {
             // Show the bar
             _ = xcb.xcb_map_window(s.conn, s.window);
-            // CRITICAL FIX: Immediately redraw to avoid blank bar during Expose event delay
+            utils.flush(wm.conn);
+            
+            // CRITICAL FIX: Sync with X server to ensure window is fully mapped
+            // before drawing. This prevents segment lag where the bar appears
+            // but segments are blank until Expose event arrives.
+            _ = c.XSync(@as(?*c.struct__XDisplay, @ptrCast(s.dc.display)), 0);
+            
+            // Immediately redraw to avoid blank bar during Expose event delay
             draw(s, wm) catch {};
             std.log.info("[bar] Bar shown", .{});
         } else {

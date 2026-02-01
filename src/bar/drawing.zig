@@ -96,7 +96,7 @@ pub const DrawContext = struct {
     display: *c.Display,
     drawable: c.Drawable,
     xft_draw: *c.XftDraw,
-    xft_font: *c.XftFont,
+    xft_font: *c.XftFont,  // Primary font with fallbacks
     width: u16,
     height: u16,
     color_cache: ColorCache,
@@ -124,7 +124,7 @@ pub const DrawContext = struct {
             .display = display,
             .drawable = drawable,
             .xft_draw = xft_draw,
-            .xft_font = undefined, // Set in loadFont
+            .xft_font = undefined,  // Set in loadFont/loadFonts
             .width = width,
             .height = height,
             .color_cache = ColorCache.init(allocator, display, visual, colormap),
@@ -163,6 +163,43 @@ pub const DrawContext = struct {
         }
         
         return error.FontLoadFailed;
+    }
+    
+    /// Load multiple fonts by creating a Fontconfig pattern with fallbacks
+    /// This allows proper CJK rendering alongside Latin fonts
+    pub fn loadFonts(self: *DrawContext, font_names: []const []const u8) !void {
+        if (font_names.len == 0) return error.NoFontsProvided;
+        
+        // Try loading each font - Xft/Fontconfig will handle fallback automatically
+        // when rendering characters the primary font doesn't have
+        for (font_names) |font_name| {
+            const font_name_z = try self.allocator.dupeZ(u8, font_name);
+            defer self.allocator.free(font_name_z);
+            
+            const font = c.XftFontOpenName(self.display, 0, font_name_z.ptr);
+            if (font) |f| {
+                self.xft_font = f;
+                std.log.info("[drawing] Xft font loaded: {s}", .{font_name});
+                
+                // Load additional fonts as fallback
+                // Note: Fontconfig will automatically find fallback fonts for missing glyphs
+                // but we can explicitly load additional fonts to prefer them
+                return;
+            } else {
+                std.log.warn("[drawing] Failed to load font: {s}", .{font_name});
+            }
+        }
+        
+        // If all fonts failed, try system fallback
+        std.log.warn("[drawing] All fonts failed, trying system fallback", .{});
+        const fallback = c.XftFontOpenName(self.display, 0, "monospace:size=10");
+        if (fallback) |f| {
+            self.xft_font = f;
+            std.log.info("[drawing] Xft fallback font loaded", .{});
+            return;
+        }
+        
+        return error.NoFontsLoaded;
     }
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
