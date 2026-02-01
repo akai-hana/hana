@@ -8,6 +8,7 @@ const c = @cImport({
     @cInclude("X11/Xft/Xft.h");
     @cInclude("X11/Xlib.h");
     @cInclude("X11/Xlib-xcb.h");
+    @cInclude("fontconfig/fontconfig.h");
 });
 
 // Color conversion constant: 8-bit to 16-bit (0xFF -> 0xFFFF)
@@ -173,39 +174,112 @@ pub const DrawContext = struct {
         std.log.info("[drawing] Xft font loaded: {s}", .{font_name});
     }
     
+    /// Open a font by pattern string and verify via fontconfig that the loaded
+    /// font's family actually matches what we asked for.  XftFontOpenName never
+    /// returns null — fontconfig silently substitutes — so we must check.
+    /// Returns the font on success, or null if the family didn't match.
+    fn openVerified(self: *DrawContext, pattern: []const u8) ?*c.XftFont {
+        const pattern_z = self.allocator.dupeZ(u8, pattern) catch return null;
+        defer self.allocator.free(pattern_z);
+
+        const font = c.XftFontOpenName(self.display, 0, pattern_z.ptr) orelse return null;
+
+        // Extract the family name from the loaded font's FcPattern
+        var family_cstr: [*:0]const u8 = undefined;
+        const rc = c.FcPatternGetString(font.*.pattern, "family", 0, @ptrCast(&family_cstr));
+        if (rc != 0) {  // 0 == FcResultMatch
+            // Can't verify — accept it but warn
+            std.log.warn("[drawing] Could not verify family for '{s}', accepting anyway", .{pattern});
+            return font;
+        }
+        const actual_family = std.mem.span(family_cstr);
+
+        // Extract the requested family: everything before the first ':'
+        const colon = std.mem.indexOfScalar(u8, pattern, ':') orelse pattern.len;
+        const req_family = pattern[0..colon];
+
+        std.log.info("[drawing] openVerified: requested='{s}' actual='{s}'", .{ req_family, actual_family });
+
+        // Check: actual family must be a prefix of (or equal to) the requested family,
+        // or vice versa.  This handles e.g. requested "FiraCode Nerd Font" matching
+        // actual "FiraCode Nerd Font".
+        const shorter = if (actual_family.len < req_family.len) actual_family else req_family;
+        const longer  = if (actual_family.len < req_family.len) req_family  else actual_family;
+
+        if (shorter.len == 0 or longer.len == 0) {
+            c.XftFontClose(self.display, font);
+            return null;
+        }
+
+        // Count matching prefix characters
+        var prefix: usize = 0;
+        while (prefix < shorter.len and shorter[prefix] == longer[prefix]) prefix += 1;
+
+        // Require the entire shorter string to match as a prefix
+        if (prefix < shorter.len) {
+            std.log.warn("[drawing] Family mismatch: wanted '{s}', got '{s}'. Rejecting.", .{ req_family, actual_family });
+            c.XftFontClose(self.display, font);
+            return null;
+        }
+
+        return font;
+    }
+
     /// Load multiple fonts for per-glyph fallback rendering.
-    /// Each font is loaded individually; during draw, XftCharIndex is used
-    /// to pick the first font in the list that covers each codepoint.
+    /// Each font name is tried as-is first.  If fontconfig silently substitutes
+    /// a different font (detected via FcPatternGetString), we retry by splitting
+    /// the last word off the family as a :style= property — this handles config
+    /// entries like "Noto Sans CJK JP Medium" where "Medium" is a style, not
+    /// part of the family name.
     pub fn loadFonts(self: *DrawContext, font_names: []const []const u8) !void {
         if (font_names.len == 0) return error.NoFontsProvided;
-        
+
         var fonts = std.ArrayList(*c.XftFont){};
         errdefer {
             for (fonts.items) |f| c.XftFontClose(self.display, f);
             fonts.deinit(self.allocator);
         }
-        
+
         for (font_names) |font_name| {
-            const font_name_z = try self.allocator.dupeZ(u8, font_name);
-            defer self.allocator.free(font_name_z);
-            
-            if (c.XftFontOpenName(self.display, 0, font_name_z.ptr)) |f| {
+            // --- attempt 1: name as-is ---
+            if (self.openVerified(font_name)) |f| {
                 try fonts.append(self.allocator, f);
-                std.log.info("[drawing] Xft font loaded: {s}", .{font_name});
-            } else {
-                std.log.warn("[drawing] Failed to load font: {s}", .{font_name});
+                continue;
             }
+
+            // --- attempt 2: split last word as :style= ---
+            // font_name looks like "Family Style:size=N"
+            // We want                "Family:style=Style:size=N"
+            const colon = std.mem.indexOfScalar(u8, font_name, ':') orelse font_name.len;
+            const name_part  = font_name[0..colon];       // "Family Style"
+            const props_part = font_name[colon..];        // ":size=N"  (or "" if no colon)
+
+            if (std.mem.lastIndexOfScalar(u8, name_part, ' ')) |space| {
+                const family = name_part[0..space];       // "Family"
+                const style  = name_part[space + 1..];    // "Style"
+
+                const retry = std.fmt.allocPrint(self.allocator,
+                    "{s}:style={s}{s}", .{ family, style, props_part }) catch continue;
+                defer self.allocator.free(retry);
+
+                if (self.openVerified(retry)) |f| {
+                    try fonts.append(self.allocator, f);
+                    continue;
+                }
+            }
+
+            std.log.warn("[drawing] Font not available: {s}", .{font_name});
         }
-        
+
         if (fonts.items.len == 0) {
             if (c.XftFontOpenName(self.display, 0, "monospace:size=10")) |f| {
                 try fonts.append(self.allocator, f);
-                std.log.info("[drawing] Xft fallback font loaded", .{});
+                std.log.warn("[drawing] All requested fonts failed, using monospace fallback", .{});
             } else {
                 return error.NoFontsLoaded;
             }
         }
-        
+
         self.xft_fonts = try fonts.toOwnedSlice(self.allocator);
         self.xft_font = self.xft_fonts[0];
     }
