@@ -32,8 +32,8 @@ pub const Batch = struct {
         };
     }
 
-    pub fn deinit(_: *Batch) void {
-        // No resources to clean up - stack-allocated array
+    pub inline fn deinit(_: *Batch) void {
+        // No-op: stack-allocated, no cleanup needed
     }
 
     pub fn map(self: *Batch, win: u32) !void {

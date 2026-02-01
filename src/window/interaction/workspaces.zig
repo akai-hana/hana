@@ -18,7 +18,7 @@ pub const Workspace = struct {
     pub fn init(allocator: std.mem.Allocator, id: usize, name: []const u8) !Workspace {
         return .{
             .id = id,
-            .windows = std.ArrayList(u32){},
+            .windows = .{ .items = &.{}, .capacity = 0 },
             .window_set = std.AutoHashMap(u32, void).init(allocator),
             .name = name,
             .allocator = allocator,
@@ -46,7 +46,7 @@ pub const Workspace = struct {
 
         for (self.windows.items, 0..) |w, i| {
             if (w == win) {
-                _ = self.windows.orderedRemove(i);
+                _ = self.windows.swapRemove(i);
                 return true;
             }
         }
@@ -144,22 +144,14 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
         return;
     }
 
-    // Find current workspace for this window
-    const from_ws = s.window_to_workspace.get(win) orelse blk: {
-        // Window not in map, search for it
-        for (s.workspaces, 0..) |*ws, i| {
-            if (ws.contains(win)) {
-                s.window_to_workspace.put(win, i) catch {};
-                break :blk i;
-            }
-        } else {
-            // Window not found anywhere, just add to target
-            s.workspaces[target_ws].add(win) catch |err| {
-                std.log.err("[workspaces] Failed to add window to workspace {}: {}", .{ target_ws, err });
-            };
-            s.window_to_workspace.put(win, target_ws) catch {};
-            return;
-        }
+    // Get current workspace for this window, using O(1) lookup
+    const from_ws = s.window_to_workspace.get(win) orelse {
+        // Window not tracked, just add to target
+        s.workspaces[target_ws].add(win) catch |err| {
+            std.log.err("[workspaces] Failed to add window to workspace {}: {}", .{ target_ws, err });
+        };
+        s.window_to_workspace.put(win, target_ws) catch {};
+        return;
     };
 
     if (from_ws == target_ws) return;
@@ -184,19 +176,19 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
 
         // ISSUE #1 FIX: Retile current workspace when removing a window
         if (wm.config.tiling.enabled) {
-            const tiling_mod = @import("tiling");
-            if (tiling_mod.getState()) |ts| {
-                ts.markDirty();
-            }
+            markTilingDirty();
         }
     } else if (target_ws == s.current) {
         // Moving to current workspace - mark tiling dirty
         if (wm.config.tiling.enabled) {
-            const tiling_mod = @import("tiling");
-            if (tiling_mod.getState()) |ts| {
-                ts.markDirty();
-            }
+            markTilingDirty();
         }
+    }
+}
+
+inline fn markTilingDirty() void {
+    if (@import("tiling").getState()) |ts| {
+        ts.markDirty();
     }
 }
 

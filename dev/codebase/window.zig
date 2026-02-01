@@ -21,11 +21,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     }
 
     // Determine target workspace based on rules
-    const target_ws = if (wm.config.workspaces.rules.items.len > 0)
-        matchWorkspaceRule(wm, win)
-    else
-        null;
-
+    const target_ws = matchWorkspaceRule(wm, win);
     const current_ws = workspaces.getCurrentWorkspace() orelse 0;
 
     // Validate target workspace exists
@@ -43,10 +39,9 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
     
     // ISSUE #5 FIX: Only map window if it belongs to current workspace
-    // This prevents windows bound to other workspaces from appearing on screen
-    const should_map = (validated_target_ws == current_ws);
+    const is_current_ws = (validated_target_ws == current_ws);
     
-    if (should_map) {
+    if (is_current_ws) {
         _ = xcb.xcb_map_window(wm.conn, win);
     }
     
@@ -55,19 +50,15 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     };
 
     // Add to appropriate workspace
-    if (validated_target_ws == current_ws) {
+    if (is_current_ws) {
         workspaces.addWindowToCurrentWorkspace(wm, win);
     } else {
         workspaces.moveWindowTo(wm, win, validated_target_ws);
     }
 
-    // Set up tiling if enabled.
-    // Border pre-configuration only runs when the window is mapped on the
-    // current workspace.  tiling.addWindow is called unconditionally so that
-    // windows bound to a different workspace are still registered in the tiling
-    // lists and will be laid out correctly when that workspace is switched to.
+    // Set up tiling if enabled
     if (wm.config.tiling.enabled) {
-        if (validated_target_ws == current_ws and should_map) {
+        if (is_current_ws) {
             _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, 
                 &[_]u32{wm.config.tiling.border_width});
             _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, 
