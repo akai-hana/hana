@@ -257,6 +257,9 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
         wm.focused_window = null;
     }
 
+    // Cache fullscreen info to avoid 3 separate lookups
+    const fs_info = wm.fullscreen.getForWorkspace(new_ws);
+
     // (a) Move old-workspace windows off-screen.  configure, not unmap —
     //     this keeps them mapped so their rendered content is preserved for
     //     the next time we switch back to this workspace.
@@ -275,8 +278,8 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     // (c) Restore fullscreen window on the new workspace.  retile skips
     //     fullscreen windows, so we restore geometry explicitly here so the
     //     request travels in the same flush as everything else.
-    if (wm.fullscreen.getForWorkspace(new_ws)) |fs_info| {
-        _ = xcb.xcb_configure_window(wm.conn, fs_info.window,
+    if (fs_info) |info| {
+        _ = xcb.xcb_configure_window(wm.conn, info.window,
             xcb.XCB_CONFIG_WINDOW_X |
             xcb.XCB_CONFIG_WINDOW_Y |
             xcb.XCB_CONFIG_WINDOW_WIDTH |
@@ -289,7 +292,7 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
                 @intCast(screen.height_in_pixels),      // height
                 0,                                      // border_width
             });
-        _ = xcb.xcb_configure_window(wm.conn, fs_info.window,
+        _ = xcb.xcb_configure_window(wm.conn, info.window,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE,
             &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
@@ -308,7 +311,7 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     utils.flush(wm.conn);
     
     // Check if new workspace has fullscreen window and adjust bar visibility
-    if (wm.fullscreen.getForWorkspace(new_ws)) |_| {
+    if (fs_info != null) {
         // New workspace has fullscreen - hide bar
         bar.hideForFullscreen(wm);
     } else {
@@ -318,17 +321,14 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
 
     // (f) Raise bar above fullscreen window (must happen after the main
     //     flush to avoid splitting the atomic batch), then set focus.
-    if (wm.fullscreen.getForWorkspace(new_ws)) |_| {
+    if (fs_info != null) {
         bar.raiseBar();
     }
 
-    if (new_workspace.windows.items.len > 0) {
-        _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-            wm.focused_window.?, xcb.XCB_CURRENT_TIME);
-    } else {
-        _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-            wm.root, xcb.XCB_CURRENT_TIME);
-    }
+    // Set focus using the pre-computed focused_window
+    const focus_target = if (wm.focused_window) |win| win else wm.root;
+    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
+        focus_target, xcb.XCB_CURRENT_TIME);
     utils.flush(wm.conn);
 
     bar.markDirty();

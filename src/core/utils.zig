@@ -124,9 +124,7 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
     const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
     const len: usize = @intCast(reply.*.value_len);
 
-    var instance_end: usize = 0;
-    while (instance_end < len and data[instance_end] != 0) : (instance_end += 1) {}
-    if (instance_end >= len) return null;
+    const instance_end = std.mem.indexOfScalar(u8, data[0..len], 0) orelse return null;
 
     const instance = allocator.dupe(u8, data[0..instance_end]) catch return null;
     errdefer allocator.free(instance);
@@ -137,8 +135,10 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
         return null;
     }
 
-    var class_end = class_start;
-    while (class_end < len and data[class_end] != 0) : (class_end += 1) {}
+    const class_end = if (std.mem.indexOfScalar(u8, data[class_start..len], 0)) |idx|
+        class_start + idx
+    else
+        len;
 
     const class = allocator.dupe(u8, data[class_start..class_end]) catch {
         allocator.free(instance);

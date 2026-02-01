@@ -28,18 +28,18 @@ fn handleReloadSignal(_: posix.SIG) callconv(.c) void { should_reload.store(true
 fn handleTerminateSignal(_: posix.SIG) callconv(.c) void { running.store(false, .release); }
 
 fn setupSignalHandler() void {
-    const sa_reload = posix.Sigaction{
-        .handler = .{ .handler = handleReloadSignal },
+    const base_sa = posix.Sigaction{
+        .handler = undefined,
         .mask = std.mem.zeroes(posix.sigset_t),
         .flags = posix.SA.RESTART,
     };
+
+    var sa_reload = base_sa;
+    sa_reload.handler = .{ .handler = handleReloadSignal };
     posix.sigaction(posix.SIG.HUP, &sa_reload, null);
 
-    const sa_term = posix.Sigaction{
-        .handler = .{ .handler = handleTerminateSignal },
-        .mask = std.mem.zeroes(posix.sigset_t),
-        .flags = posix.SA.RESTART,
-    };
+    var sa_term = base_sa;
+    sa_term.handler = .{ .handler = handleTerminateSignal };
     posix.sigaction(posix.SIG.TERM, &sa_term, null);
     posix.sigaction(posix.SIG.INT, &sa_term, null);
 }
@@ -80,9 +80,10 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32) void {
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
 
+    const lock_modifiers = [_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 };
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
-        for ([_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 }) |lock| {
+        for (lock_modifiers) |lock| {
             if (xcb.xcb_request_check(wm.conn, xcb.xcb_grab_key_checked(wm.conn, 0, wm.root,
                 @intCast(kb.modifiers | lock), keycode, xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC))) |err| {
                 std.log.warn("[keybind] Failed to grab key {}: {*}", .{ keycode, err });
