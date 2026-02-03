@@ -84,8 +84,8 @@ Mod+Shift+v = "pkill youtube-music"
 
 # Emergency/Debug
 #TODO not yet working
-#Mod+Shift+d      = "dump_state"        # Print debug info
-Mod+Shift+Escape = "emergency_recover"  # Emergency recovery mode
+#Mod+Shift+d      = "dump_state"       # Print debug info
+Mod+Shift+Escape = "emergency_recover" # Emergency recovery mode
 
 [bar]
 show = true
@@ -97,7 +97,7 @@ font_size = 12
 # Uncomment to set a fixed height instead:
 #height = 32
 
-# Spacing configuration for better readability!
+# Bar spacing
 padding = 99 # Padding inside segments (around text)
 spacing = 6  # Space between segments
 
