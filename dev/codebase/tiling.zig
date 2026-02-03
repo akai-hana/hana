@@ -16,6 +16,8 @@ const grid_layout = @import("grid");
 
 pub const Layout = enum { master, monocle, grid };
 
+const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
+
 pub const State = struct {
     enabled: bool,
     layout: Layout,
@@ -99,7 +101,10 @@ fn parseLayout(name: []const u8) Layout {
     return map.get(name) orelse .master;
 }
 
-// OPTIMIZATION: Streamlined window addition with early returns
+inline fn isTileable(s: *const State, wm: *const WM, win: u32) bool {
+    return !wm.fullscreen.isFullscreen(win) and s.tiled_set.contains(win);
+}
+
 pub fn addWindow(wm: *WM, win: u32) void {
     const s = state orelse return;
     if (!s.enabled) return;
@@ -127,11 +132,10 @@ pub fn addWindow(wm: *WM, win: u32) void {
         return;
     }
 
-    // OPTIMIZATION: Try batch first, fall back to direct XCB
+    // Try batch first, fall back to direct XCB
     var b = batch.Batch.begin(wm) catch {
         utils.configureBorder(wm.conn, win, s.border_width, s.borderColor(wm, win));
-        _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK,
-            &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
+        _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
         focus.setFocus(wm, win, .tiling_operation);
         s.markDirty();
         return;
@@ -153,7 +157,7 @@ pub fn removeWindow(wm: *WM, win: u32) void {
 
     _ = s.tiled_set.remove(win);
 
-    // OPTIMIZATION: Linear search with early exit
+    // Linear search with early exit
     for (s.tiled_windows.items, 0..) |w, i| {
         if (w == win) {
             _ = s.tiled_windows.orderedRemove(i);
@@ -179,13 +183,13 @@ pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     defer b.deinit();
 
     if (old_focused) |old_win| {
-        if (s.tiled_set.contains(old_win) and !wm.fullscreen.isFullscreen(old_win)) {
+        if (isTileable(s, wm, old_win)) {
             b.setBorder(old_win, s.borderColor(wm, old_win)) catch {};
         }
     }
 
     if (new_focused) |new_win| {
-        if (s.tiled_set.contains(new_win) and !wm.fullscreen.isFullscreen(new_win)) {
+        if (isTileable(s, wm, new_win)) {
             b.setBorder(new_win, s.borderColor(wm, new_win)) catch {};
         }
     }
@@ -197,13 +201,13 @@ fn updateWindowFocusDirect(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     const s = state orelse return;
 
     if (old_focused) |old_win| {
-        if (s.tiled_set.contains(old_win) and !wm.fullscreen.isFullscreen(old_win)) {
+        if (isTileable(s, wm, old_win)) {
             utils.setBorder(wm.conn, old_win, s.borderColor(wm, old_win));
         }
     }
 
     if (new_focused) |new_win| {
-        if (s.tiled_set.contains(new_win) and !wm.fullscreen.isFullscreen(new_win)) {
+        if (isTileable(s, wm, new_win)) {
             utils.setBorder(wm.conn, new_win, s.borderColor(wm, new_win));
         }
     }
@@ -229,21 +233,18 @@ pub fn retileIfDirty(wm: *WM) void {
     retileCurrentWorkspace(wm);
 }
 
-// OPTIMIZATION: Stack-allocated visible window buffer, improved filtering
 pub fn retileCurrentWorkspace(wm: *WM) void {
     const s = state orelse return;
-    if (!s.enabled) return;
+    if (!s.enabled or s.tiled_windows.items.len == 0) return;
 
     const ws_state = workspaces.getState() orelse return;
     const current_ws = &ws_state.workspaces[ws_state.current];
-
-    if (s.tiled_windows.items.len == 0) return;
 
     // Stack-allocated buffer for visible windows (typical max is ~20-30)
     var visible_buf: [128]u32 = undefined;
     var visible_count: usize = 0;
 
-    // OPTIMIZATION: O(1) lookup using workspace HashSet
+    // O(1) lookup using workspace HashSet
     for (s.tiled_windows.items) |win| {
         if (wm.fullscreen.isFullscreen(win)) continue;
         if (!s.tiled_set.contains(win)) continue;

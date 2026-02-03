@@ -1,10 +1,9 @@
-//! Monocle layout
+//! Monocle layout - All windows fullscreen, stacked
 
 const std = @import("std");
 const defs = @import("defs");
 const utils = @import("utils");
 const batch = @import("batch");
-const bar = @import("bar");
 
 const tiling = @import("tiling");
 const State = tiling.State;
@@ -24,14 +23,16 @@ pub fn tileWithOffset(b: *batch.Batch, state: *State, windows: []const u32, scre
         .height = screen_h,
     };
 
+    // Configure all windows to fullscreen
     for (windows) |win| {
         b.configure(win, rect) catch |err| {
-            std.log.err("[monocle] Failed to configure window {}: {}", .{ win, err });
-            continue;
+            std.log.err("[monocle] Failed to configure window {x}: {}", .{ win, err });
         };
     }
 
-    b.raise(windows[windows.len - 1]) catch |err| {
-        std.log.err("[monocle] Failed to raise window: {}", .{err});
+    // Raise the last window (most recently focused in tiled_windows order)
+    const top_win = windows[windows.len - 1];
+    b.raise(top_win) catch |err| {
+        std.log.err("[monocle] Failed to raise window {x}: {}", .{ top_win, err });
     };
 }

@@ -1,4 +1,4 @@
-//! Core type definitions
+//! Core type definitions - Optimized version
 
 const std = @import("std");
 
@@ -77,13 +77,17 @@ pub const MasterSide = enum {
     left,
     right,
 
-    pub fn fromString(str: []const u8) ?MasterSide {
-        if (std.mem.eql(u8, str, "left")) return .left;
-        if (std.mem.eql(u8, str, "right")) return .right;
-        return null;
+    // OPTIMIZATION: Use compile-time string map for O(1) lookup
+    const STRING_MAP = std.StaticStringMap(MasterSide).initComptime(.{
+        .{ "left", .left },
+        .{ "right", .right },
+    });
+
+    pub inline fn fromString(str: []const u8) ?MasterSide {
+        return STRING_MAP.get(str);
     }
 
-    pub fn toString(self: MasterSide) []const u8 {
+    pub inline fn toString(self: MasterSide) []const u8 {
         return switch (self) {
             .left => "left",
             .right => "right",
@@ -107,10 +111,14 @@ pub const BarVerticalPosition = enum {
     top,
     bottom,
 
-    pub fn fromString(str: []const u8) ?BarVerticalPosition {
-        if (std.mem.eql(u8, str, "top")) return .top;
-        if (std.mem.eql(u8, str, "bottom")) return .bottom;
-        return null;
+    // OPTIMIZATION: Use compile-time string map for O(1) lookup
+    const STRING_MAP = std.StaticStringMap(BarVerticalPosition).initComptime(.{
+        .{ "top", .top },
+        .{ "bottom", .bottom },
+    });
+
+    pub inline fn fromString(str: []const u8) ?BarVerticalPosition {
+        return STRING_MAP.get(str);
     }
 };
 
@@ -119,11 +127,15 @@ pub const BarPosition = enum {
     center,
     right,
 
-    pub fn fromString(str: []const u8) ?BarPosition {
-        if (std.mem.eql(u8, str, "left")) return .left;
-        if (std.mem.eql(u8, str, "center")) return .center;
-        if (std.mem.eql(u8, str, "right")) return .right;
-        return null;
+    // OPTIMIZATION: Use compile-time string map for O(1) lookup
+    const STRING_MAP = std.StaticStringMap(BarPosition).initComptime(.{
+        .{ "left", .left },
+        .{ "center", .center },
+        .{ "right", .right },
+    });
+
+    pub inline fn fromString(str: []const u8) ?BarPosition {
+        return STRING_MAP.get(str);
     }
 };
 
@@ -133,12 +145,16 @@ pub const BarSegment = enum {
     clock,
     layout,
 
-    pub fn fromString(str: []const u8) ?BarSegment {
-        if (std.mem.eql(u8, str, "workspaces")) return .workspaces;
-        if (std.mem.eql(u8, str, "title")) return .title;
-        if (std.mem.eql(u8, str, "clock")) return .clock;
-        if (std.mem.eql(u8, str, "layout")) return .layout;
-        return null;
+    // OPTIMIZATION: Use compile-time string map for O(1) lookup
+    const STRING_MAP = std.StaticStringMap(BarSegment).initComptime(.{
+        .{ "workspaces", .workspaces },
+        .{ "title", .title },
+        .{ "clock", .clock },
+        .{ "layout", .layout },
+    });
+
+    pub inline fn fromString(str: []const u8) ?BarSegment {
+        return STRING_MAP.get(str);
     }
 };
 
@@ -199,15 +215,15 @@ pub const BarConfig = struct {
         self.layout.deinit(allocator);
     }
 
-    pub fn getWorkspaceAccent(self: *const BarConfig) u32 {
+    pub inline fn getWorkspaceAccent(self: *const BarConfig) u32 {
         return self.workspaces_accent orelse self.accent_color;
     }
 
-    pub fn getTitleAccent(self: *const BarConfig) u32 {
+    pub inline fn getTitleAccent(self: *const BarConfig) u32 {
         return self.title_accent_color orelse self.accent_color;
     }
 
-    pub fn getClockAccent(self: *const BarConfig) u32 {
+    pub inline fn getClockAccent(self: *const BarConfig) u32 {
         return self.clock_accent orelse self.accent_color;
     }
 };
@@ -280,45 +296,52 @@ pub const FullscreenInfo = struct {
     },
 };
 
-/// Fullscreen state tracking - supports one fullscreen window per workspace
+/// OPTIMIZATION: Improved fullscreen state with reverse lookup for O(1) window checks
 pub const FullscreenState = struct {
     // Map workspace index -> fullscreen info
     per_workspace: std.AutoHashMap(usize, FullscreenInfo),
+    // OPTIMIZATION: Reverse map for O(1) window -> workspace lookup
+    window_to_workspace: std.AutoHashMap(u32, usize),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) FullscreenState {
         return .{
             .per_workspace = std.AutoHashMap(usize, FullscreenInfo).init(allocator),
+            .window_to_workspace = std.AutoHashMap(u32, usize).init(allocator),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *FullscreenState) void {
         self.per_workspace.deinit();
+        self.window_to_workspace.deinit();
     }
 
-    pub fn isFullscreen(self: *const FullscreenState, win: u32) bool {
-        var it = self.per_workspace.valueIterator();
-        while (it.next()) |info| {
-            if (info.window == win) return true;
-        }
-        return false;
+    // OPTIMIZATION: O(1) lookup instead of O(n) iteration
+    pub inline fn isFullscreen(self: *const FullscreenState, win: u32) bool {
+        return self.window_to_workspace.contains(win);
     }
 
-    pub fn getForWorkspace(self: *const FullscreenState, ws: usize) ?FullscreenInfo {
+    pub inline fn getForWorkspace(self: *const FullscreenState, ws: usize) ?FullscreenInfo {
         return self.per_workspace.get(ws);
     }
 
     pub fn setForWorkspace(self: *FullscreenState, ws: usize, info: FullscreenInfo) !void {
         try self.per_workspace.put(ws, info);
+        try self.window_to_workspace.put(info.window, ws);
     }
 
     pub fn removeForWorkspace(self: *FullscreenState, ws: usize) void {
+        // Remove from both maps
+        if (self.per_workspace.get(ws)) |info| {
+            _ = self.window_to_workspace.remove(info.window);
+        }
         _ = self.per_workspace.remove(ws);
     }
 
     pub fn clear(self: *FullscreenState) void {
         self.per_workspace.clearRetainingCapacity();
+        self.window_to_workspace.clearRetainingCapacity();
     }
 };
 
@@ -355,7 +378,7 @@ pub const WM = struct {
         self.config.deinit(self.allocator);
     }
 
-    pub fn hasWindow(self: *WM, window_id: u32) bool {
+    pub inline fn hasWindow(self: *WM, window_id: u32) bool {
         return self.windows.contains(window_id);
     }
 
