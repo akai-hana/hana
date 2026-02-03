@@ -22,34 +22,57 @@ const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
     xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
 
 const LOCK_MODIFIERS = [_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 };
-const POLL_TIMEOUT_MS: i32 = 100;
 
 var should_reload = std.atomic.Value(bool).init(false);
 var running = std.atomic.Value(bool).init(true);
 
-fn handleReloadSignal(_: posix.SIG) callconv(.c) void {
-    should_reload.store(true, .release);
+fn setupSignalFd() !posix.fd_t {
+    // Block signals so they don't interrupt - we'll handle via signalfd
+    var sigset: std.os.linux.sigset_t = std.mem.zeroes(std.os.linux.sigset_t);
+    std.os.linux.sigaddset(&sigset, posix.SIG.HUP);
+    std.os.linux.sigaddset(&sigset, posix.SIG.TERM);
+    std.os.linux.sigaddset(&sigset, posix.SIG.INT);
+    
+    // Block the signals using linux function directly
+    _ = std.os.linux.sigprocmask(posix.SIG.BLOCK, &sigset, null);
+    
+    // Create signalfd to receive signals as events
+    const sfd = std.os.linux.signalfd(-1, &sigset, std.os.linux.SFD.NONBLOCK | std.os.linux.SFD.CLOEXEC);
+    if (sfd < 0) return error.SignalFdFailed;
+    
+    return @intCast(sfd);
 }
 
-fn handleTerminateSignal(_: posix.SIG) callconv(.c) void {
-    running.store(false, .release);
-}
-
-fn setupSignalHandler() void {
-    const base_sa = posix.Sigaction{
-        .handler = undefined,
-        .mask = std.mem.zeroes(posix.sigset_t),
-        .flags = posix.SA.RESTART,
+fn setupTimerFd() !posix.fd_t {
+    // Create timerfd for periodic bar clock updates (1 second interval)
+    const tfd = std.os.linux.timerfd_create(.MONOTONIC, .{ .NONBLOCK = true, .CLOEXEC = true });
+    if (tfd < 0) return error.TimerFdFailed;
+    
+    // Set up 1-second periodic timer
+    const spec = std.os.linux.itimerspec{
+        .it_interval = .{ .sec = 1, .nsec = 0 },
+        .it_value = .{ .sec = 1, .nsec = 0 },
     };
+    
+    if (std.os.linux.timerfd_settime(@intCast(tfd), .{}, &spec, null) < 0) {
+        posix.close(@intCast(tfd));
+        return error.TimerFdSetFailed;
+    }
+    
+    return @intCast(tfd);
+}
 
-    var sa_reload = base_sa;
-    sa_reload.handler = .{ .handler = handleReloadSignal };
-    posix.sigaction(posix.SIG.HUP, &sa_reload, null);
-
-    var sa_term = base_sa;
-    sa_term.handler = .{ .handler = handleTerminateSignal };
-    posix.sigaction(posix.SIG.TERM, &sa_term, null);
-    posix.sigaction(posix.SIG.INT, &sa_term, null);
+fn handleSignalFd(signal_fd: posix.fd_t, reload_flag: *std.atomic.Value(bool), running_flag: *std.atomic.Value(bool)) void {
+    var siginfo: std.os.linux.signalfd_siginfo = undefined;
+    const bytes_read = posix.read(signal_fd, std.mem.asBytes(&siginfo)) catch return;
+    
+    if (bytes_read == @sizeOf(std.os.linux.signalfd_siginfo)) {
+        switch (siginfo.signo) {
+            @intFromEnum(posix.SIG.HUP) => reload_flag.store(true, .release),
+            @intFromEnum(posix.SIG.TERM), @intFromEnum(posix.SIG.INT) => running_flag.store(false, .release),
+            else => {},
+        }
+    }
 }
 
 fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
@@ -204,7 +227,14 @@ pub fn main() !void {
     defer wm.deinit();
 
     try utils.initAtomCache(conn);
-    setupSignalHandler();
+    
+    // Set up event sources
+    const signal_fd = try setupSignalFd();
+    defer posix.close(signal_fd);
+    
+    const timer_fd = try setupTimerFd();
+    defer posix.close(timer_fd);
+    
     events.initModules(&wm);
     defer events.deinitModules(&wm);
 
@@ -220,46 +250,70 @@ pub fn main() !void {
 
     const x_fd = xcb.xcb_get_file_descriptor(conn);
 
-    // OPTIMIZATION: Main loop with reduced system calls
+    // OPTIMIZATION: Fully event-driven main loop - no polling, wake on events only
+    var pollfds = [_]posix.pollfd{
+        .{ .fd = x_fd, .events = posix.POLL.IN, .revents = 0 },
+        .{ .fd = signal_fd, .events = posix.POLL.IN, .revents = 0 },
+        .{ .fd = timer_fd, .events = posix.POLL.IN, .revents = 0 },
+    };
+    
     while (running.load(.acquire)) {
-        // Check for config reload
-        if (should_reload.swap(false, .acq_rel)) {
-            handleConfigReload(&wm) catch |err| {
-                std.log.err("[config] Reload failed: {}", .{err});
-            };
-        }
-
-        // Process all pending events without blocking
-        var events_handled: u32 = 0;
-        while (true) {
-            const event = xcb.xcb_poll_for_event(conn);
-            if (event == null) break;
-            defer std.c.free(event);
-            events_handled += 1;
-            events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
-        }
-
-        if (events_handled > 0) {
-            // Release focus protection after event batch
-            focus.releaseProtection();
+        // Wait for events on any fd (blocks until activity - no busy waiting!)
+        const ready = posix.poll(&pollfds, -1) catch |err| {
+            if (err == error.Interrupted) continue;
+            std.log.err("[main] Poll error: {}", .{err});
+            continue;
+        };
+        
+        if (ready == 0) continue; // Shouldn't happen with infinite timeout
+        
+        // Handle X11 events
+        if (pollfds[0].revents & posix.POLL.IN != 0) {
+            var events_handled: u32 = 0;
+            while (true) {
+                const event = xcb.xcb_poll_for_event(conn);
+                if (event == null) break;
+                defer std.c.free(event);
+                events_handled += 1;
+                events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
+            }
             
-            // Perform deferred operations in single flush
-            tiling.retileIfDirty(&wm);
-            bar.updateIfDirty(&wm) catch |err| {
-                std.log.err("[main] Failed to update bar: {}", .{err});
-            };
-            utils.flush(conn);
-        } else {
-            // No events - wait for activity with timeout
-            var pollfds = [_]posix.pollfd{.{
-                .fd = x_fd,
-                .events = posix.POLL.IN,
-                .revents = 0,
-            }};
-            _ = posix.poll(&pollfds, POLL_TIMEOUT_MS) catch 0;
+            if (events_handled > 0) {
+                // Release focus protection after event batch
+                focus.releaseProtection();
+                
+                // Perform deferred operations in single flush
+                tiling.retileIfDirty(&wm);
+                bar.updateIfDirty(&wm) catch |err| {
+                    std.log.err("[main] Failed to update bar: {}", .{err});
+                };
+                utils.flush(conn);
+            }
+        }
+        
+        // Handle signals
+        if (pollfds[1].revents & posix.POLL.IN != 0) {
+            handleSignalFd(signal_fd, &should_reload, &running);
             
-            // Check for clock update during idle
+            if (should_reload.swap(false, .acq_rel)) {
+                handleConfigReload(&wm) catch |err| {
+                    std.log.err("[config] Reload failed: {}", .{err});
+                };
+            }
+        }
+        
+        // Handle timer (bar clock updates)
+        if (pollfds[2].revents & posix.POLL.IN != 0) {
+            // Read timer to acknowledge (required to clear event)
+            var expiration: u64 = 0;
+            _ = posix.read(timer_fd, std.mem.asBytes(&expiration)) catch {};
+            
             bar.checkClockUpdate() catch {};
+        }
+        
+        // Reset revents for next poll
+        for (&pollfds) |*pfd| {
+            pfd.revents = 0;
         }
 
         // Connection health check
