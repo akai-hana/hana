@@ -23,6 +23,15 @@ const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
 
 const LOCK_MODIFIERS = [_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 };
 
+// Cursor glyph constants for clarity
+const CURSOR_LEFT_PTR = 68;
+const CURSOR_LEFT_PTR_MASK = 69;
+
+// Pre-converted signal numbers for efficient comparison
+const SIG_HUP: u32 = @intFromEnum(posix.SIG.HUP);
+const SIG_TERM: u32 = @intFromEnum(posix.SIG.TERM);
+const SIG_INT: u32 = @intFromEnum(posix.SIG.INT);
+
 var should_reload = std.atomic.Value(bool).init(false);
 var running = std.atomic.Value(bool).init(true);
 
@@ -33,10 +42,9 @@ fn setupSignalFd() !posix.fd_t {
     std.os.linux.sigaddset(&sigset, posix.SIG.TERM);
     std.os.linux.sigaddset(&sigset, posix.SIG.INT);
     
-    // Block the signals using linux function directly
     _ = std.os.linux.sigprocmask(posix.SIG.BLOCK, &sigset, null);
     
-    // Create signalfd to receive signals as events
+    // Create signalfd - use raw flags (not a struct like timerfd)
     const sfd = std.os.linux.signalfd(-1, &sigset, std.os.linux.SFD.NONBLOCK | std.os.linux.SFD.CLOEXEC);
     if (sfd < 0) return error.SignalFdFailed;
     
@@ -44,11 +52,9 @@ fn setupSignalFd() !posix.fd_t {
 }
 
 fn setupTimerFd() !posix.fd_t {
-    // Create timerfd for periodic bar clock updates (1 second interval)
     const tfd = std.os.linux.timerfd_create(.MONOTONIC, .{ .NONBLOCK = true, .CLOEXEC = true });
     if (tfd < 0) return error.TimerFdFailed;
     
-    // Set up 1-second periodic timer
     const spec = std.os.linux.itimerspec{
         .it_interval = .{ .sec = 1, .nsec = 0 },
         .it_value = .{ .sec = 1, .nsec = 0 },
@@ -63,13 +69,17 @@ fn setupTimerFd() !posix.fd_t {
 }
 
 fn handleSignalFd(signal_fd: posix.fd_t, reload_flag: *std.atomic.Value(bool), running_flag: *std.atomic.Value(bool)) void {
-    var siginfo: std.os.linux.signalfd_siginfo = undefined;
-    const bytes_read = posix.read(signal_fd, std.mem.asBytes(&siginfo)) catch return;
-    
-    if (bytes_read == @sizeOf(std.os.linux.signalfd_siginfo)) {
+    // Drain all pending signals (multiple may have arrived)
+    while (true) {
+        var siginfo: std.os.linux.signalfd_siginfo = undefined;
+        const bytes_read = posix.read(signal_fd, std.mem.asBytes(&siginfo)) catch break;
+        
+        if (bytes_read != @sizeOf(std.os.linux.signalfd_siginfo)) break;
+        
+        // Use pre-converted signal constants for efficiency
         switch (siginfo.signo) {
-            @intFromEnum(posix.SIG.HUP) => reload_flag.store(true, .release),
-            @intFromEnum(posix.SIG.TERM), @intFromEnum(posix.SIG.INT) => running_flag.store(false, .release),
+            SIG_HUP => reload_flag.store(true, .release),
+            SIG_TERM, SIG_INT => running_flag.store(false, .release),
             else => {},
         }
     }
@@ -79,32 +89,32 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void 
     const font = xcb.xcb_generate_id(conn);
     _ = xcb.xcb_open_font(conn, font, 6, "cursor");
     const cursor = xcb.xcb_generate_id(conn);
-    _ = xcb.xcb_create_glyph_cursor(conn, cursor, font, font, 68, 69, 0, 0, 0, 65535, 65535, 65535);
+    _ = xcb.xcb_create_glyph_cursor(conn, cursor, font, font, 
+        CURSOR_LEFT_PTR, CURSOR_LEFT_PTR_MASK, 0, 0, 0, 65535, 65535, 65535);
     _ = xcb.xcb_change_window_attributes(conn, screen.*.root, xcb.XCB_CW_CURSOR, &[_]u32{cursor});
     _ = xcb.xcb_close_font(conn, font);
 }
 
 fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
-    if (xcb.xcb_request_check(conn, xcb.xcb_change_window_attributes_checked(conn, root, xcb.XCB_CW_EVENT_MASK, &[_]u32{WM_EVENT_MASK}))) |err| {
+    if (xcb.xcb_request_check(conn, xcb.xcb_change_window_attributes_checked(
+        conn, root, xcb.XCB_CW_EVENT_MASK, &[_]u32{WM_EVENT_MASK}))) |err| {
         std.c.free(err);
         std.log.err("Another window manager is running", .{});
         return error.AnotherWMRunning;
     }
 }
 
-// OPTIMIZATION: Batch existing window setup to reduce round-trips
 fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32) void {
     const reply = xcb.xcb_query_tree_reply(conn, xcb.xcb_query_tree(conn, root), null) orelse return;
     defer std.c.free(reply);
 
     const children = xcb.xcb_query_tree_children(reply);
     const len: usize = @intCast(xcb.xcb_query_tree_children_length(reply));
+    if (len == 0) return;
 
-    // Stack-allocate cookie buffer for typical window counts
     const MAX_BATCH = 256;
     var cookies: [MAX_BATCH]xcb.xcb_get_window_attributes_cookie_t = undefined;
     
-    // Process in batches to avoid stack overflow with many windows
     var processed: usize = 0;
     while (processed < len) {
         const batch_size = @min(len - processed, MAX_BATCH);
@@ -115,7 +125,7 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32) void {
         }
         _ = xcb.xcb_flush(conn);
 
-        // Process replies using stored cookies
+        // Process replies
         for (0..batch_size) |i| {
             const attrs = xcb.xcb_get_window_attributes_reply(conn, cookies[i], null) orelse continue;
             defer std.c.free(attrs);
@@ -133,7 +143,6 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32) void {
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
     
-    // OPTIMIZATION: Pre-allocate error checking
     var failed_count: usize = 0;
     
     for (wm.config.keybindings.items) |kb| {
@@ -198,7 +207,6 @@ pub fn main() !void {
     setupRootCursor(conn, screen);
     input.setupGrabs(conn, root);
 
-    // OPTIMIZATION: Use C allocator in release mode for better performance
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
@@ -228,7 +236,6 @@ pub fn main() !void {
 
     try utils.initAtomCache(conn);
     
-    // Set up event sources
     const signal_fd = try setupSignalFd();
     defer posix.close(signal_fd);
     
@@ -250,7 +257,6 @@ pub fn main() !void {
 
     const x_fd = xcb.xcb_get_file_descriptor(conn);
 
-    // OPTIMIZATION: Fully event-driven main loop - no polling, wake on events only
     var pollfds = [_]posix.pollfd{
         .{ .fd = x_fd, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = signal_fd, .events = posix.POLL.IN, .revents = 0 },
@@ -258,31 +264,24 @@ pub fn main() !void {
     };
     
     while (running.load(.acquire)) {
-        // Wait for events on any fd (blocks until activity - no busy waiting!)
-        const ready = posix.poll(&pollfds, -1) catch |err| {
+        // Block until activity on any fd - true zero-CPU idle
+        _ = posix.poll(&pollfds, -1) catch |err| {
             if (err == error.Interrupted) continue;
             std.log.err("[main] Poll error: {}", .{err});
             continue;
         };
         
-        if (ready == 0) continue; // Shouldn't happen with infinite timeout
-        
-        // Handle X11 events
+        // Handle X11 events (drain all available)
         if (pollfds[0].revents & posix.POLL.IN != 0) {
             var events_handled: u32 = 0;
-            while (true) {
-                const event = xcb.xcb_poll_for_event(conn);
-                if (event == null) break;
+            while (xcb.xcb_poll_for_event(conn)) |event| {
                 defer std.c.free(event);
                 events_handled += 1;
                 events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
             }
             
             if (events_handled > 0) {
-                // Release focus protection after event batch
                 focus.releaseProtection();
-                
-                // Perform deferred operations in single flush
                 tiling.retileIfDirty(&wm);
                 bar.updateIfDirty(&wm) catch |err| {
                     std.log.err("[main] Failed to update bar: {}", .{err});
@@ -291,7 +290,7 @@ pub fn main() !void {
             }
         }
         
-        // Handle signals
+        // Handle signals (drain all pending)
         if (pollfds[1].revents & posix.POLL.IN != 0) {
             handleSignalFd(signal_fd, &should_reload, &running);
             
@@ -302,25 +301,23 @@ pub fn main() !void {
             }
         }
         
-        // Handle timer (bar clock updates)
+        // Handle timer
         if (pollfds[2].revents & posix.POLL.IN != 0) {
-            // Read timer to acknowledge (required to clear event)
             var expiration: u64 = 0;
             _ = posix.read(timer_fd, std.mem.asBytes(&expiration)) catch {};
-            
-            bar.checkClockUpdate() catch {};
+            bar.checkClockUpdate() catch |err| {
+                std.log.err("[bar] Clock update failed: {}", .{err});
+            };
         }
         
-        // Reset revents for next poll
-        for (&pollfds) |*pfd| {
-            pfd.revents = 0;
-        }
-
-        // Connection health check
-        if (xcb.xcb_connection_has_error(conn) != 0) {
+        // Check connection health only if we saw POLLERR/POLLHUP
+        if ((pollfds[0].revents & (posix.POLL.ERR | posix.POLL.HUP)) != 0 or
+            xcb.xcb_connection_has_error(conn) != 0) {
             std.log.err("[main] X11 connection error, shutting down", .{});
             break;
         }
+        
+        // Note: poll() automatically resets revents, no manual reset needed
     }
 
     std.log.info("[hana] Shutting down gracefully", .{});
