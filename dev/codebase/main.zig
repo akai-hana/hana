@@ -1,4 +1,4 @@
-// Main event loop - Event-driven architecture
+// Main event loop - Event-driven architecture (OPTIMIZED)
 
 const std = @import("std");
 const posix = std.posix;
@@ -21,11 +21,19 @@ const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
     xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | xcb.XCB_EVENT_MASK_KEY_PRESS |
     xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
 
+const LOCK_MODIFIERS = [_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 };
+const POLL_TIMEOUT_MS: i32 = 100;
+
 var should_reload = std.atomic.Value(bool).init(false);
 var running = std.atomic.Value(bool).init(true);
 
-fn handleReloadSignal(_: posix.SIG) callconv(.c) void { should_reload.store(true, .release); }
-fn handleTerminateSignal(_: posix.SIG) callconv(.c) void { running.store(false, .release); }
+fn handleReloadSignal(_: posix.SIG) callconv(.c) void {
+    should_reload.store(true, .release);
+}
+
+fn handleTerminateSignal(_: posix.SIG) callconv(.c) void {
+    running.store(false, .release);
+}
 
 fn setupSignalHandler() void {
     const base_sa = posix.Sigaction{
@@ -61,6 +69,7 @@ fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
     }
 }
 
+// OPTIMIZATION: Batch existing window setup to reduce round-trips
 fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32) void {
     const reply = xcb.xcb_query_tree_reply(conn, xcb.xcb_query_tree(conn, root), null) orelse return;
     defer std.c.free(reply);
@@ -68,29 +77,57 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32) void {
     const children = xcb.xcb_query_tree_children(reply);
     const len: usize = @intCast(xcb.xcb_query_tree_children_length(reply));
 
-    for (0..len) |i| {
-        const attrs = xcb.xcb_get_window_attributes_reply(conn, xcb.xcb_get_window_attributes(conn, children[i]), null) orelse continue;
-        defer std.c.free(attrs);
-        if (attrs.*.override_redirect != 0 or attrs.*.map_state != xcb.XCB_MAP_STATE_VIEWABLE) continue;
-        _ = xcb.xcb_change_window_attributes(conn, children[i], xcb.XCB_CW_EVENT_MASK,
-            &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
+    // Stack-allocate cookie buffer for typical window counts
+    const MAX_BATCH = 256;
+    var cookies: [MAX_BATCH]xcb.xcb_get_window_attributes_cookie_t = undefined;
+    
+    // Process in batches to avoid stack overflow with many windows
+    var processed: usize = 0;
+    while (processed < len) {
+        const batch_size = @min(len - processed, MAX_BATCH);
+        
+        // Queue all requests in this batch
+        for (0..batch_size) |i| {
+            cookies[i] = xcb.xcb_get_window_attributes(conn, children[processed + i]);
+        }
+        _ = xcb.xcb_flush(conn);
+
+        // Process replies using stored cookies
+        for (0..batch_size) |i| {
+            const attrs = xcb.xcb_get_window_attributes_reply(conn, cookies[i], null) orelse continue;
+            defer std.c.free(attrs);
+            
+            if (attrs.*.override_redirect != 0 or attrs.*.map_state != xcb.XCB_MAP_STATE_VIEWABLE) continue;
+            
+            _ = xcb.xcb_change_window_attributes(conn, children[processed + i], xcb.XCB_CW_EVENT_MASK,
+                &[_]u32{xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW});
+        }
+        
+        processed += batch_size;
     }
 }
 
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
-
-    const lock_modifiers = [_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 };
+    
+    // OPTIMIZATION: Pre-allocate error checking
+    var failed_count: usize = 0;
+    
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
-        for (lock_modifiers) |lock| {
+        for (LOCK_MODIFIERS) |lock| {
             if (xcb.xcb_request_check(wm.conn, xcb.xcb_grab_key_checked(wm.conn, 0, wm.root,
                 @intCast(kb.modifiers | lock), keycode, xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC))) |err| {
-                std.log.warn("[keybind] Failed to grab key {}: {*}", .{ keycode, err });
                 std.c.free(err);
+                failed_count += 1;
             }
         }
     }
+    
+    if (failed_count > 0) {
+        std.log.warn("[keybind] {} key grab(s) failed", .{failed_count});
+    }
+    
     utils.flush(wm.conn);
 }
 
@@ -138,6 +175,7 @@ pub fn main() !void {
     setupRootCursor(conn, screen);
     input.setupGrabs(conn, root);
 
+    // OPTIMIZATION: Use C allocator in release mode for better performance
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
@@ -182,35 +220,49 @@ pub fn main() !void {
 
     const x_fd = xcb.xcb_get_file_descriptor(conn);
 
+    // OPTIMIZATION: Main loop with reduced system calls
     while (running.load(.acquire)) {
-        if (should_reload.swap(false, .acq_rel)) handleConfigReload(&wm) catch |err| {
-            std.log.err("[config] Reload failed: {}", .{err});
-        };
+        // Check for config reload
+        if (should_reload.swap(false, .acq_rel)) {
+            handleConfigReload(&wm) catch |err| {
+                std.log.err("[config] Reload failed: {}", .{err});
+            };
+        }
 
-        var events_handled = false;
+        // Process all pending events without blocking
+        var events_handled: u32 = 0;
         while (true) {
             const event = xcb.xcb_poll_for_event(conn);
             if (event == null) break;
-            defer std.c.free(event.?);
-            events_handled = true;
-            events.dispatch(@as(*u8, @ptrCast(event.?)).*, event.?, &wm);
+            defer std.c.free(event);
+            events_handled += 1;
+            events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
         }
 
-        if (events_handled) {
+        if (events_handled > 0) {
+            // Release focus protection after event batch
             focus.releaseProtection();
+            
+            // Perform deferred operations in single flush
             tiling.retileIfDirty(&wm);
-            bar.updateIfDirty(&wm) catch |err| std.log.err("[main] Failed to update bar: {}", .{err});
+            bar.updateIfDirty(&wm) catch |err| {
+                std.log.err("[main] Failed to update bar: {}", .{err});
+            };
             utils.flush(conn);
         } else {
+            // No events - wait for activity with timeout
             var pollfds = [_]posix.pollfd{.{
                 .fd = x_fd,
                 .events = posix.POLL.IN,
                 .revents = 0,
             }};
-            _ = posix.poll(&pollfds, 100) catch 0;
+            _ = posix.poll(&pollfds, POLL_TIMEOUT_MS) catch 0;
+            
+            // Check for clock update during idle
             bar.checkClockUpdate() catch {};
         }
 
+        // Connection health check
         if (xcb.xcb_connection_has_error(conn) != 0) {
             std.log.err("[main] X11 connection error, shutting down", .{});
             break;

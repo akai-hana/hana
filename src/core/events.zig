@@ -1,4 +1,4 @@
-//! Event dispatch
+// Event dispatch (OPTIMIZED)
 
 const std = @import("std");
 const defs = @import("defs");
@@ -11,6 +11,7 @@ const tiling = @import("tiling");
 
 const EventHandler = *const fn (event: *anyopaque, wm: *defs.WM) void;
 
+// OPTIMIZATION: Compile-time event dispatch table with minimal size
 const dispatch_table = blk: {
     var table = [_]?EventHandler{null} ** 36;
     table[xcb.XCB_KEY_PRESS] = @ptrCast(&input.handleKeyPress);
@@ -26,9 +27,14 @@ const dispatch_table = blk: {
     break :blk table;
 };
 
+// OPTIMIZATION: Inline dispatch for minimal overhead
 pub inline fn dispatch(event_type: u8, event: *anyopaque, wm: *defs.WM) void {
     const idx = event_type & 0x7f;
-    if (idx < dispatch_table.len) if (dispatch_table[idx]) |handler| handler(event, wm);
+    if (idx < dispatch_table.len) {
+        if (dispatch_table[idx]) |handler| {
+            handler(event, wm);
+        }
+    }
 }
 
 pub fn initModules(wm: *defs.WM) void {

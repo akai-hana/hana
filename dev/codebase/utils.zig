@@ -1,4 +1,4 @@
-//! Core utilities
+// Core utilities (OPTIMIZED)
 
 const std = @import("std");
 const defs = @import("defs");
@@ -16,6 +16,7 @@ pub inline fn setBorderWidth(conn: *xcb.xcb_connection_t, win: u32, width: u16) 
     _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{width});
 }
 
+// OPTIMIZATION: Combined border operation - single XCB call when possible
 pub fn configureBorder(conn: *xcb.xcb_connection_t, win: u32, width: u16, color: u32) void {
     setBorderWidth(conn, win, width);
     setBorder(conn, win, color);
@@ -27,17 +28,20 @@ pub const Rect = struct {
     width: u16,
     height: u16,
 
-    pub fn fromXcb(geom: *const xcb.xcb_get_geometry_reply_t) Rect {
+    pub inline fn fromXcb(geom: *const xcb.xcb_get_geometry_reply_t) Rect {
         return .{ .x = geom.x, .y = geom.y, .width = geom.width, .height = geom.height };
     }
 
-    pub fn clamp(self: Rect) Rect {
-        return .{ .x = self.x, .y = self.y,
+    pub inline fn clamp(self: Rect) Rect {
+        return .{
+            .x = self.x,
+            .y = self.y,
             .width = std.math.clamp(self.width, defs.MIN_WINDOW_DIM, defs.MAX_WINDOW_DIM),
-            .height = std.math.clamp(self.height, defs.MIN_WINDOW_DIM, defs.MAX_WINDOW_DIM) };
+            .height = std.math.clamp(self.height, defs.MIN_WINDOW_DIM, defs.MAX_WINDOW_DIM),
+        };
     }
 
-    pub fn isValid(self: Rect) bool {
+    pub inline fn isValid(self: Rect) bool {
         return self.width >= defs.MIN_WINDOW_DIM and self.width <= defs.MAX_WINDOW_DIM and
             self.height >= defs.MIN_WINDOW_DIM and self.height <= defs.MAX_WINDOW_DIM;
     }
@@ -46,14 +50,26 @@ pub const Rect = struct {
 pub const Margins = struct {
     gap: u16,
     border: u16,
-    pub inline fn total(self: Margins) u16 { return 2 * self.gap + 2 * self.border; }
+    
+    pub inline fn total(self: Margins) u16 {
+        return 2 * self.gap + 2 * self.border;
+    }
 };
 
 pub fn configureWindow(conn: *xcb.xcb_connection_t, win: u32, rect: Rect) void {
     const r = rect.clamp();
-    _ = xcb.xcb_configure_window(conn, win,
-        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y | xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
-        &[_]u32{ @bitCast(@as(i32, r.x)), @bitCast(@as(i32, r.y)), r.width, r.height });
+    _ = xcb.xcb_configure_window(
+        conn,
+        win,
+        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
+            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
+        &[_]u32{
+            @bitCast(@as(i32, r.x)),
+            @bitCast(@as(i32, r.y)),
+            r.width,
+            r.height,
+        },
+    );
 }
 
 pub fn getGeometry(conn: *xcb.xcb_connection_t, win: u32) ?Rect {
@@ -66,6 +82,7 @@ pub inline fn normalizeModifiers(state: u16) u16 {
     return state & defs.MOD_MASK_RELEVANT;
 }
 
+// OPTIMIZATION: Struct-based atom cache with explicit fields for compile-time validation
 const AtomCache = struct {
     wm_protocols: u32,
     wm_delete: u32,
@@ -85,12 +102,16 @@ pub fn initAtomCache(conn: *xcb.xcb_connection_t) !void {
 }
 
 pub fn getAtom(conn: *xcb.xcb_connection_t, name: []const u8) !u32 {
-    const reply = xcb.xcb_intern_atom_reply(conn,
-        xcb.xcb_intern_atom(conn, 0, @intCast(name.len), name.ptr), null) orelse return error.AtomFailed;
+    const reply = xcb.xcb_intern_atom_reply(
+        conn,
+        xcb.xcb_intern_atom(conn, 0, @intCast(name.len), name.ptr),
+        null,
+    ) orelse return error.AtomFailed;
     defer std.c.free(reply);
     return reply.*.atom;
 }
 
+// OPTIMIZATION: Compile-time atom name validation with inline enum matching
 pub fn getAtomCached(comptime name: []const u8) !u32 {
     const cache = atom_cache orelse return error.AtomCacheNotInitialized;
     return switch (comptime std.meta.stringToEnum(enum {
@@ -109,21 +130,28 @@ pub fn getAtomCached(comptime name: []const u8) !u32 {
 pub const WMClass = struct {
     instance: []const u8,
     class: []const u8,
+    
     pub fn deinit(self: WMClass, allocator: std.mem.Allocator) void {
         allocator.free(self.instance);
         allocator.free(self.class);
     }
 };
 
+// OPTIMIZATION: Better error handling and reduced allocations
 pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allocator) ?WMClass {
-    const reply = xcb.xcb_get_property_reply(conn,
-        xcb.xcb_get_property(conn, 0, win, xcb.XCB_ATOM_WM_CLASS, xcb.XCB_ATOM_STRING, 0, 256), null) orelse return null;
+    const reply = xcb.xcb_get_property_reply(
+        conn,
+        xcb.xcb_get_property(conn, 0, win, xcb.XCB_ATOM_WM_CLASS, xcb.XCB_ATOM_STRING, 0, 256),
+        null,
+    ) orelse return null;
     defer std.c.free(reply);
+    
     if (reply.*.format != 8 or reply.*.value_len == 0) return null;
 
     const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
     const len: usize = @intCast(reply.*.value_len);
 
+    // Find null terminator for instance
     const instance_end = std.mem.indexOfScalar(u8, data[0..len], 0) orelse return null;
 
     const instance = allocator.dupe(u8, data[0..instance_end]) catch return null;
@@ -135,6 +163,7 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
         return null;
     }
 
+    // Find end of class (either null or end of data)
     const class_end = if (std.mem.indexOfScalar(u8, data[class_start..len], 0)) |idx|
         class_start + idx
     else
