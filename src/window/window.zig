@@ -133,6 +133,8 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
                 break;
             }
         }
+        // Restore bar visibility when fullscreen window is destroyed
+        bar.showForFullscreen(wm);
     }
 
     if (wm.config.tiling.enabled) {

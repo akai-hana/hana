@@ -8,12 +8,9 @@ const bar = @import("bar");
 
 const WORKSPACE_WIDTH = bar.WORKSPACE_WIDTH;
 
-// Generate number strings at compile time
 const static_numbers = blk: {
     var nums: [20][]const u8 = undefined;
-    for (&nums, 1..) |*num, i| {
-        num.* = std.fmt.comptimePrint("{d}", .{i});
-    }
+    for (&nums, 1..) |*num, i| num.* = std.fmt.comptimePrint("{d}", .{i});
     break :blk nums;
 };
 
@@ -29,13 +26,11 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
 
         dc.fillRect(x, 0, WORKSPACE_WIDTH, height, bg);
         
-        // Get label: custom icon, static number, or fallback
         const label = if (i < config.workspace_icons.items.len) 
             config.workspace_icons.items[i]
         else if (i < static_numbers.len) 
             static_numbers[i] 
-        else 
-            "?";
+        else "?";
         
         try dc.drawText(x + (WORKSPACE_WIDTH - dc.textWidth(label)) / 2, text_y, label, fg);
 
@@ -48,12 +43,11 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
             if (is_current) {
                 dc.fillRect(ix, iy, size, size, fg);
             } else {
-                // Hollow rectangle
-                dc.fillRect(ix, iy, size, 1, fg);  // Top
-                dc.fillRect(ix, iy + size - 1, size, 1, fg);  // Bottom
+                dc.fillRect(ix, iy, size, 1, fg);
+                dc.fillRect(ix, iy + size - 1, size, 1, fg);
                 if (size > 2) {
-                    dc.fillRect(ix, iy + 1, 1, size - 2, fg);  // Left
-                    dc.fillRect(ix + size - 1, iy + 1, 1, size - 2, fg);  // Right
+                    dc.fillRect(ix, iy + 1, 1, size - 2, fg);
+                    dc.fillRect(ix + size - 1, iy + 1, 1, size - 2, fg);
                 }
             }
         }

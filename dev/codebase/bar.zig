@@ -62,7 +62,6 @@ const State = struct {
     }
 
     fn deinit(self: *State) void {
-        self.alive = false;
         self.status_text.deinit(self.allocator);
         self.cached_title.deinit(self.allocator);
         self.allocator.destroy(self);
@@ -87,7 +86,6 @@ inline fn updateClockIfNeeded(s: *State) void {
 fn loadBarFonts(dc: *drawing.DrawContext, wm: *defs.WM) !void {
     const bar_cfg = wm.config.bar;
     
-    // Multi-font path
     if (bar_cfg.fonts.items.len > 0) {
         var sized_fonts = std.ArrayList([]const u8){};
         defer {
@@ -104,7 +102,6 @@ fn loadBarFonts(dc: *drawing.DrawContext, wm: *defs.WM) !void {
         return dc.loadFonts(sized_fonts.items);
     }
     
-    // Single font path
     const font_str = if (bar_cfg.font_size > 0)
         try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ bar_cfg.font, bar_cfg.font_size })
     else
@@ -119,21 +116,16 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
     else
         .{ 0, 0, height, 0, 0, 0, 0, 0, 0, wm.screen.width_in_pixels, 0, 0 };
 
-    const atoms = [_]struct { name: []const u8, prop: []const u32 }{
-        .{ .name = "_NET_WM_STRUT_PARTIAL", .prop = &strut },
-        .{ .name = "_NET_WM_WINDOW_TYPE", .prop = &[_]u32{try utils.getAtom(wm.conn, "_NET_WM_WINDOW_TYPE_DOCK")} },
-        .{ .name = "_NET_WM_STATE", .prop = &[_]u32{ 
-            try utils.getAtom(wm.conn, "_NET_WM_STATE_ABOVE"), 
-            try utils.getAtom(wm.conn, "_NET_WM_STATE_STICKY") 
-        }},
-    };
+    _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
+        try utils.getAtom(wm.conn, "_NET_WM_STRUT_PARTIAL"), xcb.XCB_ATOM_CARDINAL, 32, 12, &strut);
 
-    inline for (atoms) |atom| {
-        _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
-            try utils.getAtom(wm.conn, atom.name), 
-            if (std.mem.eql(u8, atom.name, "_NET_WM_STRUT_PARTIAL")) xcb.XCB_ATOM_CARDINAL else xcb.XCB_ATOM_ATOM,
-            32, @intCast(atom.prop.len), atom.prop.ptr);
-    }
+    _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
+        try utils.getAtom(wm.conn, "_NET_WM_WINDOW_TYPE"), xcb.XCB_ATOM_ATOM, 32, 1,
+        &[_]u32{try utils.getAtom(wm.conn, "_NET_WM_WINDOW_TYPE_DOCK")});
+
+    _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
+        try utils.getAtom(wm.conn, "_NET_WM_STATE"), xcb.XCB_ATOM_ATOM, 32, 2,
+        &[_]u32{ try utils.getAtom(wm.conn, "_NET_WM_STATE_ABOVE"), try utils.getAtom(wm.conn, "_NET_WM_STATE_STICKY") });
 }
 
 fn calculateBarHeight(wm: *defs.WM) !u16 {
@@ -219,7 +211,6 @@ pub inline fn raiseBar() void {
         xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 }
 pub inline fn getBarHeight() u16 { return if (state) |s| s.height else 0; }
-pub inline fn getHeight() u16 { return getBarHeight(); }
 pub inline fn isBarVisible() bool { return state != null; }
 
 pub fn toggleBar(wm: *defs.WM) void {
@@ -250,7 +241,6 @@ pub fn checkClockUpdate() !void {
 }
 
 fn drawClockOnly(s: *State, wm: *defs.WM) !void {
-    // Fast path: only redraw clock if it's in the right layout
     for (s.config.layout.items) |layout| {
         if (layout.position != .right) continue;
         
@@ -302,13 +292,27 @@ fn calculateSegmentWidth(s: *State, segment: defs.BarSegment) u16 {
     };
 }
 
+fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment) !void {
+    var right_x: u16 = s.width;
+    var i = segments.len;
+    while (i > 0) : (i -= 1) {
+        right_x -= calculateSegmentWidth(s, segments[i - 1]);
+        _ = try drawSegment(s, wm, segments[i - 1], right_x, null);
+        if (i > 1) right_x -= s.config.spacing;
+    }
+}
+
 fn draw(s: *State, wm: *defs.WM) !void {
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
     // Pre-calculate widths
     var widths = [_]u16{0} ** 2; // [left, right]
     for (s.config.layout.items) |layout| {
-        const idx: usize = if (layout.position == .left) 0 else if (layout.position == .right) 1 else continue;
+        const idx: usize = switch (layout.position) {
+            .left => 0,
+            .right => 1,
+            .center => continue,
+        };
         for (layout.segments.items) |segment| widths[idx] += calculateSegmentWidth(s, segment) + s.config.spacing;
         if (layout.segments.items.len > 0) widths[idx] -= s.config.spacing;
     }
@@ -328,15 +332,7 @@ fn draw(s: *State, wm: *defs.WM) !void {
                     if (segment != .title) x += s.config.spacing;
                 }
             },
-            .right => {
-                var right_x: u16 = s.width;
-                var i = layout.segments.items.len;
-                while (i > 0) : (i -= 1) {
-                    right_x -= calculateSegmentWidth(s, layout.segments.items[i - 1]);
-                    _ = try drawSegment(s, wm, layout.segments.items[i - 1], right_x, null);
-                    if (i > 1) right_x -= s.config.spacing;
-                }
-            },
+            .right => try drawRightSegments(s, wm, layout.segments.items),
         }
     }
     s.dc.flush();
