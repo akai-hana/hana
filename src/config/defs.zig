@@ -8,6 +8,31 @@ pub const xcb = @cImport({
 
 pub const xkbcommon = @import("xkbcommon");
 
+/// Generic compile-time enum <-> string conversion helper
+/// Automatically generates string mapping from enum fields at compile time
+pub fn EnumStringHelper(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        
+        const map = blk: {
+            const fields = @typeInfo(T).@"enum".fields;
+            var entries: [fields.len]struct { []const u8, T } = undefined;
+            for (fields, 0..) |field, i| {
+                entries[i] = .{ field.name, @enumFromInt(field.value) };
+            }
+            break :blk std.StaticStringMap(T).initComptime(entries);
+        };
+        
+        pub inline fn fromString(str: []const u8) ?T {
+            return map.get(str);
+        }
+        
+        pub inline fn toString(value: T) []const u8 {
+            return @tagName(value);
+        }
+    };
+}
+
 // Modifier masks
 pub const MOD_SHIFT: u16 = xcb.XCB_MOD_MASK_SHIFT;
 pub const MOD_LOCK: u16 = xcb.XCB_MOD_MASK_LOCK;
@@ -77,7 +102,7 @@ pub const MasterSide = enum {
     left,
     right,
 
-    const Helper = @import("enum_helpers").EnumStringHelper(MasterSide);
+    const Helper = EnumStringHelper(MasterSide);
     pub const fromString = Helper.fromString;
     pub const toString = Helper.toString;
 };
@@ -98,7 +123,7 @@ pub const BarVerticalPosition = enum {
     top,
     bottom,
 
-    const Helper = @import("enum_helpers").EnumStringHelper(BarVerticalPosition);
+    const Helper = EnumStringHelper(BarVerticalPosition);
     pub const fromString = Helper.fromString;
 };
 
@@ -107,7 +132,7 @@ pub const BarPosition = enum {
     center,
     right,
 
-    const Helper = @import("enum_helpers").EnumStringHelper(BarPosition);
+    const Helper = EnumStringHelper(BarPosition);
     pub const fromString = Helper.fromString;
 };
 
@@ -117,7 +142,7 @@ pub const BarSegment = enum {
     clock,
     layout,
 
-    const Helper = @import("enum_helpers").EnumStringHelper(BarSegment);
+    const Helper = EnumStringHelper(BarSegment);
     pub const fromString = Helper.fromString;
 };
 
