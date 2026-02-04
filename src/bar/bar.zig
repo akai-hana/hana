@@ -47,8 +47,8 @@ const State = struct {
             .dc = dc,
             .conn = conn,
             .config = config,
-            .status_text = .{},  // Simplified initialization
-            .cached_title = .{},  // Simplified initialization
+            .status_text = .{},
+            .cached_title = .{},
             .cached_title_window = null,
             .dirty = false,
             .dirty_clock = false,
@@ -76,7 +76,6 @@ const State = struct {
 
 var state: ?*State = null;
 
-// Helper function for time checking
 inline fn updateClockIfNeeded(s: *State) void {
     const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
     if (ts.sec != s.last_second) {
@@ -86,28 +85,32 @@ inline fn updateClockIfNeeded(s: *State) void {
 }
 
 fn loadBarFonts(dc: *drawing.DrawContext, wm: *defs.WM) !void {
-    if (wm.config.bar.fonts.items.len > 0) {
+    const bar_cfg = wm.config.bar;
+    
+    // Multi-font path
+    if (bar_cfg.fonts.items.len > 0) {
         var sized_fonts = std.ArrayList([]const u8){};
         defer {
             for (sized_fonts.items) |s| wm.allocator.free(s);
             sized_fonts.deinit(wm.allocator);
         }
-        for (wm.config.bar.fonts.items) |font_name| {
-            const sized = if (wm.config.bar.font_size > 0)
-                try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ font_name, wm.config.bar.font_size })
+        for (bar_cfg.fonts.items) |font_name| {
+            const sized = if (bar_cfg.font_size > 0)
+                try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ font_name, bar_cfg.font_size })
             else
                 try wm.allocator.dupe(u8, font_name);
             try sized_fonts.append(wm.allocator, sized);
         }
-        try dc.loadFonts(sized_fonts.items);
-    } else {
-        const font_str = if (wm.config.bar.font_size > 0)
-            try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ wm.config.bar.font, wm.config.bar.font_size })
-        else
-            wm.config.bar.font;
-        defer if (wm.config.bar.font_size > 0) wm.allocator.free(font_str);
-        try dc.loadFont(font_str);
+        return dc.loadFonts(sized_fonts.items);
     }
+    
+    // Single font path
+    const font_str = if (bar_cfg.font_size > 0)
+        try std.fmt.allocPrint(wm.allocator, "{s}:size={}", .{ bar_cfg.font, bar_cfg.font_size })
+    else
+        bar_cfg.font;
+    defer if (bar_cfg.font_size > 0) wm.allocator.free(font_str);
+    try dc.loadFont(font_str);
 }
 
 fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
@@ -116,16 +119,21 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
     else
         .{ 0, 0, height, 0, 0, 0, 0, 0, 0, wm.screen.width_in_pixels, 0, 0 };
 
-    _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
-        try utils.getAtom(wm.conn, "_NET_WM_STRUT_PARTIAL"), xcb.XCB_ATOM_CARDINAL, 32, 12, &strut);
+    const atoms = [_]struct { name: []const u8, prop: []const u32 }{
+        .{ .name = "_NET_WM_STRUT_PARTIAL", .prop = &strut },
+        .{ .name = "_NET_WM_WINDOW_TYPE", .prop = &[_]u32{try utils.getAtom(wm.conn, "_NET_WM_WINDOW_TYPE_DOCK")} },
+        .{ .name = "_NET_WM_STATE", .prop = &[_]u32{ 
+            try utils.getAtom(wm.conn, "_NET_WM_STATE_ABOVE"), 
+            try utils.getAtom(wm.conn, "_NET_WM_STATE_STICKY") 
+        }},
+    };
 
-    _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
-        try utils.getAtom(wm.conn, "_NET_WM_WINDOW_TYPE"), xcb.XCB_ATOM_ATOM, 32, 1,
-        &[_]u32{try utils.getAtom(wm.conn, "_NET_WM_WINDOW_TYPE_DOCK")});
-
-    _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
-        try utils.getAtom(wm.conn, "_NET_WM_STATE"), xcb.XCB_ATOM_ATOM, 32, 2,
-        &[_]u32{ try utils.getAtom(wm.conn, "_NET_WM_STATE_ABOVE"), try utils.getAtom(wm.conn, "_NET_WM_STATE_STICKY") });
+    inline for (atoms) |atom| {
+        _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
+            try utils.getAtom(wm.conn, atom.name), 
+            if (std.mem.eql(u8, atom.name, "_NET_WM_STRUT_PARTIAL")) xcb.XCB_ATOM_CARDINAL else xcb.XCB_ATOM_ATOM,
+            32, @intCast(atom.prop.len), atom.prop.ptr);
+    }
 }
 
 fn calculateBarHeight(wm: *defs.WM) !u16 {
@@ -187,7 +195,6 @@ pub fn deinit() void {
     }
 }
 
-// Consolidated function for bar visibility changes
 fn setBarVisibility(wm: *defs.WM, visible: bool, reason: []const u8) void {
     if (state) |s| {
         if (visible) {
@@ -231,7 +238,6 @@ pub fn showForFullscreen(wm: *defs.WM) void {
 pub fn updateIfDirty(wm: *defs.WM) !void {
     if (state) |s| {
         updateClockIfNeeded(s);
-        
         if (s.isDirty()) {
             if (s.dirty) try draw(s, wm) else if (s.dirty_clock) try drawClockOnly(s, wm);
             s.clearDirty();
@@ -252,8 +258,7 @@ fn drawClockOnly(s: *State, wm: *defs.WM) !void {
         var i = layout.segments.items.len;
         while (i > 0) : (i -= 1) {
             const segment = layout.segments.items[i - 1];
-            const w = calculateSegmentWidth(s, segment);
-            right_x -= w;
+            right_x -= calculateSegmentWidth(s, segment);
             
             if (segment == .clock) {
                 _ = try clock_segment.draw(s.dc, s.config, s.height, right_x);
@@ -263,7 +268,6 @@ fn drawClockOnly(s: *State, wm: *defs.WM) !void {
             if (i > 1) right_x -= s.config.spacing;
         }
     }
-    // Fallback to full redraw if clock not found in right position
     try draw(s, wm);
 }
 
@@ -301,20 +305,12 @@ fn calculateSegmentWidth(s: *State, segment: defs.BarSegment) u16 {
 fn draw(s: *State, wm: *defs.WM) !void {
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
-    var left_width: u16 = 0;
-    var right_width: u16 = 0;
-    
-    // Pre-calculate widths for each position
+    // Pre-calculate widths
+    var widths = [_]u16{0} ** 2; // [left, right]
     for (s.config.layout.items) |layout| {
-        const width_ptr = switch (layout.position) {
-            .left => &left_width,
-            .right => &right_width,
-            .center => continue,
-        };
-        for (layout.segments.items) |segment| {
-            width_ptr.* += calculateSegmentWidth(s, segment) + s.config.spacing;
-        }
-        if (layout.segments.items.len > 0) width_ptr.* -= s.config.spacing;
+        const idx: usize = if (layout.position == .left) 0 else if (layout.position == .right) 1 else continue;
+        for (layout.segments.items) |segment| widths[idx] += calculateSegmentWidth(s, segment) + s.config.spacing;
+        if (layout.segments.items.len > 0) widths[idx] -= s.config.spacing;
     }
 
     var x: u16 = 0;
@@ -325,8 +321,7 @@ fn draw(s: *State, wm: *defs.WM) !void {
                 x += s.config.spacing;
             },
             .center => {
-                const remaining = if (s.width > x + right_width + s.config.spacing)
-                    s.width - x - right_width - s.config.spacing else 100;
+                const remaining = @max(100, s.width -| x -| widths[1] -| s.config.spacing);
                 for (layout.segments.items) |segment| {
                     const w = if (segment == .title) remaining else calculateSegmentWidth(s, segment);
                     x = try drawSegment(s, wm, segment, x, w);
@@ -337,9 +332,8 @@ fn draw(s: *State, wm: *defs.WM) !void {
                 var right_x: u16 = s.width;
                 var i = layout.segments.items.len;
                 while (i > 0) : (i -= 1) {
-                    const w = calculateSegmentWidth(s, layout.segments.items[i - 1]);
-                    right_x -= w;
-                    _ = try drawSegment(s, wm, layout.segments.items[i - 1], right_x, w);
+                    right_x -= calculateSegmentWidth(s, layout.segments.items[i - 1]);
+                    _ = try drawSegment(s, wm, layout.segments.items[i - 1], right_x, null);
                     if (i > 1) right_x -= s.config.spacing;
                 }
             },
