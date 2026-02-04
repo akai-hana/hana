@@ -15,41 +15,40 @@ pub const Value = union(enum) {
     array: std.ArrayList(Value),
     color: u32,
 
-    /// Generic getter for values - replaces asInt, asBool, asString, asColor, asArray
-    pub inline fn as(self: Value, comptime T: type) ?T {
-        return switch (T) {
-            i64 => if (self == .integer) self.integer else null,
-            bool => switch (self) {
-                .boolean => |b| b,
-                .integer => |i| i != 0,
-                else => null,
-            },
-            []const u8 => if (self == .string) self.string else null,
-            u32 => if (self == .color) self.color else null,
-            []const Value => if (self == .array) self.array.items else null,
-            else => @compileError("Unsupported type for Value.as()"),
+    pub inline fn asInt(self: Value) ?i64 {
+        return switch (self) {
+            .integer => |i| i,
+            else => null,
         };
     }
 
-    // Legacy methods for backward compatibility (call generic as() internally)
-    pub inline fn asInt(self: Value) ?i64 {
-        return self.as(i64);
-    }
-
     pub inline fn asBool(self: Value) ?bool {
-        return self.as(bool);
+        return switch (self) {
+            .boolean => |b| b,
+            .integer => |i| i != 0,
+            else => null,
+        };
     }
 
     pub inline fn asString(self: Value) ?[]const u8 {
-        return self.as([]const u8);
+        return switch (self) {
+            .string => |s| s,
+            else => null,
+        };
     }
 
     pub inline fn asColor(self: Value) ?u32 {
-        return self.as(u32);
+        return switch (self) {
+            .color => |c| c,
+            else => null,
+        };
     }
 
     pub inline fn asArray(self: Value) ?[]const Value {
-        return self.as([]const Value);
+        return switch (self) {
+            .array => |arr| arr.items,
+            else => null,
+        };
     }
 
     pub fn deinit(self: *Value, allocator: std.mem.Allocator) void {
@@ -83,26 +82,20 @@ pub const Section = struct {
         return self.pairs.get(key);
     }
 
-    /// Generic getter for section values - replaces getInt, getBool, getString, getColor
-    pub inline fn getAs(self: *const Section, key: []const u8, comptime T: type) ?T {
-        return if (self.get(key)) |v| v.as(T) else null;
-    }
-
-    // Legacy methods for backward compatibility (call generic getAs() internally)
     pub inline fn getInt(self: *const Section, key: []const u8) ?i64 {
-        return self.getAs(key, i64);
+        return if (self.get(key)) |v| v.asInt() else null;
     }
 
     pub inline fn getBool(self: *const Section, key: []const u8) ?bool {
-        return self.getAs(key, bool);
+        return if (self.get(key)) |v| v.asBool() else null;
     }
 
     pub inline fn getString(self: *const Section, key: []const u8) ?[]const u8 {
-        return self.getAs(key, []const u8);
+        return if (self.get(key)) |v| v.asString() else null;
     }
 
     pub inline fn getColor(self: *const Section, key: []const u8) ?u32 {
-        return self.getAs(key, u32);
+        return if (self.get(key)) |v| v.asColor() else null;
     }
 };
 
