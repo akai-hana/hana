@@ -23,11 +23,11 @@ pub fn parseColor(str: []const u8) !u32 {
 fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
     const value = section.get(key) orelse return default;
 
-    if (value.as(u32)) |color| {
+    if (value.asColor()) |color| {
         return if (color <= 0xFFFFFF) color else default;
     }
 
-    if (value.as([]const u8)) |str| {
+    if (value.asString()) |str| {
         const color = parseColor(str) catch {
             std.log.warn("[config] Invalid color for {s}: '{s}'", .{ key, str });
             return default;
@@ -35,7 +35,7 @@ fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
         return color;
     }
 
-    if (value.as(i64)) |int_val| {
+    if (value.asInt()) |int_val| {
         const color: u32 = @intCast(int_val);
         return if (color <= 0xFFFFFF) color else default;
     }
@@ -53,16 +53,16 @@ fn get(
     comptime max: ?T,
 ) T {
     const value = switch (T) {
-        bool => section.getAs(key, bool) orelse return default,
-        []const u8 => section.getAs(key, []const u8) orelse return default,
+        bool => section.getBool(key) orelse return default,
+        []const u8 => section.getString(key) orelse return default,
         f32 => blk: {
-            if (section.getAs(key, i64)) |i| {
+            if (section.getInt(key)) |i| {
                 break :blk @as(f32, @floatFromInt(i)) / 100.0;
             }
             return default;
         },
         u16, u32, usize => blk: {
-            const i = section.getAs(key, i64) orelse return default;
+            const i = section.getInt(key) orelse return default;
             break :blk @as(T, @intCast(i));
         },
         else => @compileError("Unsupported type"),
@@ -229,7 +229,7 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, c
 
         if (std.mem.eql(u8, key, "Mod")) continue;
 
-        const action_str = value.as([]const u8) orelse continue;
+        const action_str = value.asString() orelse continue;
         const parts = parseKeybindingSpec(allocator, key) catch |err| {
             std.log.warn("[config] Failed to parse keybind '{s}': {}", .{ key, err });
             continue;
@@ -508,18 +508,18 @@ fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Sect
     cfg.bar.workspace_icons.clearRetainingCapacity();
     
     if (section.get("icons")) |value| {
-        if (value.as([]const parser.Value)) |arr| {
+        if (value.asArray()) |arr| {
             // Array of strings
             for (arr) |item| {
-                if (item.as([]const u8)) |str| {
+                if (item.asString()) |str| {
                     const icon = try allocator.dupe(u8, str);
                     try cfg.bar.workspace_icons.append(allocator, icon);
-                } else if (item.as(i64)) |num| {
+                } else if (item.asInt()) |num| {
                     const icon = try std.fmt.allocPrint(allocator, "{}", .{num});
                     try cfg.bar.workspace_icons.append(allocator, icon);
                 }
             }
-        } else if (value.as([]const u8)) |str| {
+        } else if (value.asString()) |str| {
             // String of characters (old format)
             for (str) |ch| {
                 const icon = try std.fmt.allocPrint(allocator, "{c}", .{ch});
@@ -556,7 +556,7 @@ fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, 
     
     // Try to parse layout array
     if (section.get("layout")) |value| {
-        if (value.as([]const parser.Value)) |layout_arr| {
+        if (value.asArray()) |layout_arr| {
             for (layout_arr) |_| {
                 // Each item should be a table with position and segments
                 // Since we can't easily parse inline tables, we'll use a workaround
@@ -581,9 +581,9 @@ fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, 
             };
             
             if (layout_section.get("segments")) |seg_value| {
-                if (seg_value.as([]const parser.Value)) |seg_arr| {
+                if (seg_value.asArray()) |seg_arr| {
                     for (seg_arr) |seg_item| {
-                        if (seg_item.as([]const u8)) |seg_str| {
+                        if (seg_item.asString()) |seg_str| {
                             if (defs.BarSegment.fromString(seg_str)) |segment| {
                                 try bar_layout.segments.append(allocator, segment);
                             }
@@ -617,7 +617,7 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *d
     if (doc.getSection("rules")) |section| {
         var iter = section.pairs.iterator();
         while (iter.next()) |entry| {
-            const ws_num = entry.value_ptr.*.as(i64) orelse continue;
+            const ws_num = entry.value_ptr.*.asInt() orelse continue;
 
             if (ws_num < 1 or ws_num > cfg.workspaces.count) {
                 std.log.warn("[config] Rule workspace {} for '{s}' exceeds count {}, skipping", .{ ws_num, entry.key_ptr.*, cfg.workspaces.count });
