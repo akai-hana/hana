@@ -111,12 +111,12 @@ pub const TilingConfig = struct {
     enabled: bool = true,
     layout: []const u8 = "master_left",
     master_side: MasterSide = .left,
-    master_width_factor: f32 = 0.50,
+    master_width: f32 = 0.50,
     master_count: usize = 1,
     gaps: u16 = 10,
     border_width: u16 = 2,
     border_focused: u32 = 0x5294E2,
-    border_normal: u32 = 0x383C4A,
+    border_unfocused: u32 = 0x383C4A,
 };
 
 pub const BarVerticalPosition = enum {
