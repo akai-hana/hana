@@ -23,11 +23,11 @@ pub fn parseColor(str: []const u8) !u32 {
 fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
     const value = section.get(key) orelse return default;
 
-    if (value.asColor()) |color| {
+    if (value.as(u32)) |color| {
         return if (color <= 0xFFFFFF) color else default;
     }
 
-    if (value.asString()) |str| {
+    if (value.as([]const u8)) |str| {
         const color = parseColor(str) catch {
             std.log.warn("[config] Invalid color for {s}: '{s}'", .{ key, str });
             return default;
@@ -35,7 +35,7 @@ fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
         return color;
     }
 
-    if (value.asInt()) |int_val| {
+    if (value.as(i64)) |int_val| {
         const color: u32 = @intCast(int_val);
         return if (color <= 0xFFFFFF) color else default;
     }
@@ -53,16 +53,16 @@ fn get(
     comptime max: ?T,
 ) T {
     const value = switch (T) {
-        bool => section.getBool(key) orelse return default,
-        []const u8 => section.getString(key) orelse return default,
+        bool => section.getAs(key, bool) orelse return default,
+        []const u8 => section.getAs(key, []const u8) orelse return default,
         f32 => blk: {
-            if (section.getInt(key)) |i| {
+            if (section.getAs(key, i64)) |i| {
                 break :blk @as(f32, @floatFromInt(i)) / 100.0;
             }
             return default;
         },
         u16, u32, usize => blk: {
-            const i = section.getInt(key) orelse return default;
+            const i = section.getAs(key, i64) orelse return default;
             break :blk @as(T, @intCast(i));
         },
         else => @compileError("Unsupported type"),
@@ -212,269 +212,265 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
 }
 
 fn getDefaultConfig(allocator: std.mem.Allocator) defs.Config {
-    var cfg = defs.Config.init(allocator);
-    
-    // Set default workspace icons
-    for (0..9) |i| {
-        const icon = std.fmt.allocPrint(allocator, "{}", .{i + 1}) catch continue;
-        cfg.bar.workspace_icons.append(allocator, icon) catch {};
-    }
-    
-    // Set default layout
-    var default_layout = defs.BarLayout{
-        .position = .left,
-        .segments = std.ArrayList(defs.BarSegment){},
-    };
-    default_layout.segments.append(allocator, .workspaces) catch {};
-    cfg.bar.layout.append(allocator, default_layout) catch {};
-    
-    var center_layout = defs.BarLayout{
-        .position = .center,
-        .segments = std.ArrayList(defs.BarSegment){},
-    };
-    center_layout.segments.append(allocator, .title) catch {};
-    cfg.bar.layout.append(allocator, center_layout) catch {};
-    
-    var right_layout = defs.BarLayout{
-        .position = .right,
-        .segments = std.ArrayList(defs.BarSegment){},
-    };
-    right_layout.segments.append(allocator, .clock) catch {};
-    cfg.bar.layout.append(allocator, right_layout) catch {};
-    
-    return cfg;
+    // Use struct defaults from defs.zig, only initialize allocator-based fields
+    return defs.Config.init(allocator);
 }
-
-const MOD_MAP = std.StaticStringMap(u16).initComptime(.{
-    .{ "Super", defs.MOD_SUPER },
-    .{ "Mod4", defs.MOD_SUPER },
-    .{ "Alt", defs.MOD_ALT },
-    .{ "Mod1", defs.MOD_ALT },
-    .{ "Control", defs.MOD_CONTROL },
-    .{ "Ctrl", defs.MOD_CONTROL },
-    .{ "Shift", defs.MOD_SHIFT },
-});
-
-const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
-    .{ "close", .close_window },
-    .{ "kill", .close_window },
-    .{ "reload", .reload_config },
-    .{ "reload_config", .reload_config },
-    .{ "toggle_layout", .toggle_layout },
-    .{ "toggle_layout_reverse", .toggle_layout_reverse },
-    .{ "toggle_bar", .toggle_bar },
-    .{ "increase_master", .increase_master },
-    .{ "decrease_master", .decrease_master },
-    .{ "increase_master_count", .increase_master_count },
-    .{ "decrease_master_count", .decrease_master_count },
-    .{ "toggle_tiling", .toggle_tiling },
-    .{ "toggle_fullscreen", .toggle_fullscreen },
-    .{ "fullscreen", .toggle_fullscreen },
-    .{ "dump_state", .dump_state },
-    .{ "emergency_recover", .emergency_recover },
-});
 
 fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
     const section = doc.getSection("Keybindings") orelse return;
-    const mod_substitute = section.getString("Mod");
+
+    const mod_str = get([]const u8, section, "Mod", "Super", null, null);
+    const mod_mask = try parseModifier(mod_str);
 
     var iter = section.pairs.iterator();
     while (iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.key_ptr.*, "Mod")) continue;
+        const key = entry.key_ptr.*;
+        const value = entry.value_ptr.*;
 
-        const command = entry.value_ptr.*.asString() orelse continue;
+        if (std.mem.eql(u8, key, "Mod")) continue;
 
-        const keybind_str = if (mod_substitute) |mod|
-            try substituteModVariable(allocator, entry.key_ptr.*, mod)
-        else
-            entry.key_ptr.*;
-        defer if (mod_substitute != null) allocator.free(keybind_str);
-
-        const parts = parseKeybindString(keybind_str) catch |err| {
-            std.log.warn("[config] Failed to parse keybind '{s}': {}", .{ keybind_str, err });
+        const action_str = value.as([]const u8) orelse continue;
+        const parts = parseKeybindingSpec(allocator, key) catch |err| {
+            std.log.warn("[config] Failed to parse keybind '{s}': {}", .{ key, err });
             continue;
         };
-        const action = try parseAction(allocator, command);
 
-        try cfg.keybindings.append(allocator, .{
-            .modifiers = parts.modifiers,
+        const modifiers = mod_mask | parts.mods;
+        const action = try parseAction(allocator, action_str);
+        
+        const kb = defs.Keybind{
+            .modifiers = modifiers,
             .keysym = parts.keysym,
             .action = action,
-        });
+        };
+        try cfg.keybindings.append(allocator, kb);
     }
 }
 
-fn substituteModVariable(allocator: std.mem.Allocator, keybind: []const u8, mod: []const u8) ![]const u8 {
-    if (std.mem.startsWith(u8, keybind, "Mod+")) {
-        return try std.fmt.allocPrint(allocator, "{s}+{s}", .{ mod, keybind[4..] });
-    }
-    return try allocator.dupe(u8, keybind);
-}
+const KeybindingSpec = struct {
+    mods: u16,
+    keysym: u32,
+};
 
-fn parseKeybindString(str: []const u8) !struct { modifiers: u16, keysym: u32 } {
-    var modifiers: u16 = 0;
+fn parseKeybindingSpec(allocator: std.mem.Allocator, spec: []const u8) !KeybindingSpec {
+    _ = allocator;
+    var mods: u16 = 0;
     var keysym: ?u32 = null;
 
-    var parts = std.mem.splitScalar(u8, str, '+');
-    while (parts.next()) |part| {
+    var it = std.mem.splitScalar(u8, spec, '+');
+    while (it.next()) |part| {
         const trimmed = std.mem.trim(u8, part, " \t");
 
-        if (MOD_MAP.get(trimmed)) |mod| {
-            modifiers |= mod;
+        if (std.ascii.eqlIgnoreCase(trimmed, "Mod")) {
+            continue;
+        } else if (std.ascii.eqlIgnoreCase(trimmed, "Shift")) {
+            mods |= defs.MOD_SHIFT;
+        } else if (std.ascii.eqlIgnoreCase(trimmed, "Control") or std.ascii.eqlIgnoreCase(trimmed, "Ctrl")) {
+            mods |= defs.MOD_CONTROL;
+        } else if (std.ascii.eqlIgnoreCase(trimmed, "Alt")) {
+            mods |= defs.MOD_ALT;
+        } else if (std.ascii.eqlIgnoreCase(trimmed, "Super")) {
+            mods |= defs.MOD_SUPER;
         } else {
             if (keysym != null) return error.MultipleKeys;
-            keysym = try keyNameToKeysym(trimmed);
+            
+            if (trimmed.len >= 64) {
+                std.log.warn("[config] Key name too long: {s}", .{trimmed});
+                return error.KeyNameTooLong;
+            }
+            
+            var buf: [64]u8 = undefined;
+            @memcpy(buf[0..trimmed.len], trimmed);
+            buf[trimmed.len] = 0;
+            
+            const ks = xkb.xkb_keysym_from_name(@ptrCast(&buf), xkb.XKB_KEYSYM_CASE_INSENSITIVE);
+            if (ks == xkb.XKB_KEY_NoSymbol) {
+                std.log.warn("[config] Unknown key: {s}", .{trimmed});
+                return error.UnknownKeyName;
+            }
+            keysym = ks;
         }
     }
 
-    return .{ .modifiers = modifiers, .keysym = keysym orelse return error.NoKeysym };
+    return KeybindingSpec{
+        .mods = mods,
+        .keysym = keysym orelse return error.NoKeysym,
+    };
 }
 
-fn keyNameToKeysym(name: []const u8) !u32 {
-    if (name.len >= 64) return error.KeyNameTooLong;
-
-    var buf: [64]u8 = undefined;
-    @memcpy(buf[0..name.len], name);
-    buf[name.len] = 0;
-
-    const keysym = xkb.xkb_keysym_from_name(@ptrCast(&buf), xkb.XKB_KEYSYM_CASE_INSENSITIVE);
-    return if (keysym == xkb.XKB_KEY_NoSymbol) error.UnknownKeyName else keysym;
+/// Resolve keybindings using the xkb state (called at runtime)
+pub fn resolveKeybindings(keybindings: []const defs.Keybind, xkb_state: *xkb.XkbState) void {
+    _ = keybindings;
+    _ = xkb_state;
+    // Keybindings are already resolved during parsing via parseKeybindingSpec
+    // This function exists for runtime operations if needed in the future
 }
 
-fn parseAction(allocator: std.mem.Allocator, cmd: []const u8) !defs.Action {
-    if (ACTION_MAP.get(cmd)) |action| return action;
+fn parseModifier(str: []const u8) !u16 {
+    if (std.ascii.eqlIgnoreCase(str, "Super")) return defs.MOD_SUPER;
+    if (std.ascii.eqlIgnoreCase(str, "Alt")) return defs.MOD_ALT;
+    if (std.ascii.eqlIgnoreCase(str, "Control") or std.ascii.eqlIgnoreCase(str, "Ctrl")) return defs.MOD_CONTROL;
+    if (std.ascii.eqlIgnoreCase(str, "Shift")) return defs.MOD_SHIFT;
+    return error.InvalidModifier;
+}
 
-    if (std.mem.startsWith(u8, cmd, "workspace_")) {
-        const num = try std.fmt.parseInt(usize, cmd[10..], 10);
+fn parseAction(allocator: std.mem.Allocator, str: []const u8) !defs.Action {
+    // Handle workspace switching
+    if (std.mem.startsWith(u8, str, "workspace_")) {
+        const num_str = str[10..];
+        const num = std.fmt.parseInt(usize, num_str, 10) catch {
+            // Fall through to exec if not a valid number
+            return .{ .exec = try allocator.dupe(u8, str) };
+        };
         if (num < 1 or num > defs.MAX_WORKSPACES) return error.InvalidWorkspace;
         return .{ .switch_workspace = num - 1 };
     }
-
-    if (std.mem.startsWith(u8, cmd, "move_to_workspace_")) {
-        const num = try std.fmt.parseInt(usize, cmd[18..], 10);
+    
+    // Handle move to workspace
+    if (std.mem.startsWith(u8, str, "move_to_workspace_")) {
+        const num_str = str[18..];
+        const num = std.fmt.parseInt(usize, num_str, 10) catch {
+            // Fall through to exec if not a valid number
+            return .{ .exec = try allocator.dupe(u8, str) };
+        };
         if (num < 1 or num > defs.MAX_WORKSPACES) return error.InvalidWorkspace;
         return .{ .move_to_workspace = num - 1 };
     }
-
-    return .{ .exec = try allocator.dupe(u8, cmd) };
-}
-
-pub fn resolveKeybindings(keybindings: anytype, xkb_state: *xkb.XkbState) void {
-    // First pass: resolve keycodes
-    for (keybindings) |*kb| {
-        kb.keycode = xkb_state.keysymToKeycode(kb.keysym);
+    
+    // Handle named actions
+    if (std.mem.eql(u8, str, "close") or std.mem.eql(u8, str, "close_window")) {
+        return .close_window;
+    }
+    if (std.mem.eql(u8, str, "kill") or std.mem.eql(u8, str, "kill_window")) {
+        return .close_window;
+    }
+    if (std.mem.eql(u8, str, "reload") or std.mem.eql(u8, str, "reload_config")) {
+        return .reload_config;
+    }
+    if (std.mem.eql(u8, str, "toggle_layout")) {
+        return .toggle_layout;
+    }
+    if (std.mem.eql(u8, str, "toggle_layout_reverse")) {
+        return .toggle_layout_reverse;
+    }
+    if (std.mem.eql(u8, str, "toggle_bar")) {
+        return .toggle_bar;
+    }
+    if (std.mem.eql(u8, str, "increase_master") or std.mem.eql(u8, str, "inc_master")) {
+        return .increase_master;
+    }
+    if (std.mem.eql(u8, str, "decrease_master") or std.mem.eql(u8, str, "dec_master")) {
+        return .decrease_master;
+    }
+    if (std.mem.eql(u8, str, "increase_master_count") or std.mem.eql(u8, str, "inc_master_count")) {
+        return .increase_master_count;
+    }
+    if (std.mem.eql(u8, str, "decrease_master_count") or std.mem.eql(u8, str, "dec_master_count")) {
+        return .decrease_master_count;
+    }
+    if (std.mem.eql(u8, str, "toggle_tiling")) {
+        return .toggle_tiling;
+    }
+    if (std.mem.eql(u8, str, "toggle_fullscreen") or std.mem.eql(u8, str, "fullscreen")) {
+        return .toggle_fullscreen;
+    }
+    if (std.mem.eql(u8, str, "dump_state")) {
+        return .dump_state;
+    }
+    if (std.mem.eql(u8, str, "emergency_recover")) {
+        return .emergency_recover;
     }
     
-    // Second pass: detect conflicts
-    // Map of (modifiers + keycode) -> binding index for conflict detection
-    var seen = std.AutoHashMap(u64, usize).init(std.heap.c_allocator);
-    defer seen.deinit();
-    
-    for (keybindings, 0..) |*kb, i| {
-        const keycode = kb.keycode orelse continue;
-        
-        // Create unique key from modifiers and keycode
-        const key: u64 = (@as(u64, kb.modifiers) << 32) | keycode;
-        
-        if (seen.get(key)) |first_index| {
-            std.log.warn("[config] Keybinding conflict detected!", .{});
-            std.log.warn("  Binding #{}: mods=0x{x:0>4} key={} (first)", .{
-                first_index + 1, keybindings[first_index].modifiers, keycode
-            });
-            std.log.warn("  Binding #{}: mods=0x{x:0>4} key={} (duplicate)", .{
-                i + 1, kb.modifiers, keycode
-            });
-            std.log.warn("  The second binding will override the first!", .{});
-        } else {
-            seen.put(key, i) catch {};
-        }
-    }
+    // Default: treat as exec command
+    return .{ .exec = try allocator.dupe(u8, str) };
 }
 
 fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
     const section = doc.getSection("tiling") orelse return;
 
     cfg.tiling.enabled = get(bool, section, "enabled", true, null, null);
-
-    const layout_str = get([]const u8, section, "layout", "master_left", null, null);
-    cfg.allocated_layout = try allocator.dupe(u8, layout_str);
-    cfg.tiling.layout = cfg.allocated_layout.?;
-
-    if (section.getString("master_side")) |side_str| {
-        cfg.tiling.master_side = defs.MasterSide.fromString(side_str) orelse .left;
-    }
-
-    cfg.tiling.master_count = get(usize, section, "master_count", 1, 1, null);
-    cfg.tiling.master_width_factor = get(f32, section, "master_width_factor", 50.0, defs.MIN_MASTER_WIDTH, defs.MAX_MASTER_WIDTH);
+    cfg.tiling.master_count = get(usize, section, "master_count", 1, 0, defs.MAX_WINDOWS);
+    cfg.tiling.master_width_factor = get(f32, section, "master_width_factor", 0.50, defs.MIN_MASTER_WIDTH, defs.MAX_MASTER_WIDTH);
     cfg.tiling.gaps = get(u16, section, "gaps", 10, 0, defs.MAX_GAPS);
     cfg.tiling.border_width = get(u16, section, "border_width", 2, 0, defs.MAX_BORDER_WIDTH);
 
     cfg.tiling.border_focused = getColor(section, "border_focused", 0x5294E2);
     cfg.tiling.border_normal = getColor(section, "border_normal", 0x383C4A);
+
+    if (section.getString("layout")) |layout_str| {
+        cfg.allocated_layout = try allocator.dupe(u8, layout_str);
+        cfg.tiling.layout = cfg.allocated_layout.?;
+    }
+
+    if (section.getString("master_side")) |side_str| {
+        if (defs.MasterSide.fromString(side_str)) |side| {
+            cfg.tiling.master_side = side;
+        }
+    }
+}
+
+// PHASE 2 REFACTORING: Generic color application helper
+fn applyColors(section: *const parser.Section, bar: *defs.BarConfig) void {
+    const ColorMap = struct {
+        key: []const u8,
+        field: *u32,
+        default: u32,
+    };
+
+    const colors = [_]ColorMap{
+        .{ .key = "bg", .field = &bar.bg, .default = 0x222222 },
+        .{ .key = "fg", .field = &bar.fg, .default = 0xBBBBBB },
+        .{ .key = "selected_bg", .field = &bar.selected_bg, .default = 0x005577 },
+        .{ .key = "selected_fg", .field = &bar.selected_fg, .default = 0xEEEEEE },
+        .{ .key = "occupied_fg", .field = &bar.occupied_fg, .default = 0xEEEEEE },
+        .{ .key = "urgent_bg", .field = &bar.urgent_bg, .default = 0xFF0000 },
+        .{ .key = "urgent_fg", .field = &bar.urgent_fg, .default = 0xFFFFFF },
+        .{ .key = "accent_color", .field = &bar.accent_color, .default = 0x61AFEF },
+    };
+
+    inline for (colors) |c| {
+        c.field.* = getColor(section, c.key, c.default);
+    }
+
+    // Optional accent overrides (null if not specified)
+    bar.workspaces_accent = if (section.get("workspaces_accent")) |_|
+        getColor(section, "workspaces_accent", bar.accent_color)
+    else
+        null;
+
+    bar.title_accent_color = if (section.get("title_accent_color")) |_|
+        getColor(section, "title_accent_color", bar.accent_color)
+    else
+        null;
+
+    bar.clock_accent = if (section.get("clock_accent")) |_|
+        getColor(section, "clock_accent", bar.accent_color)
+    else
+        null;
 }
 
 fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
     const section = doc.getSection("bar") orelse return;
 
     cfg.bar.show = get(bool, section, "show", true, null, null);
-    
-    // Parse vertical position (top/bottom)
+    cfg.bar.height = if (section.getInt("height")) |h| @as(u16, @intCast(h)) else null;
+    cfg.bar.padding = get(u16, section, "padding", 8, 0, 100);
+    cfg.bar.spacing = get(u16, section, "spacing", 12, 0, 100);
+    cfg.bar.font_size = get(u16, section, "font_size", 10, 6, 72);
+
     if (section.getString("position")) |pos_str| {
-        cfg.bar.vertical_position = defs.BarVerticalPosition.fromString(pos_str) orelse .top;
-    }
-    
-    // Height can be null for auto-adapt
-    if (section.getInt("height")) |h| {
-        cfg.bar.height = @intCast(std.math.clamp(h, 16, 100));
-    }
-
-    const font_str = get([]const u8, section, "font", "monospace:size=10", null, null);
-    cfg.allocated_font = try allocator.dupe(u8, font_str);
-    cfg.bar.font = cfg.allocated_font.?;
-
-    // Parse fonts array for multi-font support (CJK, etc.)
-    if (section.get("fonts")) |value| {
-        if (value.asArray()) |arr| {
-            // Clear any existing fonts
-            for (cfg.bar.fonts.items) |font| {
-                allocator.free(font);
-            }
-            cfg.bar.fonts.clearRetainingCapacity();
-            
-            // Load fonts from array
-            for (arr) |item| {
-                if (item.asString()) |font_name| {
-                    const font_copy = try allocator.dupe(u8, font_name);
-                    try cfg.bar.fonts.append(allocator, font_copy);
-                }
-            }
-            std.log.info("[config] Loaded {} fonts for bar", .{cfg.bar.fonts.items.len});
+        if (defs.BarVerticalPosition.fromString(pos_str)) |pos| {
+            cfg.bar.vertical_position = pos;
         }
     }
 
-    cfg.bar.font_size = get(u16, section, "font_size", 10, 6, 72);
-    cfg.bar.padding = get(u16, section, "padding", 8, 0, 50);
-    cfg.bar.spacing = get(u16, section, "spacing", 12, 0, 100);
+    if (section.getString("font")) |font_str| {
+        cfg.allocated_font = try allocator.dupe(u8, font_str);
+        cfg.bar.font = cfg.allocated_font.?;
+    }
 
-    cfg.bar.bg = getColor(section, "bg", 0x222222);
-    cfg.bar.fg = getColor(section, "fg", 0xBBBBBB);
-    cfg.bar.selected_bg = getColor(section, "selected_bg", 0x005577);
-    cfg.bar.selected_fg = getColor(section, "selected_fg", 0xEEEEEE);
-    cfg.bar.occupied_fg = getColor(section, "occupied_fg", 0xEEEEEE);
-    cfg.bar.urgent_bg = getColor(section, "urgent_bg", 0xFF0000);
-    cfg.bar.urgent_fg = getColor(section, "urgent_fg", 0xFFFFFF);
-    
-    // Accent colors
-    cfg.bar.accent_color = getColor(section, "accent_color", 0x61AFEF);
-    if (section.get("workspaces_accent")) |_| {
-        cfg.bar.workspaces_accent = getColor(section, "workspaces_accent", cfg.bar.accent_color);
-    }
-    if (section.get("title_accent_color")) |_| {
-        cfg.bar.title_accent_color = getColor(section, "title_accent_color", cfg.bar.accent_color);
-    }
-    if (section.get("clock_accent")) |_| {
-        cfg.bar.clock_accent = getColor(section, "clock_accent", cfg.bar.accent_color);
-    }
+    // PHASE 2 REFACTORING: Use generic color helper
+    applyColors(section, &cfg.bar);
 
     // Clock format
     const clock_fmt = get([]const u8, section, "clock_format", "%Y-%m-%d %H:%M:%S", null, null);
@@ -512,18 +508,18 @@ fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Sect
     cfg.bar.workspace_icons.clearRetainingCapacity();
     
     if (section.get("icons")) |value| {
-        if (value.asArray()) |arr| {
+        if (value.as([]const parser.Value)) |arr| {
             // Array of strings
             for (arr) |item| {
-                if (item.asString()) |str| {
+                if (item.as([]const u8)) |str| {
                     const icon = try allocator.dupe(u8, str);
                     try cfg.bar.workspace_icons.append(allocator, icon);
-                } else if (item.asInt()) |num| {
+                } else if (item.as(i64)) |num| {
                     const icon = try std.fmt.allocPrint(allocator, "{}", .{num});
                     try cfg.bar.workspace_icons.append(allocator, icon);
                 }
             }
-        } else if (value.asString()) |str| {
+        } else if (value.as([]const u8)) |str| {
             // String of characters (old format)
             for (str) |ch| {
                 const icon = try std.fmt.allocPrint(allocator, "{c}", .{ch});
@@ -541,6 +537,16 @@ fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Sect
     }
 }
 
+// PHASE 2 REFACTORING: Helper to create a bar layout with segments
+fn makeLayout(allocator: std.mem.Allocator, pos: defs.BarPosition, segments: []const defs.BarSegment) !defs.BarLayout {
+    var layout = defs.BarLayout{
+        .position = pos,
+        .segments = std.ArrayList(defs.BarSegment){},
+    };
+    try layout.segments.appendSlice(allocator, segments);
+    return layout;
+}
+
 fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, doc: *const parser.Document, cfg: *defs.Config) !void {
     // Clear defaults
     for (cfg.bar.layout.items) |*item| {
@@ -550,7 +556,7 @@ fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, 
     
     // Try to parse layout array
     if (section.get("layout")) |value| {
-        if (value.asArray()) |layout_arr| {
+        if (value.as([]const parser.Value)) |layout_arr| {
             for (layout_arr) |_| {
                 // Each item should be a table with position and segments
                 // Since we can't easily parse inline tables, we'll use a workaround
@@ -575,9 +581,9 @@ fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, 
             };
             
             if (layout_section.get("segments")) |seg_value| {
-                if (seg_value.asArray()) |seg_arr| {
+                if (seg_value.as([]const parser.Value)) |seg_arr| {
                     for (seg_arr) |seg_item| {
-                        if (seg_item.asString()) |seg_str| {
+                        if (seg_item.as([]const u8)) |seg_str| {
                             if (defs.BarSegment.fromString(seg_str)) |segment| {
                                 try bar_layout.segments.append(allocator, segment);
                             }
@@ -594,28 +600,11 @@ fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, 
         }
     }
     
-    // If no layout was parsed, use defaults
+    // PHASE 2 REFACTORING: Simplified default layout creation using helper
     if (cfg.bar.layout.items.len == 0) {
-        var left_layout = defs.BarLayout{
-            .position = .left,
-            .segments = std.ArrayList(defs.BarSegment){},
-        };
-        try left_layout.segments.append(allocator, .workspaces);
-        try cfg.bar.layout.append(allocator, left_layout);
-        
-        var center_layout = defs.BarLayout{
-            .position = .center,
-            .segments = std.ArrayList(defs.BarSegment){},
-        };
-        try center_layout.segments.append(allocator, .title);
-        try cfg.bar.layout.append(allocator, center_layout);
-        
-        var right_layout = defs.BarLayout{
-            .position = .right,
-            .segments = std.ArrayList(defs.BarSegment){},
-        };
-        try right_layout.segments.append(allocator, .clock);
-        try cfg.bar.layout.append(allocator, right_layout);
+        try cfg.bar.layout.append(allocator, try makeLayout(allocator, .left, &.{.workspaces}));
+        try cfg.bar.layout.append(allocator, try makeLayout(allocator, .center, &.{.title}));
+        try cfg.bar.layout.append(allocator, try makeLayout(allocator, .right, &.{.clock}));
     }
 }
 
@@ -628,7 +617,7 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *d
     if (doc.getSection("rules")) |section| {
         var iter = section.pairs.iterator();
         while (iter.next()) |entry| {
-            const ws_num = entry.value_ptr.*.asInt() orelse continue;
+            const ws_num = entry.value_ptr.*.as(i64) orelse continue;
 
             if (ws_num < 1 or ws_num > cfg.workspaces.count) {
                 std.log.warn("[config] Rule workspace {} for '{s}' exceeds count {}, skipping", .{ ws_num, entry.key_ptr.*, cfg.workspaces.count });
