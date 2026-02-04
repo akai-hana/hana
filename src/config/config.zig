@@ -1,4 +1,4 @@
-//! Configuration interpreter
+// ! Configuration interpreter
 
 const std = @import("std");
 const defs = @import("defs");
@@ -44,6 +44,7 @@ fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
 }
 
 // Simplified getter with inline validation and logging
+// When values are out of bounds, returns the default value (NOT clamped)
 fn get(
     comptime T: type,
     section: *const parser.Section,
