@@ -96,7 +96,6 @@ fn get(
 }
 
 pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
-    // First, try ~/.config/hana/config.toml (XDG_CONFIG_HOME or ~/.config)
     const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else ".";
     const config_home = if (std.c.getenv("XDG_CONFIG_HOME")) |ch|
         std.mem.span(ch)
@@ -110,7 +109,6 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
     if (loadConfig(allocator, xdg_path)) |cfg| {
         return cfg;
     } else |_| {
-        // Second, try ./config.toml in current directory
         const cwd = try std.process.getCwdAlloc(allocator);
         defer allocator.free(cwd);
 
@@ -120,7 +118,6 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
         if (loadConfig(allocator, local)) |cfg| {
             return cfg;
         } else |_| {
-            // Finally, use embedded fallback with auto-detection
             std.log.info("[config] No config.toml found, using fallback with auto-detection", .{});
             return try loadFallbackConfig(allocator);
         }
@@ -152,7 +149,6 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
         if (content.items.len > 1024 * 1024) return error.FileTooLarge;
     }
 
-    // Check if file is empty
     if (content.items.len == 0) {
         std.log.info("[config] Empty config file: {s}, using fallback", .{path});
         return try loadFallbackConfig(allocator);
@@ -173,7 +169,6 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
     return cfg;
 }
 
-/// Load fallback configuration with auto-detection of terminal and font
 fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
     const fallback = @import("fallback");
     const fallback_toml = fallback.getFallbackToml();
@@ -189,7 +184,6 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
     try parseBar(allocator, &doc, &cfg);
     try parseRules(allocator, &doc, &cfg);
 
-    // Auto-detect terminal and replace "auto_terminal" action
     const terminal = try fallback.detectTerminal(allocator);
     for (cfg.keybindings.items) |*kb| {
         if (kb.action == .exec) {
@@ -200,11 +194,9 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
         }
     }
 
-    // Auto-detect font if set to "auto"
     if (std.mem.eql(u8, cfg.bar.font, "auto")) {
         const detected_font = try fallback.detectFont(allocator);
         const font_with_size = try std.fmt.allocPrint(allocator, "{s}:size={}", .{detected_font, cfg.bar.font_size});
-        // Note: the default font string will be freed by Config.deinit, so we don't allocate it in getDefaultConfig
         cfg.bar.font = font_with_size;
     }
 
@@ -215,33 +207,22 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
 fn getDefaultConfig(allocator: std.mem.Allocator) defs.Config {
     var cfg = defs.Config.init(allocator);
     
-    // Set default workspace icons
     for (0..9) |i| {
         const icon = std.fmt.allocPrint(allocator, "{}", .{i + 1}) catch continue;
         cfg.bar.workspace_icons.append(allocator, icon) catch {};
     }
     
-    // Set default layout
-    var default_layout = defs.BarLayout{
-        .position = .left,
-        .segments = std.ArrayList(defs.BarSegment){},
-    };
-    default_layout.segments.append(allocator, .workspaces) catch {};
-    cfg.bar.layout.append(allocator, default_layout) catch {};
+    var left = defs.BarLayout{ .position = .left, .segments = std.ArrayList(defs.BarSegment){} };
+    left.segments.append(allocator, .workspaces) catch {};
+    cfg.bar.layout.append(allocator, left) catch {};
     
-    var center_layout = defs.BarLayout{
-        .position = .center,
-        .segments = std.ArrayList(defs.BarSegment){},
-    };
-    center_layout.segments.append(allocator, .title) catch {};
-    cfg.bar.layout.append(allocator, center_layout) catch {};
+    var center = defs.BarLayout{ .position = .center, .segments = std.ArrayList(defs.BarSegment){} };
+    center.segments.append(allocator, .title) catch {};
+    cfg.bar.layout.append(allocator, center) catch {};
     
-    var right_layout = defs.BarLayout{
-        .position = .right,
-        .segments = std.ArrayList(defs.BarSegment){},
-    };
-    right_layout.segments.append(allocator, .clock) catch {};
-    cfg.bar.layout.append(allocator, right_layout) catch {};
+    var right = defs.BarLayout{ .position = .right, .segments = std.ArrayList(defs.BarSegment){} };
+    right.segments.append(allocator, .clock) catch {};
+    cfg.bar.layout.append(allocator, right) catch {};
     
     return cfg;
 }
@@ -282,7 +263,6 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, c
     var iter = section.pairs.iterator();
     while (iter.next()) |entry| {
         if (std.mem.eql(u8, entry.key_ptr.*, "Mod")) continue;
-
         const command = entry.value_ptr.*.asString() orelse continue;
 
         const keybind_str = if (mod_substitute) |mod|
@@ -295,12 +275,11 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, c
             std.log.warn("[config] Failed to parse keybind '{s}': {}", .{ keybind_str, err });
             continue;
         };
-        const action = try parseAction(allocator, command);
 
         try cfg.keybindings.append(allocator, .{
             .modifiers = parts.modifiers,
             .keysym = parts.keysym,
-            .action = action,
+            .action = try parseAction(allocator, command),
         });
     }
 }
@@ -419,12 +398,10 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
 
     cfg.bar.show = get(bool, section, "show", true, null, null);
     
-    // Parse vertical position (top/bottom)
     if (section.getString("position")) |pos_str| {
         cfg.bar.vertical_position = defs.BarVerticalPosition.fromString(pos_str) orelse .top;
     }
     
-    // Height can be null for auto-adapt
     if (section.getInt("height")) |h| {
         cfg.bar.height = @intCast(std.math.clamp(h, 16, 100));
     }
@@ -433,16 +410,11 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     cfg.allocated_font = try allocator.dupe(u8, font_str);
     cfg.bar.font = cfg.allocated_font.?;
 
-    // Parse fonts array for multi-font support (CJK, etc.)
     if (section.get("fonts")) |value| {
         if (value.asArray()) |arr| {
-            // Clear any existing fonts
-            for (cfg.bar.fonts.items) |font| {
-                allocator.free(font);
-            }
+            for (cfg.bar.fonts.items) |font| allocator.free(font);
             cfg.bar.fonts.clearRetainingCapacity();
             
-            // Load fonts from array
             for (arr) |item| {
                 if (item.asString()) |font_name| {
                     const font_copy = try allocator.dupe(u8, font_name);
@@ -465,19 +437,11 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     cfg.bar.urgent_bg = getColor(section, "urgent_bg", 0xFF0000);
     cfg.bar.urgent_fg = getColor(section, "urgent_fg", 0xFFFFFF);
     
-    // Accent colors
     cfg.bar.accent_color = getColor(section, "accent_color", 0x61AFEF);
-    if (section.get("workspaces_accent")) |_| {
-        cfg.bar.workspaces_accent = getColor(section, "workspaces_accent", cfg.bar.accent_color);
-    }
-    if (section.get("title_accent_color")) |_| {
-        cfg.bar.title_accent_color = getColor(section, "title_accent_color", cfg.bar.accent_color);
-    }
-    if (section.get("clock_accent")) |_| {
-        cfg.bar.clock_accent = getColor(section, "clock_accent", cfg.bar.accent_color);
-    }
+    cfg.bar.workspaces_accent = getColor(section, "workspaces_accent", cfg.bar.accent_color);
+    cfg.bar.title_accent_color = getColor(section, "title_accent_color", cfg.bar.accent_color);
+    cfg.bar.clock_accent = getColor(section, "clock_accent", cfg.bar.accent_color);
 
-    // Clock format
     const clock_fmt = get([]const u8, section, "clock_format", "%Y-%m-%d %H:%M:%S", null, null);
     cfg.allocated_clock_format = try allocator.dupe(u8, clock_fmt);
     cfg.bar.clock_format = cfg.allocated_clock_format.?;
@@ -485,13 +449,9 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     cfg.bar.indicator_size = get(u16, section, "indicator_size", 4, 2, 10);
     cfg.bar.title_accent = get(bool, section, "title_accent", true, null, null);
     
-    // Parse workspace icons
     try parseWorkspaceIcons(allocator, section, cfg);
-    
-    // Parse bar layout
     try parseBarLayout(allocator, section, doc, cfg);
     
-    // Parse per-segment colors from bar.colors section
     if (doc.getSection("bar.colors")) |colors_section| {
         if (colors_section.get("workspaces")) |_| {
             cfg.bar.workspaces_accent = getColor(colors_section, "workspaces", cfg.bar.accent_color);
@@ -506,15 +466,11 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
 }
 
 fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Section, cfg: *defs.Config) !void {
-    // Clear defaults
-    for (cfg.bar.workspace_icons.items) |icon| {
-        allocator.free(icon);
-    }
+    for (cfg.bar.workspace_icons.items) |icon| allocator.free(icon);
     cfg.bar.workspace_icons.clearRetainingCapacity();
     
     if (section.get("icons")) |value| {
         if (value.asArray()) |arr| {
-            // Array of strings
             for (arr) |item| {
                 if (item.asString()) |str| {
                     const icon = try allocator.dupe(u8, str);
@@ -525,7 +481,6 @@ fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Sect
                 }
             }
         } else if (value.asString()) |str| {
-            // String of characters (old format)
             for (str) |ch| {
                 const icon = try std.fmt.allocPrint(allocator, "{c}", .{ch});
                 try cfg.bar.workspace_icons.append(allocator, icon);
@@ -533,7 +488,6 @@ fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Sect
         }
     }
     
-    // Fill remaining with numbers if needed
     const ws_count = cfg.workspaces.count;
     while (cfg.bar.workspace_icons.items.len < ws_count) {
         const idx = cfg.bar.workspace_icons.items.len;
@@ -543,25 +497,15 @@ fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Sect
 }
 
 fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, doc: *const parser.Document, cfg: *defs.Config) !void {
-    // Clear defaults
-    for (cfg.bar.layout.items) |*item| {
-        item.deinit(allocator);
-    }
+    for (cfg.bar.layout.items) |*item| item.deinit(allocator);
     cfg.bar.layout.clearRetainingCapacity();
     
-    // Try to parse layout array
     if (section.get("layout")) |value| {
-        if (value.asArray()) |layout_arr| {
-            for (layout_arr) |_| {
-                // Each item should be a table with position and segments
-                // Since we can't easily parse inline tables, we'll use a workaround
-                // Users can define [bar.layout.0], [bar.layout.1], etc.
-                std.log.warn("[config] bar.layout array parsing not yet fully supported, use sections like [bar.layout.left]", .{});
-            }
+        if (value.asArray()) |_| {
+            std.log.warn("[config] bar.layout array parsing not yet fully supported, use sections like [bar.layout.left]", .{});
         }
     }
     
-    // Try to parse layout sections: [bar.layout.left], [bar.layout.center], [bar.layout.right]
     const positions = [_]struct { name: []const u8, pos: defs.BarPosition }{
         .{ .name = "bar.layout.left", .pos = .left },
         .{ .name = "bar.layout.center", .pos = .center },
@@ -595,26 +539,16 @@ fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, 
         }
     }
     
-    // If no layout was parsed, use defaults
     if (cfg.bar.layout.items.len == 0) {
-        var left_layout = defs.BarLayout{
-            .position = .left,
-            .segments = std.ArrayList(defs.BarSegment){},
-        };
+        var left_layout = defs.BarLayout{ .position = .left, .segments = std.ArrayList(defs.BarSegment){} };
         try left_layout.segments.append(allocator, .workspaces);
         try cfg.bar.layout.append(allocator, left_layout);
         
-        var center_layout = defs.BarLayout{
-            .position = .center,
-            .segments = std.ArrayList(defs.BarSegment){},
-        };
+        var center_layout = defs.BarLayout{ .position = .center, .segments = std.ArrayList(defs.BarSegment){} };
         try center_layout.segments.append(allocator, .title);
         try cfg.bar.layout.append(allocator, center_layout);
         
-        var right_layout = defs.BarLayout{
-            .position = .right,
-            .segments = std.ArrayList(defs.BarSegment){},
-        };
+        var right_layout = defs.BarLayout{ .position = .right, .segments = std.ArrayList(defs.BarSegment){} };
         try right_layout.segments.append(allocator, .clock);
         try cfg.bar.layout.append(allocator, right_layout);
     }
