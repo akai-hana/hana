@@ -68,7 +68,7 @@ fn get(
         else => @compileError("Unsupported type"),
     };
 
-    // Validate bounds and warn if out of range
+    // Validate bounds and warn if out of range - returns default, NOT clamped value
     if (comptime min != null or max != null) {
         var out_of_bounds = false;
         
