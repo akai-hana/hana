@@ -9,7 +9,6 @@ const focus = @import("focus");
 const workspaces = @import("workspaces");
 const batch = @import("batch");
 const bar = @import("bar");
-const error_context = @import("error_context");
 const tracking = @import("tracking").tracking;
 const ModuleState = @import("module_state").ModuleState;
 
@@ -21,6 +20,15 @@ pub const Layout = enum { master, monocle, grid };
 
 const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
 
+// OPTIMIZATION: Merged error handling directly into this module
+inline fn logError(operation: []const u8, err: anyerror, window: ?u32) void {
+    if (window) |win| {
+        std.log.err("[tiling.{s}] Failed: {} (window: 0x{x})", .{ operation, err, win });
+    } else {
+        std.log.err("[tiling.{s}] Failed: {}", .{ operation, err });
+    }
+}
+
 pub const State = struct {
     enabled: bool,
     layout: Layout,
@@ -31,7 +39,7 @@ pub const State = struct {
     border_width: u16,
     border_focused: u32,
     border_normal: u32,
-    windows: tracking,  // Replaces tiled_windows + tiled_set
+    windows: tracking,
     dirty: bool,
 
     pub inline fn margins(self: *const State) utils.Margins {
@@ -79,7 +87,7 @@ pub fn init(wm: *WM) void {
     };
 
     StateManager.init(wm.allocator, initial_state) catch |err| {
-        std.log.err("[tiling] Failed to initialize state: {}", .{err});
+        logError("init", err, null);
     };
 }
 
@@ -114,7 +122,7 @@ pub fn addWindow(wm: *WM, win: u32) void {
 
     // Add to tiled windows (prepend for focus ordering)
     s.windows.addFront(win) catch |err| {
-        error_context.logError("tiling.addWindow", err, win);
+        logError("addWindow", err, win);
         return;
     };
 
@@ -228,10 +236,9 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
     var visible_buf: [128]u32 = undefined;
     var visible_count: usize = 0;
 
-    // OPTIMIZATION: Removed redundant tiled_set check since we're iterating windows from tracking
+    // OPTIMIZATION: Direct iteration without redundant checks
     for (s.windows.items()) |win| {
         if (wm.fullscreen.isFullscreen(win)) continue;
-        // Redundant check removed: if it's in windows.items(), it's already in the set
 
         if (current_ws.contains(win)) {
             if (visible_count < visible_buf.len) {
@@ -256,7 +263,7 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
 
     // Create batch for all layout operations
     var b = batch.Batch.begin(wm) catch {
-        std.log.err("[tiling] Failed to create batch, skipping retile", .{});
+        logError("retileCurrentWorkspace", error.BatchFailed, null);
         return;
     };
     defer b.deinit();
