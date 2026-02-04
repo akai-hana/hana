@@ -90,7 +90,7 @@ pub fn init(wm: *WM) void {
 }
 
 pub fn deinit(wm: *WM) void {
-    if (StateManager.getMut()) |s| {
+    if (StateManager.get(true)) |s| {
         for (s.workspaces) |*ws| {
             ws.deinit();
             wm.allocator.free(ws.name);
@@ -102,7 +102,7 @@ pub fn deinit(wm: *WM) void {
 }
 
 pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
-    const s = StateManager.getMut() orelse return;
+    const s = StateManager.get(true) orelse return;
     if (@import("bar").isBarWindow(win)) return;
 
     const ws = &s.workspaces[s.current];
@@ -116,7 +116,7 @@ pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
 }
 
 pub fn removeWindow(win: u32) void {
-    const s = StateManager.getMut() orelse return;
+    const s = StateManager.get(true) orelse return;
     if (s.window_to_workspace.fetchRemove(win)) |entry| {
         const ws_idx = entry.value;
         if (ws_idx < s.workspaces.len) {
@@ -126,7 +126,7 @@ pub fn removeWindow(win: u32) void {
 }
 
 pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
-    const s = StateManager.getMut() orelse return;
+    const s = StateManager.get(true) orelse return;
 
     if (target_ws >= s.workspaces.len) {
         std.log.err("[workspaces] Invalid target workspace: {}", .{target_ws});
@@ -173,7 +173,7 @@ inline fn markTilingDirty() void {
 }
 
 pub fn switchTo(wm: *WM, ws_id: usize) void {
-    const s = StateManager.getMut() orelse return;
+    const s = StateManager.get(true) orelse return;
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
     const old_ws = s.current;
     s.current = ws_id;
@@ -181,7 +181,7 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
 }
 
 fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
-    const s = StateManager.getMut() orelse return;
+    const s = StateManager.get(true) orelse return;
 
     const old_workspace = &s.workspaces[old_ws];
     const new_workspace = &s.workspaces[new_ws];
@@ -245,25 +245,25 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
 }
 
 pub inline fn getCurrentWindowsView() ?[]const u32 {
-    const s = StateManager.getMut() orelse return null;
+    const s = StateManager.get(true) orelse return null;
     return s.workspaces[s.current].windows.items();
 }
 
 pub inline fn getCurrentWorkspace() ?usize {
-    const s = StateManager.getMut() orelse return null;
+    const s = StateManager.get(true) orelse return null;
     return s.current;
 }
 
 pub inline fn isOnCurrentWorkspace(win: u32) bool {
-    const s = StateManager.getMut() orelse return false;
+    const s = StateManager.get(true) orelse return false;
     return s.workspaces[s.current].contains(win);
 }
 
 pub inline fn getState() ?*State {
-    return StateManager.getMut();
+    return StateManager.get(true);
 }
 
 pub inline fn getCurrentWorkspaceObject() ?*Workspace {
-    const s = StateManager.getMut() orelse return null;
+    const s = StateManager.get(true) orelse return null;
     return &s.workspaces[s.current];
 }
