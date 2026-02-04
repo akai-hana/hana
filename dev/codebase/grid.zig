@@ -4,6 +4,7 @@ const std = @import("std");
 const defs = @import("defs");
 const utils = @import("utils");
 const batch = @import("batch");
+const layout_common = @import("layout_common");
 
 const tiling = @import("tiling");
 const State = tiling.State;
@@ -16,7 +17,7 @@ inline fn calcGridDims(n: usize) struct { cols: u16, rows: u16 } {
 }
 
 pub fn tile(b: *batch.Batch, state: *State, windows: []const u32, screen_w: u16, screen_h: u16) void {
-    tileWithOffset(b, state, windows, screen_w, screen_h, 0);
+    layout_common.tileWrapper(tileWithOffset, b, state, windows, screen_w, screen_h);
 }
 
 pub fn tileWithOffset(b: *batch.Batch, state: *State, windows: []const u32, screen_w: u16, screen_h: u16, y_offset: u16) void {
@@ -52,8 +53,6 @@ pub fn tileWithOffset(b: *batch.Batch, state: *State, windows: []const u32, scre
             .width = win_w,
             .height = win_h,
         };
-        b.configure(win, rect) catch |err| {
-            std.log.err("[grid] Failed to configure window {x}: {}", .{ win, err });
-        };
+        layout_common.configureSafe(b, win, rect, "grid");
     }
 }

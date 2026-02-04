@@ -77,22 +77,9 @@ pub const MasterSide = enum {
     left,
     right,
 
-    // OPTIMIZATION: Use compile-time string map for O(1) lookup
-    const STRING_MAP = std.StaticStringMap(MasterSide).initComptime(.{
-        .{ "left", .left },
-        .{ "right", .right },
-    });
-
-    pub inline fn fromString(str: []const u8) ?MasterSide {
-        return STRING_MAP.get(str);
-    }
-
-    pub inline fn toString(self: MasterSide) []const u8 {
-        return switch (self) {
-            .left => "left",
-            .right => "right",
-        };
-    }
+    const Helper = @import("enum_helpers").EnumStringHelper(MasterSide);
+    pub const fromString = Helper.fromString;
+    pub const toString = Helper.toString;
 };
 
 pub const TilingConfig = struct {
@@ -111,15 +98,8 @@ pub const BarVerticalPosition = enum {
     top,
     bottom,
 
-    // OPTIMIZATION: Use compile-time string map for O(1) lookup
-    const STRING_MAP = std.StaticStringMap(BarVerticalPosition).initComptime(.{
-        .{ "top", .top },
-        .{ "bottom", .bottom },
-    });
-
-    pub inline fn fromString(str: []const u8) ?BarVerticalPosition {
-        return STRING_MAP.get(str);
-    }
+    const Helper = @import("enum_helpers").EnumStringHelper(BarVerticalPosition);
+    pub const fromString = Helper.fromString;
 };
 
 pub const BarPosition = enum {
@@ -127,16 +107,8 @@ pub const BarPosition = enum {
     center,
     right,
 
-    // OPTIMIZATION: Use compile-time string map for O(1) lookup
-    const STRING_MAP = std.StaticStringMap(BarPosition).initComptime(.{
-        .{ "left", .left },
-        .{ "center", .center },
-        .{ "right", .right },
-    });
-
-    pub inline fn fromString(str: []const u8) ?BarPosition {
-        return STRING_MAP.get(str);
-    }
+    const Helper = @import("enum_helpers").EnumStringHelper(BarPosition);
+    pub const fromString = Helper.fromString;
 };
 
 pub const BarSegment = enum {
@@ -145,17 +117,8 @@ pub const BarSegment = enum {
     clock,
     layout,
 
-    // OPTIMIZATION: Use compile-time string map for O(1) lookup
-    const STRING_MAP = std.StaticStringMap(BarSegment).initComptime(.{
-        .{ "workspaces", .workspaces },
-        .{ "title", .title },
-        .{ "clock", .clock },
-        .{ "layout", .layout },
-    });
-
-    pub inline fn fromString(str: []const u8) ?BarSegment {
-        return STRING_MAP.get(str);
-    }
+    const Helper = @import("enum_helpers").EnumStringHelper(BarSegment);
+    pub const fromString = Helper.fromString;
 };
 
 pub const BarLayout = struct {

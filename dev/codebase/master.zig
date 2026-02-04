@@ -4,6 +4,7 @@ const std = @import("std");
 const defs = @import("defs");
 const utils = @import("utils");
 const batch = @import("batch");
+const layout_common = @import("layout_common");
 
 const tiling = @import("tiling");
 const State = tiling.State;
@@ -24,7 +25,7 @@ inline fn calcMarginedWidth(full_w: u16, left_margin: u16, right_margin: u16) u1
 }
 
 pub fn tile(b: *batch.Batch, state: *State, windows: []const u32, screen_w: u16, screen_h: u16) void {
-    tileWithOffset(b, state, windows, screen_w, screen_h, 0);
+    layout_common.tileWrapper(tileWithOffset, b, state, windows, screen_w, screen_h);
 }
 
 pub fn tileWithOffset(b: *batch.Batch, state: *State, windows: []const u32, screen_w: u16, screen_h: u16, y_offset: u16) void {
@@ -64,9 +65,7 @@ pub fn tileWithOffset(b: *batch.Batch, state: *State, windows: []const u32, scre
             .width = master_inner_w,
             .height = m_layout.item_h,
         };
-        b.configure(win, rect) catch |err| {
-            std.log.err("[master] Failed to configure master window {x}: {}", .{ win, err });
-        };
+        layout_common.configureSafe(b, win, rect, "master");
     }
 
     if (s_count == 0) return;
@@ -106,9 +105,7 @@ fn tileStackSimple(b: *batch.Batch, windows: []const u32, x: u16, y_offset: u16,
             .width = inner_w,
             .height = s_layout.item_h,
         };
-        b.configure(win, rect) catch |err| {
-            std.log.err("[master] Failed to configure stack window {x}: {}", .{ win, err });
-        };
+        layout_common.configureSafe(b, win, rect, "master");
     }
 }
 
@@ -151,9 +148,7 @@ fn tileStackOverflow(b: *batch.Batch, windows: []const u32, x: u16, y_offset: u1
                 .width = row_inner_w,
                 .height = s_layout.item_h,
             };
-            b.configure(win, rect) catch |err| {
-                std.log.err("[master] Failed to configure overflow window {x}: {}", .{ win, err });
-            };
+            layout_common.configureSafe(b, win, rect, "master");
 
             col += 1;
         }

@@ -4,12 +4,13 @@ const std = @import("std");
 const defs = @import("defs");
 const utils = @import("utils");
 const batch = @import("batch");
+const layout_common = @import("layout_common");
 
 const tiling = @import("tiling");
 const State = tiling.State;
 
 pub fn tile(b: *batch.Batch, state: *State, windows: []const u32, screen_w: u16, screen_h: u16) void {
-    tileWithOffset(b, state, windows, screen_w, screen_h, 0);
+    layout_common.tileWrapper(tileWithOffset, b, state, windows, screen_w, screen_h);
 }
 
 pub fn tileWithOffset(b: *batch.Batch, state: *State, windows: []const u32, screen_w: u16, screen_h: u16, y_offset: u16) void {
@@ -25,14 +26,12 @@ pub fn tileWithOffset(b: *batch.Batch, state: *State, windows: []const u32, scre
 
     // Configure all windows to fullscreen
     for (windows) |win| {
-        b.configure(win, rect) catch |err| {
-            std.log.err("[monocle] Failed to configure window {x}: {}", .{ win, err });
-        };
+        layout_common.configureSafe(b, win, rect, "monocle");
     }
 
     // Raise the last window (most recently focused in tiled_windows order)
     const top_win = windows[windows.len - 1];
     b.raise(top_win) catch |err| {
-        std.log.err("[monocle] Failed to raise window {x}: {}", .{ top_win, err });
+        std.log.err("[monocle] Failed to raise window 0x{x}: {}", .{ top_win, err });
     };
 }

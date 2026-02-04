@@ -55,7 +55,7 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
         try dc.drawText(x + (WORKSPACE_WIDTH - dc.textWidth(label)) / 2, text_y, label, fg);
 
         // Draw window presence indicator
-        if (ws.windows.items.len > 0) {
+        if (ws.windows.list.items.len > 0) {
             const size = @max(config.indicator_size, 2);
             drawIndicator(dc, x + 3, 3, size, fg, is_current);
         }
