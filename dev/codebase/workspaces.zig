@@ -1,19 +1,16 @@
-// Workspace management
+// Workspace management - OPTIMIZED with batch operations
 
-// TODO:
-// Write about how this file uses batching
-
-const std         = @import("std");
-const defs        = @import("defs");
-    const xcb     = defs.xcb;
-    const WM      = defs.WM;
-const utils       = @import("utils");
-const tracking    = @import("tracking").tracking;
-const focus       = @import("focus");
-const batch       = @import("batch");
-const bar         = @import("bar");
+const std = @import("std");
+const defs = @import("defs");
+const xcb = defs.xcb;
+const WM = defs.WM;
+const utils = @import("utils");
+const focus = @import("focus");
+const bar = @import("bar");
+const batch = @import("batch");
+const tracking = @import("tracking").tracking;
 const ModuleState = @import("module_state").ModuleState;
-const debug       = @import("debug");
+const debug = @import("debug");
 
 pub const Workspace = struct {
     id: usize,
@@ -158,16 +155,18 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: usize) void {
     };
     s.window_to_workspace.put(win, target_ws) catch {};
 
-    // OPTIMIZATION: Simplified visibility handling
+    // OPTIMIZATION: Simplified visibility handling using dwm approach
     const is_tiling = wm.config.tiling.enabled;
     if (from_ws == s.current) {
-        _ = xcb.xcb_unmap_window(wm.conn, win);
+        // Move window off-screen instead of unmapping
+        hideWindow(wm, win);
         if (wm.focused_window == win) {
             focus.clearFocus(wm);
         }
         if (is_tiling) markTilingDirty();
-    } else if (target_ws == s.current and is_tiling) {
-        markTilingDirty();
+    } else if (target_ws == s.current) {
+        // Window moving to current workspace - will be shown on next retile
+        if (is_tiling) markTilingDirty();
     }
 }
 
@@ -185,7 +184,7 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
     executeSwitch(wm, old_ws, ws_id);
 }
 
-// FIXED: Rewritten to prevent flicker by configuring ALL positions before visibility changes
+// DWM-STYLE: Move windows off-screen instead of unmapping for flicker-free switching
 fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     const s = StateManager.get(true) orelse return;
 
@@ -205,22 +204,23 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     _ = xcb.xcb_grab_server(wm.conn);
     defer _ = xcb.xcb_ungrab_server(wm.conn);
 
-    // STEP 1: CRITICAL FIX - Configure window positions FIRST, before ANY visibility changes
-    // This ensures windows are at their correct positions when mapped, preventing flicker
-    if (wm.config.tiling.enabled) {
-        @import("tiling").retileCurrentWorkspace(wm);
-    }
-    
-    // Flush configuration changes BEFORE changing visibility
-    // This is the key - ensures X server has processed all position updates
-    _ = xcb.xcb_flush(wm.conn);
-
-    // OPTIMIZATION: Use batch operations for visibility changes
+    // OPTIMIZATION: Use batch operations for all XCB calls
     var b = batch.Batch.begin(wm) catch {
-        executeSwitchDirect(wm, old_workspace, new_workspace, screen, fs_info);
+        executeSwitchDirect(wm, old_workspace, screen, fs_info);
         return;
     };
     defer b.deinit();
+
+    // DWM APPROACH: Hide old windows FIRST by moving them off-screen
+    // This prevents any overlap with transparent windows
+    for (old_workspace.windows.items()) |win| {
+        hideWindowWithBatch(&b, win) catch {};
+    }
+
+    // Configure and show new windows at their correct positions
+    if (wm.config.tiling.enabled) {
+        @import("tiling").retileCurrentWorkspace(wm);
+    }
 
     // Configure fullscreen window if present
     if (fs_info) |info| {
@@ -232,25 +232,10 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
         };
         b.configure(info.window, rect) catch {};
         b.setBorderWidth(info.window, 0) catch {};
-    }
-
-    // STEP 2: Now that positions are configured and flushed, change visibility atomically
-    // Map new windows - they'll appear at their correct positions immediately
-    for (new_workspace.windows.items()) |win| {
-        b.map(win) catch {};
-    }
-
-    // Unmap old windows
-    for (old_workspace.windows.items()) |win| {
-        b.unmap(win) catch {};
-    }
-
-    // Raise fullscreen window if present
-    if (fs_info) |info| {
         b.raise(info.window) catch {};
     }
 
-    // STEP 3: Execute visibility changes in one atomic batch
+    // Execute all operations atomically
     b.execute();
 
     // OPTIMIZATION: Combined bar state management
@@ -269,14 +254,19 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
 }
 
 // OPTIMIZATION: Direct fallback when batch unavailable
-fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Workspace, screen: *xcb.xcb_screen_t, fs_info: ?defs.FullscreenInfo) void {
+fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, screen: *xcb.xcb_screen_t, fs_info: ?defs.FullscreenInfo) void {
     const conn = wm.conn;
     
     // CRITICAL: Grab server for atomic switching
     _ = xcb.xcb_grab_server(conn);
     defer _ = xcb.xcb_ungrab_server(conn);
     
-    // STEP 1: CRITICAL FIX - Configure positions FIRST
+    // DWM APPROACH: Hide old windows FIRST
+    for (old_workspace.windows.items()) |win| {
+        hideWindow(wm, win);
+    }
+    
+    // Configure new windows
     if (wm.config.tiling.enabled) {
         @import("tiling").retileCurrentWorkspace(wm);
     }
@@ -294,27 +284,36 @@ fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Works
             xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
             xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
             xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &values);
-    }
-    
-    // CRITICAL: Flush all configuration changes BEFORE visibility changes
-    _ = xcb.xcb_flush(conn);
-    
-    // STEP 2: Now change visibility - windows will appear at correct positions
-    for (new_workspace.windows.items()) |win| {
-        _ = xcb.xcb_map_window(conn, win);
-    }
-    
-    for (old_workspace.windows.items()) |win| {
-        _ = xcb.xcb_unmap_window(conn, win);
-    }
-    
-    // Raise fullscreen window if present
-    if (fs_info) |info| {
         _ = xcb.xcb_configure_window(conn, info.window,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
 
     utils.flush(conn);
+}
+
+// DWM-STYLE: Hide window by moving it off-screen (keeps it mapped)
+inline fn hideWindow(wm: *WM, win: u32) void {
+    // Get window geometry to calculate off-screen position
+    const geom_cookie = xcb.xcb_get_geometry(wm.conn, win);
+    const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
+    defer if (geom_reply != null) @import("std").c.free(geom_reply);
+    
+    // Move window far off-screen (dwm uses WIDTH * -2)
+    const off_screen_x: i32 = if (geom_reply != null) 
+        -(@as(i32, @intCast(geom_reply.*.width)) * 2)
+    else 
+        -4000; // Fallback if geometry query fails
+    
+    const values = [_]u32{@bitCast(off_screen_x)};
+    _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
+}
+
+// Batch version of hideWindow
+inline fn hideWindowWithBatch(b: *batch.Batch, win: u32) !void {
+    // For batch operations, use a fixed large negative value to move window off-screen
+    const off_screen_x: i32 = -4000;
+    const values = [_]u32{@bitCast(off_screen_x)};
+    _ = xcb.xcb_configure_window(b.wm.conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
 }
 
 pub inline fn getCurrentWindowsView() ?[]const u32 {
