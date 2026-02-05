@@ -198,6 +198,10 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
 
     const fs_info = wm.fullscreen.getForWorkspace(new_ws);
 
+    // CRITICAL: Grab server to make switching truly atomic (no intermediate frames)
+    _ = xcb.xcb_grab_server(wm.conn);
+    defer _ = xcb.xcb_ungrab_server(wm.conn);
+
     // OPTIMIZATION: Retile BEFORE mapping for seamless switching
     if (wm.config.tiling.enabled) {
         @import("tiling").retileCurrentWorkspace(wm);
@@ -253,6 +257,10 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
 // OPTIMIZATION: Direct fallback when batch unavailable
 fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Workspace, screen: *xcb.xcb_screen_t, fs_info: ?defs.FullscreenInfo) void {
     const conn = wm.conn;
+    
+    // CRITICAL: Grab server for atomic switching
+    _ = xcb.xcb_grab_server(conn);
+    defer _ = xcb.xcb_ungrab_server(conn);
     
     // Retile first for seamless switching
     if (wm.config.tiling.enabled) {
