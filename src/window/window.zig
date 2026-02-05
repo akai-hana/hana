@@ -226,65 +226,21 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     if (wm.focused_window == win) {
         focus.clearFocus(wm);
         
-        // Force retiling to complete BEFORE querying pointer position
-        if (wm.config.tiling.enabled) {
-            tiling.retileIfDirty(wm);
-        }
-        
-        // Critical: Force a round-trip to X server to ensure all window moves are complete
-        // Without this, we might query the pointer before windows have actually moved
-        utils.flush(wm.conn);
-        const sync_cookie = xcb.xcb_get_input_focus(wm.conn);
-        const sync_reply = xcb.xcb_get_input_focus_reply(wm.conn, sync_cookie, null);
-        if (sync_reply) |reply| std.c.free(reply);
-        
-        // Focus next appropriate window
-        focusNextWindow(wm);
+        // Force EnterNotify by warping pointer slightly
+        // This makes X server re-evaluate what window the pointer is in
+        forcePointerUpdate(wm);
     }
 
     bar.markDirty();
     utils.flush(wm.conn);
 }
 
-// Focus the next appropriate window after the focused window is destroyed
-fn focusNextWindow(wm: *WM) void {
-    // Strategy 1: Query pointer position to focus window under cursor (after retiling)
-    // This mimics DWM's EnterNotify behavior but does it proactively
-    const pointer_query = xcb.xcb_query_pointer(wm.conn, wm.root);
-    const pointer_reply = xcb.xcb_query_pointer_reply(wm.conn, pointer_query, null);
-    
-    if (pointer_reply) |reply| {
-        defer std.c.free(reply);
-        
-        const child_win = reply.*.child;
-        
-        // If pointer is over a valid window (not root, not bar), focus it
-        if (child_win != 0 and child_win != wm.root and !bar.isBarWindow(child_win)) {
-            // Check if window is managed by us and on current workspace
-            if (wm.windows.contains(child_win) and workspaces.isOnCurrentWorkspace(child_win)) {
-                focus.setFocus(wm, child_win, .mouse_enter);
-                tiling.updateWindowFocus(wm, null, child_win);
-                return;
-            }
-        }
-    }
-    
-    // Strategy 2: Fallback to first window in workspace if pointer isn't over a valid window
-    if (workspaces.getCurrentWorkspaceObject()) |ws| {
-        const windows = ws.windows.list.items;
-        
-        // Try to find the first valid window in the workspace
-        for (windows) |workspace_win| {
-            if (workspace_win != 0 and workspace_win != wm.root and 
-                !bar.isBarWindow(workspace_win) and wm.windows.contains(workspace_win)) {
-                focus.setFocus(wm, workspace_win, .window_destroyed);
-                tiling.updateWindowFocus(wm, null, workspace_win);
-                return;
-            }
-        }
-    }
-    
-    // If both strategies fail, focus stays cleared (root window has focus)
+// Force X server to generate EnterNotify by warping pointer
+fn forcePointerUpdate(wm: *WM) void {
+    // Warp pointer 1 pixel right and back - this forces X to re-evaluate what window it's in
+    _ = xcb.xcb_warp_pointer(wm.conn, xcb.XCB_NONE, xcb.XCB_NONE, 0, 0, 0, 0, 1, 0);
+    _ = xcb.xcb_warp_pointer(wm.conn, xcb.XCB_NONE, xcb.XCB_NONE, 0, 0, 0, 0, -1, 0);
+    utils.flush(wm.conn);
 }
 
 // OPTIMIZATION: Extract fullscreen cleanup into separate function
