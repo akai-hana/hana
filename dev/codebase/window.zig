@@ -12,7 +12,9 @@ const bar = @import("bar");
 const batch = @import("batch");
 const debug = @import("debug");
 
-const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
+const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW | 
+                          xcb.XCB_EVENT_MASK_LEAVE_WINDOW |
+                          xcb.XCB_EVENT_MASK_BUTTON_PRESS;
 
 // OPTIMIZATION: Inline workspace validation function
 inline fn validateWorkspace(target_ws: ?usize, current_ws: usize) usize {
@@ -51,6 +53,11 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
     // Subscribe to enter/leave events
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
+    
+    // Grab button clicks for click-to-focus
+    _ = xcb.xcb_grab_button(wm.conn, 1, win, 0, 
+        xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC,
+        xcb.XCB_NONE, xcb.XCB_NONE, xcb.XCB_BUTTON_INDEX_ANY, 0);
 
     // DWM APPROACH: Always map window, but position off-screen if not on current workspace
     if (!is_current_ws) {
@@ -91,6 +98,10 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 // OPTIMIZATION: Fallback for when batch operations fail
 inline fn handleMapRequestDirect(wm: *WM, win: u32, is_current_ws: bool, validated_ws: usize) void {
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
+    
+    _ = xcb.xcb_grab_button(wm.conn, 1, win, 0,
+        xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC,
+        xcb.XCB_NONE, xcb.XCB_NONE, xcb.XCB_BUTTON_INDEX_ANY, 0);
     
     // DWM APPROACH: Always map, but position off-screen if not current workspace
     if (!is_current_ws) {
@@ -147,17 +158,25 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     const win = event.event;
     
-    // OPTIMIZATION: Combined early return checks
     if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
 
-    // Filter spurious EnterNotify events
-    if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
-        event.detail == xcb.XCB_NOTIFY_DETAIL_VIRTUAL or
+    // Filter spurious EnterNotify events INCLUDING grab/ungrab from button clicks
+    if (event.mode == xcb.XCB_NOTIFY_MODE_GRAB or event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) return;
+    if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL) return;
+    if (event.detail == xcb.XCB_NOTIFY_DETAIL_VIRTUAL or
         event.detail == xcb.XCB_NOTIFY_DETAIL_NONLINEAR_VIRTUAL) return;
 
     const old_focus = wm.focused_window;
     focus.setFocus(wm, win, .mouse_enter);
     tiling.updateWindowFocus(wm, old_focus, win);
+}
+
+pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
+    const win = event.event;
+    if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
+    if (wm.focused_window != win) {
+        focus.setFocus(wm, win, .mouse_click);
+    }
 }
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
