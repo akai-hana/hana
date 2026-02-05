@@ -194,6 +194,10 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     
     if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
     
+    // Always ungrab buttons on clicked window (even if already focused)
+    // This is critical for apps like Firefox to receive input properly
+    grabButtons(wm, win, true);
+    
     // Focus window and replay the event (DWM approach)
     focus.setFocus(wm, win, .mouse_click);
     _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, xcb.XCB_CURRENT_TIME);
@@ -221,10 +225,33 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
 
     if (wm.focused_window == win) {
         focus.clearFocus(wm);
+        // Focus window under mouse cursor after destroying focused window
+        focusWindowUnderPointer(wm);
     }
 
     bar.markDirty();
     utils.flush(wm.conn);
+}
+
+// Focus the window under the current pointer position
+fn focusWindowUnderPointer(wm: *WM) void {
+    const pointer_query = xcb.xcb_query_pointer(wm.conn, wm.root);
+    const pointer_reply = xcb.xcb_query_pointer_reply(wm.conn, pointer_query, null);
+    
+    if (pointer_reply) |reply| {
+        defer std.c.free(reply);
+        
+        const child_win = reply.*.child;
+        
+        // If pointer is over a valid window (not root, not bar), focus it
+        if (child_win != 0 and child_win != wm.root and !bar.isBarWindow(child_win)) {
+            // Check if window is managed by us
+            if (wm.windows.contains(child_win)) {
+                focus.setFocus(wm, child_win, .mouse_enter);
+                tiling.updateWindowFocus(wm, null, child_win);
+            }
+        }
+    }
 }
 
 // OPTIMIZATION: Extract fullscreen cleanup into separate function
