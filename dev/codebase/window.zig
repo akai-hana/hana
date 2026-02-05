@@ -205,6 +205,9 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     // Set focus if window isn't already focused
     if (wm.focused_window != win) {
         focus.setFocus(wm, win, .mouse_click);
+        // Release protection immediately - mouse clicks are explicit actions
+        // and the user expects normal mouse focus behavior afterwards
+        focus.releaseProtection();
     }
     
     // Replay the button press to the window so it can process it
