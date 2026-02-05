@@ -210,14 +210,14 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     };
     defer b.deinit();
 
-    // Unmap old windows (instant, no visible movement)
-    for (old_workspace.windows.items()) |win| {
-        b.unmap(win) catch {};
-    }
-
-    // Map new windows at their correct positions (already retiled above)
+    // CRITICAL: Map NEW windows FIRST (overlay on top of old)
     for (new_workspace.windows.items()) |win| {
         b.map(win) catch {};
+    }
+
+    // THEN unmap old windows (no empty frame - new windows already visible)
+    for (old_workspace.windows.items()) |win| {
+        b.unmap(win) catch {};
     }
 
     // Restore fullscreen window if present
@@ -259,14 +259,14 @@ fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Works
         @import("tiling").retileCurrentWorkspace(wm);
     }
     
-    // Unmap old windows (instant, no visible movement)
-    for (old_workspace.windows.items()) |win| {
-        _ = xcb.xcb_unmap_window(conn, win);
-    }
-    
-    // Map new windows at their correct positions
+    // CRITICAL: Map NEW windows FIRST (overlay on top of old)
     for (new_workspace.windows.items()) |win| {
         _ = xcb.xcb_map_window(conn, win);
+    }
+    
+    // THEN unmap old windows (no empty frame - new windows already visible)
+    for (old_workspace.windows.items()) |win| {
+        _ = xcb.xcb_unmap_window(conn, win);
     }
     
     // Restore fullscreen window if present
