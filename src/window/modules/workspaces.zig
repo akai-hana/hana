@@ -198,6 +198,11 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
 
     const fs_info = wm.fullscreen.getForWorkspace(new_ws);
 
+    // OPTIMIZATION: Retile BEFORE mapping for seamless switching
+    if (wm.config.tiling.enabled) {
+        @import("tiling").retileCurrentWorkspace(wm);
+    }
+
     // OPTIMIZATION: Use batch operations for all XCB calls
     var b = batch.Batch.begin(wm) catch {
         executeSwitchDirect(wm, old_workspace, new_workspace, screen, fs_info);
@@ -205,18 +210,12 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     };
     defer b.deinit();
 
-    // Move old windows off-screen (batch)
+    // Unmap old windows (instant, no visible movement)
     for (old_workspace.windows.items()) |win| {
-        const rect = utils.Rect{
-            .x = @intCast(screen.width_in_pixels),
-            .y = 0,
-            .width = 1,
-            .height = 1,
-        };
-        b.configure(win, rect) catch {};
+        b.unmap(win) catch {};
     }
 
-    // Map new windows (batch)
+    // Map new windows at their correct positions (already retiled above)
     for (new_workspace.windows.items()) |win| {
         b.map(win) catch {};
     }
@@ -235,11 +234,6 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     }
 
     b.execute();
-
-    // Retile after batch execute
-    if (wm.config.tiling.enabled) {
-        @import("tiling").retileCurrentWorkspace(wm);
-    }
 
     // OPTIMIZATION: Combined bar state management
     if (fs_info != null) {
@@ -260,13 +254,17 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
 fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Workspace, screen: *xcb.xcb_screen_t, fs_info: ?defs.FullscreenInfo) void {
     const conn = wm.conn;
     
-    // Move old windows off-screen
-    for (old_workspace.windows.items()) |win| {
-        _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X,
-            &[_]u32{@intCast(screen.width_in_pixels)});
+    // Retile first for seamless switching
+    if (wm.config.tiling.enabled) {
+        @import("tiling").retileCurrentWorkspace(wm);
     }
     
-    // Map new windows
+    // Unmap old windows (instant, no visible movement)
+    for (old_workspace.windows.items()) |win| {
+        _ = xcb.xcb_unmap_window(conn, win);
+    }
+    
+    // Map new windows at their correct positions
     for (new_workspace.windows.items()) |win| {
         _ = xcb.xcb_map_window(conn, win);
     }
@@ -289,10 +287,6 @@ fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Works
     }
 
     utils.flush(conn);
-    
-    if (wm.config.tiling.enabled) {
-        @import("tiling").retileCurrentWorkspace(wm);
-    }
 }
 
 pub inline fn getCurrentWindowsView() ?[]const u32 {
