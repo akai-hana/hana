@@ -227,12 +227,16 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
         focus.clearFocus(wm);
         
         // Force retiling to complete BEFORE querying pointer position
-        // This ensures windows are in their final positions after destroy
         if (wm.config.tiling.enabled) {
             tiling.retileIfDirty(wm);
         }
         
+        // Critical: Force a round-trip to X server to ensure all window moves are complete
+        // Without this, we might query the pointer before windows have actually moved
         utils.flush(wm.conn);
+        const sync_cookie = xcb.xcb_get_input_focus(wm.conn);
+        const sync_reply = xcb.xcb_get_input_focus_reply(wm.conn, sync_cookie, null);
+        if (sync_reply) |reply| std.c.free(reply);
         
         // Focus next appropriate window
         focusNextWindow(wm);
