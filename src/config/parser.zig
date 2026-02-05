@@ -1,4 +1,4 @@
-//! Minimal TOML parser for config file - OPTIMIZED VERSION
+//! TOML file parser 
 //!
 //! Key improvements:
 //! - Reduced allocations in hot paths

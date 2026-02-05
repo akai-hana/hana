@@ -1,4 +1,4 @@
-// ! Configuration interpreter
+//! Configuration interpreter
 
 const std = @import("std");
 const defs = @import("defs");

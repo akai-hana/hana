@@ -1,23 +1,21 @@
-//! Enhanced status bar with configurable layout and auto-sizing
+//! Hana status bar
+//! Taking heavy inspiration from dwm
 
-const std = @import("std");
-const defs = @import("defs");
-const xcb = defs.xcb;
+const std     = @import("std");
+const defs    = @import("defs");
+    const xcb = defs.xcb;
+const utils   = @import("utils");
+
 const drawing = @import("drawing");
-const utils = @import("utils");
-const workspaces = @import("workspaces");
-const tiling = @import("tiling");
-const debug = @import("debug");
+const tiling  = @import("tiling");
+const debug   = @import("debug");
 
-const c = @cImport({
-    @cInclude("X11/Xlib.h");
-});
-
-const workspaces_segment = @import("tags");
-const layout_segment = @import("layout");
-const title_segment = @import("title");
-const clock_segment = @import("clock");
-const status_segment = @import("status");
+const workspaces             = @import("workspaces");
+    const workspaces_segment = @import("tags");
+    const layout_segment     = @import("layout");
+    const title_segment      = @import("title");
+    const clock_segment      = @import("clock");
+    const status_segment     = @import("status");
 
 pub const WORKSPACE_WIDTH: u16 = 40;
 
@@ -182,7 +180,6 @@ fn setBarVisibility(wm: *defs.WM, visible: bool, reason: []const u8) void {
         if (visible) {
             _ = xcb.xcb_map_window(s.conn, s.window);
             utils.flush(wm.conn);
-            _ = c.XSync(@ptrCast(s.dc.display), 0);
             draw(s, wm) catch {};
         } else {
             _ = xcb.xcb_unmap_window(s.conn, s.window);
