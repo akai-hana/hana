@@ -5,6 +5,7 @@ const defs = @import("defs");
 const tiling = @import("tiling");
 const utils = @import("utils");
 const bar = @import("bar");
+const window = @import("window");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -23,6 +24,12 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
 
     const old = wm.focused_window;
     wm.focused_window = win;
+
+    // Ungrab buttons on newly focused window, regrab on old window
+    window.grabButtons(wm, win, true);
+    if (old) |old_win| {
+        window.grabButtons(wm, old_win, false);
+    }
 
     // OPTIMIZATION: Batch XCB calls when raising window
     if (reason == .mouse_click or reason == .user_command) {
@@ -45,6 +52,7 @@ pub fn clearFocus(wm: *WM) void {
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, wm.root, xcb.XCB_CURRENT_TIME);
 
     if (old) |old_win| {
+        window.grabButtons(wm, old_win, false); // Regrab buttons on unfocused window
         tiling.updateWindowFocusFast(wm, old_win, null);
     }
     
@@ -58,6 +66,12 @@ pub fn setFocusBatch(wm: *WM, win: u32, reason: Reason, defer_flush: bool) void 
 
     const old = wm.focused_window;
     wm.focused_window = win;
+
+    // Ungrab buttons on newly focused window, regrab on old window
+    window.grabButtons(wm, win, true);
+    if (old) |old_win| {
+        window.grabButtons(wm, old_win, false);
+    }
 
     if (reason == .mouse_click or reason == .user_command) {
         _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, xcb.XCB_CURRENT_TIME);
