@@ -17,27 +17,9 @@ pub const Reason = enum {
     tiling_operation,
 };
 
-var focus_protection_active: bool = false;
-
-pub inline fn isProtected() bool {
-    return focus_protection_active;
-}
-
-pub inline fn releaseProtection() void {
-    focus_protection_active = false;
-}
-
 pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     // OPTIMIZATION: Combined early return checks, removed duplicate root check
     if (win == wm.root or win == 0 or bar.isBarWindow(win) or wm.focused_window == win) return;
-
-    // Block mouse_enter during protection period
-    if (reason == .mouse_enter and focus_protection_active) return;
-
-    // Set protection for explicit focus changes
-    if (reason != .mouse_enter) {
-        focus_protection_active = true;
-    }
 
     const old = wm.focused_window;
     wm.focused_window = win;
@@ -73,12 +55,6 @@ pub fn clearFocus(wm: *WM) void {
 // OPTIMIZATION: Batch focus operation for multiple windows (e.g., during workspace switch)
 pub fn setFocusBatch(wm: *WM, win: u32, reason: Reason, defer_flush: bool) void {
     if (win == wm.root or win == 0 or bar.isBarWindow(win) or wm.focused_window == win) return;
-
-    if (reason == .mouse_enter and focus_protection_active) return;
-
-    if (reason != .mouse_enter) {
-        focus_protection_active = true;
-    }
 
     const old = wm.focused_window;
     wm.focused_window = win;
