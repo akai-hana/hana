@@ -51,22 +51,22 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     };
     defer b.deinit();
 
-    // Subscribe to enter/leave events
+    // Subscribe to enter/leave/button events
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
 
-    // Grab button presses so we can implement click-to-focus
-    // This allows us to intercept clicks on unfocused windows
+    // Grab button presses for click-to-focus using ASYNC mode
+    // This doesn't freeze the pointer, just lets us intercept clicks
     _ = xcb.xcb_grab_button(
         wm.conn,
-        0, // owner_events = false (we intercept the event)
+        0, // owner_events = false
         win,
-        xcb.XCB_EVENT_MASK_BUTTON_PRESS | xcb.XCB_EVENT_MASK_BUTTON_RELEASE,
-        xcb.XCB_GRAB_MODE_SYNC,  // pointer_mode: sync so we can replay
-        xcb.XCB_GRAB_MODE_ASYNC, // keyboard_mode: async
+        xcb.XCB_EVENT_MASK_BUTTON_PRESS,
+        xcb.XCB_GRAB_MODE_ASYNC,  // pointer_mode: async (no freezing!)
+        xcb.XCB_GRAB_MODE_ASYNC,  // keyboard_mode: async
         xcb.XCB_NONE,
         xcb.XCB_NONE,
-        xcb.XCB_BUTTON_INDEX_ANY, // grab all buttons
-        xcb.XCB_MOD_MASK_ANY, // with any modifiers
+        xcb.XCB_BUTTON_INDEX_ANY,
+        xcb.XCB_MOD_MASK_ANY,
     );
 
     // DWM APPROACH: Always map window, but position off-screen if not on current workspace
@@ -109,13 +109,13 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 inline fn handleMapRequestDirect(wm: *WM, win: u32, is_current_ws: bool, validated_ws: usize) void {
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
     
-    // Grab button presses for click-to-focus
+    // Grab button presses for click-to-focus with ASYNC mode
     _ = xcb.xcb_grab_button(
         wm.conn,
         0,
         win,
-        xcb.XCB_EVENT_MASK_BUTTON_PRESS | xcb.XCB_EVENT_MASK_BUTTON_RELEASE,
-        xcb.XCB_GRAB_MODE_SYNC,
+        xcb.XCB_EVENT_MASK_BUTTON_PRESS,
+        xcb.XCB_GRAB_MODE_ASYNC,
         xcb.XCB_GRAB_MODE_ASYNC,
         xcb.XCB_NONE,
         xcb.XCB_NONE,
@@ -195,21 +195,12 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     const win = event.event;
     
     // Skip if clicking on root or bar
-    if (win == wm.root or win == 0 or bar.isBarWindow(win)) {
-        // Replay the event so it's not consumed
-        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, event.time);
-        utils.flush(wm.conn);
-        return;
-    }
+    if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
     
     // Set focus if window isn't already focused
     if (wm.focused_window != win) {
         focus.setFocus(wm, win, .mouse_click);
     }
-    
-    // Replay the button press to the window so it can process it
-    _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, event.time);
-    utils.flush(wm.conn);
 }
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
