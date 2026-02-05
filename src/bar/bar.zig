@@ -7,6 +7,7 @@ const drawing = @import("drawing");
 const utils = @import("utils");
 const workspaces = @import("workspaces");
 const tiling = @import("tiling");
+const debug = @import("debug");
 
 const c = @cImport({
     @cInclude("X11/Xlib.h");
@@ -42,7 +43,10 @@ const State = struct {
         const s = try allocator.create(State);
         s.* = State{
             .window = window, .width = width, .height = height, .dc = dc, .conn = conn,
-            .config = config, .status_text = .{}, .cached_title = .{}, .cached_title_window = null,
+            .config = config,
+            .status_text = .{},
+            .cached_title = .{},
+            .cached_title_window = null,
             .dirty = false, .dirty_clock = false, .last_second = 0, .alive = true,
             .allocator = allocator,
             .cached_clock_width = dc.textWidth("0000-00-00 00:00:00") + 2 * config.padding,
@@ -184,7 +188,7 @@ fn setBarVisibility(wm: *defs.WM, visible: bool, reason: []const u8) void {
             _ = xcb.xcb_unmap_window(s.conn, s.window);
         }
         utils.flush(wm.conn);
-        std.log.info("[bar] Bar {s} ({s})", .{ if (visible) "shown" else "hidden", reason });
+        debug.info("Bar {s} ({s})", .{ if (visible) "shown" else "hidden", reason });
         tiling.retileCurrentWorkspace(wm);
     }
 }
