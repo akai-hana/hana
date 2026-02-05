@@ -204,41 +204,43 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     _ = xcb.xcb_grab_server(wm.conn);
     defer _ = xcb.xcb_ungrab_server(wm.conn);
 
-    // OPTIMIZATION: Use batch operations for all XCB calls
-    var b = batch.Batch.begin(wm) catch {
-        executeSwitchDirect(wm, old_workspace, screen, fs_info);
-        return;
-    };
-    defer b.deinit();
-
-    // DWM APPROACH: Hide old windows FIRST by moving them off-screen
-    // This prevents any overlap with transparent windows
+    // CRITICAL FIX: Do ALL position changes BEFORE any flush for true atomicity
+    // Step 1: Move old workspace windows off-screen (but don't flush yet!)
     for (old_workspace.windows.items()) |win| {
-        hideWindowWithBatch(&b, win) catch {};
+        const off_screen_x: i32 = -4000;
+        const values = [_]u32{@bitCast(off_screen_x)};
+        _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
     }
 
-    // Configure and show new windows at their correct positions
+    // Step 2: Position new workspace windows on-screen (but don't flush yet!)
+    // IMPORTANT: For best results, your tiling module's retileCurrentWorkspace
+    // should NOT flush internally. This allows all positioning to be atomic.
     if (wm.config.tiling.enabled) {
         @import("tiling").retileCurrentWorkspace(wm);
     }
 
-    // Configure fullscreen window if present
+    // Step 3: Configure fullscreen window if present (but don't flush yet!)
     if (fs_info) |info| {
-        const rect = utils.Rect{
-            .x = 0,
-            .y = 0,
-            .width = screen.width_in_pixels,
-            .height = screen.height_in_pixels,
+        const values = [_]u32{
+            0, // x
+            0, // y
+            @intCast(screen.width_in_pixels), // width
+            @intCast(screen.height_in_pixels), // height
+            0, // border_width
         };
-        b.configure(info.window, rect) catch {};
-        b.setBorderWidth(info.window, 0) catch {};
-        b.raise(info.window) catch {};
+        _ = xcb.xcb_configure_window(wm.conn, info.window,
+            xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
+            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
+            xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &values);
+        _ = xcb.xcb_configure_window(wm.conn, info.window,
+            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
 
-    // Execute all operations atomically
-    b.execute();
+    // Step 4: NOW flush everything atomically in one go
+    // This ensures X server processes all position changes simultaneously
+    _ = xcb.xcb_flush(wm.conn);
 
-    // OPTIMIZATION: Combined bar state management
+    // Bar state management (after everything is positioned)
     if (fs_info != null) {
         bar.setBarState(wm, .hide_fullscreen);
         bar.raiseBar();
@@ -261,17 +263,19 @@ fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, screen: *xcb.xcb_scre
     _ = xcb.xcb_grab_server(conn);
     defer _ = xcb.xcb_ungrab_server(conn);
     
-    // DWM APPROACH: Hide old windows FIRST
+    // Step 1: Move old windows off-screen (no flush)
     for (old_workspace.windows.items()) |win| {
-        hideWindow(wm, win);
+        const off_screen_x: i32 = -4000;
+        const values = [_]u32{@bitCast(off_screen_x)};
+        _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
     }
     
-    // Configure new windows
+    // Step 2: Position new windows on-screen (ideally no flush)
     if (wm.config.tiling.enabled) {
         @import("tiling").retileCurrentWorkspace(wm);
     }
     
-    // Configure fullscreen window if present
+    // Step 3: Configure fullscreen window if present (no flush)
     if (fs_info) |info| {
         const values = [_]u32{
             0, // x
@@ -288,32 +292,15 @@ fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, screen: *xcb.xcb_scre
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
 
+    // Step 4: Atomic flush
     utils.flush(conn);
 }
 
 // DWM-STYLE: Hide window by moving it off-screen (keeps it mapped)
 inline fn hideWindow(wm: *WM, win: u32) void {
-    // Get window geometry to calculate off-screen position
-    const geom_cookie = xcb.xcb_get_geometry(wm.conn, win);
-    const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
-    defer if (geom_reply != null) @import("std").c.free(geom_reply);
-    
-    // Move window far off-screen (dwm uses WIDTH * -2)
-    const off_screen_x: i32 = if (geom_reply != null) 
-        -(@as(i32, @intCast(geom_reply.*.width)) * 2)
-    else 
-        -4000; // Fallback if geometry query fails
-    
-    const values = [_]u32{@bitCast(off_screen_x)};
-    _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
-}
-
-// Batch version of hideWindow
-inline fn hideWindowWithBatch(b: *batch.Batch, win: u32) !void {
-    // For batch operations, use a fixed large negative value to move window off-screen
     const off_screen_x: i32 = -4000;
     const values = [_]u32{@bitCast(off_screen_x)};
-    _ = xcb.xcb_configure_window(b.wm.conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
+    _ = xcb.xcb_configure_window(wm.conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
 }
 
 pub inline fn getCurrentWindowsView() ?[]const u32 {
