@@ -1,16 +1,19 @@
-// Workspace management - OPTIMIZED with batch operations
+// Workspace management
 
-const std = @import("std");
-const defs = @import("defs");
-const xcb = defs.xcb;
-const WM = defs.WM;
-const utils = @import("utils");
-const focus = @import("focus");
-const bar = @import("bar");
-const batch = @import("batch");
-const tracking = @import("tracking").tracking;
+// TODO:
+// Write about how this file uses batching
+
+const std         = @import("std");
+const defs        = @import("defs");
+    const xcb     = defs.xcb;
+    const WM      = defs.WM;
+const utils       = @import("utils");
+const tracking    = @import("tracking").tracking;
+const focus       = @import("focus");
+const batch       = @import("batch");
+const bar         = @import("bar");
 const ModuleState = @import("module_state").ModuleState;
-const debug = @import("debug");
+const debug       = @import("debug");
 
 pub const Workspace = struct {
     id: usize,
@@ -182,7 +185,7 @@ pub fn switchTo(wm: *WM, ws_id: usize) void {
     executeSwitch(wm, old_ws, ws_id);
 }
 
-// OPTIMIZATION: Completely rewritten to use batch operations
+// FIXED: Rewritten to prevent flicker by configuring ALL positions before visibility changes
 fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     const s = StateManager.get(true) orelse return;
 
@@ -202,29 +205,24 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
     _ = xcb.xcb_grab_server(wm.conn);
     defer _ = xcb.xcb_ungrab_server(wm.conn);
 
-    // OPTIMIZATION: Retile BEFORE mapping for seamless switching
+    // STEP 1: CRITICAL FIX - Configure window positions FIRST, before ANY visibility changes
+    // This ensures windows are at their correct positions when mapped, preventing flicker
     if (wm.config.tiling.enabled) {
         @import("tiling").retileCurrentWorkspace(wm);
     }
+    
+    // Flush configuration changes BEFORE changing visibility
+    // This is the key - ensures X server has processed all position updates
+    _ = xcb.xcb_flush(wm.conn);
 
-    // OPTIMIZATION: Use batch operations for all XCB calls
+    // OPTIMIZATION: Use batch operations for visibility changes
     var b = batch.Batch.begin(wm) catch {
         executeSwitchDirect(wm, old_workspace, new_workspace, screen, fs_info);
         return;
     };
     defer b.deinit();
 
-    // CRITICAL: Map NEW windows FIRST (overlay on top of old)
-    for (new_workspace.windows.items()) |win| {
-        b.map(win) catch {};
-    }
-
-    // THEN unmap old windows (no empty frame - new windows already visible)
-    for (old_workspace.windows.items()) |win| {
-        b.unmap(win) catch {};
-    }
-
-    // Restore fullscreen window if present
+    // Configure fullscreen window if present
     if (fs_info) |info| {
         const rect = utils.Rect{
             .x = 0,
@@ -234,9 +232,25 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
         };
         b.configure(info.window, rect) catch {};
         b.setBorderWidth(info.window, 0) catch {};
+    }
+
+    // STEP 2: Now that positions are configured and flushed, change visibility atomically
+    // Map new windows - they'll appear at their correct positions immediately
+    for (new_workspace.windows.items()) |win| {
+        b.map(win) catch {};
+    }
+
+    // Unmap old windows
+    for (old_workspace.windows.items()) |win| {
+        b.unmap(win) catch {};
+    }
+
+    // Raise fullscreen window if present
+    if (fs_info) |info| {
         b.raise(info.window) catch {};
     }
 
+    // STEP 3: Execute visibility changes in one atomic batch
     b.execute();
 
     // OPTIMIZATION: Combined bar state management
@@ -247,7 +261,7 @@ fn executeSwitch(wm: *WM, old_ws: usize, new_ws: usize) void {
         bar.setBarState(wm, .show_fullscreen);
     }
 
-    // Set focus - use deferred flush variant if available
+    // Set focus
     const focus_target = wm.focused_window orelse wm.root;
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, focus_target, xcb.XCB_CURRENT_TIME);
     utils.flush(wm.conn);
@@ -262,22 +276,12 @@ fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Works
     _ = xcb.xcb_grab_server(conn);
     defer _ = xcb.xcb_ungrab_server(conn);
     
-    // Retile first for seamless switching
+    // STEP 1: CRITICAL FIX - Configure positions FIRST
     if (wm.config.tiling.enabled) {
         @import("tiling").retileCurrentWorkspace(wm);
     }
     
-    // CRITICAL: Map NEW windows FIRST (overlay on top of old)
-    for (new_workspace.windows.items()) |win| {
-        _ = xcb.xcb_map_window(conn, win);
-    }
-    
-    // THEN unmap old windows (no empty frame - new windows already visible)
-    for (old_workspace.windows.items()) |win| {
-        _ = xcb.xcb_unmap_window(conn, win);
-    }
-    
-    // Restore fullscreen window if present
+    // Configure fullscreen window if present
     if (fs_info) |info| {
         const values = [_]u32{
             0, // x
@@ -290,6 +294,22 @@ fn executeSwitchDirect(wm: *WM, old_workspace: *Workspace, new_workspace: *Works
             xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
             xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
             xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &values);
+    }
+    
+    // CRITICAL: Flush all configuration changes BEFORE visibility changes
+    _ = xcb.xcb_flush(conn);
+    
+    // STEP 2: Now change visibility - windows will appear at correct positions
+    for (new_workspace.windows.items()) |win| {
+        _ = xcb.xcb_map_window(conn, win);
+    }
+    
+    for (old_workspace.windows.items()) |win| {
+        _ = xcb.xcb_unmap_window(conn, win);
+    }
+    
+    // Raise fullscreen window if present
+    if (fs_info) |info| {
         _ = xcb.xcb_configure_window(conn, info.window,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
