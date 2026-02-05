@@ -225,16 +225,27 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
 
     if (wm.focused_window == win) {
         focus.clearFocus(wm);
-        // Focus window under mouse cursor after destroying focused window
-        focusWindowUnderPointer(wm);
+        
+        // Force retiling to complete BEFORE querying pointer position
+        // This ensures windows are in their final positions after destroy
+        if (wm.config.tiling.enabled) {
+            tiling.retileIfDirty(wm);
+        }
+        
+        utils.flush(wm.conn);
+        
+        // Focus next appropriate window
+        focusNextWindow(wm);
     }
 
     bar.markDirty();
     utils.flush(wm.conn);
 }
 
-// Focus the window under the current pointer position
-fn focusWindowUnderPointer(wm: *WM) void {
+// Focus the next appropriate window after the focused window is destroyed
+fn focusNextWindow(wm: *WM) void {
+    // Strategy 1: Query pointer position to focus window under cursor (after retiling)
+    // This mimics DWM's EnterNotify behavior but does it proactively
     const pointer_query = xcb.xcb_query_pointer(wm.conn, wm.root);
     const pointer_reply = xcb.xcb_query_pointer_reply(wm.conn, pointer_query, null);
     
@@ -245,13 +256,31 @@ fn focusWindowUnderPointer(wm: *WM) void {
         
         // If pointer is over a valid window (not root, not bar), focus it
         if (child_win != 0 and child_win != wm.root and !bar.isBarWindow(child_win)) {
-            // Check if window is managed by us
-            if (wm.windows.contains(child_win)) {
+            // Check if window is managed by us and on current workspace
+            if (wm.windows.contains(child_win) and workspaces.isOnCurrentWorkspace(child_win)) {
                 focus.setFocus(wm, child_win, .mouse_enter);
                 tiling.updateWindowFocus(wm, null, child_win);
+                return;
             }
         }
     }
+    
+    // Strategy 2: Fallback to first window in workspace if pointer isn't over a valid window
+    if (workspaces.getCurrentWorkspaceObject()) |ws| {
+        const windows = ws.windows.list.items;
+        
+        // Try to find the first valid window in the workspace
+        for (windows) |workspace_win| {
+            if (workspace_win != 0 and workspace_win != wm.root and 
+                !bar.isBarWindow(workspace_win) and wm.windows.contains(workspace_win)) {
+                focus.setFocus(wm, workspace_win, .window_destroyed);
+                tiling.updateWindowFocus(wm, null, workspace_win);
+                return;
+            }
+        }
+    }
+    
+    // If both strategies fail, focus stays cleared (root window has focus)
 }
 
 // OPTIMIZATION: Extract fullscreen cleanup into separate function
