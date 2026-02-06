@@ -128,8 +128,9 @@ Mod+Shift+W = "move_to_workspace_6"
 Mod+Shift+E = "move_to_workspace_7"
 Mod+Shift+R = "move_to_workspace_8"
 
-# Bar toggle
+# Bar
 Mod+B = "toggle_bar"
+Mod+Shift+B = 
 
 # Application launchers
 Mod+P = "rofi -show drun"

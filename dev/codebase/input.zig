@@ -211,6 +211,11 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .toggle_layout => tiling.toggleLayout(wm),
         .toggle_layout_reverse => tiling.toggleLayoutReverse(wm),
         .toggle_bar => @import("bar").setBarState(wm, .toggle),
+        .toggle_bar_position => {
+            @import("bar").toggleBarPosition(wm) catch |err| {
+                debug.warn("Failed to toggle bar position: {}", .{err});
+            };
+        },
         .increase_master => tiling.increaseMasterWidth(wm),
         .decrease_master => tiling.decreaseMasterWidth(wm),
         .increase_master_count => tiling.increaseMasterCount(wm),

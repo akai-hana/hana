@@ -1,6 +1,6 @@
 //! Status bar text drawing/rendering
 //! XCB + Xft for text rendering
-//! Includes color caching
+//! Includes color caching and transparency support
 
 const std = @import("std");
 const debug = @import("debug");
@@ -17,8 +17,8 @@ const c = @cImport({
 // Color conversion constant: 8-bit to 16-bit (0xFF -> 0xFFFF)
 const COLOR_8_TO_16_MULTIPLIER: u16 = 0x101;
 
-// Helper to convert RGB888 to XRenderColor
-inline fn rgbToXRenderColor(rgb: u32) c.XRenderColor {
+// Helper to convert RGB888 to XRenderColor with custom alpha
+inline fn rgbToXRenderColorWithAlpha(rgb: u32, alpha: u16) c.XRenderColor {
     const r: u16 = @intCast((rgb >> 16) & 0xFF);
     const g: u16 = @intCast((rgb >> 8) & 0xFF);
     const b: u16 = @intCast(rgb & 0xFF);
@@ -26,13 +26,19 @@ inline fn rgbToXRenderColor(rgb: u32) c.XRenderColor {
         .red = r * COLOR_8_TO_16_MULTIPLIER,
         .green = g * COLOR_8_TO_16_MULTIPLIER,
         .blue = b * COLOR_8_TO_16_MULTIPLIER,
-        .alpha = 0xFFFF,
+        .alpha = alpha,
     };
 }
 
+// Helper to convert RGB888 to XRenderColor (fully opaque)
+inline fn rgbToXRenderColor(rgb: u32) c.XRenderColor {
+    return rgbToXRenderColorWithAlpha(rgb, 0xFFFF);
+}
+
 // Color cache for performance; avoid allocating/freeing colors repeatedly
+// Now supports transparency
 const ColorCache = struct {
-    colors: std.AutoHashMap(u32, c.XftColor),
+    colors: std.AutoHashMap(u64, c.XftColor), // Key is now (rgb << 16 | alpha)
     fallback_color: c.XftColor,
     display: *c.Display,
     visual: *c.Visual,
@@ -44,7 +50,7 @@ const ColorCache = struct {
         _ = c.XftColorAllocValue(display, visual, colormap, &rgbToXRenderColor(0xFFFFFF), &fallback);
         
         return .{
-            .colors = std.AutoHashMap(u32, c.XftColor).init(allocator),
+            .colors = std.AutoHashMap(u64, c.XftColor).init(allocator),
             .fallback_color = fallback,
             .display = display,
             .visual = visual,
@@ -64,14 +70,21 @@ const ColorCache = struct {
     }
 
     fn get(self: *ColorCache, rgb: u32) *c.XftColor {
-        const result = self.colors.getOrPut(rgb) catch {
+        return self.getWithAlpha(rgb, 0xFFFF);
+    }
+    
+    fn getWithAlpha(self: *ColorCache, rgb: u32, alpha: u16) *c.XftColor {
+        // Create a composite key from rgb and alpha
+        const key: u64 = (@as(u64, rgb) << 16) | @as(u64, alpha);
+        
+        const result = self.colors.getOrPut(key) catch {
             debug.warn("Color cache allocation failed, using fallback", .{});
             return &self.fallback_color;
         };
 
         if (!result.found_existing) {
             _ = c.XftColorAllocValue(self.display, self.visual, self.colormap, 
-                &rgbToXRenderColor(rgb), result.value_ptr);
+                &rgbToXRenderColorWithAlpha(rgb, alpha), result.value_ptr);
         }
         return result.value_ptr;
     }
@@ -145,6 +158,7 @@ pub const DrawContext = struct {
     color_cache: ColorCache,
     visual: *c.Visual,
     colormap: c.Colormap,
+    alpha_override: ?u16 = null, // NEW: Global alpha override for bar transparency
     
     pub fn init(allocator: std.mem.Allocator, drawable: u32, width: u16, height: u16) !*DrawContext {
         const dc = try allocator.create(DrawContext);
@@ -176,6 +190,11 @@ pub const DrawContext = struct {
         c.XftDrawDestroy(self.xft_draw);
         _ = c.XCloseDisplay(self.display);
         self.allocator.destroy(self);
+    }
+    
+    // NEW: Set global alpha override for bar transparency
+    pub fn setAlphaOverride(self: *DrawContext, alpha: ?u16) void {
+        self.alpha_override = alpha;
     }
     
     pub fn loadFont(self: *DrawContext, font_name: []const u8) !void {
@@ -276,12 +295,14 @@ pub const DrawContext = struct {
     }
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        const xft_color = self.color_cache.get(color);
+        const alpha = self.alpha_override orelse 0xFFFF;
+        const xft_color = self.color_cache.getWithAlpha(color, alpha);
         c.XftDrawRect(self.xft_draw, xft_color, @intCast(x), @intCast(y), width, height);
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
-        const xft_color = self.color_cache.get(color);
+        const alpha = self.alpha_override orelse 0xFFFF;
+        const xft_color = self.color_cache.getWithAlpha(color, alpha);
         
         if (self.xft_fonts.len <= 1) {
             c.XftDrawStringUtf8(self.xft_draw, xft_color, self.xft_font,

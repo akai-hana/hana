@@ -1,5 +1,6 @@
 //! Status bar
 //! Taking inspiration from dwm
+//! Now with transparency support and position toggling
 
 const std     = @import("std");
 const defs    = @import("defs");
@@ -177,6 +178,12 @@ pub fn init(wm: *defs.WM) !void {
     const dc = try drawing.DrawContext.init(wm.allocator, window, width, height);
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
+    
+    // NEW: Set transparency on the draw context
+    const alpha = wm.config.bar.getAlpha16();
+    dc.setAlphaOverride(alpha);
+    debug.info("Bar transparency: {d:.2}% (alpha: 0x{x:0>4})", 
+        .{wm.config.bar.transparency * 100.0, alpha});
 
     const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar);
     try draw(s, wm);
@@ -205,6 +212,36 @@ fn setBarVisibility(wm: *defs.WM, visible: bool, reason: []const u8) void {
         }
         utils.flush(wm.conn);
         debug.info("Bar {s} ({s})", .{ if (visible) "shown" else "hidden", reason });
+        tiling.retileCurrentWorkspace(wm);
+    }
+}
+
+// NEW: Toggle bar position between top and bottom
+pub fn toggleBarPosition(wm: *defs.WM) !void {
+    if (state) |s| {
+        // Toggle the position in config
+        wm.config.bar.vertical_position = switch (wm.config.bar.vertical_position) {
+            .top => .bottom,
+            .bottom => .top,
+        };
+        
+        // Calculate new y position
+        const new_y: i16 = if (wm.config.bar.vertical_position == .bottom)
+            @as(i16, @intCast(wm.screen.height_in_pixels)) - @as(i16, @intCast(s.height))
+        else 0;
+        
+        // Move the window to new position
+        const values = [_]u16{@bitCast(new_y)};
+        _ = xcb.xcb_configure_window(s.conn, s.window, 
+            xcb.XCB_CONFIG_WINDOW_Y, &values);
+        
+        // Update window properties for new position
+        try setWindowProperties(wm, s.window, s.height);
+        
+        utils.flush(wm.conn);
+        debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
+        
+        // Retile workspace to adjust for new bar position
         tiling.retileCurrentWorkspace(wm);
     }
 }
