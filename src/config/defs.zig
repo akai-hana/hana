@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const dpi = @import("dpi");
+const parser = @import("parser");
 
 pub const xcb = @cImport({
     @cInclude("xcb/xcb.h");
@@ -104,10 +105,10 @@ pub const TilingConfig = struct {
     enabled: bool = true,
     layout: []const u8 = "master_left",
     master_side: MasterSide = .left,
-    master_width: f32 = 0.50,
+    master_width: parser.ScalableValue = parser.ScalableValue.percentage(50.0),
     master_count: usize = 1,
-    gaps: u16 = 10,
-    border_width: u16 = 2,
+    gaps: parser.ScalableValue = parser.ScalableValue.absolute(10.0),
+    border_width: parser.ScalableValue = parser.ScalableValue.absolute(2.0),
     border_focused: u32 = 0x5294E2,
     border_unfocused: u32 = 0x383C4A,
 };
@@ -154,7 +155,8 @@ pub const BarConfig = struct {
     height: ?u16 = null,
     font: []const u8 = "monospace:size=10",
     fonts: std.ArrayList([]const u8),
-    font_size: u16 = 10,
+    font_size: parser.ScalableValue = parser.ScalableValue.percentage(10.0),
+    scaled_font_size: u16 = 10, // Computed value after DPI scaling
     padding: u16 = 8,
     spacing: u16 = 12,
 
@@ -213,7 +215,7 @@ pub const BarConfig = struct {
     
     // DPI-aware scaling helpers
     pub inline fn scaledFontSize(self: *const BarConfig) u16 {
-        return @intFromFloat(@round(@as(f32, @floatFromInt(self.font_size)) * self.scale_factor));
+        return self.scaled_font_size;
     }
     
     pub inline fn scaledPadding(self: *const BarConfig) u16 {

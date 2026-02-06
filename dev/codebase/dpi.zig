@@ -13,6 +13,11 @@ const BASELINE_WIDTH: f32 = 2560.0;
 const BASELINE_HEIGHT: f32 = 1600.0;
 const BASELINE_DPI: f32 = 96.0; // Standard DPI
 
+// Font size baseline: 1920x1080 (1080p)
+// Font percentages are relative to this resolution
+const FONT_BASELINE_WIDTH: f32 = 1920.0;
+const FONT_BASELINE_HEIGHT: f32 = 1080.0;
+
 /// DPI information and scaling factor
 pub const DpiInfo = struct {
     dpi: f32,
@@ -156,4 +161,64 @@ pub inline fn scale(base_value: anytype, scale_factor: f32) @TypeOf(base_value) 
 pub inline fn scaleToInt(comptime T: type, base_value: f32, scale_factor: f32) T {
     const scaled = base_value * scale_factor;
     return @intFromFloat(@round(scaled));
+}
+
+/// Scale a border width value
+/// For absolute values: use the value as-is (DPI-independent)
+/// For percentage values: 
+///   - 0% = 0 pixels
+///   - 100% = border and viewing area are equal (border = 50% of total space)
+///   - Formula: (percentage / 100) * 0.5 * reference_dimension
+pub fn scaleBorderWidth(value: @import("parser").ScalableValue, scale_factor: f32, reference_dimension: u16) u16 {
+    if (value.is_percentage) {
+        // For percentage: scale relative to window dimension
+        // 100% means border equals viewing area (border = 50% of total)
+        const dim_f: f32 = @floatFromInt(reference_dimension);
+        const border_px = (value.value / 100.0) * 0.5 * dim_f * scale_factor;
+        const result: u16 = @intFromFloat(@max(0.0, @round(border_px)));
+        return result;
+    } else {
+        // Absolute value - use as-is, no DPI scaling
+        const result: u16 = @intFromFloat(@max(0.0, @round(value.value)));
+        return result;
+    }
+}
+
+/// Scale a gap value  
+/// For absolute values: use the value as-is (DPI-independent)
+/// For percentage values: same logic as border width
+pub fn scaleGaps(value: @import("parser").ScalableValue, scale_factor: f32, reference_dimension: u16) u16 {
+    return scaleBorderWidth(value, scale_factor, reference_dimension);
+}
+
+/// Scale master width value
+/// For absolute values: use the value as-is in pixels
+/// For percentage values: interpret as percentage (0-100) and convert to ratio (0.0-1.0)
+pub fn scaleMasterWidth(value: @import("parser").ScalableValue) f32 {
+    if (value.is_percentage) {
+        // Convert percentage to ratio (50% -> 0.50)
+        return value.value / 100.0;
+    } else {
+        // Absolute value in pixels - will need to be converted to ratio based on screen width
+        // Return negative to indicate it's absolute pixels (caller will handle conversion)
+        return -value.value;
+    }
+}
+
+/// Scale font size based on 1080p baseline
+/// For percentage values: scale relative to 1080p
+///   - 12% on 1080p = 12 pixels
+///   - 12% on 1440p = 12 * (1440/1080) = 16 pixels
+/// For absolute values: use as-is (no scaling)
+pub fn scaleFontSize(value: @import("parser").ScalableValue, screen: *@import("defs").xcb.xcb_screen_t) u16 {
+    if (value.is_percentage) {
+        // Scale based on screen height relative to 1080p
+        const screen_height: f32 = @floatFromInt(screen.height_in_pixels);
+        const scale_factor = screen_height / FONT_BASELINE_HEIGHT;
+        const scaled_size = value.value * scale_factor;
+        return @intFromFloat(@max(1.0, @round(scaled_size)));
+    } else {
+        // Absolute value - use as-is
+        return @intFromFloat(@max(1.0, @round(value.value)));
+    }
 }

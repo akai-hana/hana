@@ -1,0 +1,191 @@
+# akai_hana's personal hana WM config :-)
+
+[tiling]
+enabled = true     # Enable tiling on startup
+layout  = "master" # Default layout: master_left, monocle, or grid
+
+# Aesthetics
+gaps             = 12  # Absolute pixels (DPI-independent). Use "12%" for DPI-scaled percentage (0-100%)
+border_width     = 6   # Absolute pixels (DPI-independent). Use "6%" for DPI-scaled percentage
+border_focused   = "#ac3232" # "#RRGGBB" / RRGGBB / 0xRRGGBB
+border_unfocused = "#52263e"
+
+#  Layouts
+## Master-stack
+master_count = 1        #  Number of windows in master area
+master_side  = "left"   #  left / right
+master_width = "50%"    #  Use "50%" for percentage (0-100%) or "800" for absolute pixels
+
+[Keybindings]
+# Convenience alias
+Mod = "Super" # Super/Mod4 / Alt/Mod1
+
+# WM interactions
+Mod+f = "toggle_fullscreen"
+Mod+Shift+Return = "pkill -9 Xorg" # quit w
+#TODO (implemented but not properly working yet)
+Mod+Shift+f = "kill"
+Mod+Shift+t = "reload" # Config hot-reload
+
+# Tiling
+Mod+n           = "toggle_tiling" # Enable/disable tiling
+Mod+space       = "toggle_layout" # TODO Cycle layouts
+Mod+Shift+space = "toggle_layout_reverse"
+
+# Layouts
+## Master-stack
+Mod+h           = "decrease_master" # area TODO
+Mod+l           = "increase_master" # area
+Mod+comma       = "increase_master_count"
+Mod+period      = "decrease_master_count" 
+
+# Workspaces
+#TODO make workspace array
+Mod+1 = "workspace_1"
+Mod+2 = "workspace_2"
+Mod+3 = "workspace_3"
+Mod+4 = "workspace_4"
+Mod+q = "workspace_5"
+Mod+w = "workspace_6"
+Mod+e = "workspace_7"
+Mod+r = "workspace_8"
+
+#TODO automatically add "Shift" to previous binds for the "move to workspace" binds
+Mod+Shift+1 = "move_to_workspace_1"
+Mod+Shift+2 = "move_to_workspace_2"
+Mod+Shift+3 = "move_to_workspace_3"
+Mod+Shift+4 = "move_to_workspace_4"
+Mod+Shift+q = "move_to_workspace_5"
+Mod+Shift+w = "move_to_workspace_6"
+Mod+Shift+e = "move_to_workspace_7"
+Mod+Shift+r = "move_to_workspace_8"
+
+# Bar toggle
+Mod+b = "toggle_bar"
+
+# Application launchers
+Mod+p = "rofi -show drun"
+
+# Program binds
+kill = "pkill -9" # program kill placeholder
+
+#TODO: replace "pkill -9" with the kill placeholder
+Mod+a       = "MOZ_USE_XINPUT2=1 firefox"
+Mod+Shift+a = "pkill -9 firefox"
+
+Mod+s       = "flatpak run org.equicord.equibop"
+Mod+Shift+s = "pkill -9 equibop"
+
+Mod+d       = "ghostty"
+Mod+Shift+d = "pkill -9 ghostty"
+
+Mod+x = "~/Games/t-client/DDNet"
+
+Mod+v       = "flatpak run com.github.th_ch.youtube_music"
+Mod+Shift+v = "pkill -9 youtube-music"
+
+# Emergency/Debug
+#TODO not yet working
+#Mod+Shift+d      = "dump_state"       # Print debug info
+Mod+Shift+Escape = "emergency_recover" # Emergency recovery mode
+
+[bar]
+show = true
+position = "bottom" # top/bottom
+
+font_size = "12%"  # Use "12%" for DPI-scaled size (baseline: 1080p). Use "12" for absolute pixels
+# Bar height
+# Auto-adapts to font size by default!
+# Uncomment to set a fixed height instead:
+#height = 32
+
+# Bar spacing
+padding = 99 # Padding inside segments (around text)
+spacing = 6  # Space between segments
+
+# List fonts in priority order: first font is primary, others come next
+# Useful for non-ASCII character support, while retaining a primary ASCII font  
+fonts = [
+    "FiraCode Nerd Font Ret",
+    "Noto Sans CJK JP",
+]
+
+# Legacy single font option (used if fonts array is not set):
+#font = "FiraCode Nerd Font Ret"
+
+# Main color palette
+bg          = "#0d0d14"
+fg          = "#bbbbbb"
+selected_bg = "#ac3232"
+selected_fg = "#eeeeee"
+occupied_fg = "#eeeeee"
+urgent_bg   = "#FF0000"
+urgent_fg   = "#FFFFFF"
+
+# Workspace labels/icons
+icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+
+indicator_size = 1
+title_accent = true
+
+# Accent colors for bar segments
+# Default accent for all segments
+accent_color = "#ac3232" # "#RRGGBB" / RRGGBB / 0xRRGGBB
+
+# Per-segment accent colors (overrides accent_color)
+# [bar.colors]
+# workspaces = "#ac3232"
+# title      = "#ac3232"
+# clock      = "#ac3232"
+
+# Configurable bar layout
+# You can rearrange segments however you like
+# Available segments: "workspaces", "title", "clock", "layout"
+
+# Bar layout
+# Anchors: left/center/right
+[bar.layout.left]
+segments = ["workspaces", "layout"]
+
+[bar.layout.center]
+segments = ["title"]
+
+[bar.layout.right]
+segments = ["clock"]
+
+[workspaces]
+count = 8
+
+# Workspace rules
+[workspace.rules.1] # browser
+Navigator
+Firefox
+
+[workspace.rules.2] # socials
+discord
+vesktop
+equibop
+electron
+
+[workspace.rules.3] # music
+com.github.th_ch.youtube_music
+
+[workspace.rules.4] # launchers
+steam
+OpenTabletDriver.UX
+
+[workspace.rules.5] # gaming
+"osu!"
+DDNet
+
+[workspace.rules.6] # editors
+emacs
+xeyes
+
+[workspace.rules.7] # Media
+freetube
+mpv
+gimp
+
+[workspace.rules.8] # torrenting
+deluge

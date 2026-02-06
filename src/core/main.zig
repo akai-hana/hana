@@ -182,6 +182,7 @@ fn handleConfigReload(wm: *WM) !void {
     errdefer new_config.deinit(wm.allocator);
 
     config.resolveKeybindings(new_config.keybindings.items, @ptrCast(@alignCast(wm.xkb_state)));
+    config.finalizeConfig(&new_config, wm.screen);
 
     var old_config = wm.config;
     wm.config = new_config;
@@ -228,6 +229,7 @@ pub fn main() !void {
 
     var user_config = try config.loadConfigDefault(allocator);
     config.resolveKeybindings(user_config.keybindings.items, xkb_state);
+    config.finalizeConfig(&user_config, screen);
 
     var wm = WM{
         .allocator = allocator,
