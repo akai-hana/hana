@@ -14,6 +14,7 @@ const utils = @import("utils");
 const bar = @import("bar");
 const focus = @import("focus");
 const tiling = @import("tiling");
+const dpi = @import("dpi"); // ADD THIS
 
 const xcb = defs.xcb;
 const WM = defs.WM;
@@ -216,6 +217,10 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
+    // ADDED: Detect DPI and print info
+    const dpi_info = try dpi.detect(conn, screen);
+    debug.info("DPI Detection - DPI: {d:.1}, Scale: {d:.2}x", .{dpi_info.dpi, dpi_info.scale_factor});
+
     const xkb_state = try allocator.create(xkbcommon.XkbState);
     defer allocator.destroy(xkb_state);
     xkb_state.* = try xkbcommon.XkbState.init(conn, allocator);
@@ -236,6 +241,7 @@ pub fn main() !void {
         .xkb_state = xkb_state,
         .should_reload_config = &should_reload,
         .running = &running,
+        .dpi_info = dpi_info, // ADDED: Store DPI info in WM
     };
     defer wm.deinit();
 

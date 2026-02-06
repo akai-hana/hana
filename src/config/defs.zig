@@ -1,6 +1,7 @@
 // Core type definitions - IMPROVED: Pointer tracking instead of event counters
 
 const std = @import("std");
+const dpi = @import("dpi");
 
 pub const xcb = @cImport({
     @cInclude("xcb/xcb.h");
@@ -377,6 +378,7 @@ pub const WM = struct {
     xkb_state: ?*xkbcommon.XkbState,
     should_reload_config: *std.atomic.Value(bool),
     running: *std.atomic.Value(bool),
+    dpi_info: dpi.DpiInfo,
     drag_state: DragState = .{},
     
     // IMPROVED: Intelligent focus control without event counters

@@ -16,6 +16,7 @@ const debug = @import("debug");
 const master_layout = @import("master");
 const monocle_layout = @import("monocle");
 const grid_layout = @import("grid");
+const dpi = @import("dpi");
 
 pub const Layout = enum { master, monocle, grid };
 
@@ -73,14 +74,21 @@ pub const State = struct {
 const StateManager = createModule(State);
 
 pub fn init(wm: *WM) void {
+    // Scale border widths and gaps based on DPI
+    const scaled_border_width = dpi.scaleToInt(u16, @floatFromInt(wm.config.tiling.border_width), wm.dpi_info.scale_factor);
+    const scaled_gaps = dpi.scaleToInt(u16, @floatFromInt(wm.config.tiling.gaps), wm.dpi_info.scale_factor);
+    
+    debug.info("DPI-scaled tiling: border {}px (base: {}px), gaps {}px (base: {}px)", 
+        .{scaled_border_width, wm.config.tiling.border_width, scaled_gaps, wm.config.tiling.gaps});
+    
     const initial_state = State{
         .enabled = wm.config.tiling.enabled,
         .layout = parseLayout(wm.config.tiling.layout),
         .master_side = wm.config.tiling.master_side,
         .master_width = wm.config.tiling.master_width,
         .master_count = wm.config.tiling.master_count,
-        .gaps = wm.config.tiling.gaps,
-        .border_width = wm.config.tiling.border_width,
+        .gaps = scaled_gaps,
+        .border_width = scaled_border_width,
         .border_focused = wm.config.tiling.border_focused,
         .border_unfocused = wm.config.tiling.border_unfocused,
         .windows = tracking.init(wm.allocator),
@@ -351,13 +359,18 @@ pub fn toggleTiling(wm: *WM) void {
 
 pub fn reloadConfig(wm: *WM) void {
     const s = StateManager.get(true) orelse return;
+    
+    // Scale border widths and gaps based on DPI
+    const scaled_border_width = dpi.scaleToInt(u16, @floatFromInt(wm.config.tiling.border_width), wm.dpi_info.scale_factor);
+    const scaled_gaps = dpi.scaleToInt(u16, @floatFromInt(wm.config.tiling.gaps), wm.dpi_info.scale_factor);
+    
     s.enabled = wm.config.tiling.enabled;
     s.layout = parseLayout(wm.config.tiling.layout);
     s.master_side = wm.config.tiling.master_side;
     s.master_width = wm.config.tiling.master_width;
     s.master_count = wm.config.tiling.master_count;
-    s.gaps = wm.config.tiling.gaps;
-    s.border_width = wm.config.tiling.border_width;
+    s.gaps = scaled_gaps;
+    s.border_width = scaled_border_width;
     s.border_focused = wm.config.tiling.border_focused;
     s.border_unfocused = wm.config.tiling.border_unfocused;
     if (s.enabled) retileCurrentWorkspace(wm);
