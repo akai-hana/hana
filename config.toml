@@ -20,6 +20,11 @@ master_width = 50%    #  (5-95)
 show = true
 position = "bottom" # top/bottom
 
+# NEW: Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
+# Accepts formats: 0.9 or 90 (will be normalized to 0-1)
+# With picom's gaussian blur, the bar will show blurred content behind it
+transparency = 0.9  # 90% opacity (10% transparency)
+
 font_size = 12
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
@@ -82,8 +87,6 @@ segments = ["clock"]
 [workspaces]
 count = 8
 
-
-
 [Keybindings]
 # Convenience alias
 Mod = "Super" # Super/Mod4 / Alt/Mod1
@@ -130,7 +133,7 @@ Mod+Shift+R = "move_to_workspace_8"
 
 # Bar
 Mod+B = "toggle_bar"
-Mod+Shift+B = 
+Mod+Shift+B = "toggle_bar_position"  # NEW: Toggle bar position (top/bottom)
 
 # Application launchers
 Mod+P = "rofi -show drun"
