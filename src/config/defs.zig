@@ -177,6 +177,9 @@ pub const BarConfig = struct {
     clock_format: []const u8 = "%Y-%m-%d %H:%M:%S",
 
     layout: std.ArrayList(BarLayout),
+    
+    // DPI scaling
+    scale_factor: f32 = 1.0,
 
     pub fn deinit(self: *BarConfig, allocator: std.mem.Allocator) void {
         for (self.workspace_icons.items) |icon| {
@@ -205,6 +208,30 @@ pub const BarConfig = struct {
 
     pub inline fn getClockAccent(self: *const BarConfig) u32 {
         return self.clock_accent orelse self.accent_color;
+    }
+    
+    // DPI-aware scaling helpers
+    pub inline fn scaledFontSize(self: *const BarConfig) u16 {
+        return @intFromFloat(@round(@as(f32, @floatFromInt(self.font_size)) * self.scale_factor));
+    }
+    
+    pub inline fn scaledPadding(self: *const BarConfig) u16 {
+        return @intFromFloat(@round(@as(f32, @floatFromInt(self.padding)) * self.scale_factor));
+    }
+    
+    pub inline fn scaledSpacing(self: *const BarConfig) u16 {
+        return @intFromFloat(@round(@as(f32, @floatFromInt(self.spacing)) * self.scale_factor));
+    }
+    
+    pub inline fn scaledIndicatorSize(self: *const BarConfig) u16 {
+        const scaled: f32 = @as(f32, @floatFromInt(self.indicator_size)) * self.scale_factor;
+        return @max(2, @as(u16, @intFromFloat(@round(scaled))));
+    }
+    
+    pub inline fn scaledWorkspaceWidth(self: *const BarConfig) u16 {
+        // Base workspace width from bar.zig is 50
+        const base_width: f32 = 50.0;
+        return @intFromFloat(@round(base_width * self.scale_factor));
     }
 };
 
