@@ -18,7 +18,7 @@ const workspaces             = @import("workspaces");
     const status_segment     = @import("status");
 
 // TODO: adjust workspace width based off of monitor DPI
-pub const WORKSPACE_WIDTH: u16 = 20;
+pub const WORKSPACE_WIDTH: u16 = 40;
 
 const State = struct {
     window: u32,
