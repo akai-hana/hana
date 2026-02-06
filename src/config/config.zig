@@ -224,7 +224,7 @@ const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
     .{ "reload_config", .reload_config },
     .{ "toggle_layout", .toggle_layout },
     .{ "toggle_layout_reverse", .toggle_layout_reverse },
-    .{ "toggle_bar_visibility", .toggle_bar_visibility },
+    .{ "toggle_bar", .toggle_bar },
     .{ "toggle_bar_position", .toggle_bar_position },
     .{ "increase_master", .increase_master },
     .{ "decrease_master", .decrease_master },

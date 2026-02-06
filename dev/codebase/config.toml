@@ -1,0 +1,205 @@
+### akai_hana's personal hana WM config :-) ###
+
+[tiling]
+enabled = true     # Enable tiling on startup
+layout  = "master" # Default layout: master_left, monocle, or grid
+
+# Aesthetics
+gaps             = 12 # px
+border_width     = 6 # px
+border_focused   = "#ac3232" # "#RRGGBB" / RRGGBB / 0xRRGGBB
+border_unfocused = "#52263e"
+
+#  Layouts
+## Master-stack
+master_count = 1      #  Number of windows in master area
+master_side  = "left" #  left / right
+master_width = 50%    #  (5-95)
+
+[bar]
+show = true
+position = "bottom" # top/bottom
+
+# NEW: Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
+# Accepts formats: 0.9 or 90 (will be normalized to 0-1)
+# With picom's gaussian blur, the bar will show blurred content behind it
+transparency = 0.9  # 90% opacity (10% transparency)
+
+font_size = 12
+# Bar height
+## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
+#height = 32
+
+# Bar spacing
+padding = 99 # Padding inside segments (around text)
+spacing = 6  # Space between segments
+
+# List fonts in priority order: first font is primary, others come next
+# Useful for non-ASCII character support, while retaining a primary ASCII font  
+fonts = [
+    "FiraCode Nerd Font Ret",
+    "Noto Sans CJK JP",
+]
+
+# Legacy single font option (used if fonts array is not set):
+#font = "FiraCode Nerd Font Ret"
+
+# Main color palette
+bg          = "#0d0d14"
+fg          = "#bbbbbb"
+selected_bg = "#ac3232"
+selected_fg = "#eeeeee"
+occupied_fg = "#eeeeee"
+urgent_bg   = "#FF0000"
+urgent_fg   = "#FFFFFF"
+
+# Workspace labels/icons
+icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+
+indicator_size = 1
+title_accent = true
+
+# Accent colors for bar segments
+# Default accent for all segments
+accent_color = "#ac3232" # "#RRGGBB" / RRGGBB / 0xRRGGBB
+
+# Per-segment accent colors (overrides accent_color)
+# [bar.colors]
+# workspaces = "#ac3232"
+# title      = "#ac3232"
+# clock      = "#ac3232"
+
+# Configurable bar layout
+# You can rearrange segments however you like
+# Available segments: "workspaces", "title", "clock", "layout"
+
+# Bar layout
+# Anchors: left/center/right
+[bar.layout.left]
+segments = ["workspaces", "layout"]
+
+[bar.layout.center]
+segments = ["title"]
+
+[bar.layout.right]
+segments = ["clock"]
+
+[workspaces]
+count = 8
+
+
+
+[Keybindings]
+# Convenience alias
+Mod = "Super" # Super/Mod4 / Alt/Mod1
+
+# WM interactions
+Mod+F = "toggle_fullscreen"
+Mod+Shift+Return = "pkill -9 Xorg" # quit w
+#TODO (implemented but not properly working yet)
+Mod+Shift+F = "kill"
+Mod+Shift+T = "reload" # Config hot-reload
+
+# Tiling
+Mod+N           = "toggle_tiling" # Enable/disable tiling
+Mod+space       = "toggle_layout" # TODO Cycle layouts
+Mod+Shift+space = "toggle_layout_reverse"
+
+# Layouts
+## Master-stack
+Mod+H           = "decrease_master" # area TODO
+Mod+L           = "increase_master" # area
+Mod+comma       = "increase_master_count"
+Mod+period      = "decrease_master_count" 
+
+# Workspaces
+#TODO make workspace array
+Mod+1 = "workspace_1"
+Mod+2 = "workspace_2"
+Mod+3 = "workspace_3"
+Mod+4 = "workspace_4"
+Mod+Q = "workspace_5"
+Mod+W = "workspace_6"
+Mod+E = "workspace_7"
+Mod+R = "workspace_8"
+
+#TODO automatically add "Shift" to previous binds for the "move to workspace" binds
+Mod+Shift+1 = "move_to_workspace_1"
+Mod+Shift+2 = "move_to_workspace_2"
+Mod+Shift+3 = "move_to_workspace_3"
+Mod+Shift+4 = "move_to_workspace_4"
+Mod+Shift+Q = "move_to_workspace_5"
+Mod+Shift+W = "move_to_workspace_6"
+Mod+Shift+E = "move_to_workspace_7"
+Mod+Shift+R = "move_to_workspace_8"
+
+# Bar
+Mod+B = "toggle_bar"
+Mod+Shift+B = "toggle_bar_position"  # NEW: Toggle bar position (top/bottom)
+
+# Application launchers
+Mod+P = "rofi -show drun"
+
+# Program binds
+kill = "pkill -9" # program kill placeholder
+
+#TODO: replace "pkill -9" with the kill placeholder
+## Misc
+Mod+A       = "MOZ_USE_XINPUT2=1 firefox"
+Mod+Shift+A = "pkill -9 firefox"
+
+Mod+s       = "flatpak run org.equicord.equibop"
+Mod+Shift+S = "pkill -9 equibop"
+
+Mod+d       = "ghostty"
+Mod+Shift+D = "pkill -9 ghostty"
+
+# z -> osu
+
+Mod+X = "~/Games/t-client/DDNet"
+Mod+Shift+X = "pkill -9 DDNet"
+
+Mod+c = "flatpak run com.valvesoftware.Steam"
+Mod+Shift+C
+
+Mod+V       = "flatpak run com.github.th_ch.youtube_music"
+Mod+Shift+V = "pkill -9 youtube-music"
+
+# Emergency/Debug
+#TODO not yet working
+#Mod+Shift+d      = "dump_state"       # Print debug info
+Mod+Shift+Escape = "emergency_recover" # Emergency recovery mode
+
+# Workspace rules
+[workspace.rules.1] # browser
+Navigator
+Firefox
+
+[workspace.rules.2] # socials
+discord
+vesktop
+equibop
+electron
+
+[workspace.rules.3] # music
+com.github.th_ch.youtube_music
+
+[workspace.rules.4] # launchers
+steam
+OpenTabletDriver.UX
+
+[workspace.rules.5] # gaming
+"osu!"
+DDNet
+
+[workspace.rules.6] # editors
+emacs
+xeyes
+
+[workspace.rules.7] # Media
+freetube
+mpv
+gimp
+
+[workspace.rules.8] # torrenting
+deluge

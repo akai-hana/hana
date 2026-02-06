@@ -65,8 +65,8 @@ pub const Action = union(enum) {
     reload_config,
     toggle_layout,
     toggle_layout_reverse,
-    toggle_bar_visibility,
-    toggle_bar_position,
+    toggle_bar,
+    toggle_bar_position,  // NEW: toggle bar between top and bottom
     increase_master,
     decrease_master,
     increase_master_count,
@@ -158,7 +158,7 @@ pub const BarConfig = struct {
     fonts: std.ArrayList([]const u8),
     font_size: parser.ScalableValue = parser.ScalableValue.percentage(10.0),
     scaled_font_size: u16 = 10, // Computed value after DPI scaling
-    padding: u16 = 16,
+    padding: u16 = 8,
     spacing: u16 = 12,
 
     bg: u32 = 0x222222,
