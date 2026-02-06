@@ -55,8 +55,15 @@ pub const MIN_WORKSPACES: usize = 1;
 // Tiling constraints
 pub const MIN_MASTER_WIDTH: f32 = 0.05;
 
-// Focus protection timeout in milliseconds
-pub const FOCUS_PROTECTION_TIMEOUT_MS: i64 = 250;
+// REMOVED: Time-based focus protection (replaced with sequence-based)
+// pub const FOCUS_PROTECTION_TIMEOUT_NS: i64 = 100 * std.time.ns_per_ms;
+
+// NEW: Sequence-based focus protection
+// After a keyboard/programmatic action, ignore EnterNotify events for the next N X11 events
+// This is deterministic and works regardless of system load
+// INCREASED to 50: On fast systems, window mapping can generate 20-30+ events very quickly
+// (ConfigureNotify, MapNotify, PropertyNotify, ReparentNotify, Expose, etc.)
+pub const FOCUS_PROTECTION_EVENT_COUNT: u16 = 50;
 
 pub const Action = union(enum) {
     exec: []const u8,
@@ -362,6 +369,16 @@ pub const WM = struct {
     should_reload_config: *std.atomic.Value(bool),
     running: *std.atomic.Value(bool),
     drag_state: DragState = .{},
+    
+    // NEW: Sequence-based focus protection (replaces time-based protection)
+    // Counts events processed since last programmatic action
+    // EnterNotify events are ignored while this counter is below FOCUS_PROTECTION_EVENT_COUNT
+    events_since_programmatic_action: u16 = 999, // Start high to not block initial events
+    
+    // ADDITIONAL: Per-window spawn protection
+    // Tracks the most recently spawned window to give it extra protection from EnterNotify
+    last_spawned_window: ?u32 = null,
+    events_since_last_spawn: u16 = 999, // Start high to not block initial events
 
     pub fn deinit(self: *WM) void {
         self.fullscreen.deinit();

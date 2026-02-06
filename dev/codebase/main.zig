@@ -282,10 +282,8 @@ pub fn main() !void {
         .{ .fd = fds.timer, .events = posix.POLL.IN, .revents = 0 },
     };
     
-    // OPTIMIZATION: Main loop is already well-optimized
-    // - Drains all X11 events before processing
-    // - Single flush per iteration
-    // - Efficient poll() multiplexing
+    // OPTIMIZATION: Main loop with sequence-based focus protection
+    // Increment event counter for each event processed to enable deterministic focus protection
     while (running.load(.acquire)) {
         _ = posix.poll(&pollfds, -1) catch |err| {
             if (err == error.Interrupted) continue;
@@ -299,6 +297,13 @@ pub fn main() !void {
             while (xcb.xcb_poll_for_event(conn)) |event| {
                 defer std.c.free(event);
                 events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
+                
+                // NEW: Increment event counter for sequence-based focus protection
+                // This provides deterministic protection against spurious EnterNotify events
+                // Cap at max value to avoid overflow (though in practice this would take years)
+                if (wm.events_since_programmatic_action < 65535) {
+                    wm.events_since_programmatic_action += 1;
+                }
             }
             
             // Batch post-processing after all events

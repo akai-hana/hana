@@ -73,6 +73,14 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     };
     defer b.deinit();
 
+    // FOCUS PROTECTION: Reset event counter BEFORE mapping to protect new window focus
+    // This prevents EnterNotify events generated during mapping from stealing focus
+    if (is_current_ws) {
+        wm.events_since_programmatic_action = 0;
+        wm.last_spawned_window = win;
+        wm.events_since_last_spawn = 0;
+    }
+
     // Subscribe to enter/leave events
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
 
@@ -110,14 +118,26 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
     b.execute();
     
-    // Grab buttons for click-to-focus (window starts unfocused)
-    grabButtons(wm, win, false);
+    // Focus new window if it's on the current workspace
+    if (is_current_ws) {
+        focus.setFocus(wm, win, .tiling_operation);
+    } else {
+        // Grab buttons for click-to-focus (window starts unfocused)
+        grabButtons(wm, win, false);
+    }
     
     bar.markDirty();
 }
 
 // OPTIMIZATION: Fallback for when batch operations fail
 inline fn handleMapRequestDirect(wm: *WM, win: u32, is_current_ws: bool, validated_ws: usize) void {
+    // FOCUS PROTECTION: Reset event counter BEFORE mapping to protect new window focus
+    if (is_current_ws) {
+        wm.events_since_programmatic_action = 0;
+        wm.last_spawned_window = win;
+        wm.events_since_last_spawn = 0;
+    }
+
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
     
     // DWM APPROACH: Always map, but position off-screen if not current workspace
@@ -150,7 +170,14 @@ inline fn handleMapRequestDirect(wm: *WM, win: u32, is_current_ws: bool, validat
     }
     
     utils.flush(wm.conn);
-    grabButtons(wm, win, false);
+    
+    // Focus new window if it's on the current workspace
+    if (is_current_ws) {
+        focus.setFocus(wm, win, .tiling_operation);
+    } else {
+        grabButtons(wm, win, false);
+    }
+    
     bar.markDirty();
 }
 
@@ -173,16 +200,38 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     utils.flush(wm.conn);
 }
 
+// FIX: Relaxed EnterNotify filtering for better Firefox compatibility
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     const win = event.event;
     
     // OPTIMIZATION: Combined early return checks
     if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
 
-    // Filter spurious EnterNotify events
-    if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
-        event.detail == xcb.XCB_NOTIFY_DETAIL_VIRTUAL or
-        event.detail == xcb.XCB_NOTIFY_DETAIL_NONLINEAR_VIRTUAL) return;
+    // FIX: Only filter UNGRAB mode - allow NORMAL and GRAB modes
+    // This fixes Firefox focus issues when moving quickly between windows
+    // UNGRAB events are still artifacts that should be filtered
+    if (event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) return;
+    
+    // FIX: Allow inferior/ancestor events for Firefox compatibility
+    // Only filter strictly virtual events (nonlinear virtual)
+    if (event.detail == xcb.XCB_NOTIFY_DETAIL_NONLINEAR_VIRTUAL) return;
+
+    // FOCUS PROTECTION: Ignore mouse-enter focus changes for a short time after
+    // programmatic focus changes (e.g., window creation, user commands)
+    // Using dual sequence-based protection:
+    
+    // GLOBAL protection: Blocks EnterNotify for ANY window after programmatic actions
+    if (wm.events_since_programmatic_action < defs.FOCUS_PROTECTION_EVENT_COUNT) {
+        return;
+    }
+    
+    // PER-WINDOW protection: Extra protection for the most recently spawned window
+    // This catches cases where the global counter has expired but the window just spawned
+    if (wm.last_spawned_window == win and wm.events_since_last_spawn < defs.FOCUS_PROTECTION_EVENT_COUNT) {
+        return;
+    }
+
+    if (!wm.hasWindow(win)) return;
 
     const old_focus = wm.focused_window;
     focus.setFocus(wm, win, .mouse_enter);
@@ -194,11 +243,8 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     
     if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
     
-    // Always ungrab buttons on clicked window (even if already focused)
-    // This is critical for apps like Firefox to receive input properly
-    grabButtons(wm, win, true);
-    
     // Focus window and replay the event (DWM approach)
+    // Note: setFocus will handle button grab/ungrab internally
     focus.setFocus(wm, win, .mouse_click);
     _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, xcb.XCB_CURRENT_TIME);
     _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_KEYBOARD, xcb.XCB_CURRENT_TIME);
