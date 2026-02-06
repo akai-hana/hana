@@ -87,10 +87,15 @@ for f in "$FILES_DIR"/* "$FILES_DIR"/.*; do
   bn="$(basename "$f")"
 
   # Remove .fixed suffix if present (but keep the original extension)
-  if [ "${bn%.fixed}" != "$bn" ]; then
-    dest="${bn%.fixed}"
-  else
-    dest="$bn"
+  bn_no_fixed="${bn%.fixed}"
+
+  # Remove any occurrence of "_improved" inside the basename (POSIX-safe)
+  # e.g. "foo_improved.js.fixed" -> "foo.js"
+  dest="$(printf '%s' "$bn_no_fixed" | sed 's/_improved//g')"
+
+  # If dest ends up empty for some weird reason, fall back to the original basename
+  if [ -z "$dest" ]; then
+    dest="$bn_no_fixed"
   fi
 
   write_to_codebase "$f" "$dest"
