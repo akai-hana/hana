@@ -158,7 +158,7 @@ pub const BarConfig = struct {
     fonts: std.ArrayList([]const u8),
     font_size: parser.ScalableValue = parser.ScalableValue.percentage(10.0),
     scaled_font_size: u16 = 10, // Computed value after DPI scaling
-    padding: u16 = 8,
+    padding: u16 = 16,
     spacing: u16 = 12,
 
     bg: u32 = 0x222222,

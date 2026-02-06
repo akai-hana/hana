@@ -20,18 +20,13 @@ master_width = 50%    #  (5-95)
 show = true
 position = "bottom" # top/bottom
 
-# NEW: Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
-# Accepts formats: 0.9 or 90 (will be normalized to 0-1)
-# With picom's gaussian blur, the bar will show blurred content behind it
-transparency = 50% # %
-
-font_size = 11
+font_size = 12
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
 #height = 32
 
 # Bar spacing
-padding = 99 # Padding inside segments (around text)
+padding = 0 # Padding inside segments (around text)
 spacing = 6  # Space between segments
 
 # List fonts in priority order: first font is primary, others come next
@@ -40,6 +35,11 @@ fonts = [
     "FiraCode Nerd Font Ret",
     "Noto Sans CJK JP",
 ]
+
+# NEW: Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
+# Accepts formats: 0.9 or 90 (will be normalized to 0-1)
+# With picom's gaussian blur, the bar will show blurred content behind it
+transparency = 50% # %
 
 # Legacy single font option (used if fonts array is not set):
 #font = "FiraCode Nerd Font Ret"
