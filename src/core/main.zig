@@ -298,11 +298,13 @@ pub fn main() !void {
                 defer std.c.free(event);
                 events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
                 
-                // NEW: Increment event counter for sequence-based focus protection
-                // This provides deterministic protection against spurious EnterNotify events
-                // Cap at max value to avoid overflow (though in practice this would take years)
-                if (wm.events_since_programmatic_action < 65535) {
+                // NEW: Increment BOTH event counters for dual protection system
+                // This allows EnterNotify to be blocked globally AND per-window
+                if (wm.events_since_programmatic_action < 999) {
                     wm.events_since_programmatic_action += 1;
+                }
+                if (wm.events_since_last_spawn < 999) {
+                    wm.events_since_last_spawn += 1;
                 }
             }
             

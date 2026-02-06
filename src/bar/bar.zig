@@ -1,5 +1,5 @@
-//! Hana status bar
-//! Took inspiration from dwm
+//! Status bar
+//! Taking inspiration from dwm
 
 const std     = @import("std");
 const defs    = @import("defs");
