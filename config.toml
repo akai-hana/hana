@@ -23,9 +23,9 @@ position = "bottom" # top/bottom
 # NEW: Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
 # Accepts formats: 0.9 or 90 (will be normalized to 0-1)
 # With picom's gaussian blur, the bar will show blurred content behind it
-transparency = 0.9  # 90% opacity (10% transparency)
+transparency = 50% # %
 
-font_size = 12
+font_size = 11
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
 #height = 32
@@ -132,8 +132,8 @@ Mod+Shift+E = "move_to_workspace_7"
 Mod+Shift+R = "move_to_workspace_8"
 
 # Bar
-Mod+B = "toggle_bar"
-Mod+Shift+B = "toggle_bar_position"  # NEW: Toggle bar position (top/bottom)
+Mod+B = "toggle_bar_visibility"     # shown/hidden
+Mod+Shift+B = "toggle_bar_position" # top/bottom
 
 # Application launchers
 Mod+P = "rofi -show drun"
