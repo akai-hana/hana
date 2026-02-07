@@ -68,10 +68,10 @@ pub const DrawContext = struct {
             return error.PangoLayoutCreateFailed;
         };
         
-        // Set DPI for proper font scaling
-        // This is critical - without it, Pango defaults to 96 DPI
-        const pango_context = c.pango_layout_get_context(layout);
-        c.pango_cairo_context_set_resolution(pango_context, @floatCast(dpi));
+        // Note: We don't set Pango's DPI resolution here because font sizes are
+        // already scaled manually via scaledFontSize() to match the old Xft behavior.
+        // Setting both would cause double-scaling.
+        _ = dpi; // DPI is available if needed in the future
         
         dc.* = .{
             .allocator = allocator,
@@ -154,6 +154,11 @@ pub const DrawContext = struct {
         c.cairo_fill(self.ctx);
     }
     
+    /// Draw text at the specified position
+    /// x: horizontal position (left edge)
+    /// y: vertical position (baseline) - use dc.baselineY(bar_height) for vertical centering
+    /// text: UTF-8 text to render
+    /// color: RGB color (0xRRGGBB format)
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
         const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
         const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
@@ -266,9 +271,16 @@ pub const DrawContext = struct {
     
     pub inline fn baselineY(self: *DrawContext, bar_height: u16) u16 {
         const asc: i32 = self.getAscender();
-        const desc: i32 = -self.getDescender();
-        const pad: i32 = @divTrunc(@as(i32, bar_height) - (asc + desc), 2);
-        return @intCast(@max(asc, pad + asc));
+        const desc: i32 = -self.getDescender(); // getDescender returns negative, so negate to get positive
+        const text_height = asc + desc;
+        
+        // Calculate padding to vertically center the text
+        // If bar is too short, use minimum padding of 0
+        const total_pad = @as(i32, bar_height) - text_height;
+        const top_pad = @max(0, @divTrunc(total_pad, 2));
+        
+        // Baseline Y = top padding + ascender height
+        return @intCast(top_pad + asc);
     }
 };
 
