@@ -319,17 +319,21 @@ pub const DrawContext = struct {
         var logical_rect: c.PangoRectangle = undefined;
         c.pango_layout_get_pixel_extents(self.pango_layout, null, &logical_rect);
         
-        // Get the baseline position within the text's bounding box
-        const baseline = c.pango_layout_get_baseline(self.pango_layout);
-        const baseline_pixels: i32 = @divTrunc(baseline, c.PANGO_SCALE);
+        // logical_rect.y is the offset from baseline to top of logical rect (usually negative)
+        // logical_rect.height is the total height of the bounding box
         
-        // Center the text's bounding box vertically in the bar
+        // To center the logical rectangle in the bar:
+        // - Top of logical rect should be at: (bar_height - height) / 2
+        // - Top of logical rect is at: baseline + logical_rect.y
+        // - Therefore: baseline + logical_rect.y = (bar_height - height) / 2
+        // - So: baseline = (bar_height - height) / 2 - logical_rect.y
+        
         const text_height: i32 = logical_rect.height;
-        const total_pad: i32 = @as(i32, bar_height) - text_height;
-        const top_pad: i32 = @max(0, @divTrunc(total_pad, 2));
+        const top_pad: i32 = @divTrunc(@as(i32, bar_height) - text_height, 2);
         
-        // Baseline Y = top padding + baseline offset within the text
-        return @intCast(top_pad + baseline_pixels);
+        // Since logical_rect.y is negative (top is above baseline), 
+        // subtracting it moves the baseline down
+        return @intCast(top_pad - logical_rect.y);
     }
 };
 
