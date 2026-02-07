@@ -8,9 +8,10 @@ const defs = @import("defs");
 
 const c = @cImport({
     @cInclude("xcb/xcb.h");
-    @cInclude("X11/Xft/Xft.h");
     @cInclude("X11/Xlib.h");
     @cInclude("X11/Xlib-xcb.h");
+    @cInclude("X11/extensions/Xrender.h");
+    @cInclude("X11/Xft/Xft.h");
     @cInclude("fontconfig/fontconfig.h");
 });
 
@@ -326,8 +327,18 @@ pub const DrawContext = struct {
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
         const alpha = self.alpha_override orelse 0xFFFF;
-        const xft_color = self.color_cache.getWithAlpha(color, alpha);
-        c.XftDrawRect(self.xft_draw, xft_color, @intCast(x), @intCast(y), width, height);
+        
+        // Use XRender for proper alpha compositing instead of XftDrawRect
+        const render_color = rgbToXRenderColorWithAlpha(color, alpha);
+        
+        // Get the XRender Picture from XftDraw
+        const picture = c.XftDrawPicture(self.xft_draw);
+        
+        // Use XRenderFillRectangle with PictOpSrc
+        // PictOpSrc replaces the destination, respecting alpha in the source color
+        // This is correct for clearing/redrawing the bar background
+        c.XRenderFillRectangle(self.display, c.PictOpSrc, picture, &render_color, 
+            @intCast(x), @intCast(y), width, height);
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {

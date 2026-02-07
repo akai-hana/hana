@@ -210,15 +210,12 @@ pub fn init(wm: *defs.WM) !void {
         _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, 
             colormap, screen.root, visual_info.visual_id);
         
-        // Apply alpha to background color
-        const bg_with_alpha = applyAlphaToColor(wm.config.bar.bg, alpha);
-        
-        // Create window with 32-bit depth and ARGB visual
-        const value_mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL | 
+        // For transparent windows, don't set a background pixel
+        // We'll draw everything ourselves with XRender for proper alpha
+        const value_mask = xcb.XCB_CW_BORDER_PIXEL | 
                            xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_COLORMAP;
         const value_list = [_]u32{ 
-            bg_with_alpha,
-            0,
+            0,  // border pixel
             xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS,
             colormap,
         };
