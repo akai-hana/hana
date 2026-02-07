@@ -30,6 +30,12 @@ pub const PangoLayout = opaque {};
 pub const PangoFontDescription = opaque {};
 pub const PangoContext = opaque {};
 pub const PangoFontMetrics = opaque {};
+pub const PangoRectangle = extern struct {
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+};
 pub const PangoEllipsizeMode = enum(c_int) {
     NONE = 0,
     START = 1,
@@ -80,6 +86,8 @@ pub extern "pango-1.0" fn pango_layout_set_text(layout: *PangoLayout, text: [*]c
 pub extern "pango-1.0" fn pango_layout_set_width(layout: *PangoLayout, width: c_int) void;
 pub extern "pango-1.0" fn pango_layout_set_ellipsize(layout: *PangoLayout, ellipsize: PangoEllipsizeMode) void;
 pub extern "pango-1.0" fn pango_layout_get_pixel_size(layout: *PangoLayout, width: *c_int, height: *c_int) void;
+pub extern "pango-1.0" fn pango_layout_get_pixel_extents(layout: *PangoLayout, ink_rect: ?*PangoRectangle, logical_rect: ?*PangoRectangle) void;
+pub extern "pango-1.0" fn pango_layout_get_baseline(layout: *PangoLayout) c_int;
 pub extern "pango-1.0" fn pango_layout_get_context(layout: *PangoLayout) *PangoContext;
 
 pub extern "pango-1.0" fn pango_context_get_metrics(

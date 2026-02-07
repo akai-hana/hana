@@ -196,7 +196,7 @@ xeyes
 
 [workspace.rules.7] # Media
 freetube
-mpv
+#mpv
 gimp
 
 [workspace.rules.8] # torrenting

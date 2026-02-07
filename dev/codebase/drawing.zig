@@ -252,6 +252,27 @@ pub const DrawContext = struct {
         return @intCast(height);
     }
     
+    /// Get baseline offset for text to properly center it visually
+    /// Returns the Y coordinate where text should be drawn for visual centering
+    pub fn centeredTextY(self: *DrawContext, text: []const u8, bar_height: u16) u16 {
+        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
+        
+        // Get logical extents (the bounding box)
+        var logical_rect: c.PangoRectangle = undefined;
+        c.pango_layout_get_pixel_extents(self.pango_layout, null, &logical_rect);
+        
+        // Get the baseline position
+        const baseline = c.pango_layout_get_baseline(self.pango_layout);
+        const baseline_pixels: i32 = @divTrunc(baseline, c.PANGO_SCALE);
+        
+        // Center the logical rectangle in the bar
+        const text_height: i32 = logical_rect.height;
+        const top_pad: i32 = @divTrunc(@as(i32, bar_height) - text_height, 2);
+        
+        // Baseline Y = top padding + baseline offset within the text
+        return @intCast(top_pad + baseline_pixels);
+    }
+    
     pub fn getAscender(self: *DrawContext) i16 {
         const metrics = c.pango_context_get_metrics(
             c.pango_layout_get_context(self.pango_layout),

@@ -47,11 +47,8 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
             static_numbers[i] 
         else "?";
         
-        // Calculate proper vertical centering using actual text height
-        const text_h = dc.textHeight(label);
-        const asc = dc.getAscender();
-        const top_pad = (height - text_h) / 2;
-        const text_y = top_pad + @as(u16, @intCast(asc));
+        // Use the centered text Y calculation for proper visual alignment
+        const text_y = dc.centeredTextY(label, height);
         
         try dc.drawText(x + (scaled_ws_width - dc.textWidth(label)) / 2, text_y, label, fg);
 
