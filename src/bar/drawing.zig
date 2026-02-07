@@ -125,8 +125,8 @@ pub const DrawContext = struct {
     }
     
     pub fn loadFonts(self: *DrawContext, font_names: []const []const u8) !void {
-        // Pango handles font fallback automatically
-        // Just load the first font, Pango will use others as fallbacks via fontconfig
+        // Pango handles font fallback automatically via fontconfig
+        // Just load the first font, Pango will use others as fallbacks
         if (font_names.len > 0) {
             try self.loadFont(font_names[0]);
             
@@ -138,16 +138,21 @@ pub const DrawContext = struct {
         }
     }
     
-    pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
+    /// Helper: Convert RGB color to Cairo RGBA components
+    /// Returns (r, g, b, a) as f64 values in 0.0-1.0 range
+    inline fn rgbToRGBA(color: u32, alpha_override: ?u16) struct { f64, f64, f64, f64 } {
         const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
         const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
         const b = @as(f64, @floatFromInt(color & 0xFF)) / 255.0;
-        
-        // Apply alpha override if set
-        const a = if (self.alpha_override) |alpha|
+        const a = if (alpha_override) |alpha|
             @as(f64, @floatFromInt(alpha)) / 65535.0
         else
             1.0;
+        return .{ r, g, b, a };
+    }
+    
+    pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
+        const r, const g, const b, const a = rgbToRGBA(color, self.alpha_override);
         
         c.cairo_set_source_rgba(self.ctx, r, g, b, a);
         c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
@@ -157,20 +162,11 @@ pub const DrawContext = struct {
     
     /// Draw text at the specified position
     /// x: horizontal position (left edge)
-    /// y: vertical position (baseline) - use dc.baselineY() or dc.baselineYForText() for centering
+    /// y: vertical position (baseline) - use dc.baselineY() for centering
     /// text: UTF-8 text to render
     /// color: RGB color (0xRRGGBB format)
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
-        const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
-        const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
-        const b = @as(f64, @floatFromInt(color & 0xFF)) / 255.0;
-        
-        // Apply alpha override if set
-        const a = if (self.alpha_override) |alpha|
-            @as(f64, @floatFromInt(alpha)) / 65535.0
-        else
-            1.0;
-        
+        const r, const g, const b, const a = rgbToRGBA(color, self.alpha_override);
         c.cairo_set_source_rgba(self.ctx, r, g, b, a);
         
         // Set text in Pango layout
@@ -195,16 +191,7 @@ pub const DrawContext = struct {
         c.pango_layout_set_width(self.pango_layout, @intCast(@as(i32, max_width) * c.PANGO_SCALE));
         c.pango_layout_set_ellipsize(self.pango_layout, c.PANGO_ELLIPSIZE_END);
         
-        const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
-        const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
-        const b = @as(f64, @floatFromInt(color & 0xFF)) / 255.0;
-        
-        // Apply alpha override if set
-        const a = if (self.alpha_override) |alpha|
-            @as(f64, @floatFromInt(alpha)) / 65535.0
-        else
-            1.0;
-        
+        const r, const g, const b, const a = rgbToRGBA(color, self.alpha_override);
         c.cairo_set_source_rgba(self.ctx, r, g, b, a);
         
         // Pango draws from top-left, but our API uses baseline Y
@@ -236,38 +223,9 @@ pub const DrawContext = struct {
         return @intCast(width);
     }
     
-    pub fn textHeight(self: *DrawContext, text: []const u8) u16 {
-        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
-        
-        var width: c_int = undefined;
-        var height: c_int = undefined;
-        c.pango_layout_get_pixel_size(self.pango_layout, &width, &height);
-        
-        return @intCast(height);
-    }
-    
-    /// Get baseline offset for text to properly center it visually
-    /// Returns the Y coordinate where text should be drawn for visual centering
-    pub fn centeredTextY(self: *DrawContext, text: []const u8, bar_height: u16) u16 {
-        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
-        
-        // Get logical extents (the bounding box)
-        var logical_rect: c.PangoRectangle = undefined;
-        c.pango_layout_get_pixel_extents(self.pango_layout, null, &logical_rect);
-        
-        // Get the baseline position
-        const baseline = c.pango_layout_get_baseline(self.pango_layout);
-        const baseline_pixels: i32 = @divTrunc(baseline, c.PANGO_SCALE);
-        
-        // Center the logical rectangle in the bar
-        const text_height: i32 = logical_rect.height;
-        const top_pad: i32 = @divTrunc(@as(i32, bar_height) - text_height, 2);
-        
-        // Baseline Y = top padding + baseline offset within the text
-        return @intCast(top_pad + baseline_pixels);
-    }
-    
-    pub fn getAscender(self: *DrawContext) i16 {
+    /// Get ascender and descender metrics in one call (optimization)
+    /// Returns (ascender, descender) both as positive values
+    fn getMetrics(self: *DrawContext) struct { i16, i16 } {
         const metrics = c.pango_context_get_metrics(
             c.pango_layout_get_context(self.pango_layout),
             self.current_font_desc,
@@ -276,60 +234,41 @@ pub const DrawContext = struct {
         defer c.pango_font_metrics_unref(metrics);
         
         const ascent = c.pango_font_metrics_get_ascent(metrics);
-        return @intCast(@divTrunc(ascent, c.PANGO_SCALE));
+        const descent = c.pango_font_metrics_get_descent(metrics);
+        
+        return .{
+            @intCast(@divTrunc(ascent, c.PANGO_SCALE)),
+            @intCast(@divTrunc(descent, c.PANGO_SCALE)),
+        };
+    }
+    
+    pub fn getAscender(self: *DrawContext) i16 {
+        const asc, _ = self.getMetrics();
+        return asc;
     }
     
     pub fn getDescender(self: *DrawContext) i16 {
-        const metrics = c.pango_context_get_metrics(
-            c.pango_layout_get_context(self.pango_layout),
-            self.current_font_desc,
-            null
-        );
-        defer c.pango_font_metrics_unref(metrics);
-        
-        const descent = c.pango_font_metrics_get_descent(metrics);
-        return -@as(i16, @intCast(@divTrunc(descent, c.PANGO_SCALE)));
+        _, const desc = self.getMetrics();
+        return -@as(i16, desc); // Return as negative
     }
     
     pub inline fn flush(self: *DrawContext) void {
         c.cairo_surface_flush(self.surface);
     }
     
+    /// Calculate baseline Y position for vertical centering in the bar
+    /// This uses the primary font's metrics for consistent alignment across all segments
     pub inline fn baselineY(self: *DrawContext, bar_height: u16) u16 {
-        const asc: i32 = self.getAscender();
-        const desc: i32 = -self.getDescender(); // getDescender returns negative, so negate to get positive
+        const asc, const desc = self.getMetrics();
         const text_height = asc + desc;
         
         // Calculate padding to vertically center the text
-        // If bar is too short, use minimum padding of 0
         const total_pad = @as(i32, bar_height) - text_height;
-        const top_pad = @max(0, @divTrunc(total_pad, 2));
+        const top_pad: i32 = @max(0, @divTrunc(total_pad, 2));
         
         // Baseline Y = top padding + ascender height
-        return @intCast(top_pad + asc);
-    }
-    
-    /// Calculate baseline Y position for specific text to be vertically centered.
-    /// This accounts for font fallback (e.g., FiraCode + CJK).
-    /// Uses the same logic as centeredTextY.
-    pub fn baselineYForText(self: *DrawContext, text: []const u8, bar_height: u16) u16 {
-        // Set the text so Pango selects the correct font
-        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
-        
-        // Get logical extents (the bounding box)
-        var logical_rect: c.PangoRectangle = undefined;
-        c.pango_layout_get_pixel_extents(self.pango_layout, null, &logical_rect);
-        
-        // Get the baseline position (distance from top of layout to baseline)
-        const baseline = c.pango_layout_get_baseline(self.pango_layout);
-        const baseline_pixels: i32 = @divTrunc(baseline, c.PANGO_SCALE);
-        
-        // Center the logical rectangle in the bar
-        const text_height: i32 = logical_rect.height;
-        const top_pad: i32 = @divTrunc(@as(i32, bar_height) - text_height, 2);
-        
-        // Baseline Y = top padding + baseline offset within the text
-        return @intCast(top_pad + baseline_pixels);
+        const baseline_y: i32 = top_pad + asc;
+        return @intCast(baseline_y);
     }
 };
 
@@ -376,12 +315,12 @@ fn getDefaultVisualType(screen: *c.xcb_screen_t) *c.xcb_visualtype_t {
 // "DejaVu Sans:size=12:weight=bold" -> "DejaVu Sans Bold 12"
 // "FiraCode Nerd Font Ret" -> "FiraCode Nerd Font Ret" (unchanged)
 fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const u8 {
-    // If it already looks like Pango format (has space, no colons), return as-is
+    // If it already looks like Pango format (no colons), return as-is
     if (std.mem.indexOfScalar(u8, xft_name, ':') == null) {
         return xft_name;
     }
     
-    var result = try std.ArrayList(u8).initCapacity(allocator, 0);
+    var result = try std.ArrayList(u8).initCapacity(allocator, xft_name.len);
     errdefer result.deinit(allocator);
     
     var parts = std.mem.splitScalar(u8, xft_name, ':');

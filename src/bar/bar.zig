@@ -44,12 +44,6 @@ fn findVisualByDepth(screen: *xcb.xcb_screen_t, depth: u8) VisualInfo {
     return .{ .visual_type = null, .visual_id = screen.root_visual };
 }
 
-/// Apply alpha to an RGB color value (RGB -> ARGB)
-fn applyAlphaToColor(rgb: u32, alpha: u16) u32 {
-    const a8: u8 = @intCast(alpha >> 8); // Convert 16-bit alpha to 8-bit
-    return (@as(u32, a8) << 24) | (rgb & 0xFFFFFF);
-}
-
 const State = struct {
     window: u32,
     width: u16,
