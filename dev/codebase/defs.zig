@@ -65,7 +65,7 @@ pub const Action = union(enum) {
     reload_config,
     toggle_layout,
     toggle_layout_reverse,
-    toggle_bar,
+    toggle_bar_visibility,
     toggle_bar_position,  // NEW: toggle bar between top and bottom
     increase_master,
     decrease_master,
