@@ -31,8 +31,6 @@ inline fn drawIndicator(dc: *drawing.DrawContext, x: u16, size: u16, filled: boo
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16) !u16 {
     const ws_state = workspaces.getState() orelse return start_x;
     var x = start_x;
-    const base_y = dc.baselineY(height);
-    const text_y = if (base_y >= 3) base_y - 3 else base_y; // Move text up by 3px
     const scaled_ws_width = config.scaledWorkspaceWidth();
     const scaled_indicator_size = config.scaledIndicatorSize();
 
@@ -48,6 +46,10 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
         else if (i < static_numbers.len) 
             static_numbers[i] 
         else "?";
+        
+        // Use text-specific baseline calculation to handle font fallback properly
+        // Each label may use a different font (e.g., FiraCode vs Noto Sans CJK JP)
+        const text_y = dc.baselineYForText(label, height);
         
         try dc.drawText(x + (scaled_ws_width - dc.textWidth(label)) / 2, text_y, label, fg);
 

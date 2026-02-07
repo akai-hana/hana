@@ -314,6 +314,30 @@ pub const DrawContext = struct {
         // Baseline Y = top padding + ascender height
         return @intCast(top_pad + asc);
     }
+    
+    /// Calculate baseline Y for specific text, accounting for font fallback.
+    /// This is necessary when using multiple fonts (e.g., FiraCode + CJK fallback)
+    /// because different fonts have different metrics.
+    pub fn baselineYForText(self: *DrawContext, text: []const u8, bar_height: u16) u16 {
+        // Set the text so Pango selects the correct font (including fallbacks)
+        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
+        
+        // Get the baseline position that Pango calculated for this specific text
+        const baseline_pango = c.pango_layout_get_baseline(self.pango_layout);
+        const baseline_px: i32 = @divTrunc(baseline_pango, c.PANGO_SCALE);
+        
+        // Get the actual height of the rendered text
+        var logical_rect: c.PangoRectangle = undefined;
+        c.pango_layout_get_pixel_extents(self.pango_layout, null, &logical_rect);
+        
+        // Calculate vertical centering offset
+        const text_height: i32 = logical_rect.height;
+        const total_pad: i32 = @as(i32, bar_height) - text_height;
+        const top_pad: i32 = @max(0, @divTrunc(total_pad, 2));
+        
+        // The baseline Y is the top padding plus the baseline position within the text
+        return @intCast(top_pad + baseline_px);
+    }
 };
 
 // Helper to find visual type from visual ID
