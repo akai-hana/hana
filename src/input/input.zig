@@ -273,7 +273,7 @@ fn dumpState(wm: *WM) void {
     debug.info("Pointer: ({}, {})", .{wm.last_pointer_x, wm.last_pointer_y});
 
     var fs_it = wm.fullscreen.per_workspace.iterator();
-    var fs_count: usize = 0;
+    var fs_count: u8 = 0;
     while (fs_it.next()) |entry| {
         debug.info("Fullscreen on workspace {}: {x}", .{ entry.key_ptr.*, entry.value_ptr.window });
         fs_count += 1;

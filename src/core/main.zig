@@ -129,7 +129,7 @@ fn grabKeybindings(wm: *WM) !void {
     const cookies = try wm.allocator.alloc(xcb.xcb_void_cookie_t, max_grabs);
     defer wm.allocator.free(cookies);
     
-    var cookie_idx: usize = 0;
+    var cookie_idx: u16 = 0;
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
         for (LOCK_MODIFIERS) |lock| {
@@ -142,7 +142,7 @@ fn grabKeybindings(wm: *WM) !void {
     utils.flush(wm.conn);
     
     var has_errors = false;
-    var failed_count: usize = 0;
+    var failed_count: u16 = 0;
     
     for (cookies[0..cookie_idx]) |cookie| {
         if (xcb.xcb_request_check(wm.conn, cookie)) |err| {

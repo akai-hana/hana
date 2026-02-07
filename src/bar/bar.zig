@@ -403,7 +403,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.W
     if (state) |s| if (event.event == s.window) {
         const ws_state = workspaces.getState() orelse return;
         const scaled_ws_width = s.config.scaledWorkspaceWidth();
-        const clicked_ws: usize = @intCast(@max(0, @divFloor(event.event_x, scaled_ws_width)));
+        const clicked_ws: u8 = @intCast(@max(0, @min(255, @divFloor(event.event_x, scaled_ws_width))));
         if (clicked_ws < ws_state.workspaces.len) {
             workspaces.switchTo(wm, clicked_ws);
             s.markDirty();
@@ -438,7 +438,7 @@ fn draw(s: *State, wm: *defs.WM) !void {
     const scaled_spacing = s.config.scaledSpacing();
     var widths = [_]u16{0} ** 2; // [left, right]
     for (s.config.layout.items) |layout| {
-        const idx: usize = switch (layout.position) {
+        const idx: u8 = switch (layout.position) {
             .left => 0,
             .right => 1,
             .center => continue,

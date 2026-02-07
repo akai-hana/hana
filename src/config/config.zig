@@ -9,7 +9,7 @@ const xkb = @import("xkbcommon");
 // Consolidated color parsing
 pub fn parseColor(str: []const u8) !u32 {
     if (str.len == 0) return error.InvalidColor;
-    const offset: usize = if (str[0] == '#') 1 else if (str.len > 2 and str[0] == '0' and (str[1] == 'x' or str[1] == 'X')) 2 else 0;
+    const offset: u8 = if (str[0] == '#') 1 else if (str.len > 2 and str[0] == '0' and (str[1] == 'x' or str[1] == 'X')) 2 else 0;
     const hex_part = str[offset..];
     if (hex_part.len == 0) return error.InvalidColor;
     const color = std.fmt.parseInt(u32, hex_part, 16) catch return error.InvalidColor;
