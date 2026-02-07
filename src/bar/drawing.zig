@@ -157,7 +157,7 @@ pub const DrawContext = struct {
     
     /// Draw text at the specified position
     /// x: horizontal position (left edge)
-    /// y: vertical position (baseline) - use dc.baselineY(bar_height) for vertical centering
+    /// y: vertical position (baseline) - use dc.baselineY() or dc.baselineYForText() for centering
     /// text: UTF-8 text to render
     /// color: RGB color (0xRRGGBB format)
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
@@ -176,11 +176,12 @@ pub const DrawContext = struct {
         // Set text in Pango layout
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
-        // Pango draws from top-left, but our API uses baseline Y
-        // Get the baseline from the layout itself (accounts for font fallback!)
+        // Pango draws from top-left. Y parameter is the baseline position.
+        // Get baseline offset from the layout (works for any font, including fallbacks)
         const baseline = c.pango_layout_get_baseline(self.pango_layout);
         const baseline_pixels: f64 = @as(f64, @floatFromInt(baseline)) / @as(f64, @floatFromInt(c.PANGO_SCALE));
         
+        // Move to baseline - baseline_offset = top of layout
         c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - baseline_pixels);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
     }
@@ -308,32 +309,27 @@ pub const DrawContext = struct {
         return @intCast(top_pad + asc);
     }
     
-    /// Calculate baseline Y for specific text, accounting for font fallback.
-    /// This is necessary when using multiple fonts (e.g., FiraCode + CJK fallback)
-    /// because different fonts have different metrics.
+    /// Calculate baseline Y position for specific text to be vertically centered.
+    /// This accounts for font fallback (e.g., FiraCode + CJK).
+    /// Uses the same logic as centeredTextY.
     pub fn baselineYForText(self: *DrawContext, text: []const u8, bar_height: u16) u16 {
-        // Set the text so Pango selects the correct font (including fallbacks)
+        // Set the text so Pango selects the correct font
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
-        // Get the logical extents (bounding box) for this specific text
+        // Get logical extents (the bounding box)
         var logical_rect: c.PangoRectangle = undefined;
         c.pango_layout_get_pixel_extents(self.pango_layout, null, &logical_rect);
         
-        // logical_rect.y is the offset from baseline to top of logical rect (usually negative)
-        // logical_rect.height is the total height of the bounding box
+        // Get the baseline position (distance from top of layout to baseline)
+        const baseline = c.pango_layout_get_baseline(self.pango_layout);
+        const baseline_pixels: i32 = @divTrunc(baseline, c.PANGO_SCALE);
         
-        // To center the logical rectangle in the bar:
-        // - Top of logical rect should be at: (bar_height - height) / 2
-        // - Top of logical rect is at: baseline + logical_rect.y
-        // - Therefore: baseline + logical_rect.y = (bar_height - height) / 2
-        // - So: baseline = (bar_height - height) / 2 - logical_rect.y
-        
+        // Center the logical rectangle in the bar
         const text_height: i32 = logical_rect.height;
         const top_pad: i32 = @divTrunc(@as(i32, bar_height) - text_height, 2);
         
-        // Since logical_rect.y is negative (top is above baseline), 
-        // subtracting it moves the baseline down
-        return @intCast(top_pad - logical_rect.y);
+        // Baseline Y = top padding + baseline offset within the text
+        return @intCast(top_pad + baseline_pixels);
     }
 };
 
