@@ -47,9 +47,9 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
             static_numbers[i] 
         else "?";
         
-        // Use text-specific baseline calculation to handle font fallback properly
-        // Each label may use a different font (e.g., FiraCode vs Noto Sans CJK JP)
-        const text_y = dc.baselineYForText(label, height);
+        // Use consistent baseline calculation for all segments to maintain alignment
+        // Even if fallback fonts are used, align to the primary font's baseline
+        const text_y = dc.baselineY(height);
         
         try dc.drawText(x + (scaled_ws_width - dc.textWidth(label)) / 2, text_y, label, fg);
 
