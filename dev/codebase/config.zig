@@ -208,33 +208,33 @@ fn getDefaultConfig(allocator: std.mem.Allocator) defs.Config {
 }
 
 const MOD_MAP = std.StaticStringMap(u16).initComptime(.{
-    .{ "Super",   defs.MOD_SUPER },
-    .{ "Mod4",    defs.MOD_SUPER },
-    .{ "Alt",     defs.MOD_ALT },
-    .{ "Mod1",    defs.MOD_ALT },
+    .{ "Super", defs.MOD_SUPER },
+    .{ "Mod4", defs.MOD_SUPER },
+    .{ "Alt", defs.MOD_ALT },
+    .{ "Mod1", defs.MOD_ALT },
     .{ "Control", defs.MOD_CONTROL },
-    .{ "Ctrl",    defs.MOD_CONTROL },
-    .{ "Shift",   defs.MOD_SHIFT },
+    .{ "Ctrl", defs.MOD_CONTROL },
+    .{ "Shift", defs.MOD_SHIFT },
 });
 
 const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
-    .{ "close",                 .close_window },
-    .{ "kill",                  .close_window },
-    .{ "reload",                .reload_config },
-    .{ "reload_config",         .reload_config },
-    .{ "toggle_layout",         .toggle_layout },
+    .{ "close", .close_window },
+    .{ "kill", .close_window },
+    .{ "reload", .reload_config },
+    .{ "reload_config", .reload_config },
+    .{ "toggle_layout", .toggle_layout },
     .{ "toggle_layout_reverse", .toggle_layout_reverse },
     .{ "toggle_bar_visibility", .toggle_bar_visibility },
-    .{ "toggle_bar_position",   .toggle_bar_position },
-    .{ "increase_master",       .increase_master },
-    .{ "decrease_master",       .decrease_master },
+    .{ "toggle_bar_position", .toggle_bar_position },
+    .{ "increase_master", .increase_master },
+    .{ "decrease_master", .decrease_master },
     .{ "increase_master_count", .increase_master_count },
     .{ "decrease_master_count", .decrease_master_count },
-    .{ "toggle_tiling",         .toggle_tiling },
-    .{ "toggle_fullscreen",     .toggle_fullscreen },
-    .{ "fullscreen",            .toggle_fullscreen },
-    .{ "dump_state",            .dump_state },
-    .{ "emergency_recover",     .emergency_recover },
+    .{ "toggle_tiling", .toggle_tiling },
+    .{ "toggle_fullscreen", .toggle_fullscreen },
+    .{ "fullscreen", .toggle_fullscreen },
+    .{ "dump_state", .dump_state },
+    .{ "emergency_recover", .emergency_recover },
 });
 
 fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {

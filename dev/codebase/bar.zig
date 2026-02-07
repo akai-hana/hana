@@ -22,6 +22,34 @@ const workspaces             = @import("workspaces");
 // TODO: make adjustable through config.toml, adjust workspace width based off of monitor DPI
 pub const WORKSPACE_WIDTH: u8 = 50;
 
+/// Result of finding a visual - contains both the structure and ID
+const VisualInfo = struct {
+    visual_type: ?*xcb.xcb_visualtype_t,
+    visual_id: u32,
+};
+
+/// Find a visual with the given depth, returning both structure and ID
+fn findVisualByDepth(screen: *xcb.xcb_screen_t, depth: u8) VisualInfo {
+    var depth_iter = xcb.xcb_screen_allowed_depths_iterator(screen);
+    while (depth_iter.rem > 0) : (xcb.xcb_depth_next(&depth_iter)) {
+        if (depth_iter.data.*.depth == depth) {
+            var visual_iter = xcb.xcb_depth_visuals_iterator(depth_iter.data);
+            if (visual_iter.rem > 0) {
+                const vt = visual_iter.data;
+                return .{ .visual_type = vt, .visual_id = vt.*.visual_id };
+            }
+        }
+    }
+    // Fallback to root visual
+    return .{ .visual_type = null, .visual_id = screen.root_visual };
+}
+
+/// Apply alpha to an RGB color value (RGB -> ARGB)
+fn applyAlphaToColor(rgb: u32, alpha: u16) u32 {
+    const a8: u8 = @intCast(alpha >> 8); // Convert 16-bit alpha to 8-bit
+    return (@as(u32, a8) << 24) | (rgb & 0xFFFFFF);
+}
+
 const State = struct {
     window: u32,
     width: u16,
@@ -162,13 +190,49 @@ pub fn init(wm: *defs.WM) !void {
         @as(i16, @intCast(screen.height_in_pixels)) - @as(i16, @intCast(height))
     else 0;
 
+    // Get alpha value for transparency
+    const alpha = wm.config.bar.getAlpha16();
+    const use_transparency = alpha < 0xFFFF;
+    
+    // Find 32-bit ARGB visual for transparency support
+    const visual_info = if (use_transparency) 
+        findVisualByDepth(screen, 32)
+    else 
+        VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
+    
+    const depth: u8 = if (use_transparency and visual_info.visual_type != null) 32 else screen.root_depth;
+    
+    // Create colormap for the visual
+    const colormap = xcb.xcb_generate_id(wm.conn);
+    _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, 
+        colormap, screen.root, visual_info.visual_id);
+    
+    // Apply alpha to background color if using transparency
+    const bg_with_alpha = if (use_transparency)
+        applyAlphaToColor(wm.config.bar.bg, alpha)
+    else
+        wm.config.bar.bg;
+
     const window = xcb.xcb_generate_id(wm.conn);
+    const value_mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL | 
+                       xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_COLORMAP;
+    const value_list = [_]u32{ 
+        bg_with_alpha,
+        0,
+        xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS,
+        colormap,
+    };
+    
     _ = xcb.xcb_create_window(
-        wm.conn, xcb.XCB_COPY_FROM_PARENT, window, screen.root,
+        wm.conn, 
+        depth,  // Use 32-bit depth for ARGB
+        window, 
+        screen.root,
         0, y_pos, width, height, 0,
-        xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, screen.root_visual,
-        xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_EVENT_MASK,
-        &[_]u32{ wm.config.bar.bg, xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS },
+        xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
+        visual_info.visual_id,  // Use ARGB visual ID
+        value_mask,
+        &value_list,
     );
 
     try setWindowProperties(wm, window, height);
@@ -179,11 +243,14 @@ pub fn init(wm: *defs.WM) !void {
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
-    // NEW: Set transparency on the draw context
-    const alpha = wm.config.bar.getAlpha16();
-    dc.setAlphaOverride(alpha);
-    debug.info("Bar transparency: {d:.2}% (alpha: 0x{x:0>4})", 
-        .{wm.config.bar.transparency * 100.0, alpha});
+    // Set transparency on the draw context
+    if (use_transparency) {
+        dc.setAlphaOverride(alpha);
+        debug.info("Bar transparency: {d:.2}% (alpha: 0x{x:0>4})", 
+            .{wm.config.bar.transparency * 100.0, alpha});
+    } else {
+        debug.info("Bar transparency: disabled (fully opaque)", .{});
+    }
 
     const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar);
     try draw(s, wm);
