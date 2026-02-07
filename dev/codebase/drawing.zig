@@ -242,6 +242,16 @@ pub const DrawContext = struct {
         return @intCast(width);
     }
     
+    pub fn textHeight(self: *DrawContext, text: []const u8) u16 {
+        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
+        
+        var width: c_int = undefined;
+        var height: c_int = undefined;
+        c.pango_layout_get_pixel_size(self.pango_layout, &width, &height);
+        
+        return @intCast(height);
+    }
+    
     pub fn getAscender(self: *DrawContext) i16 {
         const metrics = c.pango_context_get_metrics(
             c.pango_layout_get_context(self.pango_layout),
