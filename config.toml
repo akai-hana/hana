@@ -32,7 +32,7 @@ spacing = 6  # Space between segments
 # List fonts in priority order: first font is primary, others come next
 # Useful for non-ASCII character support, while retaining a primary ASCII font  
 fonts = [
-    "FiraCode Nerd Font Ret",
+#    "FiraCode Nerd Font Ret",
     "Noto Sans CJK JP",
 ]
 
@@ -54,8 +54,8 @@ urgent_bg   = "#FF0000"
 urgent_fg   = "#FFFFFF"
 
 # Workspace labels/icons
-#icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
-icons = ["1", "2", "3", "4", "5", "6", "7", "8"]
+icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+#icons = ["1", "2", "3", "4", "5", "6", "7", "8"]
 
 indicator_size = 1
 title_accent = true
