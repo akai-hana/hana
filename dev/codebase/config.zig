@@ -427,20 +427,13 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     cfg.bar.title_accent = get(bool, section, "title_accent", true, null, null);
     
     // Parse transparency value - supports both 0-1 and 0-100 formats
-    if (section.get("transparency")) |value| {
-        var trans: f32 = 1.0;
-        if (value.asInt()) |i| {
-            // If integer, assume it's 0-100 percentage
-            trans = @as(f32, @floatFromInt(i)) / 100.0;
-        } else if (value.asString()) |str| {
-            // Try parsing as float
-            trans = std.fmt.parseFloat(f32, str) catch 1.0;
-            // If value is > 1, assume it's 0-100 percentage
-            if (trans > 1.0) trans = trans / 100.0;
-        }
-        cfg.bar.transparency = std.math.clamp(trans, 0.0, 1.0);
-        debug.info("Bar transparency set to: {d:.2}%", .{cfg.bar.transparency * 100.0});
-    }
+    // Parse transparency with proper percentage support
+    const transparency_val = getScalable(section, "transparency", parser.ScalableValue.absolute(1.0));
+    cfg.bar.transparency = if (transparency_val.is_percentage)
+        std.math.clamp(transparency_val.value / 100.0, 0.0, 1.0)
+    else
+        std.math.clamp(transparency_val.value, 0.0, 1.0);
+    debug.info("Bar transparency set to: {d:.2}%", .{cfg.bar.transparency * 100.0});
     
     try parseWorkspaceIcons(allocator, section, cfg);
     try parseBarLayout(allocator, section, doc, cfg);

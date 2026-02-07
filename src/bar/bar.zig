@@ -231,7 +231,7 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
         else 0;
         
         // Move the window to new position
-        const values = [_]u16{@bitCast(new_y)};
+        const values = [_]u32{@as(u32, @bitCast(@as(i32, new_y)))};
         _ = xcb.xcb_configure_window(s.conn, s.window, 
             xcb.XCB_CONFIG_WINDOW_Y, &values);
         
