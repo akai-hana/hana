@@ -14,8 +14,8 @@ const static_numbers = blk: {
     break :blk nums;
 };
 
-inline fn drawIndicator(dc: *drawing.DrawContext, x: u16, y: u16, size: u16, filled: bool, fg: u32) void {
-    const ix, const iy = .{ x + 3, y };
+inline fn drawIndicator(dc: *drawing.DrawContext, x: u16, size: u16, filled: bool, fg: u32) void {
+    const ix, const iy = .{ x + 3, 3 };
     if (filled) {
         dc.fillRect(ix, iy, size, size, fg);
     } else {
@@ -52,8 +52,7 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
 
         // Draw window presence indicator
         if (ws.windows.list.items.len > 0) {
-            const indicator_y = (height - scaled_indicator_size) / 2;
-            drawIndicator(dc, x, indicator_y, scaled_indicator_size, is_current, fg);
+            drawIndicator(dc, x, scaled_indicator_size, is_current, fg);
         }
         
         x += scaled_ws_width;
