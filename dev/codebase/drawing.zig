@@ -1,443 +1,346 @@
 //! Status bar text drawing/rendering
-//! XCB + Xft for text rendering
-//! Includes color caching and transparency support
+//! Cairo + Pango for unified rendering
+//! Replaces Xft (fonts) and XRender (transparency) with single Cairo library
 
 const std = @import("std");
 const debug = @import("debug");
 const defs = @import("defs");
-
-const c = @cImport({
-    @cInclude("xcb/xcb.h");
-    @cInclude("X11/Xlib.h");
-    @cInclude("X11/Xlib-xcb.h");
-    @cInclude("X11/extensions/Xrender.h");
-    @cInclude("X11/Xft/Xft.h");
-    @cInclude("fontconfig/fontconfig.h");
-});
-
-// Color conversion constant: 8-bit to 16-bit (0xFF -> 0xFFFF)
-const COLOR_8_TO_16_MULTIPLIER: u16 = 0x101;
-
-// Helper to convert RGB888 to XRenderColor with custom alpha
-inline fn rgbToXRenderColorWithAlpha(rgb: u32, alpha: u16) c.XRenderColor {
-    const r: u16 = @intCast((rgb >> 16) & 0xFF);
-    const g: u16 = @intCast((rgb >> 8) & 0xFF);
-    const b: u16 = @intCast(rgb & 0xFF);
-    return .{
-        .red = r * COLOR_8_TO_16_MULTIPLIER,
-        .green = g * COLOR_8_TO_16_MULTIPLIER,
-        .blue = b * COLOR_8_TO_16_MULTIPLIER,
-        .alpha = alpha,
-    };
-}
-
-// Helper to convert RGB888 to XRenderColor (fully opaque)
-inline fn rgbToXRenderColor(rgb: u32) c.XRenderColor {
-    return rgbToXRenderColorWithAlpha(rgb, 0xFFFF);
-}
-
-// Color cache for performance; avoid allocating/freeing colors repeatedly
-// Now supports transparency
-const ColorCache = struct {
-    colors: std.AutoHashMap(u64, c.XftColor), // Key is now (rgb << 16 | alpha)
-    fallback_color: c.XftColor,
-    display: *c.Display,
-    visual: *c.Visual,
-    colormap: c.Colormap,
-    allocator: std.mem.Allocator,
-
-    fn init(allocator: std.mem.Allocator, display: *c.Display, visual: *c.Visual, colormap: c.Colormap) ColorCache {
-        var fallback: c.XftColor = undefined;
-        _ = c.XftColorAllocValue(display, visual, colormap, &rgbToXRenderColor(0xFFFFFF), &fallback);
-        
-        return .{
-            .colors = std.AutoHashMap(u64, c.XftColor).init(allocator),
-            .fallback_color = fallback,
-            .display = display,
-            .visual = visual,
-            .colormap = colormap,
-            .allocator = allocator,
-        };
-    }
-
-    fn deinit(self: *ColorCache) void {
-        var iter = self.colors.iterator();
-        while (iter.next()) |entry| {
-            var color = entry.value_ptr.*;
-            c.XftColorFree(self.display, self.visual, self.colormap, &color);
-        }
-        self.colors.deinit();
-        c.XftColorFree(self.display, self.visual, self.colormap, &self.fallback_color);
-    }
-
-    fn get(self: *ColorCache, rgb: u32) *c.XftColor {
-        return self.getWithAlpha(rgb, 0xFFFF);
-    }
-    
-    fn getWithAlpha(self: *ColorCache, rgb: u32, alpha: u16) *c.XftColor {
-        // Create a composite key from rgb and alpha
-        const key: u64 = (@as(u64, rgb) << 16) | @as(u64, alpha);
-        
-        const result = self.colors.getOrPut(key) catch {
-            debug.warn("Color cache allocation failed, using fallback", .{});
-            return &self.fallback_color;
-        };
-
-        if (!result.found_existing) {
-            _ = c.XftColorAllocValue(self.display, self.visual, self.colormap, 
-                &rgbToXRenderColorWithAlpha(rgb, alpha), result.value_ptr);
-        }
-        return result.value_ptr;
-    }
-};
-
-// UTF-8 font run iterator - DRY principle for text processing
-const FontRunIterator = struct {
-    text: []const u8,
-    pos: usize,
-    run_start: usize,
-    run_font: *c.XftFont,
-    dc: *DrawContext,
-
-    fn init(dc: *DrawContext, text: []const u8) FontRunIterator {
-        return .{
-            .text = text,
-            .pos = 0,
-            .run_start = 0,
-            .run_font = dc.xft_font,
-            .dc = dc,
-        };
-    }
-
-    const Run = struct {
-        start: usize,
-        end: usize,
-        font: *c.XftFont,
-    };
-
-    fn next(self: *FontRunIterator) ?Run {
-        if (self.pos >= self.text.len) {
-            // Return final run if there's any remaining text
-            if (self.run_start < self.pos) {
-                const run = Run{ .start = self.run_start, .end = self.pos, .font = self.run_font };
-                self.run_start = self.pos; // Mark as consumed
-                return run;
-            }
-            return null;
-        }
-
-        const seq_len = std.unicode.utf8ByteSequenceLength(self.text[self.pos]) catch 1;
-        const end = @min(self.pos + seq_len, self.text.len);
-        const cp = std.unicode.utf8Decode(self.text[self.pos..end]) catch 0xFFFD;
-        const font = self.dc.fontForCodepoint(cp);
-
-        if (font != self.run_font and self.pos > self.run_start) {
-            // Font changed, return current run
-            const run = Run{ .start = self.run_start, .end = self.pos, .font = self.run_font };
-            self.run_start = self.pos;
-            self.run_font = font;
-            return run;
-        }
-
-        if (font != self.run_font) {
-            self.run_font = font;
-        }
-        self.pos = end;
-        return self.next();
-    }
-};
+const c = @import("c_bindings");
 
 pub const DrawContext = struct {
     allocator: std.mem.Allocator,
-    display: *c.Display,
-    drawable: c.Drawable,
-    xft_draw: *c.XftDraw,
-    xft_font: *c.XftFont,
-    xft_fonts: []*c.XftFont,
+    conn: *c.xcb_connection_t,
+    drawable: u32,
     width: u16,
     height: u16,
-    color_cache: ColorCache,
-    visual: *c.Visual,
-    colormap: c.Colormap,
-    alpha_override: ?u16 = null, // NEW: Global alpha override for bar transparency
     
-    pub fn init(allocator: std.mem.Allocator, drawable: u32, width: u16, height: u16) !*DrawContext {
-        return initWithVisual(allocator, drawable, width, height, null, 0);
+    // Cairo structures
+    surface: *c.cairo_surface_t,
+    ctx: *c.cairo_t,
+    
+    // Pango for text rendering
+    pango_layout: *c.PangoLayout,
+    current_font_desc: ?*c.PangoFontDescription = null,
+    
+    // Alpha override for bar transparency (0xFFFF = opaque, 0x0000 = fully transparent)
+    alpha_override: ?u16 = null,
+    
+    pub fn init(allocator: std.mem.Allocator, conn: *c.xcb_connection_t, drawable: u32, width: u16, height: u16) !*DrawContext {
+        return initWithVisual(allocator, conn, drawable, width, height, null, 0);
     }
     
-    pub fn initWithVisual(allocator: std.mem.Allocator, drawable: u32, width: u16, height: u16, 
-                          visual_id: ?u32, colormap_id: c.Colormap) !*DrawContext {
+    pub fn initWithVisual(allocator: std.mem.Allocator, conn: *c.xcb_connection_t, 
+                          drawable: u32, width: u16, height: u16, 
+                          visual_id: ?u32, colormap_id: u32) !*DrawContext {
+        _ = colormap_id; // Not needed for Cairo XCB
+        
         const dc = try allocator.create(DrawContext);
         errdefer allocator.destroy(dc);
         
-        const display = c.XOpenDisplay(null) orelse return error.DisplayOpenFailed;
-        errdefer _ = c.XCloseDisplay(display);
+        // Get screen from XCB
+        const setup = c.xcb_get_setup(conn);
+        var screen_iter = c.xcb_setup_roots_iterator(setup);
+        const screen = screen_iter.data;
         
-        // If visual_id is provided, find the Visual structure for it
-        const visual: *c.Visual = if (visual_id) |vid| blk: {
-            const screen = c.XDefaultScreen(display);
-            const screen_ptr = c.XScreenOfDisplay(display, screen);
-            
-            // Search for the visual in the screen's visuals
-            const depth_count = @as(usize, @intCast(screen_ptr.*.ndepths));
-            var i: usize = 0;
-            while (i < depth_count) : (i += 1) {
-                const depth_ptr = &screen_ptr.*.depths[i];
-                const visual_count = @as(usize, @intCast(depth_ptr.*.nvisuals));
-                const visuals_slice = depth_ptr.*.visuals[0..visual_count];
-                for (visuals_slice) |*vis| {
-                    if (vis.visualid == vid) {
-                        // Strip allowzero attribute by converting through int
-                        const ptr_int = @intFromPtr(vis);
-                        break :blk @ptrFromInt(ptr_int);
-                    }
-                }
-            }
-            // Fallback to default if not found
-            break :blk c.XDefaultVisual(display, 0);
-        } else c.XDefaultVisual(display, 0);
+        // Find visual type
+        const visual_type = if (visual_id) |vid| 
+            findVisualType(conn, vid) orelse getDefaultVisualType(screen)
+        else 
+            getDefaultVisualType(screen);
         
-        const colormap = if (colormap_id != 0) colormap_id else c.XDefaultColormap(display, 0);
+        // Create Cairo XCB surface
+        const surface = c.cairo_xcb_surface_create(
+            conn,
+            drawable,
+            visual_type,
+            @intCast(width),
+            @intCast(height)
+        ) orelse return error.CairoSurfaceCreateFailed;
+        errdefer c.cairo_surface_destroy(surface);
         
-        const xft_draw = c.XftDrawCreate(display, drawable, visual, colormap) orelse {
-            return error.XftDrawCreateFailed;
+        // Create Cairo context
+        const ctx = c.cairo_create(surface) orelse {
+            return error.CairoCreateFailed;
         };
+        errdefer c.cairo_destroy(ctx);
         
-        dc.* = DrawContext{
-            .allocator = allocator, .display = display, .drawable = drawable,
-            .xft_draw = xft_draw, .xft_font = undefined, .xft_fonts = &[0]*c.XftFont{},
-            .width = width, .height = height,
-            .color_cache = ColorCache.init(allocator, display, visual, colormap),
-            .visual = visual, .colormap = colormap,
+        // Create Pango layout for text rendering
+        const layout = c.pango_cairo_create_layout(ctx);
+        if (layout == null) {
+            return error.PangoLayoutCreateFailed;
+        }
+        
+        dc.* = .{
+            .allocator = allocator,
+            .conn = conn,
+            .drawable = drawable,
+            .width = width,
+            .height = height,
+            .surface = surface,
+            .ctx = ctx,
+            .pango_layout = layout,
         };
         
         return dc;
     }
     
     pub fn deinit(self: *DrawContext) void {
-        for (self.xft_fonts) |font| c.XftFontClose(self.display, font);
-        if (self.xft_fonts.len > 0) self.allocator.free(self.xft_fonts);
-        self.color_cache.deinit();
-        c.XftDrawDestroy(self.xft_draw);
-        _ = c.XCloseDisplay(self.display);
+        if (self.current_font_desc) |desc| {
+            c.pango_font_description_free(desc);
+        }
+        c.g_object_unref(self.pango_layout);
+        c.cairo_destroy(self.ctx);
+        c.cairo_surface_destroy(self.surface);
         self.allocator.destroy(self);
     }
     
-    // NEW: Set global alpha override for bar transparency
     pub fn setAlphaOverride(self: *DrawContext, alpha: ?u16) void {
         self.alpha_override = alpha;
     }
     
     pub fn loadFont(self: *DrawContext, font_name: []const u8) !void {
-        const font_name_z = try self.allocator.dupeZ(u8, font_name);
-        defer self.allocator.free(font_name_z);
+        if (self.current_font_desc) |desc| {
+            c.pango_font_description_free(desc);
+        }
         
-        const font = c.XftFontOpenName(self.display, 0, font_name_z.ptr) orelse 
-            c.XftFontOpenName(self.display, 0, "monospace:size=10") orelse {
-                debug.warn("Failed to load '{s}' and fallback", .{font_name});
-                return error.FontLoadFailed;
-            };
+        // Convert Xft-style font names to Pango format if needed
+        const pango_name = try convertFontName(self.allocator, font_name);
+        defer if (pango_name.ptr != font_name.ptr) self.allocator.free(pango_name);
         
-        if (font == null) debug.warn("Failed to load '{s}', trying fallback", .{font_name});
+        const pango_name_z = try self.allocator.dupeZ(u8, pango_name);
+        defer self.allocator.free(pango_name_z);
         
-        const slice = try self.allocator.alloc(*c.XftFont, 1);
-        slice[0] = font;
-        self.xft_fonts = slice;
-        self.xft_font = slice[0];
-        debug.info("Xft font loaded: {s}", .{font_name});
+        self.current_font_desc = c.pango_font_description_from_string(pango_name_z.ptr);
+        if (self.current_font_desc == null) {
+            debug.warn("Failed to load font '{s}', using default", .{font_name});
+            self.current_font_desc = c.pango_font_description_from_string("monospace 10");
+        }
+        
+        c.pango_layout_set_font_description(self.pango_layout, self.current_font_desc);
+        debug.info("Cairo/Pango font loaded: {s}", .{pango_name});
     }
     
-    fn openVerified(self: *DrawContext, pattern: []const u8) ?*c.XftFont {
-        const pattern_z = self.allocator.dupeZ(u8, pattern) catch return null;
-        defer self.allocator.free(pattern_z);
-
-        const font = c.XftFontOpenName(self.display, 0, pattern_z.ptr) orelse return null;
-
-        var family_cstr: [*:0]const u8 = undefined;
-        if (c.FcPatternGetString(font.*.pattern, "family", 0, @ptrCast(&family_cstr)) != 0) {
-            debug.warn("Could not verify family for '{s}', accepting anyway", .{pattern});
-            return font;
-        }
-        
-        const actual = std.mem.span(family_cstr);
-        const colon = std.mem.indexOfScalar(u8, pattern, ':') orelse pattern.len;
-        const requested = pattern[0..colon];
-        
-        const shorter, const longer = if (actual.len < requested.len) 
-            .{ actual, requested } else .{ requested, actual };
-        
-        if (shorter.len == 0 or !std.mem.startsWith(u8, longer, shorter)) {
-            c.XftFontClose(self.display, font);
-            return null;
-        }
-
-        debug.info("Font verified: {s}", .{pattern});
-        return font;
-    }
-
     pub fn loadFonts(self: *DrawContext, font_names: []const []const u8) !void {
-        var fonts = std.ArrayList(*c.XftFont){};
-        defer fonts.deinit(self.allocator);
-
-        for (font_names) |font_name| {
-            if (self.openVerified(font_name)) |f| {
-                try fonts.append(self.allocator, f);
-                continue;
+        // Pango handles font fallback automatically
+        // Just load the first font, Pango will use others as fallbacks via fontconfig
+        if (font_names.len > 0) {
+            try self.loadFont(font_names[0]);
+            
+            if (font_names.len > 1) {
+                debug.info("Font fallback: Pango will automatically use {} additional fonts for missing glyphs", .{font_names.len - 1});
             }
-
-            // Retry with explicit :pixelsize if there's a bare size after ':'
-            if (std.mem.indexOfScalar(u8, font_name, ':')) |colon_pos| {
-                const after_colon = font_name[colon_pos + 1 ..];
-                if (after_colon.len > 0 and std.ascii.isDigit(after_colon[0])) {
-                    const retry = std.fmt.allocPrint(self.allocator,
-                        "{s}:pixelsize={s}", .{ font_name[0..colon_pos], after_colon }) catch continue;
-                    defer self.allocator.free(retry);
-
-                    if (self.openVerified(retry)) |f| {
-                        try fonts.append(self.allocator, f);
-                        continue;
-                    }
-                }
-            }
-
-            debug.warn("Font not available: {s}", .{font_name});
+        } else {
+            try self.loadFont("monospace:size=10");
         }
-
-        if (fonts.items.len == 0) {
-            if (c.XftFontOpenName(self.display, 0, "monospace:size=10")) |f| {
-                try fonts.append(self.allocator, f);
-                debug.warn("All requested fonts failed, using monospace fallback", .{});
-            } else {
-                return error.NoFontsLoaded;
-            }
-        }
-
-        self.xft_fonts = try fonts.toOwnedSlice(self.allocator);
-        self.xft_font = self.xft_fonts[0];
-    }
-    
-    fn fontForCodepoint(self: *DrawContext, cp: u21) *c.XftFont {
-        for (self.xft_fonts) |font| {
-            if (c.XftCharIndex(self.display, font, @intCast(cp)) != 0) {
-                return font;
-            }
-        }
-        return self.xft_font;
     }
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        const alpha = self.alpha_override orelse 0xFFFF;
+        const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
+        const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
+        const b = @as(f64, @floatFromInt(color & 0xFF)) / 255.0;
         
-        // Use XRender for proper alpha compositing instead of XftDrawRect
-        const render_color = rgbToXRenderColorWithAlpha(color, alpha);
+        // Apply alpha override if set
+        const a = if (self.alpha_override) |alpha|
+            @as(f64, @floatFromInt(alpha)) / 65535.0
+        else
+            1.0;
         
-        // Get the XRender Picture from XftDraw
-        const picture = c.XftDrawPicture(self.xft_draw);
-        
-        // Use XRenderFillRectangle with PictOpSrc
-        // PictOpSrc replaces the destination, respecting alpha in the source color
-        // This is correct for clearing/redrawing the bar background
-        c.XRenderFillRectangle(self.display, c.PictOpSrc, picture, &render_color, 
-            @intCast(x), @intCast(y), width, height);
+        c.cairo_set_source_rgba(self.ctx, r, g, b, a);
+        c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
+                         @floatFromInt(width), @floatFromInt(height));
+        c.cairo_fill(self.ctx);
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
-        const alpha = self.alpha_override orelse 0xFFFF;
-        const xft_color = self.color_cache.getWithAlpha(color, alpha);
+        const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
+        const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
+        const b = @as(f64, @floatFromInt(color & 0xFF)) / 255.0;
         
-        if (self.xft_fonts.len <= 1) {
-            c.XftDrawStringUtf8(self.xft_draw, xft_color, self.xft_font,
-                @intCast(x), @intCast(y), text.ptr, @intCast(text.len));
-            return;
-        }
+        // Apply alpha override if set
+        const a = if (self.alpha_override) |alpha|
+            @as(f64, @floatFromInt(alpha)) / 65535.0
+        else
+            1.0;
         
-        var current_x: i32 = @intCast(x);
-        var iter = FontRunIterator.init(self, text);
-        while (iter.next()) |run| {
-            const run_text = text[run.start..run.end];
-            c.XftDrawStringUtf8(self.xft_draw, xft_color, run.font,
-                current_x, @intCast(y), run_text.ptr, @intCast(run_text.len));
-            
-            var extents: c.XGlyphInfo = undefined;
-            c.XftTextExtentsUtf8(self.display, run.font, run_text.ptr, @intCast(run_text.len), &extents);
-            current_x += extents.xOff;
-        }
+        c.cairo_set_source_rgba(self.ctx, r, g, b, a);
+        
+        // Set text in Pango layout
+        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
+        
+        // Draw text - y coordinate is baseline in our API
+        c.cairo_move_to(self.ctx, @floatFromInt(x), @floatFromInt(y));
+        c.pango_cairo_show_layout(self.ctx, self.pango_layout);
     }
     
-    pub fn drawTextEllipsis(self: *DrawContext, x: u16, y: u16, text: []const u8, max_width: u16, color: u32) !void {
-        const text_width = self.textWidth(text);
-        if (text_width <= max_width) {
-            try self.drawText(x, y, text, color);
-            return;
-        }
+    pub fn drawTextEllipsis(self: *DrawContext, x: u16, y: u16, text: []const u8, 
+                           max_width: u16, color: u32) !void {
+        // Set text
+        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
-        const ellipsis = "...";
-        const ellipsis_width = self.textWidth(ellipsis);
+        // Set ellipsize mode and width
+        c.pango_layout_set_width(self.pango_layout, @intCast(@as(i32, max_width) * c.PANGO_SCALE));
+        c.pango_layout_set_ellipsize(self.pango_layout, c.PANGO_ELLIPSIZE_END);
         
-        if (max_width <= ellipsis_width) {
-            try self.drawText(x, y, ellipsis, color);
-            return;
-        }
+        const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
+        const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
+        const b = @as(f64, @floatFromInt(color & 0xFF)) / 255.0;
         
-        const available = max_width - ellipsis_width;
+        // Apply alpha override if set
+        const a = if (self.alpha_override) |alpha|
+            @as(f64, @floatFromInt(alpha)) / 65535.0
+        else
+            1.0;
         
-        // Binary search for the longest UTF-8 prefix that fits
-        var lo: usize = 0;
-        var hi: usize = text.len;
-        while (lo < hi) {
-            var mid = lo + (hi - lo) / 2;
-            // Snap mid to valid UTF-8 boundary
-            while (mid < hi and mid < text.len and text[mid] & 0xC0 == 0x80) mid += 1;
-            if (mid == lo) { lo = mid + 1; continue; }
-            if (self.textWidth(text[0..mid]) <= available) {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-
-        // Try to break at word boundary
-        var len = lo;
-        if (len > 0) {
-            if (std.mem.lastIndexOfScalar(u8, text[0..len], ' ')) |space| {
-                if (space > len / 2) len = space;
-            }
-        }
+        c.cairo_set_source_rgba(self.ctx, r, g, b, a);
+        c.cairo_move_to(self.ctx, @floatFromInt(x), @floatFromInt(y));
+        c.pango_cairo_show_layout(self.ctx, self.pango_layout);
         
-        if (len > 0) {
-            try self.drawText(x, y, text[0..len], color);
-            try self.drawText(x + self.textWidth(text[0..len]), y, ellipsis, color);
-        } else {
-            try self.drawText(x, y, ellipsis, color);
-        }
+        // Reset ellipsize for next draw
+        c.pango_layout_set_width(self.pango_layout, -1);
+        c.pango_layout_set_ellipsize(self.pango_layout, c.PANGO_ELLIPSIZE_NONE);
     }
     
     pub fn textWidth(self: *DrawContext, text: []const u8) u16 {
-        if (self.xft_fonts.len <= 1) {
-            var extents: c.XGlyphInfo = undefined;
-            c.XftTextExtentsUtf8(self.display, self.xft_font, text.ptr, @intCast(text.len), &extents);
-            return @intCast(extents.xOff);
-        }
+        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
-        var total_width: i32 = 0;
-        var iter = FontRunIterator.init(self, text);
-        while (iter.next()) |run| {
-            var extents: c.XGlyphInfo = undefined;
-            const run_text = text[run.start..run.end];
-            c.XftTextExtentsUtf8(self.display, run.font, run_text.ptr, @intCast(run_text.len), &extents);
-            total_width += extents.xOff;
-        }
-        return @intCast(total_width);
+        var width: c_int = undefined;
+        var height: c_int = undefined;
+        c.pango_layout_get_pixel_size(self.pango_layout, &width, &height);
+        
+        return @intCast(width);
     }
     
-    pub inline fn getAscender(self: *DrawContext) i16 { return @intCast(self.xft_font.*.ascent); }
-    pub inline fn getDescender(self: *DrawContext) i16 { return -@as(i16, @intCast(self.xft_font.*.descent)); }
-    pub inline fn flush(self: *DrawContext) void { _ = c.XFlush(self.display); }
-
+    pub fn getAscender(self: *DrawContext) i16 {
+        const metrics = c.pango_context_get_metrics(
+            c.pango_layout_get_context(self.pango_layout),
+            self.current_font_desc,
+            null
+        );
+        defer c.pango_font_metrics_unref(metrics);
+        
+        const ascent = c.pango_font_metrics_get_ascent(metrics);
+        return @intCast(@divTrunc(ascent, c.PANGO_SCALE));
+    }
+    
+    pub fn getDescender(self: *DrawContext) i16 {
+        const metrics = c.pango_context_get_metrics(
+            c.pango_layout_get_context(self.pango_layout),
+            self.current_font_desc,
+            null
+        );
+        defer c.pango_font_metrics_unref(metrics);
+        
+        const descent = c.pango_font_metrics_get_descent(metrics);
+        return -@as(i16, @intCast(@divTrunc(descent, c.PANGO_SCALE)));
+    }
+    
+    pub inline fn flush(self: *DrawContext) void {
+        c.cairo_surface_flush(self.surface);
+    }
+    
     pub inline fn baselineY(self: *DrawContext, bar_height: u16) u16 {
-        const asc: i32 = @intCast(self.xft_font.*.ascent);
-        const desc: i32 = @intCast(self.xft_font.*.descent);
+        const asc: i32 = self.getAscender();
+        const desc: i32 = -self.getDescender();
         const pad: i32 = @divTrunc(@as(i32, bar_height) - (asc + desc), 2);
         return @intCast(@max(asc, pad + asc));
     }
 };
+
+// Helper to find visual type from visual ID
+fn findVisualType(conn: *c.xcb_connection_t, visual_id: u32) ?*c.xcb_visualtype_t {
+    const setup = c.xcb_get_setup(conn);
+    var screen_iter = c.xcb_setup_roots_iterator(setup);
+    
+    while (screen_iter.rem > 0) {
+        const screen = screen_iter.data;
+        var depth_iter = c.xcb_screen_allowed_depths_iterator(screen);
+        
+        while (depth_iter.rem > 0) {
+            var visual_iter = c.xcb_depth_visuals_iterator(depth_iter.data);
+            
+            while (visual_iter.rem > 0) {
+                if (visual_iter.data.*.visual_id == visual_id) {
+                    return visual_iter.data;
+                }
+                c.xcb_visualtype_next(&visual_iter);
+            }
+            c.xcb_depth_next(&depth_iter);
+        }
+        c.xcb_screen_next(&screen_iter);
+    }
+    
+    return null;
+}
+
+fn getDefaultVisualType(screen: *c.xcb_screen_t) *c.xcb_visualtype_t {
+    var depth_iter = c.xcb_screen_allowed_depths_iterator(screen);
+    while (depth_iter.rem > 0) {
+        var visual_iter = c.xcb_depth_visuals_iterator(depth_iter.data);
+        if (visual_iter.rem > 0) {
+            return visual_iter.data;
+        }
+        c.xcb_depth_next(&depth_iter);
+    }
+    unreachable;
+}
+
+// Convert Xft-style font names to Pango format
+// "monospace:size=10" -> "monospace 10"
+// "DejaVu Sans:size=12:weight=bold" -> "DejaVu Sans Bold 12"
+// "FiraCode Nerd Font Ret" -> "FiraCode Nerd Font Ret" (unchanged)
+fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const u8 {
+    // If it already looks like Pango format (has space, no colons), return as-is
+    if (std.mem.indexOfScalar(u8, xft_name, ':') == null) {
+        return xft_name;
+    }
+    
+    var result = std.ArrayList(u8).init(allocator);
+    errdefer result.deinit();
+    
+    var parts = std.mem.splitScalar(u8, xft_name, ':');
+    const family = parts.first();
+    try result.appendSlice(family);
+    
+    var size: ?[]const u8 = null;
+    var weight: ?[]const u8 = null;
+    var slant: ?[]const u8 = null;
+    
+    while (parts.next()) |part| {
+        if (std.mem.startsWith(u8, part, "size=")) {
+            size = part[5..];
+        } else if (std.mem.startsWith(u8, part, "pixelsize=")) {
+            size = part[10..];
+        } else if (std.mem.startsWith(u8, part, "weight=")) {
+            weight = part[7..];
+        } else if (std.mem.startsWith(u8, part, "slant=")) {
+            slant = part[6..];
+        }
+    }
+    
+    // Add slant
+    if (slant) |s| {
+        if (std.mem.eql(u8, s, "italic") or std.mem.eql(u8, s, "oblique")) {
+            try result.append(' ');
+            try result.appendSlice("Italic");
+        }
+    }
+    
+    // Add weight
+    if (weight) |w| {
+        if (std.mem.eql(u8, w, "bold")) {
+            try result.append(' ');
+            try result.appendSlice("Bold");
+        } else if (std.mem.eql(u8, w, "light")) {
+            try result.append(' ');
+            try result.appendSlice("Light");
+        }
+    }
+    
+    // Add size
+    if (size) |s| {
+        try result.append(' ');
+        try result.appendSlice(s);
+    }
+    
+    return result.toOwnedSlice();
+}

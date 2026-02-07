@@ -89,22 +89,20 @@ fn linkSystemLibrariesAndIncludes(b: *std.Build, root: *std.Build.Module, module
     root.linkSystemLibrary("xcb", .{});
     root.linkSystemLibrary("xkbcommon", .{});
     root.linkSystemLibrary("xkbcommon-x11", .{});
-    root.linkSystemLibrary("X11", .{});
+    root.linkSystemLibrary("fontconfig", .{});
+    
+    // Cairo + Pango for unified rendering (replaces Xft + XRender)
     root.linkSystemLibrary("cairo", .{});
-    root.linkSystemLibrary("pangocairo-1.0", .{});
-    root.linkSystemLibrary("pango-1.0", .{});
-    root.linkSystemLibrary("glib-2.0", .{});
-    root.linkSystemLibrary("gobject-2.0", .{});
+    root.linkSystemLibrary("pangocairo", .{});
     
-    // Add Cairo and Pango include paths to root
-    addCairoPangoIncludes(b, root);
+    // Link GLib (required by Pango)
+    // Using linkPkgConfig ensures all required flags and dependencies are included
+    root.linkPkgConfig("glib-2.0", .{});
     
-    // Add Cairo and Pango include paths to all discovered modules
-    // This is critical because @cImport in any module needs the include paths
-    var iter = modules.iterator();
-    while (iter.next()) |entry| {
-        addCairoPangoIncludes(b, entry.value_ptr.*);
-    }
+    // Note: FreeType include paths are no longer needed
+    // Cairo handles this internally
+    _ = b;
+    _ = modules;
 }
 
 fn discoverModules(
@@ -151,13 +149,4 @@ fn discoverModules(
         });
         try all_modules.put(try allocator.dupe(u8, name), module);
     }
-}
-
-/// Add Cairo and Pango include paths (required for linking)
-fn addCairoPangoIncludes(b: *std.Build, module: *std.Build.Module) void {
-    _ = b; // Not needed anymore since we're using manual extern declarations
-    _ = module; // Manual bindings don't need include paths
-    
-    // Note: Include paths are not needed when using manual extern declarations
-    // The linker will find the symbols in the linked libraries
 }
