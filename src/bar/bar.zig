@@ -192,48 +192,66 @@ pub fn init(wm: *defs.WM) !void {
 
     // Get alpha value for transparency
     const alpha = wm.config.bar.getAlpha16();
-    const use_transparency = alpha < 0xFFFF;
+    const want_transparency = alpha < 0xFFFF;
     
     // Find 32-bit ARGB visual for transparency support
-    const visual_info = if (use_transparency) 
-        findVisualByDepth(screen, 32)
-    else 
-        VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
+    const visual_info = if (want_transparency) findVisualByDepth(screen, 32) else VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
+    const has_argb_visual = visual_info.visual_type != null;
     
-    const depth: u8 = if (use_transparency and visual_info.visual_type != null) 32 else screen.root_depth;
-    
-    // Create colormap for the visual
-    const colormap = xcb.xcb_generate_id(wm.conn);
-    _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, 
-        colormap, screen.root, visual_info.visual_id);
-    
-    // Apply alpha to background color if using transparency
-    const bg_with_alpha = if (use_transparency)
-        applyAlphaToColor(wm.config.bar.bg, alpha)
-    else
-        wm.config.bar.bg;
-
     const window = xcb.xcb_generate_id(wm.conn);
-    const value_mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL | 
-                       xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_COLORMAP;
-    const value_list = [_]u32{ 
-        bg_with_alpha,
-        0,
-        xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS,
-        colormap,
-    };
     
-    _ = xcb.xcb_create_window(
-        wm.conn, 
-        depth,  // Use 32-bit depth for ARGB
-        window, 
-        screen.root,
-        0, y_pos, width, height, 0,
-        xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
-        visual_info.visual_id,  // Use ARGB visual ID
-        value_mask,
-        &value_list,
-    );
+    // Create window with ARGB visual if transparency is enabled and available
+    if (want_transparency and has_argb_visual) {
+        // Create colormap for ARGB visual
+        const colormap = xcb.xcb_generate_id(wm.conn);
+        _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, 
+            colormap, screen.root, visual_info.visual_id);
+        
+        // Apply alpha to background color
+        const bg_with_alpha = applyAlphaToColor(wm.config.bar.bg, alpha);
+        
+        // Create window with 32-bit depth and ARGB visual
+        const value_mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL | 
+                           xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_COLORMAP;
+        const value_list = [_]u32{ 
+            bg_with_alpha,
+            0,
+            xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS,
+            colormap,
+        };
+        
+        _ = xcb.xcb_create_window(
+            wm.conn, 
+            32,  // 32-bit depth for ARGB
+            window, 
+            screen.root,
+            0, y_pos, width, height, 0,
+            xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
+            visual_info.visual_id,
+            value_mask,
+            &value_list,
+        );
+        
+        debug.info("Bar transparency: enabled at {d:.2}% (alpha: 0x{x:0>4})", 
+            .{wm.config.bar.transparency * 100.0, alpha});
+    } else {
+        // Fallback: create window with default visual (no transparency)
+        _ = xcb.xcb_create_window(
+            wm.conn, 
+            xcb.XCB_COPY_FROM_PARENT,
+            window, 
+            screen.root,
+            0, y_pos, width, height, 0,
+            xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
+            screen.root_visual,
+            xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_EVENT_MASK,
+            &[_]u32{ wm.config.bar.bg, xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS },
+        );
+        
+        if (want_transparency) {
+            debug.warn("32-bit ARGB visual not available, transparency disabled", .{});
+        }
+    }
 
     try setWindowProperties(wm, window, height);
     _ = xcb.xcb_map_window(wm.conn, window);
@@ -243,13 +261,9 @@ pub fn init(wm: *defs.WM) !void {
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
-    // Set transparency on the draw context
-    if (use_transparency) {
+    // Set transparency on the draw context if enabled
+    if (want_transparency and has_argb_visual) {
         dc.setAlphaOverride(alpha);
-        debug.info("Bar transparency: {d:.2}% (alpha: 0x{x:0>4})", 
-            .{wm.config.bar.transparency * 100.0, alpha});
-    } else {
-        debug.info("Bar transparency: disabled (fully opaque)", .{});
     }
 
     const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar);
