@@ -31,9 +31,12 @@ inline fn drawIndicator(dc: *drawing.DrawContext, x: u16, size: u16, filled: boo
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16) !u16 {
     const ws_state = workspaces.getState() orelse return start_x;
     var x = start_x;
-    const text_y = dc.baselineY(height);
     const scaled_ws_width = config.scaledWorkspaceWidth();
     const scaled_indicator_size = config.scaledIndicatorSize();
+    
+    // Get font metrics for centering calculation
+    const asc = dc.getAscender();
+    const desc = -dc.getDescender(); // getDescender returns negative
 
     for (ws_state.workspaces, 0..) |*ws, i| {
         const is_current = i == ws_state.current;
@@ -47,6 +50,17 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
         else if (i < static_numbers.len) 
             static_numbers[i] 
         else "?";
+        
+        // For CJK characters, use actual rendered height to find visual center
+        const actual_height = dc.textHeight(label);
+        const font_height: i32 = asc + desc;
+        
+        // If actual height differs from font height, adjust centering
+        const height_diff: i32 = font_height - @as(i32, actual_height);
+        const adjustment: i32 = @divTrunc(height_diff, 2);
+        
+        const base_y: i32 = @intCast(dc.baselineY(height));
+        const text_y: u16 = @intCast(base_y - adjustment);
         
         try dc.drawText(x + (scaled_ws_width - dc.textWidth(label)) / 2, text_y, label, fg);
 
