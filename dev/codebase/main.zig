@@ -31,6 +31,10 @@ const CURSOR_LEFT_PTR_MASK = 69;
 var should_reload = std.atomic.Value(bool).init(false);
 var running = std.atomic.Value(bool).init(true);
 
+// OPTIMIZATION: Timer state for dynamic enable/disable to reduce idle CPU
+var global_timer_fd: i32 = 0;
+var timer_enabled: bool = false;
+
 const FDs = struct { signal: posix.fd_t, timer: posix.fd_t };
 
 inline fn setupSignalSet() std.os.linux.sigset_t {
@@ -50,11 +54,10 @@ fn setupPollFds() !FDs {
     
     const tfd = std.os.linux.timerfd_create(.MONOTONIC, .{ .NONBLOCK = true, .CLOEXEC = true });
     if (tfd < 0) return error.TimerFdFailed;
-    const spec = std.os.linux.itimerspec{ .it_interval = .{ .sec = 1, .nsec = 0 }, .it_value = .{ .sec = 1, .nsec = 0 } };
-    if (std.os.linux.timerfd_settime(@intCast(tfd), .{}, &spec, null) < 0) {
-        posix.close(@intCast(tfd));
-        return error.TimerFdSetFailed;
-    }
+    
+    // OPTIMIZATION: Start with timer disabled - will be enabled if clock is visible
+    global_timer_fd = @intCast(tfd);
+    timer_enabled = false;
     
     return .{ .signal = @intCast(sfd), .timer = @intCast(tfd) };
 }
@@ -71,6 +74,56 @@ fn handleSignalFd(signal_fd: posix.fd_t, reload_flag: *std.atomic.Value(bool), r
             @intFromEnum(posix.SIG.TERM), @intFromEnum(posix.SIG.INT) => running_flag.store(false, .release),
             else => {},
         }
+    }
+}
+
+// OPTIMIZATION: Dynamic timer control to reduce idle CPU to near-zero
+fn shouldClockRun(wm: *WM) bool {
+    // Don't run timer if bar is disabled
+    if (!wm.config.bar.show) return false;
+    
+    // Don't run timer if bar is hidden (fullscreen)
+    if (!bar.isVisible()) return false;
+    
+    // Check if clock segment exists in layout
+    for (wm.config.bar.layout.items) |layout| {
+        for (layout.segments.items) |seg| {
+            if (seg == .clock) return true;
+        }
+    }
+    return false;
+}
+
+fn enableTimer() void {
+    if (timer_enabled) return;
+    const spec = std.os.linux.itimerspec{
+        .it_interval = .{ .sec = 1, .nsec = 0 },
+        .it_value = .{ .sec = 1, .nsec = 0 }
+    };
+    if (std.os.linux.timerfd_settime(@intCast(global_timer_fd), .{}, &spec, null) >= 0) {
+        timer_enabled = true;
+        debug.info("Clock timer enabled", .{});
+    }
+}
+
+fn disableTimer() void {
+    if (!timer_enabled) return;
+    const spec = std.os.linux.itimerspec{
+        .it_interval = .{ .sec = 0, .nsec = 0 },
+        .it_value = .{ .sec = 0, .nsec = 0 }
+    };
+    if (std.os.linux.timerfd_settime(@intCast(global_timer_fd), .{}, &spec, null) >= 0) {
+        timer_enabled = false;
+        debug.info("Clock timer disabled (idle CPU optimization)", .{});
+    }
+}
+
+pub fn updateTimerState(wm: *WM) void {
+    const should_run = shouldClockRun(wm);
+    if (should_run and !timer_enabled) {
+        enableTimer();
+    } else if (!should_run and timer_enabled) {
+        disableTimer();
     }
 }
 
@@ -129,7 +182,7 @@ fn grabKeybindings(wm: *WM) !void {
     const cookies = try wm.allocator.alloc(xcb.xcb_void_cookie_t, max_grabs);
     defer wm.allocator.free(cookies);
     
-    var cookie_idx: u16 = 0;
+    var cookie_idx: usize = 0;
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
         for (LOCK_MODIFIERS) |lock| {
@@ -142,7 +195,7 @@ fn grabKeybindings(wm: *WM) !void {
     utils.flush(wm.conn);
     
     var has_errors = false;
-    var failed_count: u16 = 0;
+    var failed_count: usize = 0;
     
     for (cookies[0..cookie_idx]) |cookie| {
         if (xcb.xcb_request_check(wm.conn, cookie)) |err| {
@@ -198,6 +251,10 @@ fn handleConfigReload(wm: *WM) !void {
     old_config.deinit(wm.allocator);
     try input.rebuildKeybindMap(wm);
     tiling.reloadConfig(wm);
+    
+    // OPTIMIZATION: Update timer state in case clock visibility changed
+    updateTimerState(wm);
+    
     debug.info("Reload complete", .{});
 }
 
@@ -260,6 +317,9 @@ pub fn main() !void {
         if (err != error.BarDisabled) debug.err("Failed to initialize: {}", .{err});
     };
     defer bar.deinit();
+
+    // OPTIMIZATION: Enable timer only if clock is visible
+    updateTimerState(&wm);
 
     try grabKeybindings(&wm);
     try setupExistingWindows(conn, root, allocator);
