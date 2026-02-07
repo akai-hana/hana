@@ -165,8 +165,19 @@ pub const DrawContext = struct {
         // Set text in Pango layout
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
-        // Draw text - y coordinate is baseline in our API
-        c.cairo_move_to(self.ctx, @floatFromInt(x), @floatFromInt(y));
+        // Pango draws from top-left, but our API uses baseline Y
+        // So we need to move up by the ascender to position correctly
+        const metrics = c.pango_context_get_metrics(
+            c.pango_layout_get_context(self.pango_layout),
+            self.current_font_desc,
+            null
+        );
+        defer c.pango_font_metrics_unref(metrics);
+        
+        const ascent = c.pango_font_metrics_get_ascent(metrics);
+        const ascent_pixels: f64 = @as(f64, @floatFromInt(ascent)) / @as(f64, @floatFromInt(c.PANGO_SCALE));
+        
+        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - ascent_pixels);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
     }
     
@@ -190,7 +201,19 @@ pub const DrawContext = struct {
             1.0;
         
         c.cairo_set_source_rgba(self.ctx, r, g, b, a);
-        c.cairo_move_to(self.ctx, @floatFromInt(x), @floatFromInt(y));
+        
+        // Pango draws from top-left, but our API uses baseline Y
+        const metrics = c.pango_context_get_metrics(
+            c.pango_layout_get_context(self.pango_layout),
+            self.current_font_desc,
+            null
+        );
+        defer c.pango_font_metrics_unref(metrics);
+        
+        const ascent = c.pango_font_metrics_get_ascent(metrics);
+        const ascent_pixels: f64 = @as(f64, @floatFromInt(ascent)) / @as(f64, @floatFromInt(c.PANGO_SCALE));
+        
+        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - ascent_pixels);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
         
         // Reset ellipsize for next draw
