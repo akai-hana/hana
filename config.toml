@@ -54,7 +54,8 @@ urgent_bg   = "#FF0000"
 urgent_fg   = "#FFFFFF"
 
 # Workspace labels/icons
-icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+#icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+icons = ["1", "2", "3", "4", "5", "6", "7", "8"]
 
 indicator_size = 1
 title_accent = true
