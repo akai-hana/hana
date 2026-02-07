@@ -165,10 +165,35 @@ pub const DrawContext = struct {
         errdefer allocator.destroy(dc);
         
         const display = c.XOpenDisplay(null) orelse return error.DisplayOpenFailed;
-        const visual = c.XDefaultVisual(display, 0);
-        const colormap = c.XDefaultColormap(display, 0);
+        errdefer _ = c.XCloseDisplay(display);
+        
+        // Query the window's attributes to get its actual visual and colormap
+        var win_attrs: c.XWindowAttributes = undefined;
+        if (c.XGetWindowAttributes(display, drawable, &win_attrs) == 0) {
+            // Failed to get window attributes, fall back to defaults
+            debug.warn("Failed to query window attributes, using defaults", .{});
+            const visual = c.XDefaultVisual(display, 0);
+            const colormap = c.XDefaultColormap(display, 0);
+            const xft_draw = c.XftDrawCreate(display, drawable, visual, colormap) orelse {
+                return error.XftDrawCreateFailed;
+            };
+            
+            dc.* = DrawContext{
+                .allocator = allocator, .display = display, .drawable = drawable,
+                .xft_draw = xft_draw, .xft_font = undefined, .xft_fonts = &[0]*c.XftFont{},
+                .width = width, .height = height,
+                .color_cache = ColorCache.init(allocator, display, visual, colormap),
+                .visual = visual, .colormap = colormap,
+            };
+            
+            return dc;
+        }
+        
+        // Use the window's actual visual and colormap
+        const visual = win_attrs.visual;
+        const colormap = win_attrs.colormap;
+        
         const xft_draw = c.XftDrawCreate(display, drawable, visual, colormap) orelse {
-            _ = c.XCloseDisplay(display);
             return error.XftDrawCreateFailed;
         };
         
