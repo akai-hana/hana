@@ -24,13 +24,13 @@ pub const DrawContext = struct {
     // Alpha override for bar transparency (0xFFFF = opaque, 0x0000 = fully transparent)
     alpha_override: ?u16 = null,
     
-    pub fn init(allocator: std.mem.Allocator, conn: *c.xcb_connection_t, drawable: u32, width: u16, height: u16) !*DrawContext {
-        return initWithVisual(allocator, conn, drawable, width, height, null, 0);
+    pub fn init(allocator: std.mem.Allocator, conn: *c.xcb_connection_t, drawable: u32, width: u16, height: u16, dpi: f32) !*DrawContext {
+        return initWithVisual(allocator, conn, drawable, width, height, null, 0, dpi);
     }
     
     pub fn initWithVisual(allocator: std.mem.Allocator, conn: *c.xcb_connection_t, 
                           drawable: u32, width: u16, height: u16, 
-                          visual_id: ?u32, colormap_id: u32) !*DrawContext {
+                          visual_id: ?u32, colormap_id: u32, dpi: f32) !*DrawContext {
         _ = colormap_id; // Not needed for Cairo XCB
         
         const dc = try allocator.create(DrawContext);
@@ -67,6 +67,11 @@ pub const DrawContext = struct {
         const layout = c.pango_cairo_create_layout(ctx) orelse {
             return error.PangoLayoutCreateFailed;
         };
+        
+        // Set DPI for proper font scaling
+        // This is critical - without it, Pango defaults to 96 DPI
+        const pango_context = c.pango_layout_get_context(layout);
+        c.pango_cairo_context_set_resolution(pango_context, @floatCast(dpi));
         
         dc.* = .{
             .allocator = allocator,

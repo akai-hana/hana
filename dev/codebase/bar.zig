@@ -166,7 +166,7 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
         0, 0, 1, 1, 0, xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, wm.screen.root_visual, 0, null);
     defer _ = xcb.xcb_destroy_window(wm.conn, temp_win);
     
-    const temp_dc = drawing.DrawContext.init(wm.allocator, wm.conn, temp_win, 1, 1) catch return 24;
+    const temp_dc = drawing.DrawContext.init(wm.allocator, wm.conn, temp_win, 1, 1, wm.dpi_info.dpi) catch return 24;
     defer temp_dc.deinit();
     loadBarFonts(temp_dc, wm) catch return 24;
     
@@ -259,9 +259,9 @@ pub fn init(wm: *defs.WM) !void {
 
     // Create DrawContext with ARGB visual if transparency is enabled
     const dc = if (want_transparency and has_argb_visual)
-        try drawing.DrawContext.initWithVisual(wm.allocator, wm.conn, window, width, height, visual_info.visual_id, colormap)
+        try drawing.DrawContext.initWithVisual(wm.allocator, wm.conn, window, width, height, visual_info.visual_id, colormap, wm.dpi_info.dpi)
     else
-        try drawing.DrawContext.init(wm.allocator, wm.conn, window, width, height);
+        try drawing.DrawContext.init(wm.allocator, wm.conn, window, width, height, wm.dpi_info.dpi);
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     

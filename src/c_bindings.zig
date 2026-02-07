@@ -70,6 +70,7 @@ pub extern "cairo" fn cairo_move_to(cr: *cairo_t, x: f64, y: f64) void;
 // Pango functions
 pub extern "pangocairo-1.0" fn pango_cairo_create_layout(cr: *cairo_t) ?*PangoLayout;
 pub extern "pangocairo-1.0" fn pango_cairo_show_layout(cr: *cairo_t, layout: *PangoLayout) void;
+pub extern "pangocairo-1.0" fn pango_cairo_context_set_resolution(context: *PangoContext, dpi: f64) void;
 
 pub extern "pango-1.0" fn pango_font_description_from_string(str: [*:0]const u8) ?*PangoFontDescription;
 pub extern "pango-1.0" fn pango_font_description_free(desc: *PangoFontDescription) void;
