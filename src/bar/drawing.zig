@@ -177,18 +177,11 @@ pub const DrawContext = struct {
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
         // Pango draws from top-left, but our API uses baseline Y
-        // So we need to move up by the ascender to position correctly
-        const metrics = c.pango_context_get_metrics(
-            c.pango_layout_get_context(self.pango_layout),
-            self.current_font_desc,
-            null
-        );
-        defer c.pango_font_metrics_unref(metrics);
+        // Get the baseline from the layout itself (accounts for font fallback!)
+        const baseline = c.pango_layout_get_baseline(self.pango_layout);
+        const baseline_pixels: f64 = @as(f64, @floatFromInt(baseline)) / @as(f64, @floatFromInt(c.PANGO_SCALE));
         
-        const ascent = c.pango_font_metrics_get_ascent(metrics);
-        const ascent_pixels: f64 = @as(f64, @floatFromInt(ascent)) / @as(f64, @floatFromInt(c.PANGO_SCALE));
-        
-        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - ascent_pixels);
+        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - baseline_pixels);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
     }
     
