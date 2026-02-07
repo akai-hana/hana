@@ -31,6 +31,7 @@ inline fn drawIndicator(dc: *drawing.DrawContext, x: u16, size: u16, filled: boo
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16) !u16 {
     const ws_state = workspaces.getState() orelse return start_x;
     var x = start_x;
+    const text_y = dc.baselineY(height);
     const scaled_ws_width = config.scaledWorkspaceWidth();
     const scaled_indicator_size = config.scaledIndicatorSize();
 
@@ -46,9 +47,6 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
         else if (i < static_numbers.len) 
             static_numbers[i] 
         else "?";
-        
-        // Use the centered text Y calculation for proper visual alignment
-        const text_y = dc.centeredTextY(label, height);
         
         try dc.drawText(x + (scaled_ws_width - dc.textWidth(label)) / 2, text_y, label, fg);
 
