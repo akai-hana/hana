@@ -161,14 +161,44 @@ pub const DrawContext = struct {
     alpha_override: ?u16 = null, // NEW: Global alpha override for bar transparency
     
     pub fn init(allocator: std.mem.Allocator, drawable: u32, width: u16, height: u16) !*DrawContext {
+        return initWithVisual(allocator, drawable, width, height, null, 0);
+    }
+    
+    pub fn initWithVisual(allocator: std.mem.Allocator, drawable: u32, width: u16, height: u16, 
+                          visual_id: ?u32, colormap_id: c.Colormap) !*DrawContext {
         const dc = try allocator.create(DrawContext);
         errdefer allocator.destroy(dc);
         
         const display = c.XOpenDisplay(null) orelse return error.DisplayOpenFailed;
-        const visual = c.XDefaultVisual(display, 0);
-        const colormap = c.XDefaultColormap(display, 0);
+        errdefer _ = c.XCloseDisplay(display);
+        
+        // If visual_id is provided, find the Visual structure for it
+        const visual: *c.Visual = if (visual_id) |vid| blk: {
+            const screen = c.XDefaultScreen(display);
+            const screen_ptr = c.XScreenOfDisplay(display, screen);
+            
+            // Search for the visual in the screen's visuals
+            const depth_count = @as(usize, @intCast(screen_ptr.*.ndepths));
+            var i: usize = 0;
+            while (i < depth_count) : (i += 1) {
+                const depth_ptr = &screen_ptr.*.depths[i];
+                const visual_count = @as(usize, @intCast(depth_ptr.*.nvisuals));
+                const visuals_slice = depth_ptr.*.visuals[0..visual_count];
+                for (visuals_slice) |*vis| {
+                    if (vis.visualid == vid) {
+                        // Strip allowzero attribute by converting through int
+                        const ptr_int = @intFromPtr(vis);
+                        break :blk @ptrFromInt(ptr_int);
+                    }
+                }
+            }
+            // Fallback to default if not found
+            break :blk c.XDefaultVisual(display, 0);
+        } else c.XDefaultVisual(display, 0);
+        
+        const colormap = if (colormap_id != 0) colormap_id else c.XDefaultColormap(display, 0);
+        
         const xft_draw = c.XftDrawCreate(display, drawable, visual, colormap) orelse {
-            _ = c.XCloseDisplay(display);
             return error.XftDrawCreateFailed;
         };
         

@@ -200,10 +200,13 @@ pub fn init(wm: *defs.WM) !void {
     
     const window = xcb.xcb_generate_id(wm.conn);
     
+    // Declare colormap outside the if block so it's available for DrawContext
+    var colormap: u32 = 0;
+    
     // Create window with ARGB visual if transparency is enabled and available
     if (want_transparency and has_argb_visual) {
         // Create colormap for ARGB visual
-        const colormap = xcb.xcb_generate_id(wm.conn);
+        colormap = xcb.xcb_generate_id(wm.conn);
         _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, 
             colormap, screen.root, visual_info.visual_id);
         
@@ -257,7 +260,11 @@ pub fn init(wm: *defs.WM) !void {
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
 
-    const dc = try drawing.DrawContext.init(wm.allocator, window, width, height);
+    // Create DrawContext with ARGB visual if transparency is enabled
+    const dc = if (want_transparency and has_argb_visual)
+        try drawing.DrawContext.initWithVisual(wm.allocator, window, width, height, visual_info.visual_id, colormap)
+    else
+        try drawing.DrawContext.init(wm.allocator, window, width, height);
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
