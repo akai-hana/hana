@@ -68,10 +68,11 @@ pub const DrawContext = struct {
             return error.PangoLayoutCreateFailed;
         };
         
-        // Note: We don't set Pango's DPI resolution here because font sizes are
-        // already scaled manually via scaledFontSize() to match the old Xft behavior.
-        // Setting both would cause double-scaling.
-        _ = dpi; // DPI is available if needed in the future
+        // CRITICAL: Set Pango's DPI resolution to match display
+        // Font sizes in config are in points, which need DPI to convert to pixels
+        // Without this, Pango defaults to 96 DPI, making fonts render at wrong size
+        const pango_context = c.pango_layout_get_context(layout);
+        c.pango_cairo_context_set_resolution(pango_context, @floatCast(dpi));
         
         dc.* = .{
             .allocator = allocator,
