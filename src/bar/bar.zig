@@ -211,7 +211,7 @@ pub fn init(wm: *defs.WM) !void {
             colormap, screen.root, visual_info.visual_id);
         
         // For transparent windows, don't set a background pixel
-        // We'll draw everything ourselves with XRender for proper alpha
+        // We'll draw everything ourselves with Cairo for proper alpha
         const value_mask = xcb.XCB_CW_BORDER_PIXEL | 
                            xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_COLORMAP;
         const value_list = [_]u32{ 

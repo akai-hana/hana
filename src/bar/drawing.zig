@@ -1,6 +1,5 @@
-//! Status bar text drawing/rendering
-//! Cairo + Pango for unified rendering
-//! Replaces Xft (fonts) and XRender (transparency) with single Cairo library
+//! Status bar text drawing/rendering using Cairo and Pango
+//! Cairo handles graphics and compositing, Pango handles text layout and fonts
 
 const std = @import("std");
 const debug = @import("debug");
@@ -65,10 +64,9 @@ pub const DrawContext = struct {
         errdefer c.cairo_destroy(ctx);
         
         // Create Pango layout for text rendering
-        const layout = c.pango_cairo_create_layout(ctx);
-        if (layout == null) {
+        const layout = c.pango_cairo_create_layout(ctx) orelse {
             return error.PangoLayoutCreateFailed;
-        }
+        };
         
         dc.* = .{
             .allocator = allocator,
@@ -294,12 +292,12 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
         return xft_name;
     }
     
-    var result = std.ArrayList(u8).init(allocator);
-    errdefer result.deinit();
+    var result = try std.ArrayList(u8).initCapacity(allocator, 0);
+    errdefer result.deinit(allocator);
     
     var parts = std.mem.splitScalar(u8, xft_name, ':');
     const family = parts.first();
-    try result.appendSlice(family);
+    try result.appendSlice(allocator, family);
     
     var size: ?[]const u8 = null;
     var weight: ?[]const u8 = null;
@@ -320,27 +318,27 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     // Add slant
     if (slant) |s| {
         if (std.mem.eql(u8, s, "italic") or std.mem.eql(u8, s, "oblique")) {
-            try result.append(' ');
-            try result.appendSlice("Italic");
+            try result.append(allocator, ' ');
+            try result.appendSlice(allocator, "Italic");
         }
     }
     
     // Add weight
     if (weight) |w| {
         if (std.mem.eql(u8, w, "bold")) {
-            try result.append(' ');
-            try result.appendSlice("Bold");
+            try result.append(allocator, ' ');
+            try result.appendSlice(allocator, "Bold");
         } else if (std.mem.eql(u8, w, "light")) {
-            try result.append(' ');
-            try result.appendSlice("Light");
+            try result.append(allocator, ' ');
+            try result.appendSlice(allocator, "Light");
         }
     }
     
     // Add size
     if (size) |s| {
-        try result.append(' ');
-        try result.appendSlice(s);
+        try result.append(allocator, ' ');
+        try result.appendSlice(allocator, s);
     }
     
-    return result.toOwnedSlice();
+    return result.toOwnedSlice(allocator);
 }
