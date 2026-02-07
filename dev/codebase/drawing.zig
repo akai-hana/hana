@@ -322,25 +322,21 @@ pub const DrawContext = struct {
         // Set the text so Pango selects the correct font (including fallbacks)
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
-        // Get the actual font metrics for the text as rendered by Pango
-        // This will reflect the fallback font's metrics if a fallback is used
-        const line = c.pango_layout_get_line_readonly(self.pango_layout, 0);
-        if (line == null) return self.baselineY(bar_height);
-        
-        // Get ink and logical extents of the line
-        var ink_rect: c.PangoRectangle = undefined;
+        // Get the logical extents (bounding box) for this specific text
         var logical_rect: c.PangoRectangle = undefined;
-        c.pango_layout_line_get_pixel_extents(line.?, &ink_rect, &logical_rect);
+        c.pango_layout_get_pixel_extents(self.pango_layout, null, &logical_rect);
         
-        // The logical rect gives us the actual bounding box Pango calculated
-        // Center this box vertically in the bar
+        // Get the baseline position within the text's bounding box
+        const baseline = c.pango_layout_get_baseline(self.pango_layout);
+        const baseline_pixels: i32 = @divTrunc(baseline, c.PANGO_SCALE);
+        
+        // Center the text's bounding box vertically in the bar
         const text_height: i32 = logical_rect.height;
         const total_pad: i32 = @as(i32, bar_height) - text_height;
         const top_pad: i32 = @max(0, @divTrunc(total_pad, 2));
         
-        // logical_rect.y is relative to the baseline, usually negative
-        // So baseline Y = top_pad - logical_rect.y
-        return @intCast(top_pad - logical_rect.y);
+        // Baseline Y = top padding + baseline offset within the text
+        return @intCast(top_pad + baseline_pixels);
     }
 };
 
