@@ -212,8 +212,8 @@ pub const tracking = struct {
     fn promoteToLarge(self: *tracking) !void {
         const s = self.small.?;
         
-        var list: std.ArrayList(u32) = .empty;
-        var set = std.AutoHashMap(u32, void).init(self.allocator);
+        var list: std.ArrayList(u32) = .init(self.allocator);
+        var set: std.AutoHashMap(u32, void) = .init(self.allocator);
         
         // Pre-allocate to avoid reallocation
         try list.ensureTotalCapacity(self.allocator, s.len + 8); // Extra capacity

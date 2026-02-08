@@ -309,7 +309,7 @@ fn focusWindowUnderPointer(wm: *WM) void {
     
     // Fallback: focus first window in workspace if pointer isn't over anything valid
     if (workspaces.getCurrentWorkspaceObject()) |ws| {
-        const windows = ws.windows.list.items;
+        const windows = ws.windows.items();
         for (windows) |workspace_win| {
             if (workspace_win != 0 and workspace_win != wm.root and 
                 !bar.isBarWindow(workspace_win) and wm.windows.contains(workspace_win)) {

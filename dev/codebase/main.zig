@@ -1,20 +1,21 @@
 // Main event loop - IMPROVED: No event counter management
 
-const std = @import("std");
-const posix = std.posix;
+const std     = @import("std");
+const posix   = std.posix;
 const builtin = @import("builtin");
 
-const debug = @import("debug");
-const config = @import("config");
-const defs = @import("defs");
+const debug     = @import("debug");
+const config    = @import("config");
+const defs      = @import("defs");
 const xkbcommon = @import("xkbcommon");
-const events = @import("events");
-const input = @import("input");
-const utils = @import("utils");
-const bar = @import("bar");
-const focus = @import("focus");
-const tiling = @import("tiling");
-const dpi = @import("dpi"); // ADD THIS
+const events    = @import("events");
+const input     = @import("input");
+const utils     = @import("utils");
+const bar       = @import("bar");
+const focus     = @import("focus");
+const tiling    = @import("tiling");
+const timer     = @import ("timer");
+const dpi       = @import("dpi"); // ADD THIS
 
 const xcb = defs.xcb;
 const WM = defs.WM;
@@ -30,10 +31,6 @@ const CURSOR_LEFT_PTR_MASK = 69;
 
 var should_reload = std.atomic.Value(bool).init(false);
 var running = std.atomic.Value(bool).init(true);
-
-// OPTIMIZATION: Timer state for dynamic enable/disable to reduce idle CPU
-var global_timer_fd: i32 = 0;
-var timer_enabled: bool = false;
 
 const FDs = struct { signal: posix.fd_t, timer: posix.fd_t };
 
@@ -56,8 +53,7 @@ fn setupPollFds() !FDs {
     if (tfd < 0) return error.TimerFdFailed;
     
     // OPTIMIZATION: Start with timer disabled - will be enabled if clock is visible
-    global_timer_fd = @intCast(tfd);
-    timer_enabled = false;
+    timer.setTimerFd(@intCast(tfd));
     
     return .{ .signal = @intCast(sfd), .timer = @intCast(tfd) };
 }
@@ -74,56 +70,6 @@ fn handleSignalFd(signal_fd: posix.fd_t, reload_flag: *std.atomic.Value(bool), r
             @intFromEnum(posix.SIG.TERM), @intFromEnum(posix.SIG.INT) => running_flag.store(false, .release),
             else => {},
         }
-    }
-}
-
-// OPTIMIZATION: Dynamic timer control to reduce idle CPU to near-zero
-fn shouldClockRun(wm: *WM) bool {
-    // Don't run timer if bar is disabled
-    if (!wm.config.bar.show) return false;
-    
-    // Don't run timer if bar is hidden (fullscreen)
-    if (!bar.isVisible()) return false;
-    
-    // Check if clock segment exists in layout
-    for (wm.config.bar.layout.items) |layout| {
-        for (layout.segments.items) |seg| {
-            if (seg == .clock) return true;
-        }
-    }
-    return false;
-}
-
-fn enableTimer() void {
-    if (timer_enabled) return;
-    const spec = std.os.linux.itimerspec{
-        .it_interval = .{ .sec = 1, .nsec = 0 },
-        .it_value = .{ .sec = 1, .nsec = 0 }
-    };
-    if (std.os.linux.timerfd_settime(@intCast(global_timer_fd), .{}, &spec, null) >= 0) {
-        timer_enabled = true;
-        debug.info("Clock timer enabled", .{});
-    }
-}
-
-fn disableTimer() void {
-    if (!timer_enabled) return;
-    const spec = std.os.linux.itimerspec{
-        .it_interval = .{ .sec = 0, .nsec = 0 },
-        .it_value = .{ .sec = 0, .nsec = 0 }
-    };
-    if (std.os.linux.timerfd_settime(@intCast(global_timer_fd), .{}, &spec, null) >= 0) {
-        timer_enabled = false;
-        debug.info("Clock timer disabled (idle CPU optimization)", .{});
-    }
-}
-
-pub fn updateTimerState(wm: *WM) void {
-    const should_run = shouldClockRun(wm);
-    if (should_run and !timer_enabled) {
-        enableTimer();
-    } else if (!should_run and timer_enabled) {
-        disableTimer();
     }
 }
 
@@ -253,7 +199,7 @@ fn handleConfigReload(wm: *WM) !void {
     tiling.reloadConfig(wm);
     
     // OPTIMIZATION: Update timer state in case clock visibility changed
-    updateTimerState(wm);
+    timer.updateTimerState(wm);
     
     debug.info("Reload complete", .{});
 }
@@ -319,7 +265,7 @@ pub fn main() !void {
     defer bar.deinit();
 
     // OPTIMIZATION: Enable timer only if clock is visible
-    updateTimerState(&wm);
+    timer.updateTimerState(&wm);
 
     try grabKeybindings(&wm);
     try setupExistingWindows(conn, root, allocator);

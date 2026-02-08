@@ -11,6 +11,7 @@ const dpi     = @import("dpi");
 const drawing = @import("drawing");
 const tiling  = @import("tiling");
 const debug   = @import("debug");
+const timer   = @import("timer");
 
 const workspaces             = @import("workspaces");
     const workspaces_segment = @import("tags");
@@ -301,7 +302,7 @@ fn setBarVisibility(wm: *defs.WM, visible: bool, reason: []const u8) void {
         debug.info("Bar {s} ({s})", .{ if (visible) "shown" else "hidden", reason });
         
         // OPTIMIZATION: Update timer state when visibility changes
-        @import("main").updateTimerState(wm);
+        timer.updateTimerState(wm);
         
         tiling.retileCurrentWorkspace(wm);
     }
