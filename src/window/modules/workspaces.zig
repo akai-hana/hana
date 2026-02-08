@@ -7,7 +7,6 @@ const WM = defs.WM;
 const utils = @import("utils");
 const focus = @import("focus");
 const bar = @import("bar");
-const batch = @import("batch");
 const tracking = @import("tracking").tracking;
 const createModule = @import("module").module;
 const debug = @import("debug");

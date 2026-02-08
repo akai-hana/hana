@@ -7,7 +7,6 @@ const WM = defs.WM;
 const utils = @import("utils");
 const focus = @import("focus");
 const workspaces = @import("workspaces");
-const batch = @import("batch");
 const bar = @import("bar");
 const tracking = @import("tracking").tracking;
 const createModule = @import("module").module;
@@ -190,22 +189,10 @@ pub fn addWindow(wm: *WM, win: u32) void {
         return;
     }
 
-    // Try batch first, fall back to direct XCB
-    var b = batch.Batch.begin(wm) catch {
-        utils.configureBorder(wm.conn, win, s.border_width, s.borderColor(wm, win));
-        _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
-        focus.setFocus(wm, win, .tiling_operation);
-        s.markDirty();
-        return;
-    };
-    defer b.deinit();
-
-    const color = s.borderColor(wm, win);
-    b.setBorderWidth(win, s.border_width) catch {};
-    b.setBorder(win, color) catch {};
-    b.setFocus(win) catch {};
-    b.execute();
-
+    // Direct XCB calls - no batch overhead
+    utils.configureBorder(wm.conn, win, s.border_width, s.borderColor(wm, win));
+    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
+    focus.setFocus(wm, win, .tiling_operation);
     wm.focused_window = win;
     s.markDirty();
 }
@@ -226,27 +213,7 @@ pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     const s = StateManager.get(true) orelse return;
     if (!s.enabled) return;
 
-    var b = batch.Batch.begin(wm) catch {
-        updateWindowFocusDirect(wm, old_focused, new_focused);
-        return;
-    };
-    defer b.deinit();
-
-    if (old_focused) |old_win| {
-        if (isTileable(s, wm, old_win)) {
-            b.setBorder(old_win, s.borderColor(wm, old_win)) catch {};
-        }
-    }
-    if (new_focused) |new_win| {
-        if (isTileable(s, wm, new_win)) {
-            b.setBorder(new_win, s.borderColor(wm, new_win)) catch {};
-        }
-    }
-    b.execute();
-}
-
-fn updateWindowFocusDirect(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
-    const s = StateManager.get(true) orelse return;
+    // Direct XCB calls - no batch overhead
     if (old_focused) |old_win| {
         if (isTileable(s, wm, old_win)) {
             utils.setBorder(wm.conn, old_win, s.borderColor(wm, old_win));
@@ -318,34 +285,26 @@ fn retileCurrentWorkspaceInternal(wm: *WM, should_flush: bool) void {
     else
         0;
 
-    // Create batch for all layout operations
-    var b = batch.Batch.begin(wm) catch {
-        logError(error.BatchFailed, null);
-        return;
-    };
-    defer b.deinit();
-
-    // Delegate to layout module
+    // Direct XCB calls - delegate to layout module
+    // XCB buffers internally, so no need for batch wrapper
     switch (s.layout) {
-        .master => master_layout.tileWithOffset(&b, s, visible, screen.width_in_pixels, available_height, y_offset),
-        .monocle => monocle_layout.tileWithOffset(&b, s, visible, screen.width_in_pixels, available_height, y_offset),
-        .grid => grid_layout.tileWithOffset(&b, s, visible, screen.width_in_pixels, available_height, y_offset),
+        .master => master_layout.tileWithOffset(wm.conn, s, visible, screen.width_in_pixels, available_height, y_offset),
+        .monocle => monocle_layout.tileWithOffset(wm.conn, s, visible, screen.width_in_pixels, available_height, y_offset),
+        .grid => grid_layout.tileWithOffset(wm.conn, s, visible, screen.width_in_pixels, available_height, y_offset),
     }
 
     // Set borders in single pass
     for (visible) |win| {
         const color = s.borderColor(wm, win);
-        b.setBorderWidth(win, s.border_width) catch {};
-        b.setBorder(win, color) catch {};
+        utils.setBorderWidth(wm.conn, win, s.border_width);
+        utils.setBorder(wm.conn, win, color);
     }
     
-    recoverOffscreenWindows(wm, current_ws, visible, screen, y_offset, &b);
+    recoverOffscreenWindows(wm, current_ws, visible, screen, y_offset);
     
-    // Only flush if requested (for atomic workspace switching, caller will flush)
+    // Flush if requested (for atomic workspace switching, caller will flush)
     if (should_flush) {
-        b.execute();
-    } else {
-        b.executeNoFlush();
+        utils.flush(wm.conn);
     }
     
     // Clear tiling suppression after retile completes
@@ -358,7 +317,7 @@ fn retileCurrentWorkspaceInternal(wm: *WM, should_flush: bool) void {
 
 // OPTIMIZATION: Extracted window recovery to reduce retile() size
 fn recoverOffscreenWindows(wm: *WM, current_ws: *workspaces.Workspace, visible: []const u32,
-                           screen: *xcb.xcb_screen_t, y_offset: u16, b: *batch.Batch) void {
+                           screen: *xcb.xcb_screen_t, y_offset: u16) void {
     // CRITICAL FIX: Safety check for windows that might be in workspace but not in tiling list
     // This prevents windows from being stuck off-screen at x=-4000
     const available_height = if (bar.isBarVisible()) screen.height_in_pixels - bar.getBarHeight() else screen.height_in_pixels;
@@ -384,7 +343,7 @@ fn recoverOffscreenWindows(wm: *WM, current_ws: *workspaces.Workspace, visible: 
             const default_w: u16 = @divTrunc(screen.width_in_pixels, 2);
             const default_h: u16 = @divTrunc(available_height, 2);
             const default_rect = utils.Rect{ .x = default_x, .y = default_y, .width = default_w, .height = default_h };
-            b.configure(ws_win, default_rect) catch {};
+            utils.configureWindow(wm.conn, ws_win, default_rect);
         }
     }
 }
