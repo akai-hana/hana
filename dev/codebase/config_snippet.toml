@@ -1,0 +1,10 @@
+# Add this to your config.toml keybinds section
+
+# Swap focused window with master (Mod+Tab)
+# - If focused on slave: moves it to master
+# - If focused on master: swaps it with first slave
+# - Focus stays on your selected window (mouse doesn't steal it)
+[[keybinds]]
+key = "Tab"
+modifiers = ["Super"]
+action = "swap_master"

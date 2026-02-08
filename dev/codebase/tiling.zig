@@ -435,6 +435,91 @@ pub fn toggleTiling(wm: *WM) void {
     }
 }
 
+// NEW: Swap focused window with master or move slave to master
+pub fn swapWithMaster(wm: *WM) void {
+    const s = StateManager.get(true) orelse return;
+    if (!s.enabled or s.windows.count() < 2) return;
+    
+    const focused = wm.focused_window orelse return;
+    if (!s.windows.contains(focused)) return;
+    
+    const windows = s.windows.items();
+    const master_count: usize = @intCast(s.master_count);
+    
+    // Find position of focused window
+    var focused_idx: ?usize = null;
+    for (windows, 0..) |win, i| {
+        if (win == focused) {
+            focused_idx = i;
+            break;
+        }
+    }
+    
+    const idx = focused_idx orelse return;
+    
+    // Suppress focus to prevent mouse from stealing it during the swap
+    wm.suppress_focus_reason = .tiling_operation;
+    
+    if (idx < master_count) {
+        // Focused window is in master area
+        // Swap with the first window after master area (if it exists)
+        if (windows.len > master_count) {
+            // Swap master with first slave
+            swapWindows(s, idx, master_count);
+            s.markDirty();
+            retileCurrentWorkspace(wm);
+            // Keep focus on the window (it's now in slave position)
+            focus.setFocus(wm, focused, .tiling_operation);
+        }
+    } else {
+        // Focused window is in slave area
+        // Move it to first master position (pushing previous master to slaves)
+        moveToFront(s, idx);
+        s.markDirty();
+        retileCurrentWorkspace(wm);
+        // Keep focus on the window (it's now in master position)
+        focus.setFocus(wm, focused, .tiling_operation);
+    }
+}
+
+// Helper: Swap two windows in the tracking list
+inline fn swapWindows(s: *State, idx1: usize, idx2: usize) void {
+    // We need to manipulate the internal list
+    // Since tracking uses small array or large list, we need to handle both cases
+    if (s.windows.small) |*small| {
+        const temp = small.items[idx1];
+        small.items[idx1] = small.items[idx2];
+        small.items[idx2] = temp;
+    } else if (s.windows.large) |*large| {
+        const temp = large.list.items[idx1];
+        large.list.items[idx1] = large.list.items[idx2];
+        large.list.items[idx2] = temp;
+    }
+}
+
+// Helper: Move window from idx to front (index 0)
+inline fn moveToFront(s: *State, from_idx: usize) void {
+    if (from_idx == 0) return;
+    
+    if (s.windows.small) |*small| {
+        const window = small.items[from_idx];
+        // Shift everything from 0..from_idx one position right
+        var i = from_idx;
+        while (i > 0) : (i -= 1) {
+            small.items[i] = small.items[i - 1];
+        }
+        small.items[0] = window;
+    } else if (s.windows.large) |*large| {
+        const window = large.list.items[from_idx];
+        // Shift everything from 0..from_idx one position right
+        var i = from_idx;
+        while (i > 0) : (i -= 1) {
+            large.list.items[i] = large.list.items[i - 1];
+        }
+        large.list.items[0] = window;
+    }
+}
+
 pub fn reloadConfig(wm: *WM) void {
     const s = StateManager.get(true) orelse return;
     
