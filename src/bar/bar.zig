@@ -150,6 +150,13 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
     try setProp(wm.conn, window, "_NET_WM_STATE", xcb.XCB_ATOM_ATOM,
         &[_]u32{try utils.getAtom(wm.conn, "_NET_WM_STATE_ABOVE"), try utils.getAtom(wm.conn, "_NET_WM_STATE_STICKY")});
     
+    // Set window opacity for compositor-based transparency
+    // This is MUCH cleaner than Cairo alpha blending - compositor blends the opaque bar
+    // Convert transparency (0.0-1.0) to opacity (0x00000000-0xFFFFFFFF)
+    const opacity_u32 = @as(u32, @intFromFloat(wm.config.bar.transparency * 4294967295.0));
+    try setProp(wm.conn, window, "_NET_WM_WINDOW_OPACITY", xcb.XCB_ATOM_CARDINAL, &[_]u32{opacity_u32});
+    debug.info("Set window opacity property: {d:.1}% (0x{x:0>8})", .{wm.config.bar.transparency * 100.0, opacity_u32});
+    
     // CRITICAL: Prevent bar from being moved or resized
     // Set allowed actions to only allow closing (for shutdown), but not move/resize
     const allowed_actions = [_]u32{
@@ -278,6 +285,7 @@ pub fn init(wm: *defs.WM) !void {
     utils.flush(wm.conn);
 
     // Create DrawContext with ARGB visual if transparency is enabled
+    // BUT don't use Cairo's alpha blending - let compositor handle it via window opacity
     const dc = if (want_transparency and has_argb_visual)
         try drawing.DrawContext.initWithVisual(wm.allocator, wm.conn, window, width, height, visual_info.visual_id, colormap, wm.dpi_info.dpi)
     else
@@ -285,13 +293,12 @@ pub fn init(wm: *defs.WM) !void {
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
-    // Set transparency on the draw context if enabled
-    if (want_transparency and has_argb_visual) {
-        dc.setAlphaOverride(alpha);
-        debug.info("Set alpha override on DrawContext: 0x{x:0>4} ({d:.1}% opaque)", .{alpha, (@as(f32, @floatFromInt(alpha)) / 0xFFFF) * 100.0});
-    }
+    // DON'T set alpha override - we're using window opacity property instead
+    // This prevents the darkening issue from Cairo alpha blending
+    debug.info("Using compositor-based transparency (window opacity) instead of Cairo alpha blending", .{});
 
-    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, want_transparency and has_argb_visual);
+    // Pass false for has_transparency since we're not using Cairo transparency
+    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, false);
     try draw(s, wm);
     utils.flush(wm.conn);
     state = s;
@@ -472,12 +479,8 @@ fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment)
 }
 
 fn draw(s: *State, wm: *defs.WM) !void {
-    // CRITICAL FIX: Clear the surface to transparent before drawing
-    // This initializes the alpha channel properly for ARGB windows
-    if (s.has_transparency) {
-        s.dc.clearTransparent();
-    }
-    
+    // Using window opacity property instead of Cairo alpha blending
+    // No need to clearTransparent() - we draw everything opaque
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
     // Pre-calculate widths
