@@ -166,9 +166,8 @@ pub const DrawContext = struct {
         return .{ r, g, b, a };
     }
     
-    /// OPTIMIZATION: Set color only if changed (for backgrounds, uses alpha_override)
-    /// CRITICAL: When using alpha < 1.0, we boost RGB values to compensate for premultiplication
-    /// to match window border brightness
+    /// OPTIMIZATION: Set color only if changed (for backgrounds)
+    /// With window-level opacity, backgrounds are always drawn at full opacity
     inline fn setColorForBackground(self: *DrawContext, color: u32) void {
         if (self.last_color) |last| {
             if (last.color == color and last.alpha == self.alpha_override) {
@@ -177,18 +176,7 @@ pub const DrawContext = struct {
         }
         
         const r, const g, const b, const a = rgbToRGBA(color, self.alpha_override);
-        
-        // CRITICAL: Compensate for premultiplied alpha to prevent darkening
-        // When alpha < 1.0, Cairo premultiplies RGB by alpha, darkening the color
-        // To get the desired brightness, we divide by alpha BEFORE Cairo multiplies
-        // Example: Want (172, 50, 50) at 70% alpha
-        //   Normal: Cairo gets (172, 50, 50, 0.7) → stores (120, 35, 35, 0.7) DARK
-        //   Fixed: Cairo gets (245, 71, 71, 0.7) → stores (172, 50, 50, 0.7) BRIGHT
-        const compensated_r = if (a < 1.0) r / a else r;
-        const compensated_g = if (a < 1.0) g / a else g;
-        const compensated_b = if (a < 1.0) b / a else b;
-        
-        c.cairo_set_source_rgba(self.ctx, compensated_r, compensated_g, compensated_b, a);
+        c.cairo_set_source_rgba(self.ctx, r, g, b, a);
         self.last_color = .{ .color = color, .alpha = self.alpha_override };
     }
     
@@ -226,23 +214,9 @@ pub const DrawContext = struct {
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
         self.setColorForBackground(color);  // Use background color (with transparency)
         
-        // CRITICAL: Use SOURCE operator for background rectangles to prevent double-compositing
-        // When we have an ARGB window with transparency:
-        // - OPERATOR_OVER blends the color over transparent background (darkens the result)
-        // - OPERATOR_SOURCE replaces pixels directly (matches window border rendering)
-        // This ensures bars render with the same brightness as window borders
-        if (self.alpha_override != null and self.alpha_override.? < 0xFFFF) {
-            c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_SOURCE);
-        }
-        
         c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
                          @floatFromInt(width), @floatFromInt(height));
         c.cairo_fill(self.ctx);
-        
-        // Restore OVER operator for subsequent drawing (text, etc.)
-        if (self.alpha_override != null and self.alpha_override.? < 0xFFFF) {
-            c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_OVER);
-        }
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
@@ -423,3 +397,4 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     
     return result.toOwnedSlice(allocator);
 }
+
