@@ -213,9 +213,23 @@ pub const DrawContext = struct {
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
         self.setColorForBackground(color);  // Use background color (with transparency)
         
+        // CRITICAL: Use SOURCE operator for background rectangles to prevent double-compositing
+        // When we have an ARGB window with transparency:
+        // - OPERATOR_OVER blends the color over transparent background (darkens the result)
+        // - OPERATOR_SOURCE replaces pixels directly (matches window border rendering)
+        // This ensures bars render with the same brightness as window borders
+        if (self.alpha_override != null and self.alpha_override.? < 0xFFFF) {
+            c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_SOURCE);
+        }
+        
         c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
                          @floatFromInt(width), @floatFromInt(height));
         c.cairo_fill(self.ctx);
+        
+        // Restore OVER operator for subsequent drawing (text, etc.)
+        if (self.alpha_override != null and self.alpha_override.? < 0xFFFF) {
+            c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_OVER);
+        }
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
