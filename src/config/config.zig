@@ -233,6 +233,7 @@ const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
     .{ "toggle_tiling", .toggle_tiling },
     .{ "toggle_fullscreen", .toggle_fullscreen },
     .{ "fullscreen", .toggle_fullscreen },
+    .{ "swap_master", .swap_master },
     .{ "dump_state", .dump_state },
     .{ "emergency_recover", .emergency_recover },
 });
