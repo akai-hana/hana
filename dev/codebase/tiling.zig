@@ -464,12 +464,14 @@ pub fn swapWithMaster(wm: *WM) void {
         // Focused window is in master area
         // Swap with the first window after master area (if it exists)
         if (windows.len > master_count) {
+            // Get the window we're swapping with (first slave)
+            const swap_target = windows[master_count];
             // Swap master with first slave
             swapWindows(s, idx, master_count);
             s.markDirty();
             retileCurrentWorkspace(wm);
-            // Keep focus on the window (it's now in slave position)
-            focus.setFocus(wm, focused, .tiling_operation);
+            // Focus the window that's now in master position (the former slave)
+            focus.setFocus(wm, swap_target, .tiling_operation);
         }
     } else {
         // Focused window is in slave area
