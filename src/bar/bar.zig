@@ -138,7 +138,7 @@ inline fn setProp(conn: *xcb.xcb_connection_t, win: u32, name: []const u8, type_
         try utils.getAtom(conn, name), type_, 32, data.len, data);
 }
 
-fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
+fn setWindowProperties(wm: *defs.WM, window: u32, height: u16, want_transparency: bool, alpha: u16) !void {
     const strut: [12]u32 = if (wm.config.bar.vertical_position == .bottom)
         .{ 0, 0, 0, height, 0, 0, 0, 0, 0, 0, 0, wm.screen.width_in_pixels }
     else
@@ -149,6 +149,14 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
         &[_]u32{try utils.getAtom(wm.conn, "_NET_WM_WINDOW_TYPE_DOCK")});
     try setProp(wm.conn, window, "_NET_WM_STATE", xcb.XCB_ATOM_ATOM,
         &[_]u32{try utils.getAtom(wm.conn, "_NET_WM_STATE_ABOVE"), try utils.getAtom(wm.conn, "_NET_WM_STATE_STICKY")});
+    
+    // CRITICAL: Set window opacity for compositor (picom) to enable transparency/blur
+    // Convert 16-bit alpha (0x0000-0xFFFF) to 32-bit opacity (0x00000000-0xFFFFFFFF)
+    if (want_transparency) {
+        const opacity_32: u32 = @as(u32, alpha) << 16 | alpha;
+        try setProp(wm.conn, window, "_NET_WM_WINDOW_OPACITY", xcb.XCB_ATOM_CARDINAL, &[_]u32{opacity_32});
+        debug.info("Set _NET_WM_WINDOW_OPACITY to 0x{x:0>8} ({d:.1}%)", .{opacity_32, (@as(f32, @floatFromInt(alpha)) / 0xFFFF) * 100.0});
+    }
     
     // CRITICAL: Prevent bar from being moved or resized
     // Set allowed actions to only allow closing (for shutdown), but not move/resize
@@ -273,7 +281,7 @@ pub fn init(wm: *defs.WM) !void {
         }
     }
 
-    try setWindowProperties(wm, window, height);
+    try setWindowProperties(wm, window, height, want_transparency and has_argb_visual, alpha);
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
 
@@ -350,7 +358,8 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
             xcb.XCB_CONFIG_WINDOW_Y, &values);
         
         // Update window properties for new position
-        try setWindowProperties(wm, s.window, s.height);
+        const alpha = wm.config.bar.getAlpha16();
+        try setWindowProperties(wm, s.window, s.height, s.has_transparency, alpha);
         
         utils.flush(wm.conn);
         debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
@@ -523,4 +532,3 @@ fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, width:
         .clock => try clock_segment.draw(s.dc, s.config, s.height, x),
     };
 }
-
