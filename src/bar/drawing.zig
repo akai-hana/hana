@@ -214,9 +214,22 @@ pub const DrawContext = struct {
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
         self.setColorForBackground(color);  // Use background color (with transparency)
         
+        // CRITICAL: Use SOURCE operator to write colors directly without blending
+        // This ensures colors match window border brightness exactly
+        // SOURCE replaces pixels completely instead of blending over existing content
+        const use_source = self.alpha_override != null and self.alpha_override.? < 0xFFFF;
+        if (use_source) {
+            c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_SOURCE);
+        }
+        
         c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
                          @floatFromInt(width), @floatFromInt(height));
         c.cairo_fill(self.ctx);
+        
+        // Restore OVER operator for text rendering
+        if (use_source) {
+            c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_OVER);
+        }
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
