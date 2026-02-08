@@ -197,9 +197,20 @@ pub fn init(wm: *defs.WM) !void {
     const alpha = wm.config.bar.getAlpha16();
     const want_transparency = alpha < 0xFFFF;
     
+    debug.info("Bar transparency config: {d:.2}% (want={}, alpha16=0x{x:0>4})", 
+        .{wm.config.bar.transparency * 100.0, want_transparency, alpha});
+    
     // Find 32-bit ARGB visual for transparency support
     const visual_info = if (want_transparency) findVisualByDepth(screen, 32) else VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
     const has_argb_visual = visual_info.visual_type != null;
+    
+    if (want_transparency) {
+        if (has_argb_visual) {
+            debug.info("Found 32-bit ARGB visual (id=0x{x})", .{visual_info.visual_id});
+        } else {
+            debug.warn("32-bit ARGB visual NOT found - transparency will be disabled", .{});
+        }
+    }
     
     const window = xcb.xcb_generate_id(wm.conn);
     
@@ -235,8 +246,7 @@ pub fn init(wm: *defs.WM) !void {
             &value_list,
         );
         
-        debug.info("Bar transparency: enabled at {d:.2}% (alpha: 0x{x:0>4})", 
-            .{wm.config.bar.transparency * 100.0, alpha});
+        debug.info("Created 32-bit ARGB window for transparency (depth=32, colormap=0x{x})", .{colormap});
     } else {
         // Fallback: create window with default visual (no transparency)
         _ = xcb.xcb_create_window(
