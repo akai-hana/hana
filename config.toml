@@ -39,7 +39,7 @@ fonts = [
 # NEW: Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
 # Accepts formats: 0.9 or 90 (will be normalized to 0-1)
 # With picom's gaussian blur, the bar will show blurred content behind it
-transparency = 70 # %
+transparency = 50 # %
 
 # Legacy single font option (used if fonts array is not set):
 #font = "FiraCode Nerd Font Ret"
@@ -50,7 +50,7 @@ bg          = "#0d0d14"
 fg          = "#bbbbbb"
 # workspace tag indicators
 # selected_bg = "#ac3232"
-selected_bg = "#CD8484"
+selected_bg = "#B44646"
 selected_fg = "#eeeeee"
 occupied_fg = "#eeeeee"
 urgent_bg   = "#FF0000"
