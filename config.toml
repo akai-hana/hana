@@ -99,6 +99,12 @@ Mod+Shift+Return = "pkill -9 Xorg" # quit w
 Mod+Shift+F = "kill"
 Mod+Shift+T = "reload" # Config hot-reload
 
+
+# wallpaper
+Mod+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-stop.sh" # stop shader wallpaper
+Mod+Shift+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-switch.sh" # start shader wallpaper
+
+
 # Tiling
 Mod+N           = "toggle_tiling" # Enable/disable tiling
 Mod+space       = "toggle_layout" # TODO Cycle layouts
