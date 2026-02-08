@@ -167,6 +167,8 @@ pub const DrawContext = struct {
     }
     
     /// OPTIMIZATION: Set color only if changed (for backgrounds, uses alpha_override)
+    /// CRITICAL: When using alpha < 1.0, we boost RGB values to compensate for premultiplication
+    /// to match window border brightness
     inline fn setColorForBackground(self: *DrawContext, color: u32) void {
         if (self.last_color) |last| {
             if (last.color == color and last.alpha == self.alpha_override) {
@@ -175,7 +177,18 @@ pub const DrawContext = struct {
         }
         
         const r, const g, const b, const a = rgbToRGBA(color, self.alpha_override);
-        c.cairo_set_source_rgba(self.ctx, r, g, b, a);
+        
+        // CRITICAL: Compensate for premultiplied alpha to prevent darkening
+        // When alpha < 1.0, Cairo premultiplies RGB by alpha, darkening the color
+        // To get the desired brightness, we divide by alpha BEFORE Cairo multiplies
+        // Example: Want (172, 50, 50) at 70% alpha
+        //   Normal: Cairo gets (172, 50, 50, 0.7) → stores (120, 35, 35, 0.7) DARK
+        //   Fixed: Cairo gets (245, 71, 71, 0.7) → stores (172, 50, 50, 0.7) BRIGHT
+        const compensated_r = if (a < 1.0) r / a else r;
+        const compensated_g = if (a < 1.0) g / a else g;
+        const compensated_b = if (a < 1.0) b / a else b;
+        
+        c.cairo_set_source_rgba(self.ctx, compensated_r, compensated_g, compensated_b, a);
         self.last_color = .{ .color = color, .alpha = self.alpha_override };
     }
     
@@ -410,4 +423,3 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     
     return result.toOwnedSlice(allocator);
 }
-
