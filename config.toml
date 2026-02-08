@@ -47,7 +47,8 @@ transparency = 70 # %
 # Main color palette
 bg          = "#0d0d14"
 fg          = "#bbbbbb"
-selected_bg = "#ac3232"
+# selected_bg = "#ac3232"
+selected_bg = "#3d2d3a"
 selected_fg = "#eeeeee"
 occupied_fg = "#eeeeee"
 urgent_bg   = "#FF0000"
