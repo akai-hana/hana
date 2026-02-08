@@ -78,10 +78,15 @@ pub fn init(wm: *WM) void {
         };
     }
     
+    // OPTIMIZATION: Pre-allocate hash map capacity
+    // Typical workload: 32 windows across all workspaces
+    var window_to_workspace = std.AutoHashMap(u32, u8).init(wm.allocator);
+    window_to_workspace.ensureTotalCapacity(32) catch {}; // Best-effort pre-allocation
+    
     const initial_state = State{
         .workspaces = workspaces_array,
         .current = 0,
-        .window_to_workspace = std.AutoHashMap(u32, u8).init(wm.allocator),
+        .window_to_workspace = window_to_workspace,
         .allocator = wm.allocator,
         .wm = wm,
     };

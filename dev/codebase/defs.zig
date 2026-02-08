@@ -330,9 +330,17 @@ pub const FullscreenState = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) FullscreenState {
+        // OPTIMIZATION: Pre-allocate fullscreen hash maps
+        // Typical: 0-2 fullscreen windows per workspace
+        var per_ws = std.AutoHashMap(u8, FullscreenInfo).init(allocator);
+        per_ws.ensureTotalCapacity(4) catch {}; // 4 workspaces with fullscreen
+        
+        var win_to_ws = std.AutoHashMap(u32, u8).init(allocator);
+        win_to_ws.ensureTotalCapacity(4) catch {}; // Match per_workspace
+        
         return .{
-            .per_workspace = std.AutoHashMap(u8, FullscreenInfo).init(allocator),
-            .window_to_workspace = std.AutoHashMap(u32, u8).init(allocator),
+            .per_workspace = per_ws,
+            .window_to_workspace = win_to_ws,
             .allocator = allocator,
         };
     }

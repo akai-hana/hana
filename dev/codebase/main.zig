@@ -234,13 +234,17 @@ pub fn main() !void {
     config.resolveKeybindings(user_config.keybindings.items, xkb_state);
     config.finalizeConfig(&user_config, screen);
 
+    // OPTIMIZATION: Pre-allocate WM windows hash map
+    var wm_windows = std.AutoHashMap(u32, void).init(allocator);
+    wm_windows.ensureTotalCapacity(32) catch {}; // Best-effort pre-allocation
+
     var wm = WM{
         .allocator = allocator,
         .conn = conn,
         .screen = screen,
         .root = root,
         .config = user_config,
-        .windows = std.AutoHashMap(u32, void).init(allocator),
+        .windows = wm_windows,
         .focused_window = null,
         .fullscreen = defs.FullscreenState.init(allocator),
         .xkb_state = xkb_state,
