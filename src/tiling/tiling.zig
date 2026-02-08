@@ -339,11 +339,32 @@ fn retileCurrentWorkspaceInternal(wm: *WM, should_flush: bool) void {
         b.setBorder(win, color) catch {};
     }
     
+    recoverOffscreenWindows(wm, current_ws, visible, screen, y_offset, &b);
+    
+    // Only flush if requested (for atomic workspace switching, caller will flush)
+    if (should_flush) {
+        b.execute();
+    } else {
+        b.executeNoFlush();
+    }
+    
+    // Clear tiling suppression after retile completes
+    // This allows focus-follows-mouse to work during normal operation
+    // but preserves .window_spawn suppression set during window creation
+    if (wm.suppress_focus_reason == .tiling_operation) {
+        wm.suppress_focus_reason = .none;
+    }
+}
+
+// OPTIMIZATION: Extracted window recovery to reduce retile() size
+fn recoverOffscreenWindows(wm: *WM, current_ws: *workspaces.Workspace, visible: []const u32,
+                           screen: *xcb.xcb_screen_t, y_offset: u16, b: *batch.Batch) void {
     // CRITICAL FIX: Safety check for windows that might be in workspace but not in tiling list
     // This prevents windows from being stuck off-screen at x=-4000
-    // Check all windows in current workspace and ensure they're on-screen
+    const available_height = if (bar.isBarVisible()) screen.height_in_pixels - bar.getBarHeight() else screen.height_in_pixels;
+    
     for (current_ws.windows.items()) |ws_win| {
-        // Skip if already in visible list
+        // Skip if already in visible list or fullscreen
         var found = false;
         for (visible) |v_win| {
             if (v_win == ws_win) {
@@ -365,20 +386,6 @@ fn retileCurrentWorkspaceInternal(wm: *WM, should_flush: bool) void {
             const default_rect = utils.Rect{ .x = default_x, .y = default_y, .width = default_w, .height = default_h };
             b.configure(ws_win, default_rect) catch {};
         }
-    }
-    
-    // Only flush if requested (for atomic workspace switching, caller will flush)
-    if (should_flush) {
-        b.execute();
-    } else {
-        b.executeNoFlush();
-    }
-    
-    // Clear tiling suppression after retile completes
-    // This allows focus-follows-mouse to work during normal operation
-    // but preserves .window_spawn suppression set during window creation
-    if (wm.suppress_focus_reason == .tiling_operation) {
-        wm.suppress_focus_reason = .none;
     }
 }
 
@@ -464,14 +471,12 @@ pub fn swapWithMaster(wm: *WM) void {
         // Focused window is in master area
         // Swap with the first window after master area (if it exists)
         if (windows.len > master_count) {
-            // Get the window we're swapping with (first slave)
-            const swap_target = windows[master_count];
             // Swap master with first slave
             swapWindows(s, idx, master_count);
             s.markDirty();
             retileCurrentWorkspace(wm);
-            // Focus the window that's now in master position (the former slave)
-            focus.setFocus(wm, swap_target, .tiling_operation);
+            // Keep focus on the window (it's now in slave position)
+            focus.setFocus(wm, focused, .tiling_operation);
         }
     } else {
         // Focused window is in slave area
