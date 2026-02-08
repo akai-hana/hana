@@ -232,7 +232,7 @@ pub fn init(wm: *defs.WM) !void {
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
 
-    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, false);
+    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, want_transparency);
     try draw(s, wm);
     utils.flush(wm.conn);
     state = s;
@@ -415,13 +415,11 @@ fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment)
 }
 
 fn draw(s: *State, wm: *defs.WM) !void {
-    // CRITICAL: Clear the surface to transparent before drawing (for ARGB windows)
-    // This initializes the alpha channel properly
-    if (s.has_transparency) {
-        s.dc.clearTransparent();
-    }
+    // When transparency is enabled, use accent_color for background to match window borders
+    // Otherwise use the configured bg color
+    const bar_bg = if (s.has_transparency) s.config.accent_color else s.config.bg;
     
-    s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
+    s.dc.fillRect(0, 0, s.width, s.height, bar_bg);
 
     // Pre-calculate widths
     const scaled_spacing = s.config.scaledSpacing();
