@@ -274,26 +274,6 @@ pub fn init(wm: *defs.WM) !void {
     }
 
     try setWindowProperties(wm, window, height);
-    
-    // CRITICAL: Set window opacity via _NET_WM_WINDOW_OPACITY property
-    // This tells the compositor (picom) to apply transparency, similar to dwm
-    // We draw everything opaque in Cairo and let the compositor handle transparency
-    if (want_transparency and has_argb_visual) {
-        const opacity_atom = try utils.getAtom(wm.conn, "_NET_WM_WINDOW_OPACITY");
-        const opacity_value: u32 = @as(u32, wm.config.bar.getAlpha16()) * 0x10001; // Convert 16-bit to 32-bit
-        _ = xcb.xcb_change_property(
-            wm.conn,
-            xcb.XCB_PROP_MODE_REPLACE,
-            window,
-            opacity_atom,
-            xcb.XCB_ATOM_CARDINAL,
-            32,
-            1,
-            @ptrCast(&opacity_value)
-        );
-        debug.info("Set _NET_WM_WINDOW_OPACITY to 0x{x:0>8} ({d:.1}%)", 
-            .{opacity_value, wm.config.bar.transparency * 100.0});
-    }
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
 
@@ -305,9 +285,12 @@ pub fn init(wm: *defs.WM) !void {
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
-    // NOTE: We draw everything opaque in Cairo and let the compositor handle transparency
-    // via _NET_WM_WINDOW_OPACITY (set above). This matches dwm's approach and provides
-    // lighter-looking transparency.
+    // Set transparency on the draw context if enabled
+    // Background will use this alpha, text will always be opaque
+    if (want_transparency and has_argb_visual) {
+        dc.setAlphaOverride(alpha);
+        debug.info("Using Cairo transparency: bg at {d:.1}% alpha, text at 100% (opaque)", .{(@as(f32, @floatFromInt(alpha)) / 0xFFFF) * 100.0});
+    }
 
     const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, want_transparency and has_argb_visual);
     try draw(s, wm);
@@ -496,7 +479,6 @@ fn draw(s: *State, wm: *defs.WM) !void {
         s.dc.clearTransparent();
     }
     
-    // Draw background - always opaque in Cairo, compositor handles transparency
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
     // Pre-calculate widths
@@ -541,3 +523,4 @@ fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, width:
         .clock => try clock_segment.draw(s.dc, s.config, s.height, x),
     };
 }
+

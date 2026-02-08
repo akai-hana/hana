@@ -22,9 +22,8 @@ pub const DrawContext = struct {
     pango_layout: *c.PangoLayout,
     current_font_desc: ?*c.PangoFontDescription = null,
     
-    // NOTE: Alpha override removed - we let the compositor handle transparency via
-    // _NET_WM_WINDOW_OPACITY instead of applying it in Cairo. This prevents
-    // double-transparency and matches dwm's approach for lighter appearance.
+    // Alpha override for bar transparency (0xFFFF = opaque, 0x0000 = fully transparent)
+    alpha_override: ?u16 = null,
     
     // OPTIMIZATION: Cache font metrics to avoid repeated Pango calls
     cached_metrics: ?struct {
@@ -109,7 +108,13 @@ pub const DrawContext = struct {
         c.cairo_surface_destroy(self.surface);
         self.allocator.destroy(self);
     }
-
+    
+    pub fn setAlphaOverride(self: *DrawContext, alpha: ?u16) void {
+        self.alpha_override = alpha;
+        // OPTIMIZATION: Invalidate color cache when alpha changes
+        self.last_color = null;
+    }
+    
     pub fn loadFont(self: *DrawContext, font_name: []const u8) !void {
         if (self.current_font_desc) |desc| {
             c.pango_font_description_free(desc);
@@ -149,25 +154,40 @@ pub const DrawContext = struct {
         }
     }
     
-    /// Helper: Convert RGB color to Cairo RGBA components (always opaque)
-    /// Transparency is handled by the compositor via _NET_WM_WINDOW_OPACITY
-    inline fn rgbToRGBA(color: u32) struct { f64, f64, f64, f64 } {
+    /// Helper: Convert RGB color to Cairo RGBA components
+    inline fn rgbToRGBA(color: u32, alpha_override: ?u16) struct { f64, f64, f64, f64 } {
         const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
         const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
         const b = @as(f64, @floatFromInt(color & 0xFF)) / 255.0;
-        const a = 1.0;  // Always opaque - compositor handles transparency
+        const a = if (alpha_override) |alpha|
+            @as(f64, @floatFromInt(alpha)) / 65535.0
+        else
+            1.0;
         return .{ r, g, b, a };
     }
     
-    /// OPTIMIZATION: Set color only if changed
-    inline fn setColor(self: *DrawContext, color: u32) void {
+    /// OPTIMIZATION: Set color only if changed (for backgrounds, uses alpha_override)
+    inline fn setColorForBackground(self: *DrawContext, color: u32) void {
         if (self.last_color) |last| {
-            if (last.color == color) {
+            if (last.color == color and last.alpha == self.alpha_override) {
                 return; // Color unchanged, skip Cairo call
             }
         }
         
-        const r, const g, const b, const a = rgbToRGBA(color);
+        const r, const g, const b, const a = rgbToRGBA(color, self.alpha_override);
+        c.cairo_set_source_rgba(self.ctx, r, g, b, a);
+        self.last_color = .{ .color = color, .alpha = self.alpha_override };
+    }
+    
+    /// OPTIMIZATION: Set color for text (ALWAYS opaque, ignores alpha_override)
+    inline fn setColorForText(self: *DrawContext, color: u32) void {
+        if (self.last_color) |last| {
+            if (last.color == color and last.alpha == null) {
+                return; // Color unchanged, skip Cairo call
+            }
+        }
+        
+        const r, const g, const b, const a = rgbToRGBA(color, null); // Force opaque
         c.cairo_set_source_rgba(self.ctx, r, g, b, a);
         self.last_color = .{ .color = color, .alpha = null };
     }
@@ -191,7 +211,7 @@ pub const DrawContext = struct {
     }
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        self.setColor(color);
+        self.setColorForBackground(color);  // Use background color (with transparency)
         
         c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
                          @floatFromInt(width), @floatFromInt(height));
@@ -199,7 +219,7 @@ pub const DrawContext = struct {
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
-        self.setColor(color);
+        self.setColorForText(color);  // Text is ALWAYS opaque
         
         // Set text in Pango layout
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
@@ -221,7 +241,7 @@ pub const DrawContext = struct {
         c.pango_layout_set_width(self.pango_layout, @intCast(@as(i32, max_width) * c.PANGO_SCALE));
         c.pango_layout_set_ellipsize(self.pango_layout, c.PANGO_ELLIPSIZE_END);
         
-        self.setColor(color);
+        self.setColorForText(color);  // Text is ALWAYS opaque
         
         // OPTIMIZATION: Use cached metrics instead of querying Pango
         const asc, _ = self.getMetrics();
@@ -376,3 +396,4 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     
     return result.toOwnedSlice(allocator);
 }
+
