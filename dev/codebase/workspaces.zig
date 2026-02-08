@@ -140,12 +140,15 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
         return;
     }
 
+    // OPTIMIZATION: Get tiling state once if needed
+    const tiling_state = if (wm.config.tiling.enabled) @import("tiling").getState() else null;
+
     const from_ws = s.window_to_workspace.get(win) orelse {
         // Window not tracked, just add to target
         s.workspaces[target_ws].add(win) catch |err| {
             debug.err("Failed to add window to workspace {}: {}", .{ target_ws, err });
             // CRITICAL: If we can't add to workspace, remove from tiling to stay consistent
-            if (@import("tiling").getState()) |ts| {
+            if (tiling_state) |ts| {
                 _ = ts.windows.remove(win);
             }
             return;
@@ -163,7 +166,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
         // CRITICAL: Rollback - add back to original workspace to maintain consistency
         s.workspaces[from_ws].add(win) catch {};
         // Also ensure it's removed from tiling if add failed
-        if (@import("tiling").getState()) |ts| {
+        if (tiling_state) |ts| {
             _ = ts.windows.remove(win);
         }
         return;
@@ -171,25 +174,20 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
     s.window_to_workspace.put(win, target_ws) catch {};
 
     // OPTIMIZATION: Simplified visibility handling using dwm approach
-    const is_tiling = wm.config.tiling.enabled;
     if (from_ws == s.current) {
         // Move window off-screen instead of unmapping
         hideWindow(wm, win);
         if (wm.focused_window == win) {
             focus.clearFocus(wm);
         }
-        if (is_tiling) markTilingDirty();
+        if (tiling_state) |ts| ts.markDirty();
     } else if (target_ws == s.current) {
         // Window moving to current workspace - will be shown on next retile
-        if (is_tiling) markTilingDirty();
+        if (tiling_state) |ts| ts.markDirty();
     }
 }
 
-inline fn markTilingDirty() void {
-    if (@import("tiling").getState()) |ts| {
-        ts.markDirty();
-    }
-}
+// OPTIMIZATION: Removed markTilingDirty() - inlined to reduce function call overhead
 
 pub fn switchTo(wm: *WM, ws_id: u8) void {
     const s = StateManager.get(true) orelse return;

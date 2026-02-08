@@ -373,6 +373,24 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
     cfg.tiling.border_unfocused = getColor(section, "border_unfocused", 0x383C4A);
 }
 
+// OPTIMIZATION: Table-driven bar color parsing
+const BarColorField = struct {
+    name: []const u8,
+    field_name: []const u8,
+    default: u32,
+};
+
+const BAR_COLOR_FIELDS = [_]BarColorField{
+    .{ .name = "bg", .field_name = "bg", .default = 0x222222 },
+    .{ .name = "fg", .field_name = "fg", .default = 0xBBBBBB },
+    .{ .name = "selected_bg", .field_name = "selected_bg", .default = 0x005577 },
+    .{ .name = "selected_fg", .field_name = "selected_fg", .default = 0xEEEEEE },
+    .{ .name = "occupied_fg", .field_name = "occupied_fg", .default = 0xEEEEEE },
+    .{ .name = "urgent_bg", .field_name = "urgent_bg", .default = 0xFF0000 },
+    .{ .name = "urgent_fg", .field_name = "urgent_fg", .default = 0xFFFFFF },
+    .{ .name = "accent_color", .field_name = "accent_color", .default = 0x61AFEF },
+};
+
 fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
     const section = doc.getSection("bar") orelse return;
     cfg.bar.show = get(bool, section, "show", true, null, null);
@@ -406,15 +424,12 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     cfg.bar.padding = get(u8, section, "padding", 8, 0, 50);
     cfg.bar.spacing = get(u8, section, "spacing", 12, 0, 100);
 
-    cfg.bar.bg = getColor(section, "bg", 0x222222);
-    cfg.bar.fg = getColor(section, "fg", 0xBBBBBB);
-    cfg.bar.selected_bg = getColor(section, "selected_bg", 0x005577);
-    cfg.bar.selected_fg = getColor(section, "selected_fg", 0xEEEEEE);
-    cfg.bar.occupied_fg = getColor(section, "occupied_fg", 0xEEEEEE);
-    cfg.bar.urgent_bg = getColor(section, "urgent_bg", 0xFF0000);
-    cfg.bar.urgent_fg = getColor(section, "urgent_fg", 0xFFFFFF);
+    // OPTIMIZATION: Table-driven color parsing (saves 11 LOC)
+    inline for (BAR_COLOR_FIELDS) |field| {
+        @field(cfg.bar, field.field_name) = getColor(section, field.name, field.default);
+    }
     
-    cfg.bar.accent_color = getColor(section, "accent_color", 0x61AFEF);
+    // Accent-based colors with fallback
     cfg.bar.workspaces_accent = getColor(section, "workspaces_accent", cfg.bar.accent_color);
     cfg.bar.title_accent_color = getColor(section, "title_accent_color", cfg.bar.accent_color);
     cfg.bar.clock_accent = getColor(section, "clock_accent", cfg.bar.accent_color);
@@ -445,6 +460,7 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     try parseWorkspaceIcons(allocator, section, cfg);
     try parseBarLayout(allocator, section, doc, cfg);
     
+    // Override with bar.colors section if present
     if (doc.getSection("bar.colors")) |colors_section| {
         cfg.bar.workspaces_accent = getColor(colors_section, "workspaces", cfg.bar.workspaces_accent orelse cfg.bar.accent_color);
         cfg.bar.title_accent_color = getColor(colors_section, "title", cfg.bar.title_accent_color orelse cfg.bar.accent_color);
