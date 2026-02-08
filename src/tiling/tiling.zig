@@ -43,6 +43,9 @@ pub const State = struct {
     border_unfocused: u32,
     windows: tracking,
     dirty: bool,
+    // OPTIMIZATION: Cache window geometries to reduce X11 queries
+    geometry_cache: std.AutoHashMap(u32, utils.Rect),
+    allocator: std.mem.Allocator,
 
     pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.gaps, .border = self.border_width };
@@ -66,8 +69,35 @@ pub const State = struct {
         self.dirty = false;
     }
     
+    // OPTIMIZATION: Get cached geometry or query and cache it
+    pub fn getGeometry(self: *State, conn: *xcb.xcb_connection_t, win: u32) ?utils.Rect {
+        // Try cache first
+        if (self.geometry_cache.get(win)) |rect| {
+            return rect;
+        }
+        
+        // Cache miss - query X11 and cache result
+        if (utils.getGeometry(conn, win)) |rect| {
+            self.geometry_cache.put(win, rect) catch {};  // Best-effort caching
+            return rect;
+        }
+        
+        return null;
+    }
+    
+    // OPTIMIZATION: Invalidate cached geometry for a window
+    pub inline fn invalidateGeometry(self: *State, win: u32) void {
+        _ = self.geometry_cache.remove(win);
+    }
+    
+    // OPTIMIZATION: Clear all geometry cache entries
+    pub inline fn clearGeometryCache(self: *State) void {
+        self.geometry_cache.clearRetainingCapacity();
+    }
+    
     pub fn deinit(self: *State) void {
         self.windows.deinit();
+        self.geometry_cache.deinit();
     }
 };
 
@@ -110,6 +140,8 @@ pub fn init(wm: *WM) void {
         .border_unfocused = wm.config.tiling.border_unfocused,
         .windows = tracking.init(wm.allocator),
         .dirty = false,
+        .geometry_cache = std.AutoHashMap(u32, utils.Rect).init(wm.allocator),
+        .allocator = wm.allocator,
     };
 
     StateManager.init(wm.allocator, initial_state) catch |err| {
@@ -435,4 +467,10 @@ pub fn reloadConfig(wm: *WM) void {
 
 pub inline fn getState() ?*State {
     return StateManager.get(true);
+}
+
+// OPTIMIZATION: Invalidate cached geometry when window is moved/resized
+pub inline fn invalidateWindowGeometry(win: u32) void {
+    const s = StateManager.get(true) orelse return;
+    s.invalidateGeometry(win);
 }

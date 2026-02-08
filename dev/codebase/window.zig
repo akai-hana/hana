@@ -199,6 +199,10 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
         @intCast(event.border_width),
     };
     _ = xcb.xcb_configure_window(wm.conn, win, event.value_mask, &values);
+    
+    // OPTIMIZATION: Invalidate cached geometry after configuration change
+    tiling.invalidateWindowGeometry(win);
+    
     utils.flush(wm.conn);
 }
 
@@ -253,6 +257,9 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     if (wm.config.tiling.enabled) {
         tiling.removeWindow(wm, win);
     }
+    
+    // OPTIMIZATION: Invalidate cached geometry when window is destroyed
+    tiling.invalidateWindowGeometry(win);
 
     workspaces.removeWindow(win);
     wm.removeWindow(win);
