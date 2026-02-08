@@ -441,26 +441,73 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     cfg.bar.indicator_size = get(u8, section, "indicator_size", 4, 2, 10);
     cfg.bar.title_accent = get(bool, section, "title_accent", true, null, null);
     
-    // Parse transparency value - supports both 0-1 and 0-100 formats
+    // Parse transparency value - supports multiple formats:
+    // - Bare decimals: 0.5, 0.75
+    // - Quoted decimals: "0.5", '0.5'
+    // - Integers: 50, 75, 100
+    // - Quoted integers: "50", '75'
+    // - Percentages: 50%, 75%, 100%
+    // Special case: 1, "1", '1', or 100% = fully opaque (skip transparency)
     if (section.get("transparency")) |value| {
         var trans: f32 = 1.0;
-        if (value.asInt()) |i| {
-            // Integer value: treat as percentage if >= 1, otherwise as decimal
-            if (i >= 1) {
-                trans = @as(f32, @floatFromInt(i)) / 100.0;
+        
+        // Check for percentage (scalable value)
+        if (value.asScalable()) |scalable| {
+            if (scalable.is_percentage) {
+                // It's a percentage like 50%
+                trans = scalable.value / 100.0;
             } else {
-                trans = @as(f32, @floatFromInt(i));
+                trans = scalable.value;
+            }
+        } else if (value.asInt()) |i| {
+            // Integer value: 0, 1, 50, 100, etc.
+            if (i == 0) {
+                trans = 0.0;  // Fully transparent
+            } else if (i == 1) {
+                trans = 1.0;  // Fully opaque - skip transparency
+                debug.info("Transparency set to 1 (fully opaque) - transparency disabled", .{});
+            } else if (i >= 2 and i <= 100) {
+                trans = @as(f32, @floatFromInt(i)) / 100.0;  // Treat as percentage
+            } else {
+                debug.warn("Invalid transparency value {} (must be 0-100), using default", .{i});
+                trans = 1.0;
             }
         } else if (value.asString()) |str| {
-            // Parse string as float
-            trans = std.fmt.parseFloat(f32, str) catch 1.0;
-            // If value >= 1, assume it's 0-100 percentage
-            if (trans >= 1.0 and trans <= 100.0) {
-                trans = trans / 100.0;
+            // String value: "0.5", "50", "1", etc.
+            const trimmed = std.mem.trim(u8, str, " \t");
+            
+            // Try parsing as float first (handles "0.5", "0.75", "1.0", etc.)
+            if (std.fmt.parseFloat(f32, trimmed)) |float_val| {
+                // Check if it's the special case of 1.0 (fully opaque)
+                if (float_val == 1.0) {
+                    trans = 1.0;
+                    debug.info("Transparency set to 1.0 (fully opaque) - transparency disabled", .{});
+                } else if (float_val >= 0.0 and float_val < 1.0) {
+                    // Decimal value (0.0 - 0.99)
+                    trans = float_val;
+                } else if (float_val >= 1.0 and float_val <= 100.0) {
+                    // Treat as percentage (1-100)
+                    trans = float_val / 100.0;
+                } else {
+                    debug.warn("Invalid transparency value {d} (must be 0.0-1.0 or 0-100), using default", .{float_val});
+                    trans = 1.0;
+                }
+            } else |_| {
+                debug.warn("Invalid transparency value '{s}', using default", .{trimmed});
+                trans = 1.0;
             }
         }
+        
+        // Clamp to valid range
         cfg.bar.transparency = std.math.clamp(trans, 0.0, 1.0);
-        debug.info("Bar transparency set to: {d:.2}%", .{cfg.bar.transparency * 100.0});
+        
+        // Log the final value
+        if (cfg.bar.transparency == 1.0) {
+            debug.info("Bar transparency: disabled (fully opaque)", .{});
+        } else {
+            debug.info("Bar transparency set to: {d:.2}% (alpha: 0x{x:0>4})", 
+                .{cfg.bar.transparency * 100.0, cfg.bar.getAlpha16()});
+        }
     }
     
     try parseWorkspaceIcons(allocator, section, cfg);
