@@ -479,7 +479,13 @@ fn draw(s: *State, wm: *defs.WM) !void {
         s.dc.clearTransparent();
     }
     
-    s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
+    // Use SOURCE operator for background fill to achieve lighter transparency
+    // like dwm's ParentRelative - directly copies RGBA without blending
+    if (s.has_transparency) {
+        s.dc.fillRectSource(0, 0, s.width, s.height, s.config.bg);
+    } else {
+        s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
+    }
 
     // Pre-calculate widths
     const scaled_spacing = s.config.scaledSpacing();

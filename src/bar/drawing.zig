@@ -218,6 +218,25 @@ pub const DrawContext = struct {
         c.cairo_fill(self.ctx);
     }
     
+    /// Fill rectangle using SOURCE operator instead of OVER
+    /// This directly copies RGBA values without blending, producing lighter transparency
+    /// similar to X11's ParentRelative - use this for the main bar background
+    pub fn fillRectSource(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
+        c.cairo_save(self.ctx);
+        
+        self.setColorForBackground(color);  // Use background color (with transparency)
+        c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_SOURCE);
+        
+        c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
+                         @floatFromInt(width), @floatFromInt(height));
+        c.cairo_fill(self.ctx);
+        
+        c.cairo_restore(self.ctx);
+        
+        // OPTIMIZATION: Invalidate color cache after operator change
+        self.last_color = null;
+    }
+    
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
         self.setColorForText(color);  // Text is ALWAYS opaque
         
