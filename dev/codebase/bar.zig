@@ -224,11 +224,13 @@ pub fn init(wm: *defs.WM) !void {
         _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, 
             colormap, screen.root, visual_info.visual_id);
         
-        // For transparent windows, don't set a background pixel
-        // We'll draw everything ourselves with Cairo for proper alpha
-        const value_mask = xcb.XCB_CW_BORDER_PIXEL | 
+        // CRITICAL: For ARGB windows, set background pixmap to None
+        // This prevents X11 from initializing the window with an opaque background
+        // Without this, transparency won't work even with proper Cairo drawing
+        const value_mask = xcb.XCB_CW_BACK_PIXMAP | xcb.XCB_CW_BORDER_PIXEL | 
                            xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_COLORMAP;
         const value_list = [_]u32{ 
+            xcb.XCB_BACK_PIXMAP_NONE,  // CRITICAL: No background - we draw everything with Cairo
             0,  // border pixel
             xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS,
             colormap,
@@ -246,7 +248,7 @@ pub fn init(wm: *defs.WM) !void {
             &value_list,
         );
         
-        debug.info("Created 32-bit ARGB window for transparency (depth=32, colormap=0x{x})", .{colormap});
+        debug.info("Created 32-bit ARGB window for transparency (depth=32, colormap=0x{x}, bg=None)", .{colormap});
     } else {
         // Fallback: create window with default visual (no transparency)
         _ = xcb.xcb_create_window(

@@ -189,6 +189,10 @@ pub const DrawContext = struct {
         c.cairo_paint(self.ctx);
         c.cairo_restore(self.ctx);
         
+        // CRITICAL: Explicitly set operator to OVER for proper alpha blending
+        // Without this, subsequent drawing operations may not blend correctly
+        c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_OVER);
+        
         // OPTIMIZATION: Invalidate color cache after clearing
         self.last_color = null;
     }

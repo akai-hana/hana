@@ -82,8 +82,9 @@ pub const cairo_operator_t = enum(c_int) {
     HSL_LUMINOSITY = 28,
 };
 
-// Export the CLEAR operator as a constant for convenience
+// Export operators as constants for convenience
 pub const CAIRO_OPERATOR_CLEAR = cairo_operator_t.CLEAR;
+pub const CAIRO_OPERATOR_OVER = cairo_operator_t.OVER;
 
 // Drawing operations
 pub extern fn cairo_set_source_rgb(cr: *cairo_t, red: f64, green: f64, blue: f64) void;
