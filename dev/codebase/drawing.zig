@@ -179,6 +179,20 @@ pub const DrawContext = struct {
         self.last_color = .{ .color = color, .alpha = self.alpha_override };
     }
     
+    /// Clear the entire surface to fully transparent (for ARGB windows)
+    /// This must be called before drawing when using transparency to properly
+    /// initialize the alpha channel. Without this, the window will be opaque
+    /// regardless of the alpha values used in drawing operations.
+    pub fn clearTransparent(self: *DrawContext) void {
+        c.cairo_save(self.ctx);
+        c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_CLEAR);
+        c.cairo_paint(self.ctx);
+        c.cairo_restore(self.ctx);
+        
+        // OPTIMIZATION: Invalidate color cache after clearing
+        self.last_color = null;
+    }
+    
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
         self.setColorIfChanged(color);
         

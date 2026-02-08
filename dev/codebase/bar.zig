@@ -60,11 +60,12 @@ const State = struct {
     last_second: i64,
     alive: bool,
     visible: bool,  // OPTIMIZATION: Track actual visibility for timer control
+    has_transparency: bool,  // Track if transparency is enabled
     allocator: std.mem.Allocator,
     cached_clock_width: u16,
 
     fn init(allocator: std.mem.Allocator, conn: *xcb.xcb_connection_t, window: u32, width: u16, height: u16,
-            dc: *drawing.DrawContext, config: defs.BarConfig) !*State {
+            dc: *drawing.DrawContext, config: defs.BarConfig, has_transparency: bool) !*State {
         const s = try allocator.create(State);
         const scaled_padding = config.scaledPadding();
         s.* = State{
@@ -75,6 +76,7 @@ const State = struct {
             .cached_title_window = null,
             .dirty = false, .dirty_clock = false, .last_second = 0, .alive = true,
             .visible = true,  // OPTIMIZATION: Start visible, setBarState will update
+            .has_transparency = has_transparency,
             .allocator = allocator,
             .cached_clock_width = dc.textWidth("0000-00-00 00:00:00") + 2 * scaled_padding,
         };
@@ -271,7 +273,7 @@ pub fn init(wm: *defs.WM) !void {
         dc.setAlphaOverride(alpha);
     }
 
-    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar);
+    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, want_transparency and has_argb_visual);
     try draw(s, wm);
     utils.flush(wm.conn);
     state = s;
@@ -452,6 +454,12 @@ fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment)
 }
 
 fn draw(s: *State, wm: *defs.WM) !void {
+    // CRITICAL FIX: Clear the surface to transparent before drawing
+    // This initializes the alpha channel properly for ARGB windows
+    if (s.has_transparency) {
+        s.dc.clearTransparent();
+    }
+    
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
     // Pre-calculate widths
