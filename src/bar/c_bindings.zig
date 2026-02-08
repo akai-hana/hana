@@ -84,7 +84,6 @@ pub const cairo_operator_t = enum(c_int) {
 
 // Export operators as constants for convenience
 pub const CAIRO_OPERATOR_CLEAR = cairo_operator_t.CLEAR;
-pub const CAIRO_OPERATOR_SOURCE = cairo_operator_t.SOURCE;
 pub const CAIRO_OPERATOR_OVER = cairo_operator_t.OVER;
 
 // Drawing operations
