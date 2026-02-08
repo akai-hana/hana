@@ -45,10 +45,12 @@ transparency = 70 # %
 #font = "FiraCode Nerd Font Ret"
 
 # Main color palette
+# bar
 bg          = "#0d0d14"
 fg          = "#bbbbbb"
+# workspace tag indicators
 # selected_bg = "#ac3232"
-selected_bg = "#3d2d3a"
+selected_bg = "#CD8484"
 selected_fg = "#eeeeee"
 occupied_fg = "#eeeeee"
 urgent_bg   = "#FF0000"
