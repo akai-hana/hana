@@ -200,6 +200,9 @@ pub fn init(wm: *defs.WM) !void {
     debug.info("Bar transparency config: {d:.2}% (want={}, alpha16=0x{x:0>4})", 
         .{wm.config.bar.transparency * 100.0, want_transparency, alpha});
     
+    // XCB constant - use literal value to ensure it's correct
+    const XCB_BACK_PIXMAP_NONE: u32 = 0;
+    
     // Find 32-bit ARGB visual for transparency support
     const visual_info = if (want_transparency) findVisualByDepth(screen, 32) else VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
     const has_argb_visual = visual_info.visual_type != null;
@@ -224,17 +227,19 @@ pub fn init(wm: *defs.WM) !void {
         _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, 
             colormap, screen.root, visual_info.visual_id);
         
-        // CRITICAL: For ARGB windows, set background pixmap to None
+        // CRITICAL: For ARGB windows, set background pixmap to None (0)
         // This prevents X11 from initializing the window with an opaque background
-        // Without this, transparency won't work even with proper Cairo drawing
         const value_mask = xcb.XCB_CW_BACK_PIXMAP | xcb.XCB_CW_BORDER_PIXEL | 
                            xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_COLORMAP;
         const value_list = [_]u32{ 
-            xcb.XCB_BACK_PIXMAP_NONE,  // CRITICAL: No background - we draw everything with Cairo
+            XCB_BACK_PIXMAP_NONE,  // 0 = No background pixmap
             0,  // border pixel
             xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS,
             colormap,
         };
+        
+        debug.info("Creating ARGB window: depth=32, visual=0x{x}, back_pixmap={}, colormap=0x{x}", 
+            .{visual_info.visual_id, XCB_BACK_PIXMAP_NONE, colormap});
         
         _ = xcb.xcb_create_window(
             wm.conn, 
@@ -248,7 +253,7 @@ pub fn init(wm: *defs.WM) !void {
             &value_list,
         );
         
-        debug.info("Created 32-bit ARGB window for transparency (depth=32, colormap=0x{x}, bg=None)", .{colormap});
+        debug.info("ARGB window created successfully (id=0x{x})", .{window});
     } else {
         // Fallback: create window with default visual (no transparency)
         _ = xcb.xcb_create_window(
@@ -283,6 +288,7 @@ pub fn init(wm: *defs.WM) !void {
     // Set transparency on the draw context if enabled
     if (want_transparency and has_argb_visual) {
         dc.setAlphaOverride(alpha);
+        debug.info("Set alpha override on DrawContext: 0x{x:0>4} ({d:.1}% opaque)", .{alpha, (@as(f32, @floatFromInt(alpha)) / 0xFFFF) * 100.0});
     }
 
     const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, want_transparency and has_argb_visual);
