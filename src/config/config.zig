@@ -445,13 +445,19 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     if (section.get("transparency")) |value| {
         var trans: f32 = 1.0;
         if (value.asInt()) |i| {
-            // If integer, assume it's 0-100 percentage
-            trans = @as(f32, @floatFromInt(i)) / 100.0;
+            // Integer value: treat as percentage if >= 1, otherwise as decimal
+            if (i >= 1) {
+                trans = @as(f32, @floatFromInt(i)) / 100.0;
+            } else {
+                trans = @as(f32, @floatFromInt(i));
+            }
         } else if (value.asString()) |str| {
-            // Try parsing as float
+            // Parse string as float
             trans = std.fmt.parseFloat(f32, str) catch 1.0;
-            // If value is > 1, assume it's 0-100 percentage
-            if (trans > 1.0) trans = trans / 100.0;
+            // If value >= 1, assume it's 0-100 percentage
+            if (trans >= 1.0 and trans <= 100.0) {
+                trans = trans / 100.0;
+            }
         }
         cfg.bar.transparency = std.math.clamp(trans, 0.0, 1.0);
         debug.info("Bar transparency set to: {d:.2}%", .{cfg.bar.transparency * 100.0});
