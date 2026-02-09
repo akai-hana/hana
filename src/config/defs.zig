@@ -54,7 +54,7 @@ pub const XKB_RETRY_DELAY_MS: u64 = 20;
 
 // Workspace limits
 // OPTIMIZED: u8 instead of usize - max 255 workspaces is more than enough
-pub const MIN_WORKSPACES: u8 = 1;
+pub const MIN_WORKSPACES: u6 = 1;
 
 // Tiling constraints
 pub const MIN_MASTER_WIDTH: f32 = 0.05;
@@ -243,7 +243,7 @@ pub const BarConfig = struct {
     
     pub inline fn scaledWorkspaceWidth(self: *const BarConfig) u16 {
         // Base workspace width from bar.zig is 50
-        const base_width: f32 = 50.0;
+        const base_width: f16 = 40;
         return @intFromFloat(@round(base_width * self.scale_factor));
     }
     

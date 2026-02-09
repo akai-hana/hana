@@ -14,15 +14,18 @@ pub const DrawContext = struct {
     width: u16,
     height: u16,
     
-    // Cairo structures
+    // Cairo structures (for text rendering only)
     surface: *c.cairo_surface_t,
     ctx: *c.cairo_t,
+    
+    // XCB graphics context (for background rectangles - like window borders)
+    gc: u32,
     
     // Pango for text rendering
     pango_layout: *c.PangoLayout,
     current_font_desc: ?*c.PangoFontDescription = null,
     
-    // Alpha override for bar transparency (0xFFFF = opaque, 0x0000 = fully transparent)
+    // Alpha override for window opacity (not used for Cairo anymore)
     alpha_override: ?u16 = null,
     
     // OPTIMIZATION: Cache font metrics to avoid repeated Pango calls
@@ -94,7 +97,12 @@ pub const DrawContext = struct {
             .surface = surface,
             .ctx = ctx,
             .pango_layout = layout,
+            .gc = 0, // Will be created below
         };
+        
+        // Create XCB graphics context for direct rectangle drawing (like window borders)
+        dc.gc = defs.xcb.xcb_generate_id(conn);
+        _ = defs.xcb.xcb_create_gc(conn, dc.gc, drawable, 0, null);
         
         return dc;
     }
@@ -103,6 +111,9 @@ pub const DrawContext = struct {
         if (self.current_font_desc) |desc| {
             c.pango_font_description_free(desc);
         }
+        // Free XCB graphics context
+        _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
+        
         c.g_object_unref(self.pango_layout);
         c.cairo_destroy(self.ctx);
         c.cairo_surface_destroy(self.surface);
@@ -166,8 +177,7 @@ pub const DrawContext = struct {
         return .{ r, g, b, a };
     }
     
-    /// OPTIMIZATION: Set color only if changed (for backgrounds)
-    /// With window-level opacity, backgrounds are always drawn at full opacity
+    /// OPTIMIZATION: Set color only if changed (for backgrounds, uses alpha_override)
     inline fn setColorForBackground(self: *DrawContext, color: u32) void {
         if (self.last_color) |last| {
             if (last.color == color and last.alpha == self.alpha_override) {
@@ -212,24 +222,24 @@ pub const DrawContext = struct {
     }
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        self.setColorForBackground(color);  // Use background color (with transparency)
+        // CRITICAL: Use XCB to draw rectangles directly (like window borders)
+        // This avoids Cairo's premultiplied alpha - we use raw RGB pixel values
+        // The compositor will apply transparency, just like with window borders
         
-        // CRITICAL: Use SOURCE operator to write colors directly without blending
-        // This ensures colors match window border brightness exactly
-        // SOURCE replaces pixels completely instead of blending over existing content
-        const use_source = self.alpha_override != null and self.alpha_override.? < 0xFFFF;
-        if (use_source) {
-            c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_SOURCE);
-        }
+        // Set the foreground color in the graphics context
+        _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{color});
         
-        c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
-                         @floatFromInt(width), @floatFromInt(height));
-        c.cairo_fill(self.ctx);
+        // Draw the rectangle using XCB (not Cairo)
+        const rect = defs.xcb.xcb_rectangle_t{
+            .x = @intCast(x),
+            .y = @intCast(y),
+            .width = width,
+            .height = height,
+        };
+        _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
         
-        // Restore OVER operator for text rendering
-        if (use_source) {
-            c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_OVER);
-        }
+        // Flush to ensure the rectangle is drawn
+        _ = defs.xcb.xcb_flush(self.conn);
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
