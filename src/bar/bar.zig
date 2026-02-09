@@ -275,7 +275,7 @@ fn setBarVisibility(wm: *defs.WM, visible: bool, reason: []const u8) void {
         // OPTIMIZATION: Update timer state when visibility changes
         timer.updateTimerState(wm);
         
-        tiling.retileCurrentWorkspace(wm);
+        tiling.retileCurrentWorkspace(wm, true);
     }
 }
 
@@ -307,7 +307,7 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
         debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
         
         // Retile workspace to adjust for new bar position
-        tiling.retileCurrentWorkspace(wm);
+        tiling.retileCurrentWorkspace(wm, true);
     }
 }
 
