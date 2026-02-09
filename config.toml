@@ -44,7 +44,7 @@ border_unfocused = '#52263e' # Letters can also be MAJUS/minus
 ## Master-stack
 #TODO: convert previous 2 lines to [tiling.layouts.master-stack], then replace master_count with count, master_side with side, and so on, instead of appending "master_" to each parameter.
 master_count = 1      # Number of windows in master area (master stack size)
-master_side  = "left" # Left/Right L/R
+master_side  = "left" # "Left"/"Right" / 'L'/'R' #TODO: implement 'L'/'R' value recognition
 master_width = 50%    # N/N% (5%-95% (suggestion of presentation))
 
 [bar]
@@ -81,7 +81,8 @@ padding = 99 # Padding inside segments (around text)
 # Accepts formats: 0.9 or 90 (will be normalized to 0-1)
 # With picom's gaussian blur, the bar will show blurred content behind it
 # transparency = 50 # %
-transparency = 50 # %
+transparency = 0% # [0 - 1] / [0% - 100%]
+#TODO: restrict ranges to (0-1) or (0%-100%). currently, "50" sets it to 50% transparency, even though N (without %) is only intended as a 0.NN range.
 
 # Main color palette
 ## Bar
