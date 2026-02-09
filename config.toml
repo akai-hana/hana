@@ -55,33 +55,22 @@ fonts = [
 # Font size as percentage of bar height (e.g., 16% = font takes up 16% of the bar's vertical space)
 font_size = 16%
 
-# Workspace labels/icons
-icons = [
-	"あ", # 1
-	"か", # 2
-	"い", # 3
-	"は", # 4
-	"な", # 5
-	"つ", # 6
-	"ん", # 7
-	"で"  # 8
-]
+# Workspace labels/icons (1-N)
+icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
 
 # Spacing between each segment/module inside the bar
 segment_spacing = 8%
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
-## Future enhancement: percentage values where 100% = auto-calculated size, 150% = 1.5x auto size
-height = 200
+## TODO: Future enhancement: percentage values where 100% = auto-calculated size, 150% = 1.5x auto size
+# height = 100%
 
 # Padding inside segments (horizontal space around text content within each segment)
 padding = 99
 
-# Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
-# Accepts formats: 0.9 or 90% (will be normalized to 0-1)
+# Bar transparency (0 = fully transparent, 1 = fully opaque)
 # With picom's gaussian blur, the bar will show blurred content behind it
-# Note: Implementation should restrict to either (0.0-1.0) or (0%-100%) ranges for consistency
 transparency = 0% # [0.0 - 1.0] / [0% - 100%]
 
 # Main color palette
@@ -96,7 +85,7 @@ occupied_fg = "#eeeeee"
 urgent_bg   = "#FF0000"
 urgent_fg   = "#FFFFFF"
 
-indicator_size = 1
+indicator_size = 2
 
 # Accent colors for bar segments
 # Default accent for all segments
