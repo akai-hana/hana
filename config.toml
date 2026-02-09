@@ -13,7 +13,7 @@
 #     and if decimal, use a dot or a comma (N.N%/N,N%).
 #
 # + HEX code values can be set with either of the following formats:
-#   "#RRGGBB" / RRGGBB / 0xRRGGBB
+#   "#RRGGBB" / '#RRGGBB' / RRGGBB / 0xRRGGBB
 
 [tiling]
 enabled = true
@@ -22,8 +22,8 @@ layout  = "master" # master_left / monocle / grid / fibonacci
 # Aesthetics
 gaps             = 2.5%
 border_width     = 1% 
-border_focused   = ac3232 
-border_unfocused = 52263e # Letters can also be MAJUS/minus
+border_focused   = '#ac3232'
+border_unfocused = '#52263e' # Letters can also be MAJUS/minus
 
 # Layouts
 ## Master-stack
