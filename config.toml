@@ -1,11 +1,18 @@
 ### akai_hana's personal hana WM config.toml :-) ###
 
 ### NOTES:
-# + All values are CAPS-insensitive. 
-#   - Style them however you want :9
-# + Numerical values can be either N (px) or N% (ratio).
+# + All parameters (X =) and values (= Y) are CAPS-insensitive. 
+#   - It boils down to preference. Style them however you want :9
+#
+# + Numerical values can be either N (px) or N%/%N (ratio)
 #   - The former represents an exact amount of pixels,
 #     while the latter represents a ratio between two elements.
+#     For example, 'gaps = 5%' will make gaps take up 5%
+#     of viewable area in relation to the size of windows.
+#   - Any percentage value can be N% or %N, decimal or not (N.NN%),
+#     and if decimal, use a dot or a comma (N.N%/N,N%).
+#
+# + 
 
 [tiling]
 enabled = true
@@ -21,7 +28,7 @@ border_unfocused = "#52263e" # Letters can also be MAJUS/minus
 ## Master-stack
 master_count = 1      # Number of windows in master area (master-stack size)
 master_side  = "left" # Left/Right L/R
-master_width = 5%    # N/N% (5%-95%)
+master_width = 50%    # N/N% (5%-95%)
 
 [bar]
 show = true
