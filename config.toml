@@ -85,7 +85,7 @@ occupied_fg = "#eeeeee"
 urgent_bg   = "#FF0000"
 urgent_fg   = "#FFFFFF"
 
-indicator_size = 2
+indicator_size = 20
 
 # Accent colors for bar segments
 # Default accent for all segments
