@@ -15,15 +15,13 @@
 # + HEX code values can be set with either of the following formats:
 #   "#RRGGBB" / '#RRGGBB' / RRGGBB / 0xRRGGBB
 #   - (Any string can be wrapped with "" or '')
-#
-# +
 
 [tiling]
 enabled = true #TODO: change "enabled" to "enable"
 layout = "master" # master_left / monocle / grid / fibonacci
 
 # Aesthetics
-#TODO: make [tiling.aesthetics]
+#TODO: replace with [tiling.aesthetics]
 gaps             = 2.5%
 border_width     = 1% 
 border_focused   = '#ac3232'
@@ -231,7 +229,6 @@ electron
 com.github.th_ch.youtube_music
 
 [workspace.rules.4] # launchers
-steam
 OpenTabletDriver.UX
 
 [workspace.rules.5] # gaming
