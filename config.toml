@@ -41,7 +41,7 @@ fonts = [
 # Accepts formats: 0.9 or 90 (will be normalized to 0-1)
 # With picom's gaussian blur, the bar will show blurred content behind it
 # transparency = 50 # %
-transparency = 50 # %
+transparency = 100 # %
 
 # Legacy single font option (used if fonts array is not set):
 #font = "FiraCode Nerd Font Ret"
