@@ -139,6 +139,9 @@ inline fn setProp(conn: *xcb.xcb_connection_t, win: u32, name: []const u8, type_
 }
 
 fn setWindowProperties(wm: *defs.WM, window: u32, height: u16, want_transparency: bool, alpha: u16) !void {
+    _ = want_transparency;
+    _ = alpha;
+    
     const strut: [12]u32 = if (wm.config.bar.vertical_position == .bottom)
         .{ 0, 0, 0, height, 0, 0, 0, 0, 0, 0, 0, wm.screen.width_in_pixels }
     else
@@ -150,15 +153,8 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16, want_transparency
     try setProp(wm.conn, window, "_NET_WM_STATE", xcb.XCB_ATOM_ATOM,
         &[_]u32{try utils.getAtom(wm.conn, "_NET_WM_STATE_ABOVE"), try utils.getAtom(wm.conn, "_NET_WM_STATE_STICKY")});
     
-    // Set window opacity (like window border transparency)
-    if (want_transparency) {
-        const opacity_atom = try utils.getAtom(wm.conn, "_NET_WM_WINDOW_OPACITY");
-        const alpha_u32: u32 = @intCast(alpha);
-        const opacity_u32 = [_]u32{alpha_u32 * 65537}; // Convert 16-bit to 32-bit
-        _ = xcb.xcb_change_property(wm.conn, xcb.XCB_PROP_MODE_REPLACE, window,
-            opacity_atom, xcb.XCB_ATOM_CARDINAL, 32, 1, &opacity_u32);
-        debug.info("Set window opacity to {d:.1}%", .{(@as(f32, @floatFromInt(alpha)) / 0xFFFF) * 100.0});
-    }
+    // DON'T set _NET_WM_WINDOW_OPACITY - let picom handle transparency like it does for borders
+    // This ensures the bar and borders render the same way
     
     // CRITICAL: Prevent bar from being moved or resized
     // Set allowed actions to only allow closing (for shutdown), but not move/resize
@@ -207,12 +203,14 @@ pub fn init(wm: *defs.WM) !void {
     const alpha = wm.config.bar.getAlpha16();
     const want_transparency = alpha < 0xFFFF;
     
-    debug.info("Bar transparency config: {d:.2}% (want={}, alpha16=0x{x:0>4})", 
-        .{wm.config.bar.transparency * 100.0, want_transparency, alpha});
+    if (want_transparency) {
+        debug.info("Bar transparency: {d:.2}% (handled by compositor, not window opacity)", 
+            .{wm.config.bar.transparency * 100.0});
+    } else {
+        debug.info("Bar transparency: disabled (fully opaque)", .{});
+    }
     
-    // CRITICAL: Use RGB window (not ARGB) with direct XCB rendering
-    // Backgrounds are drawn using XCB (like window borders), not Cairo
-    // This avoids Cairo's premultiplied alpha entirely
+    // Create simple RGB window - transparency handled by picom like borders
     const window = xcb.xcb_generate_id(wm.conn);
     
     // Create simple RGB window
@@ -228,7 +226,7 @@ pub fn init(wm: *defs.WM) !void {
         &[_]u32{ wm.config.bar.bg, xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS },
     );
     
-    debug.info("Created RGB window with XCB rendering (like borders)", .{});
+    debug.info("Created RGB window (transparency handled by picom like borders)", .{});
 
     try setWindowProperties(wm, window, height, want_transparency, alpha);
     _ = xcb.xcb_map_window(wm.conn, window);
