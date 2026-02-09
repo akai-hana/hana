@@ -257,8 +257,8 @@ pub const BarConfig = struct {
     }
     
     pub inline fn scaledWorkspaceWidth(self: *const BarConfig) u16 {
-        // Base workspace width (50 from bar.zig, reduced to 40 for tighter spacing)
-        const base_width: f32 = 50.0;
+        // Base workspace width TODO: make available as a settable width in config.toml
+        const base_width: f32 = 40.0;
         return @intFromFloat(@round(base_width * self.scale_factor));
     }
     

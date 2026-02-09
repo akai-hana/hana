@@ -1,6 +1,8 @@
 ### akai_hana's personal hana WM config.toml :-) ###
 
 ### NOTES:
+### (configuration tips & tricks)
+#
 # + All parameters (X =) and values (= Y) are CAPS-insensitive. 
 #   - _It boils down to preference. Style them however you want :9_
 #
@@ -12,22 +14,27 @@
 #   - Any percentage value can be N% or %N, decimal or not (N.NN%),
 #     and if decimal, use a dot or a comma (N.N%/N,N%).
 #
+# + Any string can be wrapped with "" or ''
+
 # + HEX code values can be set with either of the following formats:
-#   "#RRGGBB" / '#RRGGBB' / RRGGBB / 0xRRGGBB
-#   - (Any string can be wrapped with "" or '')
+#   (RRGGBB/rrggbb, ""/'') "#RRGGBB" / RRGGBB / 0xRRGGBB
 
 [tiling]
 enable = true
 
-# Available layouts in cycle order (first is default on startup)
+# Enabled layouts
+## First is default; cycling follows order
+#TODO: make this work (currently this isn't respected;
+# only the first layout is set as a default, but any of the following aren't
+# applied to the order, and commenting out any layout doesn't stop it from appearing
+# as an option while cycling
 layouts = [
-    "master-stack",
     "monocle",
+    "master-stack",
     "grid",
-    "fibonacci",
+    # "fibonacci", # NOT YET IMPLEMENTED
 ]
 
-# Aesthetics
 [tiling.aesthetics]
 gaps             = 2.5%
 border_width     = 1% 
@@ -53,18 +60,20 @@ fonts = [
 ]
 
 # Font size as percentage of bar height (e.g., 16% = font takes up 16% of the bar's vertical space)
-font_size = 16%
-
-# Workspace labels/icons (1-N)
-icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+font_size = 26%
 
 # Spacing between each segment/module inside the bar
 segment_spacing = 8%
 
+# Workspace labels/icons (1-N)
+icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+
+#TODO: add workspace width parameter, that modifies line 242 in defs.zig: make default (40) 100%, and 150% is 40x1.5, and so on. otherwise, if no percentage placed on config, just set the literal pixel value.
+
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
 ## TODO: Future enhancement: percentage values where 100% = auto-calculated size, 150% = 1.5x auto size
-# height = 100%
+height = 40
 
 # Padding inside segments (horizontal space around text content within each segment)
 padding = 99
@@ -126,7 +135,7 @@ Mod = "Super" # Super/Mod4 / Alt/Mod1
 # WM interactions
 Mod+F = "toggle_fullscreen"
 Mod+Shift+Return = "kill Xorg" # quit wm
-Mod+Shift+F = "{kill}"
+Mod+Shift+F = "kill"
 Mod+Shift+T = "reload" # Config hot-reload
 
 # wallpaper
@@ -141,7 +150,7 @@ Mod+Tab         = "swap_master"   # Swap focused window with master (slave→mas
 
 # Layouts
 ## Master-stack
-Mod+H      = "decrease_master" # Decrease master area width
+Mod+H      = "decrease_master" 
 Mod+L      = "increase_master" # Increase master area width
 Mod+comma  = "increase_master_count"
 Mod+period = "decrease_master_count" 

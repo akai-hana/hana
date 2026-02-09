@@ -245,8 +245,8 @@ const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
 
 fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
     const section = doc.getSection("Keybindings") orelse return;
-    const mod_substitute = section.getString("Mod");
-    const kill_placeholder = section.getString("kill") orelse "pkill -9";
+    const mod_placeholder = section.getString("Mod");
+    const kill_placeholder = section.getString("kill") orelse return;
 
     var iter = section.pairs.iterator();
     while (iter.next()) |entry| {
@@ -255,11 +255,11 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, c
         
         const command = entry.value_ptr.*.asString() orelse continue;
 
-        const keybind_str = if (mod_substitute) |mod|
+        const keybind_str = if (mod_placeholder) |mod|
             try substituteModVariable(allocator, entry.key_ptr.*, mod)
         else
             entry.key_ptr.*;
-        defer if (mod_substitute != null) allocator.free(keybind_str);
+        defer if (mod_placeholder != null) allocator.free(keybind_str);
 
         const parts = parseKeybindString(keybind_str) catch |err| {
             debug.warn("Failed to parse keybind '{s}': {}", .{ keybind_str, err });
