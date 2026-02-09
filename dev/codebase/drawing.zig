@@ -14,18 +14,18 @@ pub const DrawContext = struct {
     width: u16,
     height: u16,
     
-    // Cairo structures (for both backgrounds and text rendering)
+    // Cairo structures (for text rendering only)
     surface: *c.cairo_surface_t,
     ctx: *c.cairo_t,
     
-    // XCB graphics context (kept for compatibility but not used for backgrounds anymore)
+    // XCB graphics context (for background rectangles - like window borders)
     gc: u32,
     
     // Pango for text rendering
     pango_layout: *c.PangoLayout,
     current_font_desc: ?*c.PangoFontDescription = null,
     
-    // Alpha override for backgrounds (text ignores this and stays opaque)
+    // Alpha override for window opacity (not used for Cairo anymore)
     alpha_override: ?u16 = null,
     
     // OPTIMIZATION: Cache font metrics to avoid repeated Pango calls
@@ -222,12 +222,24 @@ pub const DrawContext = struct {
     }
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        // Use Cairo to draw rectangles with proper alpha support
-        self.setColorForBackground(color);
+        // CRITICAL: Use XCB to draw rectangles directly (like window borders)
+        // This avoids Cairo's premultiplied alpha - we use raw RGB pixel values
+        // The compositor will apply transparency, just like with window borders
         
-        c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
-                         @floatFromInt(width), @floatFromInt(height));
-        c.cairo_fill(self.ctx);
+        // Set the foreground color in the graphics context
+        _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{color});
+        
+        // Draw the rectangle using XCB (not Cairo)
+        const rect = defs.xcb.xcb_rectangle_t{
+            .x = @intCast(x),
+            .y = @intCast(y),
+            .width = width,
+            .height = height,
+        };
+        _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
+        
+        // Flush to ensure the rectangle is drawn
+        _ = defs.xcb.xcb_flush(self.conn);
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
