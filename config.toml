@@ -44,27 +44,36 @@ width = 50%      # N/N% (5%-95% suggested range)
 enable   = true
 position = "bottom" # top/bottom; can be swapped on runtime
 
-# Font array; priority order: first font is primary, others come next when first doesn't support some character.
+# Font array
+# Priority order: first font is primary, others come next when first doesn't support some character.
 # Useful for non-ASCII character support, while retaining a primary ASCII font.
 fonts = [
     "FiraCode Nerd Font Propo Ret",
-    "Noto Sans CJK JP",
+    "Noto Sans CJK JP", # to render japanese characters
 ]
 
 # Font size as percentage of bar height (e.g., 16% = font takes up 16% of the bar's vertical space)
 font_size = 16%
 
 # Workspace labels/icons
-icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+icons = [
+	"あ", # 1
+	"か", # 2
+	"い", # 3
+	"は", # 4
+	"な", # 5
+	"つ", # 6
+	"ん", # 7
+	"で"  # 8
+]
 
 # Spacing between each segment/module inside the bar
-# N (pixels) = exact pixel spacing; N% = percentage of bar height
 segment_spacing = 8%
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
 ## Future enhancement: percentage values where 100% = auto-calculated size, 150% = 1.5x auto size
-#height = 32
+height = 100%
 
 # Padding inside segments (horizontal space around text content within each segment)
 padding = 99
