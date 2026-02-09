@@ -12,7 +12,7 @@ enabled = true
 layout  = "master" # master_left / monocle / grid / fibonacci
 
 # Aesthetics
-gaps             = 1% # px
+gaps             = 4% # px
 border_width     = 1% 
 border_focused   = "#ac3232" # "#RRGGBB" / RRGGBB / 0xRRGGBB
 border_unfocused = "#52263e" # Letters can also be MAJUS/minus
@@ -21,7 +21,7 @@ border_unfocused = "#52263e" # Letters can also be MAJUS/minus
 ## Master-stack
 master_count = 1      # Number of windows in master area (master-stack size)
 master_side  = "left" # Left/Right L/R
-master_width = 1%    # N/N%
+master_width = 5%    # N/N% (5%-95%)
 
 [bar]
 show = true
