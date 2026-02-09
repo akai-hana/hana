@@ -12,7 +12,7 @@ enabled = true
 layout  = "master" # master_left / monocle / grid / fibonacci
 
 # Aesthetics
-gaps             = 4% # px
+gaps             = 2.5% # px
 border_width     = 1% 
 border_focused   = "#ac3232" # "#RRGGBB" / RRGGBB / 0xRRGGBB
 border_unfocused = "#52263e" # Letters can also be MAJUS/minus
