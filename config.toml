@@ -95,7 +95,7 @@ accent_color = "#ac3232" #TODO: rename "accent_color" to "accent", move under [b
 # Per-segment accent colors (overrides accent_color)
 [bar.colors]
 # workspaces = "#ac3232"
-workspaces = "#b9c0a8"
+workspaces = "#b9c0a8" #TODO: why doesn't this work? no matter what color i place, it won't change. pending to fix.
 
 # title      = "#ac3232"
 # clock      = "#ac3232"
@@ -124,7 +124,7 @@ Mod = "Super" # Super/Mod4 / Alt/Mod1
 
 # WM interactions
 Mod+F = "toggle_fullscreen"
-Mod+Shift+Return = "pkill -9 Xorg" # quit wm
+Mod+Shift+Return = "kill Xorg" # quit wm
 Mod+Shift+F = "kill"
 Mod+Shift+T = "reload" # Config hot-reload
 
