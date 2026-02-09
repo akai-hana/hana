@@ -14,18 +14,18 @@ pub const DrawContext = struct {
     width: u16,
     height: u16,
     
-    // Cairo structures (for text rendering only)
+    // Cairo structures (for both backgrounds and text rendering)
     surface: *c.cairo_surface_t,
     ctx: *c.cairo_t,
     
-    // XCB graphics context (for background rectangles - like window borders)
+    // XCB graphics context (kept for compatibility but not used for backgrounds anymore)
     gc: u32,
     
     // Pango for text rendering
     pango_layout: *c.PangoLayout,
     current_font_desc: ?*c.PangoFontDescription = null,
     
-    // Alpha override for window opacity (not used for Cairo anymore)
+    // Alpha override for backgrounds (text ignores this and stays opaque)
     alpha_override: ?u16 = null,
     
     // OPTIMIZATION: Cache font metrics to avoid repeated Pango calls
@@ -199,9 +199,6 @@ pub const DrawContext = struct {
         }
         
         const r, const g, const b, const a = rgbToRGBA(color, null); // Force opaque
-        // CRITICAL: Use SOURCE operator for text to ensure it's fully opaque
-        // even when window has transparency via _NET_WM_WINDOW_OPACITY
-        c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_SOURCE);
         c.cairo_set_source_rgba(self.ctx, r, g, b, a);
         self.last_color = .{ .color = color, .alpha = null };
     }
@@ -225,31 +222,15 @@ pub const DrawContext = struct {
     }
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        // CRITICAL: Use XCB to draw rectangles directly (like window borders)
-        // This avoids Cairo's premultiplied alpha - we use raw RGB pixel values
-        // The compositor will apply transparency, just like with window borders
+        // Use Cairo to draw rectangles with proper alpha support
+        self.setColorForBackground(color);
         
-        // Set the foreground color in the graphics context
-        _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{color});
-        
-        // Draw the rectangle using XCB (not Cairo)
-        const rect = defs.xcb.xcb_rectangle_t{
-            .x = @intCast(x),
-            .y = @intCast(y),
-            .width = width,
-            .height = height,
-        };
-        _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
-        
-        // Flush to ensure the rectangle is drawn
-        _ = defs.xcb.xcb_flush(self.conn);
+        c.cairo_rectangle(self.ctx, @floatFromInt(x), @floatFromInt(y), 
+                         @floatFromInt(width), @floatFromInt(height));
+        c.cairo_fill(self.ctx);
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
-        // Save Cairo state to isolate operator change
-        c.cairo_save(self.ctx);
-        defer c.cairo_restore(self.ctx);
-        
         self.setColorForText(color);  // Text is ALWAYS opaque
         
         // Set text in Pango layout
@@ -265,10 +246,6 @@ pub const DrawContext = struct {
     
     pub fn drawTextEllipsis(self: *DrawContext, x: u16, y: u16, text: []const u8, 
                            max_width: u16, color: u32) !void {
-        // Save Cairo state to isolate operator change
-        c.cairo_save(self.ctx);
-        defer c.cairo_restore(self.ctx);
-        
         // Set text
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
@@ -431,3 +408,4 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     
     return result.toOwnedSlice(allocator);
 }
+
