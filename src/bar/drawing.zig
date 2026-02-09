@@ -199,6 +199,9 @@ pub const DrawContext = struct {
         }
         
         const r, const g, const b, const a = rgbToRGBA(color, null); // Force opaque
+        // CRITICAL: Use SOURCE operator for text to ensure it's fully opaque
+        // even when window has transparency via _NET_WM_WINDOW_OPACITY
+        c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_SOURCE);
         c.cairo_set_source_rgba(self.ctx, r, g, b, a);
         self.last_color = .{ .color = color, .alpha = null };
     }
@@ -243,6 +246,10 @@ pub const DrawContext = struct {
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
+        // Save Cairo state to isolate operator change
+        c.cairo_save(self.ctx);
+        defer c.cairo_restore(self.ctx);
+        
         self.setColorForText(color);  // Text is ALWAYS opaque
         
         // Set text in Pango layout
@@ -258,6 +265,10 @@ pub const DrawContext = struct {
     
     pub fn drawTextEllipsis(self: *DrawContext, x: u16, y: u16, text: []const u8, 
                            max_width: u16, color: u32) !void {
+        // Save Cairo state to isolate operator change
+        c.cairo_save(self.ctx);
+        defer c.cairo_restore(self.ctx);
+        
         // Set text
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
@@ -420,4 +431,3 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     
     return result.toOwnedSlice(allocator);
 }
-
