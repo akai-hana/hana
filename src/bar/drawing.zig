@@ -31,6 +31,9 @@ pub const DrawContext = struct {
     // Track if this is an ARGB window (32-bit with alpha channel)
     is_argb: bool = false,
     
+    // Transparency value for ARGB windows (0.0 = transparent, 1.0 = opaque)
+    transparency: f32 = 1.0,
+    
     // OPTIMIZATION: Cache font metrics to avoid repeated Pango calls
     cached_metrics: ?struct {
         ascent: i16,
@@ -44,12 +47,12 @@ pub const DrawContext = struct {
     } = null,
     
     pub fn init(allocator: std.mem.Allocator, conn: *c.xcb_connection_t, drawable: u32, width: u16, height: u16, dpi: f32) !*DrawContext {
-        return initWithVisual(allocator, conn, drawable, width, height, null, 0, dpi, false);
+        return initWithVisual(allocator, conn, drawable, width, height, null, 0, dpi, false, 1.0);
     }
     
     pub fn initWithVisual(allocator: std.mem.Allocator, conn: *c.xcb_connection_t, 
                           drawable: u32, width: u16, height: u16, 
-                          visual_id: ?u32, colormap_id: u32, dpi: f32, is_argb: bool) !*DrawContext {
+                          visual_id: ?u32, colormap_id: u32, dpi: f32, is_argb: bool, transparency: f32) !*DrawContext {
         _ = colormap_id; // Not needed for Cairo XCB
         
         const dc = try allocator.create(DrawContext);
@@ -102,6 +105,7 @@ pub const DrawContext = struct {
             .pango_layout = layout,
             .gc = 0, // Will be created below
             .is_argb = is_argb,
+            .transparency = transparency,
         };
         
         // Create XCB graphics context for direct rectangle drawing (like window borders)
@@ -230,11 +234,13 @@ pub const DrawContext = struct {
         // This avoids Cairo's premultiplied alpha - we use raw RGB pixel values
         // The compositor will apply transparency, just like with window borders
         
-        // For ARGB windows, add alpha channel to make colors opaque
-        const final_color = if (self.is_argb)
-            (0xFF000000 | color)  // Add opaque alpha channel
-        else
-            color;
+        // For ARGB windows, automatically add alpha channel based on transparency setting
+        const final_color = if (self.is_argb) blk: {
+            // Convert transparency (0.0-1.0) to alpha byte (0-255)
+            const alpha_f32 = std.math.clamp(self.transparency, 0.0, 1.0);
+            const alpha_byte: u32 = @intFromFloat(@round(alpha_f32 * 255.0));
+            break :blk (alpha_byte << 24) | (color & 0xFFFFFF);
+        } else color;
         
         // Set the foreground color in the graphics context
         _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});

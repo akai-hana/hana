@@ -285,7 +285,8 @@ pub fn init(wm: *defs.WM) !void {
         visual_info.visual_id,
         colormap,
         wm.dpi_info.dpi,
-        want_transparency  // is_argb flag
+        want_transparency,  // is_argb flag
+        wm.config.bar.transparency  // transparency value
     );
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
@@ -480,7 +481,7 @@ fn draw(s: *State, wm: *defs.WM) !void {
         s.dc.clearTransparent();
     }
     
-    // Draw background (fillRect automatically adds alpha for ARGB windows)
+    // Draw background (fillRect automatically adds proper alpha for ARGB windows)
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
     // Pre-calculate widths
