@@ -52,7 +52,7 @@ master_width = 50%    # N/N% (5%-95% (suggestion of presentation))
 [bar]
 show      = true #TODO: change "show" to "enable"
 position  = "bottom" # top/bottom; can be swapped on runtime
-font_size = 24%
+font_size = 12%
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
