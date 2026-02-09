@@ -2,7 +2,7 @@
 
 ### NOTES:
 # + All parameters (X =) and values (= Y) are CAPS-insensitive. 
-#   - It boils down to preference. Style them however you want :9
+#   - _It boils down to preference. Style them however you want :9_
 #
 # + Numerical values can be either N (px) or N%/%N (ratio)
 #   - The former represents an exact amount of pixels,
@@ -14,31 +14,50 @@
 #
 # + HEX code values can be set with either of the following formats:
 #   "#RRGGBB" / '#RRGGBB' / RRGGBB / 0xRRGGBB
+#   - (Any string can be wrapped with "" or '')
+#
+# +
 
 [tiling]
-enabled = true
-layout  = "master" # master_left / monocle / grid / fibonacci
+enabled = true #TODO: change "enabled" to "enable"
+layout = "master" # master_left / monocle / grid / fibonacci
 
 # Aesthetics
+#TODO: make [tiling.aesthetics]
 gaps             = 2.5%
 border_width     = 1% 
 border_focused   = '#ac3232'
 border_unfocused = '#52263e' # Letters can also be MAJUS/minus
 
-# Layouts
+#TODO: make new [tiling.layouts] section, where the user can set the available layouts through an array.
+# ej. {
+
+# layouts = [
+# master-stack,
+# monocle,
+# grid
+# ]
+
+# } something like that. it doesn't matter if syntax isn't exactly the same. what's important is the idea of an array,
+# where one can define both the available layouts, as well as what order they'll appear on, being the first one the
+# default layout, and then cycling forward moving from the top to the bottom of the array.
+
+# Tiling layouts
 ## Master-stack
-master_count = 1      # Number of windows in master area (master-stack size)
+#TODO: convert previous 2 lines to [tiling.layouts.master-stack], then replace master_count with count, master_side with side, and so on, instead of appending "master_" to each parameter.
+master_count = 1      # Number of windows in master area (master stack size)
 master_side  = "left" # Left/Right L/R
-master_width = 5%    # N/N% (5%-95% (suggestion of presentation))
+master_width = 50%    # N/N% (5%-95% (suggestion of presentation))
 
 [bar]
-show = true
-position = "bottom" # top/bottom; can be swapped on runtime
-font_size = 24
+show      = true #TODO: change "show" to "enable"
+position  = "bottom" # top/bottom; can be swapped on runtime
+font_size = 24%
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
-#height = 32
+#height = 32 #TODO: enable a percentage value, where 100% is the auto-calculated size, and 150% would be 1.5x times the
+             #      size of that, for example.
 
 # Bar spacing
 padding = 99 # Padding inside segments (around text)
