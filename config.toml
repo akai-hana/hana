@@ -20,8 +20,8 @@ master_width = 50%    #  (5-95)
 show = true
 position = "bottom" # top/bottom
 
-# font_size = 24
-font_size = 14
+font_size = 24
+# font_size = 14
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
 #height = 32
