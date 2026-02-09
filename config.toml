@@ -90,7 +90,8 @@ urgent_fg   = "#FFFFFF"
 
 # Accent colors for bar segments
 # Default accent for all segments
-accent_color = "#ac3232" #TODO: rename "accent_color" to "accent", move under [bar.colors]
+# accent_color = "#ac3232" #TODO: rename "accent_color" to "accent", move under [bar.colors]
+accent_color = "#b9c0a8"
 
 # Per-segment accent colors (overrides accent_color)
 [bar.colors]
@@ -125,7 +126,7 @@ Mod = "Super" # Super/Mod4 / Alt/Mod1
 # WM interactions
 Mod+F = "toggle_fullscreen"
 Mod+Shift+Return = "kill Xorg" # quit wm
-Mod+Shift+F = "kill"
+Mod+Shift+F = "{kill}"
 Mod+Shift+T = "reload" # Config hot-reload
 
 # wallpaper
@@ -198,6 +199,7 @@ Mod+V       = "flatpak run com.github.th_ch.youtube_music"
 Mod+Shift+V = "{kill} youtube-music"
 
 # Emergency/Debug
+#TODO: this does nothing? either figure out if it's dead code, or make it work, or outright remove it.
 Mod+Shift+Escape = "emergency_recover" # Emergency recovery mode
 
 # Workspace rules
@@ -227,7 +229,6 @@ xeyes
 
 [workspace.rules.7] # Media
 freetube
-#mpv
 gimp
 
 [workspace.rules.8] # torrenting
