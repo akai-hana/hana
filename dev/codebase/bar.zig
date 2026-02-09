@@ -210,23 +210,34 @@ pub fn init(wm: *defs.WM) !void {
         debug.info("Bar transparency: disabled (fully opaque)", .{});
     }
     
-    // Create simple RGB window - transparency handled by picom like borders
+    // Find appropriate visual and depth for transparency
+    const visual_info = if (want_transparency) 
+        findVisualByDepth(screen, 32)  // Use 32-bit depth for transparency
+    else 
+        VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
+    
+    const depth: u8 = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
+    
+    // Create window with appropriate depth/visual for transparency
     const window = xcb.xcb_generate_id(wm.conn);
     
-    // Create simple RGB window
     _ = xcb.xcb_create_window(
         wm.conn, 
-        xcb.XCB_COPY_FROM_PARENT,
+        depth,
         window, 
         screen.root,
         0, y_pos, width, height, 0,
         xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
-        screen.root_visual,
+        visual_info.visual_id,
         xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_EVENT_MASK,
         &[_]u32{ wm.config.bar.bg, xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS },
     );
     
-    debug.info("Created RGB window (transparency handled by picom like borders)", .{});
+    if (want_transparency) {
+        debug.info("Created 32-bit ARGB window for transparency (handled by compositor like borders)", .{});
+    } else {
+        debug.info("Created RGB window (fully opaque)", .{});
+    }
 
     try setWindowProperties(wm, window, height, want_transparency, alpha);
     _ = xcb.xcb_map_window(wm.conn, window);
