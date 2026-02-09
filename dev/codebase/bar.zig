@@ -218,20 +218,52 @@ pub fn init(wm: *defs.WM) !void {
     
     const depth: u8 = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
     
+    // Create colormap for ARGB visual if needed
+    const colormap = if (want_transparency) blk: {
+        const cmap = xcb.xcb_generate_id(wm.conn);
+        _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, cmap, screen.root, visual_info.visual_id);
+        break :blk cmap;
+    } else 0;
+    
     // Create window with appropriate depth/visual for transparency
     const window = xcb.xcb_generate_id(wm.conn);
     
-    _ = xcb.xcb_create_window(
-        wm.conn, 
-        depth,
-        window, 
-        screen.root,
-        0, y_pos, width, height, 0,
-        xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
-        visual_info.visual_id,
-        xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_EVENT_MASK,
-        &[_]u32{ wm.config.bar.bg, xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS },
-    );
+    if (want_transparency) {
+        const bg_color = 0xFF000000 | wm.config.bar.bg;  // Add alpha channel (opaque)
+        const values = [_]u32{ 
+            bg_color, 
+            0, 
+            xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS, 
+            colormap 
+        };
+        _ = xcb.xcb_create_window(
+            wm.conn, 
+            depth,
+            window, 
+            screen.root,
+            0, y_pos, width, height, 0,
+            xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
+            visual_info.visual_id,
+            xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL | xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_COLORMAP,
+            &values,
+        );
+    } else {
+        const values = [_]u32{ 
+            wm.config.bar.bg, 
+            xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS 
+        };
+        _ = xcb.xcb_create_window(
+            wm.conn, 
+            depth,
+            window, 
+            screen.root,
+            0, y_pos, width, height, 0,
+            xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
+            visual_info.visual_id,
+            xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_EVENT_MASK,
+            &values,
+        );
+    }
     
     if (want_transparency) {
         debug.info("Created 32-bit ARGB window for transparency (handled by compositor like borders)", .{});
@@ -250,7 +282,7 @@ pub fn init(wm: *defs.WM) !void {
     
     debug.info("Bar uses XCB rendering for backgrounds (like borders), Pango for text", .{});
 
-    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, false); // No transparency in Cairo
+    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, want_transparency);
     try draw(s, wm);
     utils.flush(wm.conn);
     state = s;
@@ -433,8 +465,14 @@ fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment)
 }
 
 fn draw(s: *State, wm: *defs.WM) !void {
-    // Use XCB to draw background (no Cairo alpha, like window borders)
-    s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
+    // Add alpha channel for ARGB windows (opaque background)
+    const bg_color = if (s.has_transparency)
+        (0xFF000000 | s.config.bg)
+    else
+        s.config.bg;
+    
+    // Use XCB to draw background
+    s.dc.fillRect(0, 0, s.width, s.height, bg_color);
 
     // Pre-calculate widths
     const scaled_spacing = s.config.scaledSpacing();
