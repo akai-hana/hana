@@ -50,7 +50,19 @@ master_width = 50%    # N/N% (5%-95% (suggestion of presentation))
 [bar]
 show      = true #TODO: change "show" to "enable"
 position  = "bottom" # top/bottom; can be swapped on runtime
-font_size = 16% #TODO: comment this line. in specific, what's the ratio of a percentage-based value.
+
+# List fonts in priority order: first font is primary, others come next
+# Useful for non-ASCII character support, while retaining a primary ASCII font  
+fonts = [
+    "FiraCode Nerd Font Propo Ret",
+    "Noto Sans CJK JP",
+]
+
+font_size = 16% #TODO: add a comment on what this line does. in specific, what's the ratio of this percentage-based value (between what and what?)
+
+# Workspace labels/icons
+icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
+segment_spacing = 8% # Spacing between each segment/module inside the bar
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
@@ -60,14 +72,8 @@ font_size = 16% #TODO: comment this line. in specific, what's the ratio of a per
 # Bar spacing
 padding = 99 # Padding inside segments (around text)
 #TODO: i'm still not sure what padding actually does. can you add a comment here clarifying what it does?
-segment_spacing = 8  # Space between segments
 
-# List fonts in priority order: first font is primary, others come next
-# Useful for non-ASCII character support, while retaining a primary ASCII font  
-fonts = [
-    "FiraCode Nerd Font Propo Ret",
-    "Noto Sans CJK JP",
-]
+
 
 # Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
 # Accepts formats: 0.9 or 90 (will be normalized to 0-1)
@@ -91,16 +97,12 @@ occupied_fg = "#eeeeee"
 urgent_bg   = "#FF0000"
 urgent_fg   = "#FFFFFF"
 
-# Workspace labels/icons
-icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
-#icons = ["1", "2", "3", "4", "5", "6", "7", "8"]
-
 indicator_size = 1
-title_accent = true
 
 # Accent colors for bar segments
 # Default accent for all segments
-accent_color = "#ac3232" # "#RRGGBB" / RRGGBB / 0xRRGGBB
+title_accent = true #TODO: remove this parameter, and all its related logic, as it is useless; the user could just set the title accent hex code to the same hexcode of the background color.
+accent_color = "#ac3232"
 
 # Per-segment accent colors (overrides accent_color)
 # [bar.colors]
