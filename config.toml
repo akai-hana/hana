@@ -93,7 +93,7 @@ urgent_fg   = "#FFFFFF"
 accent_color = "#ac3232"
 
 # Per-segment accent colors (overrides accent_color)
-# [bar.colors]
+[bar.colors]
 # workspaces = "#ac3232"
 workspaces = "#B9C0A8"
 
