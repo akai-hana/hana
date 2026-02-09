@@ -90,12 +90,12 @@ urgent_fg   = "#FFFFFF"
 
 # Accent colors for bar segments
 # Default accent for all segments
-accent_color = "#ac3232"
+accent_color = "#ac3232" #TODO: rename "accent_color" to "accent", move under [bar.colors]
 
 # Per-segment accent colors (overrides accent_color)
 [bar.colors]
 # workspaces = "#ac3232"
-workspaces = "#B9C0A8"
+workspaces = "#b9c0a8"
 
 # title      = "#ac3232"
 # clock      = "#ac3232"
