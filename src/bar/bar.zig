@@ -210,19 +210,26 @@ pub fn init(wm: *defs.WM) !void {
     debug.info("Bar transparency config: {d:.2}% (want={}, alpha16=0x{x:0>4})", 
         .{wm.config.bar.transparency * 100.0, want_transparency, alpha});
     
-    // Use ARGB visual for per-pixel transparency (opaque text, transparent background)
+    // Try to get ARGB visual for per-pixel transparency (opaque text, transparent background)
     const window = xcb.xcb_generate_id(wm.conn);
     const visual_info = if (want_transparency) findVisualByDepth(screen, 32) else VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
     
+    // Check if we actually got a 32-bit visual
+    const use_argb = want_transparency and visual_info.visual_type != null;
+    
+    if (want_transparency and !use_argb) {
+        debug.warn("32-bit ARGB visual not available, transparency disabled", .{});
+    }
+    
     // Create colormap for ARGB visual
-    const colormap = if (want_transparency) blk: {
+    const colormap = if (use_argb) blk: {
         const cmap = xcb.xcb_generate_id(wm.conn);
         _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, cmap, screen.root, visual_info.visual_id);
         break :blk cmap;
     } else 0;
     
-    // Create window with ARGB visual if transparency is wanted
-    if (want_transparency) {
+    // Create window with ARGB visual if transparency is wanted and available
+    if (use_argb) {
         const mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL | xcb.XCB_CW_COLORMAP | xcb.XCB_CW_EVENT_MASK;
         const values = [_]u32{ 0, 0, colormap, xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS };
         _ = xcb.xcb_create_window(wm.conn, 32, window, screen.root, 0, y_pos, width, height, 0,
@@ -241,7 +248,7 @@ pub fn init(wm: *defs.WM) !void {
     utils.flush(wm.conn);
 
     // Create DrawContext with ARGB visual if using transparency
-    const dc = if (want_transparency)
+    const dc = if (use_argb)
         try drawing.DrawContext.initWithVisual(wm.allocator, wm.conn, window, width, height, visual_info.visual_id, colormap, wm.dpi_info.dpi)
     else
         try drawing.DrawContext.init(wm.allocator, wm.conn, window, width, height, wm.dpi_info.dpi);
@@ -249,11 +256,16 @@ pub fn init(wm: *defs.WM) !void {
     try loadBarFonts(dc, wm);
     
     // Set alpha override for backgrounds (text will ignore this)
-    if (want_transparency) dc.setAlphaOverride(alpha);
+    if (use_argb) {
+        dc.setAlphaOverride(alpha);
+        // Clear to transparent once at initialization for ARGB windows
+        dc.clearTransparent();
+        debug.info("Set alpha override to 0x{x:0>4} ({d:.1}%)", .{alpha, (@as(f32, @floatFromInt(alpha)) / 0xFFFF) * 100.0});
+    }
     
-    debug.info("Bar uses Cairo for backgrounds{s}, Pango for text", .{if (want_transparency) " with transparency" else ""});
+    debug.info("Bar uses Cairo for backgrounds{s}, Pango for text", .{if (use_argb) " with transparency" else ""});
 
-    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, want_transparency);
+    const s = try State.init(wm.allocator, wm.conn, window, width, height, dc, wm.config.bar, use_argb);
     try draw(s, wm);
     utils.flush(wm.conn);
     state = s;
@@ -392,7 +404,11 @@ fn drawClockOnly(s: *State, wm: *defs.WM) !void {
 }
 
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
-    if (state) |s| if (event.window == s.window and event.count == 0) draw(s, wm) catch {};
+    if (state) |s| if (event.window == s.window and event.count == 0) {
+        // Clear to transparent for ARGB windows before redrawing
+        if (s.has_transparency) s.dc.clearTransparent();
+        draw(s, wm) catch {};
+    };
 }
 
 pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *defs.WM) void {
@@ -435,11 +451,6 @@ fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment)
 }
 
 fn draw(s: *State, wm: *defs.WM) !void {
-    // Clear to transparent if using ARGB visual
-    if (s.has_transparency) {
-        s.dc.clearTransparent();
-    }
-    
     // Draw background using Cairo (supports per-pixel alpha)
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
