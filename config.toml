@@ -51,38 +51,37 @@ master_width = 50%    # N/N% (5%-95% (suggestion of presentation))
 show      = true #TODO: change "show" to "enable"
 position  = "bottom" # top/bottom; can be swapped on runtime
 
-# List fonts in priority order: first font is primary, others come next
-# Useful for non-ASCII character support, while retaining a primary ASCII font  
+# Font array; priority order: first font is primary, others come next when first doesn't support some character.
+# Useful for non-ASCII character support, while retaining a primary ASCII font.
 fonts = [
     "FiraCode Nerd Font Propo Ret",
     "Noto Sans CJK JP",
 ]
+
+# Legacy single font option (used if fonts array is not set):
+#font = "FiraCode Nerd Font Ret" #TODO: remove this legacy feature; user can just set an array with one element.
 
 font_size = 16% #TODO: add a comment on what this line does. in specific, what's the ratio of this percentage-based value (between what and what?)
 
 # Workspace labels/icons
 icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
 segment_spacing = 8% # Spacing between each segment/module inside the bar
+#TODO: what's the difference between setting segment_spacing as N and as N%? i notice no real difference...
+# add a comment explaining so. if there truly is no difference, then fix it, as it'd make no sense then.
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
-#height = 32 #TODO: enable a percentage value, where 100% is the auto-calculated size, and 150% would be 1.5x times the
-             #      size of that, for example.
+#height = 32 #TODO: enable a percentage value, where 100% is the auto-calculated size, and 150% would be 1.5x times the size of that, for example.
 
 # Bar spacing
 padding = 99 # Padding inside segments (around text)
 #TODO: i'm still not sure what padding actually does. can you add a comment here clarifying what it does?
 
-
-
 # Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
 # Accepts formats: 0.9 or 90 (will be normalized to 0-1)
 # With picom's gaussian blur, the bar will show blurred content behind it
 # transparency = 50 # %
-transparency = 0 # %
-
-# Legacy single font option (used if fonts array is not set):
-#font = "FiraCode Nerd Font Ret"
+transparency = 0% # %
 
 # Main color palette
 ## Bar
