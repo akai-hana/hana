@@ -28,7 +28,7 @@ border_unfocused = "#52263e" # Letters can also be MAJUS/minus
 ## Master-stack
 master_count = 1      # Number of windows in master area (master-stack size)
 master_side  = "left" # Left/Right L/R
-master_width = 50%    # N/N% (5%-95%)
+master_width = 5%    # N/N% (5%-95%)
 
 [bar]
 show = true
