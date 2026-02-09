@@ -275,8 +275,18 @@ pub fn init(wm: *defs.WM) !void {
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
 
-    // Create DrawContext with RGB visual (transparency via window opacity, not Cairo)
-    const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, window, width, height, wm.dpi_info.dpi);
+    // Create DrawContext with ARGB awareness
+    const dc = try drawing.DrawContext.initWithVisual(
+        wm.allocator, 
+        wm.conn, 
+        window, 
+        width, 
+        height, 
+        visual_info.visual_id,
+        colormap,
+        wm.dpi_info.dpi,
+        want_transparency  // is_argb flag
+    );
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
@@ -465,14 +475,13 @@ fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment)
 }
 
 fn draw(s: *State, wm: *defs.WM) !void {
-    // Add alpha channel for ARGB windows (opaque background)
-    const bg_color = if (s.has_transparency)
-        (0xFF000000 | s.config.bg)
-    else
-        s.config.bg;
+    // For ARGB windows, clear to transparent first (critical for proper rendering)
+    if (s.has_transparency) {
+        s.dc.clearTransparent();
+    }
     
-    // Use XCB to draw background
-    s.dc.fillRect(0, 0, s.width, s.height, bg_color);
+    // Draw background (fillRect automatically adds alpha for ARGB windows)
+    s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
     // Pre-calculate widths
     const scaled_spacing = s.config.scaledSpacing();
