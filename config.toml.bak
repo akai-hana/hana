@@ -17,32 +17,37 @@
 #   - (Any string can be wrapped with "" or '')
 
 [tiling]
-enable = true
-
-# Available layouts in cycle order (first is default on startup)
-layouts = [
-    "master-stack",
-    "monocle",
-    "grid",
-    "fibonacci",
-]
+enabled = true #TODO: change "enabled" to "enable"
+layout = "master" # master_left / monocle / grid / fibonacci
 
 # Aesthetics
-[tiling.aesthetics]
+#TODO: replace with [tiling.aesthetics]
 gaps             = 2.5%
 border_width     = 1% 
 border_focused   = '#ac3232'
 border_unfocused = '#52263e' # Letters can also be MAJUS/minus
 
-# Layout-specific settings
-[tiling.layouts.master-stack]
-count = 1        # Number of windows in master area (master stack size)
-side  = "left"   # "left"/"right" / 'L'/'R'
-width = 50%      # N/N% (5%-95% suggested range)
+#TODO: make new [tiling.layouts] section, where the user can set the available layouts through an array.
+# the first element in the array is the bootup default, while cycling forward will move from the top to
+# the bottom of the array.
+# ej.
+
+# layouts = [
+# 	master-stack,
+# 	monocle,
+# 	grid,
+# ]
+
+# Tiling layouts
+## Master-stack
+#TODO: convert previous 2 lines to [tiling.layouts.master-stack], then replace master_count with count, master_side with side, and so on, instead of appending "master_" to each parameter.
+master_count = 1      # Number of windows in master area (master stack size)
+master_side  = "left" # "Left"/"Right" / 'L'/'R' #TODO: implement 'L'/'R' value recognition
+master_width = 50%    # N/N% (5%-95% (suggestion of presentation))
 
 [bar]
-enable   = true
-position = "bottom" # top/bottom; can be swapped on runtime
+show      = true #TODO: change "show" to "enable"
+position  = "bottom" # top/bottom; can be swapped on runtime
 
 # Font array; priority order: first font is primary, others come next when first doesn't support some character.
 # Useful for non-ASCII character support, while retaining a primary ASCII font.
@@ -51,34 +56,37 @@ fonts = [
     "Noto Sans CJK JP",
 ]
 
-# Font size as percentage of bar height (e.g., 16% = font takes up 16% of the bar's vertical space)
-font_size = 16%
+# Legacy single font option (used if fonts array is not set):
+#font = "FiraCode Nerd Font Ret" #TODO: remove this legacy feature; user can just set an array with one element.
+
+font_size = 16% #TODO: add a comment on what this line does. in specific, what's the ratio of this percentage-based value (between what and what?)
 
 # Workspace labels/icons
 icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
-
-# Spacing between each segment/module inside the bar
-# N (pixels) = exact pixel spacing; N% = percentage of bar height
-segment_spacing = 8%
+segment_spacing = 8% # Spacing between each segment/module inside the bar
+#TODO: what's the difference between setting segment_spacing as N and as N%? i notice no real difference...
+# add a comment explaining so. if there truly is no difference, then fix it, as it'd make no sense then.
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
-## Future enhancement: percentage values where 100% = auto-calculated size, 150% = 1.5x auto size
-#height = 32
+#height = 32 #TODO: enable a percentage value, where 100% is the auto-calculated size, and 150% would be 1.5x times the size of that, for example.
 
-# Padding inside segments (horizontal space around text content within each segment)
-padding = 99
+# Bar spacing
+padding = 99 # Padding inside segments (around text)
+#TODO: i'm still not sure what padding actually does. can you add a comment here clarifying what it does?
 
 # Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
-# Accepts formats: 0.9 or 90% (will be normalized to 0-1)
+# Accepts formats: 0.9 or 90 (will be normalized to 0-1)
 # With picom's gaussian blur, the bar will show blurred content behind it
-# Note: Implementation should restrict to either (0.0-1.0) or (0%-100%) ranges for consistency
-transparency = 0% # [0.0 - 1.0] / [0% - 100%]
+# transparency = 50 # %
+transparency = 0% # [0 - 1] / [0% - 100%]
+#TODO: restrict ranges to (0-1) or (0%-100%). currently, "50" sets it to 50% transparency, even though N (without %) is only intended as a 0.NN range.
 
 # Main color palette
 ## Bar
-bg = "#0d0d14"
-fg = "#ebd9bc"
+bg          = "#0d0d14"
+# fg          = "#bbbbbb"
+fg          = "#ebd9bc"
 
 ## Workspace tag indicators
 selected_bg = "#ac3232"
@@ -91,6 +99,7 @@ indicator_size = 1
 
 # Accent colors for bar segments
 # Default accent for all segments
+title_accent = true #TODO: remove this parameter, and all its related logic, as it is useless; the user could just set the title accent hex code to the same hexcode of the background color.
 accent_color = "#ac3232"
 
 # Per-segment accent colors (overrides accent_color)
@@ -123,29 +132,32 @@ Mod = "Super" # Super/Mod4 / Alt/Mod1
 
 # WM interactions
 Mod+F = "toggle_fullscreen"
-Mod+Shift+Return = "pkill -9 Xorg" # quit wm
+Mod+Shift+Return = "pkill -9 Xorg" # quit w
+#TODO (implemented but not properly working yet)
 Mod+Shift+F = "kill"
 Mod+Shift+T = "reload" # Config hot-reload
+
 
 # wallpaper
 Mod+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-switch.sh" # start shader wallpaper
 Mod+Shift+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-stop.sh" # stop shader wallpaper
 
+
 # Tiling
 Mod+N           = "toggle_tiling" # Enable/disable tiling
-Mod+space       = "toggle_layout" # Cycle layouts forward
-Mod+Shift+space = "toggle_layout_reverse" # Cycle layouts backward
+Mod+space       = "toggle_layout" # TODO Cycle layouts
+Mod+Shift+space = "toggle_layout_reverse"
 Mod+Tab         = "swap_master"   # Swap focused window with master (slave→master or master↔slave)
 
 # Layouts
 ## Master-stack
-Mod+H      = "decrease_master" # Decrease master area width
-Mod+L      = "increase_master" # Increase master area width
-Mod+comma  = "increase_master_count"
-Mod+period = "decrease_master_count" 
+Mod+H           = "decrease_master" # area TODO
+Mod+L           = "increase_master" # area
+Mod+comma       = "increase_master_count"
+Mod+period      = "decrease_master_count" 
 
 # Workspaces
-# Switch to workspace N
+#TODO make workspace array
 Mod+1 = "workspace_1"
 Mod+2 = "workspace_2"
 Mod+3 = "workspace_3"
@@ -155,7 +167,7 @@ Mod+W = "workspace_6"
 Mod+E = "workspace_7"
 Mod+R = "workspace_8"
 
-# Move window to workspace N
+#TODO automatically add "Shift" to previous binds for the "move to workspace" binds
 Mod+Shift+1 = "move_to_workspace_1"
 Mod+Shift+2 = "move_to_workspace_2"
 Mod+Shift+3 = "move_to_workspace_3"
@@ -175,28 +187,31 @@ Mod+P = "rofi -show drun"
 # Program binds
 kill = "pkill -9" # program kill placeholder
 
+#TODO: replace "pkill -9" with the kill placeholder
 ## Misc
 Mod+A       = "MOZ_USE_XINPUT2=1 firefox"
-Mod+Shift+A = "{kill} firefox"
+Mod+Shift+A = "pkill -9 firefox"
 
 Mod+s       = "flatpak run org.equicord.equibop"
-Mod+Shift+S = "{kill} equibop"
+Mod+Shift+S = "pkill -9 equibop"
 
 Mod+d       = "ghostty"
-Mod+Shift+D = "{kill} ghostty"
+Mod+Shift+D = "pkill -9 ghostty"
 
 # z -> osu
 
-Mod+X       = "~/Games/t-client/DDNet"
-Mod+Shift+X = "{kill} DDNet"
+Mod+X = "~/Games/t-client/DDNet"
+Mod+Shift+X = "pkill -9 DDNet"
 
-Mod+c       = "flatpak run com.valvesoftware.Steam"
-Mod+Shift+C = "{kill} steam"
+Mod+c = "flatpak run com.valvesoftware.Steam"
+Mod+Shift+C
 
 Mod+V       = "flatpak run com.github.th_ch.youtube_music"
-Mod+Shift+V = "{kill} youtube-music"
+Mod+Shift+V = "pkill -9 youtube-music"
 
 # Emergency/Debug
+#TODO not yet working
+#Mod+Shift+d      = "dump_state"       # Print debug info
 Mod+Shift+Escape = "emergency_recover" # Emergency recovery mode
 
 # Workspace rules
