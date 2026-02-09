@@ -30,17 +30,15 @@ border_focused   = '#ac3232'
 border_unfocused = '#52263e' # Letters can also be MAJUS/minus
 
 #TODO: make new [tiling.layouts] section, where the user can set the available layouts through an array.
-# ej. {
+# the first element in the array is the bootup default, while cycling forward will move from the top to
+# the bottom of the array.
+# ej.
 
 # layouts = [
-# master-stack,
-# monocle,
-# grid
+# 	master-stack,
+# 	monocle,
+# 	grid,
 # ]
-
-# } something like that. it doesn't matter if syntax isn't exactly the same. what's important is the idea of an array,
-# where one can define both the available layouts, as well as what order they'll appear on, being the first one the
-# default layout, and then cycling forward moving from the top to the bottom of the array.
 
 # Tiling layouts
 ## Master-stack
@@ -52,7 +50,7 @@ master_width = 50%    # N/N% (5%-95% (suggestion of presentation))
 [bar]
 show      = true #TODO: change "show" to "enable"
 position  = "bottom" # top/bottom; can be swapped on runtime
-font_size = 16%
+font_size = 16% #TODO: comment this line. in specific, what's the ratio of a percentage-based value.
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
@@ -61,7 +59,8 @@ font_size = 16%
 
 # Bar spacing
 padding = 99 # Padding inside segments (around text)
-spacing = 6  # Space between segments
+#TODO: i'm still not sure what padding actually does. can you add a comment here clarifying what it does?
+segment_spacing = 8  # Space between segments
 
 # List fonts in priority order: first font is primary, others come next
 # Useful for non-ASCII character support, while retaining a primary ASCII font  
@@ -70,7 +69,7 @@ fonts = [
     "Noto Sans CJK JP",
 ]
 
-# NEW: Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
+# Bar transparency (0.0 = fully transparent, 1.0 = fully opaque)
 # Accepts formats: 0.9 or 90 (will be normalized to 0-1)
 # With picom's gaussian blur, the bar will show blurred content behind it
 # transparency = 50 # %
