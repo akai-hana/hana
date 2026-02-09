@@ -6,7 +6,7 @@ layout  = "master" # master_left / monocle / grid / fibonacci
 
 # Aesthetics
 gaps             = 12 # px
-border_width     = 50% # N = px, N% = 
+border_width     = 95% # N = px, N% = 
 border_focused   = "#ac3232" # "#RRGGBB" / RRGGBB / 0xRRGGBB
 border_unfocused = "#52263e"
 
