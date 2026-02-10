@@ -39,7 +39,8 @@ layouts = [
 # - 100-200%: Can go extreme, where 200% = entire window consumed by gaps/border
 # This keeps the 0-100% range "sane" while allowing extreme customization if needed
 gaps             = 2.75%
-border_width     = 1.25%
+border_width     = 99%
+# border_width     = 1.25%
 border_focused   = '#ac3232'
 border_unfocused = '#52263e' # Letters can also be MAJUS/minus
 
@@ -144,7 +145,7 @@ kill = "pkill -9" # program kill value placeholder
 
 # WM interactions
 Mod+F = "toggle_fullscreen"
-Mod+Shift+Return = "kill Xorg" # quit wm
+Mod+Shift+Return = "{kill} Xorg" # quit wm
 Mod+Shift+F = "close_window" # Close focused window
 Mod+Shift+T = "reload" # Config hot-reload
 
