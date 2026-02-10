@@ -24,6 +24,8 @@ const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
     xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | xcb.XCB_EVENT_MASK_KEY_PRESS |
     xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
 
+/// Lock key combinations to grab: none, CapsLock, NumLock, and both.
+/// This ensures keybindings work regardless of lock key state.
 const LOCK_MODIFIERS = [_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 };
 
 const CURSOR_LEFT_PTR = 68;
@@ -226,9 +228,16 @@ fn handleConfigReload(wm: *WM) !void {
 }
 
 pub fn main() !void {
-    const conn = xcb.xcb_connect(null, null) orelse return error.X11ConnectionFailed;
+    const conn = xcb.xcb_connect(null, null) orelse {
+        debug.err("Failed to connect to X11 server", .{});
+        return error.X11ConnectionFailed;
+    };
     defer xcb.xcb_disconnect(conn);
-    if (xcb.xcb_connection_has_error(conn) != 0) return error.X11ConnectionFailed;
+    
+    if (xcb.xcb_connection_has_error(conn) != 0) {
+        debug.err("X11 connection has errors", .{});
+        return error.X11ConnectionFailed;
+    }
 
     const setup = xcb.xcb_get_setup(conn);
     const screen = xcb.xcb_setup_roots_iterator(setup).data orelse return error.X11ScreenFailed;

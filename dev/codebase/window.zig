@@ -1,3 +1,31 @@
+//! # Window Management Module
+//!
+//! Handles window lifecycle events, configuration, and user interactions.
+//!
+//! ## Dependencies:
+//! - `defs`: Core WM types
+//! - `xcb`: X11 bindings
+//! - `utils`: Utility functions
+//! - `workspaces`: Workspace management
+//! - `tiling`: Window tiling system
+//! - `bar`: Status bar
+//! - `focus`: Focus management (via separate module)
+//!
+//! ## Exports:
+//! - `manageWindow()`: Set up window management
+//! - `unmanageWindow()`: Clean up window
+//! - `grabButtons()`: Configure click-to-focus
+//! - `handleConfigureRequest()`: Handle window resize requests
+//! - `handleEnterNotify()`: Handle mouse enter events
+//! - `handleButtonPress()`: Handle mouse clicks
+//! - `handleDestroyNotify()`: Handle window destruction
+//!
+//! ## Key Features:
+//! - Focus-follows-mouse with click-to-focus
+//! - Window border management
+//! - Off-screen window positioning
+//! - Multi-workspace window tracking
+//
 // Window event handlers - IMPROVED: Intelligent focus-follows-mouse
 
 const std        = @import("std");
@@ -29,6 +57,11 @@ const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW |
                           xcb.XCB_EVENT_MASK_LEAVE_WINDOW |
                           xcb.XCB_EVENT_MASK_BUTTON_PRESS;
 
+/// Helper to check if a window is a system window (root, null, or bar)
+inline fn isSystemWindow(wm: *const WM, win: u32) bool {
+    return win == wm.root or win == 0 or bar.isBarWindow(win);
+}
+
 /// Manages button grabs for click-to-focus behavior.
 /// When a window is unfocused, we grab all button presses so we can intercept
 /// the click, focus the window, and then replay the event to the window.
@@ -47,7 +80,7 @@ pub fn grabButtons(wm: *WM, win: u32, focused: bool) void {
     }
 }
 
-inline fn validateWorkspace(target_workspace: ?u8, current_workspace: u8) u8 {
+fn validateWorkspace(target_workspace: ?u8, current_workspace: u8) u8 {
     const workspace = target_workspace orelse return current_workspace;
     const ws_state  = workspaces.getState() orelse return current_workspace;
     
@@ -152,9 +185,11 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const win = event.window;
     
-    if (wm.config.tiling.enabled and tiling.isWindowTiled(win)
-    or wm.fullscreen.isFullscreen(win))
+    if ((wm.config.tiling.enabled and tiling.isWindowTiled(win)) or
+        wm.fullscreen.isFullscreen(win))
+    {
         return;
+    }
 
     const values = [_]u32{
         @intCast(event.x),
@@ -176,7 +211,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     const win = event.event;
     
     // Filter out system windows and invalid window IDs
-    if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
+    if (isSystemWindow(wm, win)) return;
     
     // Check if this is a window we're managing
     // Note: win == 0 checks for null ID, hasWindow checks if we're tracking it
@@ -196,7 +231,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     const win = event.event;
     
-    if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
+    if (isSystemWindow(wm, win)) return;
     
     // CRITICAL: Only focus windows on the current workspace
     if (!workspaces.isOnCurrentWorkspace(win)) return;

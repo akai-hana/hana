@@ -1,3 +1,31 @@
+//! # Tiling Window Management Module
+//!
+//! Provides automatic window layout and tiling functionality with multiple layout algorithms.
+//!
+//! ## Dependencies:
+//! - `defs`: Core WM types
+//! - `xcb`: X11 bindings
+//! - `utils`: Utility functions
+//! - `focus`: Window focus management
+//! - `workspaces`: Workspace state management
+//! - `tracking`: Window tracking structures
+//! - `master`: Master-stack layout algorithm
+//!
+//! ## Exports:
+//! - `addWindow()`: Add a window to tiling
+//! - `removeWindow()`: Remove a window from tiling
+//! - `isWindowTiled()`: Check if window is tiled
+//! - `retileIfDirty()`: Retile workspace if layout changed
+//! - `adjustMasterCount()`: Adjust number of master windows
+//! - `adjustMasterWidth()`: Adjust master window width
+//!
+//! ## Key Features:
+//! - Multiple layout algorithms (master-stack, etc.)
+//! - Automatic window placement
+//! - Master/stack window organization
+//! - Off-screen window recovery
+//! - Dirty-flag based retiling for performance
+//
 // Tiling system - Delegates to layout modules (OPTIMIZED & REFACTORED)
 
 const std = @import("std");
@@ -175,6 +203,13 @@ inline fn isTileable(s: *const State, wm: *const WM, win: u32) bool {
     return !wm.fullscreen.isFullscreen(win) and s.windows.contains(win);
 }
 
+/// Adds a window to the tiling system.
+/// 
+/// If the window is already tiled or in fullscreen mode, only marks
+/// the layout as dirty. Otherwise, prepends the window to the tiled
+/// list and applies initial border/focus setup for windows on the current workspace.
+///
+/// Side effects: May retile workspace if dirty flag is set later
 pub fn addWindow(wm: *WM, win: u32) void {
     const s = StateManager.get(true) orelse return;
     if (!s.enabled) return;
@@ -204,6 +239,12 @@ pub fn addWindow(wm: *WM, win: u32) void {
     s.markDirty();
 }
 
+/// Removes a window from the tiling system.
+/// 
+/// If the removed window was focused, focuses the next window in the tiled list.
+/// Marks the layout as dirty to trigger retiling.
+///
+/// Side effects: May change focused window, triggers retiling
 pub fn removeWindow(wm: *WM, win: u32) void {
     const s = StateManager.get(true) orelse return;
 
