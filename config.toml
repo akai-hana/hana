@@ -75,7 +75,7 @@ workspace_width = 100%  # Default base width
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
 ## TODO: Future enhancement: percentage values where 100% = auto-calculated size, 150% = 1.5x auto size.
-height = 40
+height = 45
 
 # Padding inside segments (horizontal space around text content within each segment)
 padding = 99
