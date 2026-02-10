@@ -21,6 +21,13 @@ pub const Layout = enum { master, monocle, grid };
 
 const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
 
+// FIXED: Magic numbers replaced with named constants (shared with window.zig)
+/// Minimum X coordinate threshold for detecting off-screen windows
+const OFFSCREEN_THRESHOLD_MIN: i32 = -1000;
+
+/// Maximum X coordinate threshold for detecting off-screen windows  
+const OFFSCREEN_THRESHOLD_MAX: i32 = 10000;
+
 // OPTIMIZATION: Merged error handling directly into this module
 inline fn logError(err: anyerror, window: ?u32) void {
     if (window) |win| {
@@ -340,7 +347,7 @@ fn recoverOffscreenWindows(wm: *WM, current_ws: *workspaces.Workspace, visible: 
         
         // This window is in workspace but wasn't retiled - check if it's off-screen
         const check_geom = utils.getGeometry(wm.conn, ws_win) orelse continue;
-        if (check_geom.x < -1000 or check_geom.x > 10000) {
+        if (check_geom.x < OFFSCREEN_THRESHOLD_MIN or check_geom.x > OFFSCREEN_THRESHOLD_MAX) {
             // Window is off-screen! Position it at a default location
             debug.warn("Recovering window 0x{x} from off-screen position", .{ws_win});
             const default_x: i16 = @divTrunc(@as(i16, @intCast(screen.width_in_pixels)), 4);
@@ -380,7 +387,9 @@ fn adjustMasterWidth(wm: *WM, delta: f32) void {
 pub fn increaseMasterWidth(wm: *WM) void { adjustMasterWidth(wm, 0.05); }
 pub fn decreaseMasterWidth(wm: *WM) void { adjustMasterWidth(wm, -0.05); }
 
-fn adjustMasterCount(wm: *WM, delta: isize) void {
+// FIXED: Changed delta type from isize to i8 to prevent overflow issues
+// Only ever called with 1 or -1, so i8 is sufficient and safer
+fn adjustMasterCount(wm: *WM, delta: i8) void {
     const s = StateManager.get(true) orelse return;
     const win_count: u8 = @intCast(@min(255, s.windows.count()));
     const new_count: u8 = if (delta > 0)
@@ -455,13 +464,16 @@ pub fn swapWithMaster(wm: *WM) void {
 
 // Helper: Swap two windows in the tracking list
 inline fn swapWindows(s: *State, idx1: usize, idx2: usize) void {
-    // We need to manipulate the internal list
-    // Since tracking uses small array or large list, we need to handle both cases
+    // FIXED: Add bounds checking to prevent out-of-bounds access
     if (s.windows.small) |*small| {
+        std.debug.assert(idx1 < small.len);
+        std.debug.assert(idx2 < small.len);
         const temp = small.items[idx1];
         small.items[idx1] = small.items[idx2];
         small.items[idx2] = temp;
     } else if (s.windows.large) |*large| {
+        std.debug.assert(idx1 < large.list.items.len);
+        std.debug.assert(idx2 < large.list.items.len);
         const temp = large.list.items[idx1];
         large.list.items[idx1] = large.list.items[idx2];
         large.list.items[idx2] = temp;
@@ -472,7 +484,9 @@ inline fn swapWindows(s: *State, idx1: usize, idx2: usize) void {
 inline fn moveToFront(s: *State, from_idx: usize) void {
     if (from_idx == 0) return;
     
+    // FIXED: Add bounds checking to prevent out-of-bounds access
     if (s.windows.small) |*small| {
+        std.debug.assert(from_idx < small.len);
         const window = small.items[from_idx];
         // Shift everything from 0..from_idx one position right
         var i = from_idx;
@@ -481,6 +495,7 @@ inline fn moveToFront(s: *State, from_idx: usize) void {
         }
         small.items[0] = window;
     } else if (s.windows.large) |*large| {
+        std.debug.assert(from_idx < large.list.items.len);
         const window = large.list.items[from_idx];
         // Shift everything from 0..from_idx one position right
         var i = from_idx;

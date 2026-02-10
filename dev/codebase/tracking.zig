@@ -22,7 +22,9 @@ pub const tracking = struct {
     
     pub fn init(allocator: std.mem.Allocator) tracking {
         return .{
-            .small = .{ .items = undefined, .len = 0 },
+            // FIXED: Zero-initialize array to avoid undefined behavior
+            // Elements beyond .len are unused, but accessing them should be safe
+            .small = .{ .items = [_]u32{0} ** SMALL_THRESHOLD, .len = 0 },
             .large = null,
             .allocator = allocator,
         };
@@ -231,27 +233,30 @@ pub const tracking = struct {
     
     /// INTERNAL: Demote from large hash+list back to small array
     fn demoteToSmall(self: *tracking) void {
-        if (self.large) |l| {
-            // Only demote if we can fit in small array
-            if (l.list.items.len > SMALL_THRESHOLD) return;
-            
-            var small_items: [SMALL_THRESHOLD]u32 = undefined;
-            const len = l.list.items.len;
-            
-            // Copy to small array
-            @memcpy(small_items[0..len], l.list.items);
-            
-            // Free large structures
-            var large_copy = l;
-            large_copy.list.deinit(self.allocator);
-            large_copy.set.deinit();
-            
-            self.large = null;
-            self.small = .{
-                .items = small_items,
-                .len = @intCast(len),
-            };
-        }
+        // FIXED: Use early return pattern and consume large before freeing
+        // to prevent potential double-free if called multiple times
+        var large = self.large orelse return;
+        
+        // Only demote if we can fit in small array
+        if (large.list.items.len > SMALL_THRESHOLD) return;
+        
+        var small_items: [SMALL_THRESHOLD]u32 = undefined;
+        const len = large.list.items.len;
+        
+        // Copy to small array
+        @memcpy(small_items[0..len], large.list.items);
+        
+        // Set to null BEFORE freeing to prevent double-free
+        self.large = null;
+        
+        // Now safe to free
+        large.list.deinit(self.allocator);
+        large.set.deinit();
+        
+        self.small = .{
+            .items = small_items,
+            .len = @intCast(len),
+        };
     }
 };
 
