@@ -70,7 +70,7 @@ segment_spacing = 8%
 icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
 
 # Workspace width as percentage of base (100% = 40px, 150% = 60px, or set exact pixels)
-workspace_width = 150%  # Default base width
+workspace_width = 125%  # Default base width
 
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
