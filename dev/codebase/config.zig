@@ -449,7 +449,7 @@ const BAR_COLOR_FIELDS = [_]BarColorField{
 
 fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
     const section = doc.getSection("bar") orelse return;
-    cfg.bar.enable = get(bool, section, "enable", true, null, null);
+    cfg.bar.enabled = get(bool, section, "enable", true, null, null);
     
     if (section.getString("position")) |pos_str| {
         cfg.bar.vertical_position = defs.BarVerticalPosition.fromString(pos_str) orelse .top;

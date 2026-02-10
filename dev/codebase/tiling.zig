@@ -283,9 +283,9 @@ fn retileCurrentWorkspaceInternal(wm: *WM, should_flush: bool, state_opt: ?*Stat
     const screen = wm.screen;
 
     // Calculate available space accounting for bar
-    const bar_height = if (wm.config.bar.enable) bar.getBarHeight() else 0;
+    const bar_height = if (wm.config.bar.enabled) bar.getBarHeight() else 0;
     const available_height = screen.height_in_pixels - bar_height;
-    const y_offset: u16 = if (wm.config.bar.enable and wm.config.bar.vertical_position == .top)
+    const y_offset: u16 = if (wm.config.bar.enabled and wm.config.bar.vertical_position == .top)
         bar_height
     else
         0;
