@@ -593,19 +593,18 @@ pub fn swapWithMaster(wm: *WM) void {
     // BUGFIX: If focused is already master, swap with first slave (top of slave stack)
     if (idx == 0) {
         // Master is focused - swap with first slave (window at index 1)
+        // After swap: slave becomes new master, old master becomes first slave
         moveWindowToIndex(s, 1, 0);
-        s.markDirty();
-        retileCurrentWorkspace(wm, false);
-        
-        // Update focus to follow the window (master moved to slave position)
-        focus.setFocus(wm, focused, .tiling_operation);
+        // Force retile with cache clear to ensure proper positioning
+        retileCurrentWorkspace(wm, true);
         return;
     }
     
-    // Focused is not master - swap with master as before
+    // Focused is not master - swap with master
+    // After swap: focused slave becomes new master, old master moves to slave position
     moveWindowToIndex(s, idx, 0);
-    s.markDirty();
-    retileCurrentWorkspace(wm, false);
+    // Force retile with cache clear to ensure proper positioning
+    retileCurrentWorkspace(wm, true);
 }
 
 pub fn promoteToMaster(wm: *WM) void {

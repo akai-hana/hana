@@ -242,13 +242,17 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     for (old_workspace.windows.items()) |win| hideWindow(wm, win);
 
     // Step 2: Position new workspace windows (no flush yet!)
-    // BUGFIX: Don't retile if there's a fullscreen window on the target workspace
-    // Fullscreen windows should remain fullscreen and not have their geometry updated by retiling
-    if (wm.config.tiling.enabled and fs_info == null) {
+    // CRITICAL: Handle all cases properly
+    if (fs_info) |info| {
+        // Case 1: There's a fullscreen window on this workspace
+        // Skip positioning all windows - configureFullscreen will handle the fullscreen window
+        // and other windows can stay off-screen since they're not visible anyway
+        _ = info; // Suppress unused variable warning
+    } else if (wm.config.tiling.enabled) {
+        // Case 2: Tiling enabled, no fullscreen - retile all windows
         tiling.retileCurrentWorkspace(wm, false); // No flush - atomic operation
-    } else if (wm.config.tiling.enabled == false) {
-        // When tiling is disabled, manually position windows to be visible
-        // Without this, windows remain off-screen (-4000) from when they were hidden
+    } else {
+        // Case 3: Tiling disabled, no fullscreen - manually position windows to be visible
         for (new_workspace.windows.items()) |win| {
             // Get current geometry to preserve window sizes
             const geom_cookie = xcb.xcb_get_geometry(wm.conn, win);
