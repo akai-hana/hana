@@ -355,9 +355,11 @@ pub fn isWindowTiled(window_id: u32) bool {
 // Helper function to calculate screen area available for tiling
 fn calculateScreenArea(wm: *WM) utils.Rect {
     const bar_height = bar.getBarHeight();
+    const bar_at_bottom = wm.config.bar.vertical_position == .bottom;
+    
     return .{
         .x = 0,
-        .y = @intCast(bar_height),
+        .y = if (bar_at_bottom) 0 else @intCast(bar_height),
         .width = wm.screen.width_in_pixels,
         .height = wm.screen.height_in_pixels - bar_height,
     };
