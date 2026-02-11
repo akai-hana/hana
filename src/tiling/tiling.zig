@@ -589,8 +589,44 @@ pub fn swapWithMaster(wm: *WM) void {
     }
     
     const idx = focused_idx orelse return;
-    if (idx == 0) return;  // Already master
     
+    // BUGFIX: If focused is already master, swap with last-focused window or second window
+    if (idx == 0) {
+        // Try to swap with the last-focused window from history
+        var target_idx: ?usize = null;
+        
+        // Search focus history for a valid window on current workspace that's not master
+        for (s.focus_history.slice()) |hist_win| {
+            if (hist_win == focused) continue;  // Skip master itself
+            if (!workspaces.isOnCurrentWorkspace(hist_win)) continue;
+            if (!s.windows.contains(hist_win)) continue;
+            
+            // Find this window's index in the tiling list
+            for (windows, 0..) |win, i| {
+                if (win == hist_win) {
+                    target_idx = i;
+                    break;
+                }
+            }
+            if (target_idx) |tidx| {
+                if (tidx > 0) break;  // Found a valid non-master window
+            }
+        }
+        
+        // If no valid window in history, use second window (first slave)
+        const swap_idx = target_idx orelse 1;
+        
+        // Swap master with the target window
+        moveWindowToIndex(s, swap_idx, 0);
+        s.markDirty();
+        retileCurrentWorkspace(wm, false);
+        
+        // Update focus to follow the window (master moved to slave position)
+        focus.setFocus(wm, focused, .tiling_operation);
+        return;
+    }
+    
+    // Focused is not master - swap with master as before
     moveWindowToIndex(s, idx, 0);
     s.markDirty();
     retileCurrentWorkspace(wm, false);

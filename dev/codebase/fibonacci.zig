@@ -62,8 +62,8 @@ fn tileFibonacci(
     if (index == windows.len - 1) {
         // Last window gets remaining space
         const rect = utils.Rect{
-            .x = x,
-            .y = y,
+            .x = @intCast(x),
+            .y = @intCast(y),
             .width = width -| border * 2,
             .height = height -| border * 2,
         };
@@ -78,8 +78,8 @@ fn tileFibonacci(
         const win_height = half_height -| gap;
         
         const rect = utils.Rect{
-            .x = x,
-            .y = y,
+            .x = @intCast(x),
+            .y = @intCast(y),
             .width = width -| border * 2,
             .height = win_height -| border * 2,
         };
@@ -95,8 +95,8 @@ fn tileFibonacci(
         const win_width = half_width -| gap;
         
         const rect = utils.Rect{
-            .x = x,
-            .y = y,
+            .x = @intCast(x),
+            .y = @intCast(y),
             .width = win_width -| border * 2,
             .height = height -| border * 2,
         };
