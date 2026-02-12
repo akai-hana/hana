@@ -90,6 +90,14 @@ fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
     }
 }
 
+// ============================================================================
+// PHASE 2 IMPROVEMENT: Reduced Allocations in setupExistingWindows
+// ============================================================================
+
+/// Typical window count - most systems have ≤32 windows at startup
+/// This allows zero-allocation fast path for common case
+const TYPICAL_WINDOW_COUNT = 32;
+
 fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32, allocator: std.mem.Allocator) !void {
     const reply = xcb.xcb_query_tree_reply(conn, xcb.xcb_query_tree(conn, root), null) orelse return;
     defer std.c.free(reply);
@@ -98,24 +106,43 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32, allocator: std.m
     const len: usize = @intCast(xcb.xcb_query_tree_children_length(reply));
     if (len == 0) return;
 
-    var cookies: std.ArrayList(xcb.xcb_get_window_attributes_cookie_t) = .empty;
-    defer cookies.deinit(allocator);
+    // PHASE 2 OPTIMIZATION: Use stack allocation for typical case (≤32 windows)
+    // Only allocate heap memory if we have more windows than typical
+    var cookie_buffer: [TYPICAL_WINDOW_COUNT]xcb.xcb_get_window_attributes_cookie_t = undefined;
+    
     // Note: We use a minimal event mask here (enter/leave) for existing windows
     // Full MANAGED_WINDOW mask is applied in window.zig when windows are properly managed
     const event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
     
-    try cookies.ensureTotalCapacity(allocator, len);
-    for (0..len) |i| {
-        const cookie = xcb.xcb_get_window_attributes(conn, children[i]);
-        cookies.appendAssumeCapacity(cookie);
-    }
-    _ = xcb.xcb_flush(conn);
-
-    for (cookies.items, 0..) |cookie, i| {
-        const attrs = xcb.xcb_get_window_attributes_reply(conn, cookie, null) orelse continue;
-        defer std.c.free(attrs);
-        if (attrs.*.override_redirect != 0 or attrs.*.map_state != xcb.XCB_MAP_STATE_VIEWABLE) continue;
-        _ = xcb.xcb_change_window_attributes(conn, children[i], xcb.XCB_CW_EVENT_MASK, &[_]u32{event_mask});
+    if (len <= TYPICAL_WINDOW_COUNT) {
+        // Fast path: Use stack allocation (zero heap allocations!)
+        for (0..len) |i| {
+            cookie_buffer[i] = xcb.xcb_get_window_attributes(conn, children[i]);
+        }
+        _ = xcb.xcb_flush(conn);
+        
+        for (cookie_buffer[0..len], 0..) |cookie, i| {
+            const attrs = xcb.xcb_get_window_attributes_reply(conn, cookie, null) orelse continue;
+            defer std.c.free(attrs);
+            if (attrs.*.override_redirect != 0 or attrs.*.map_state != xcb.XCB_MAP_STATE_VIEWABLE) continue;
+            _ = xcb.xcb_change_window_attributes(conn, children[i], xcb.XCB_CW_EVENT_MASK, &[_]u32{event_mask});
+        }
+    } else {
+        // Slow path: Need heap allocation for many windows
+        const cookies = try allocator.alloc(xcb.xcb_get_window_attributes_cookie_t, len);
+        defer allocator.free(cookies);
+        
+        for (0..len) |i| {
+            cookies[i] = xcb.xcb_get_window_attributes(conn, children[i]);
+        }
+        _ = xcb.xcb_flush(conn);
+        
+        for (cookies, 0..) |cookie, i| {
+            const attrs = xcb.xcb_get_window_attributes_reply(conn, cookie, null) orelse continue;
+            defer std.c.free(attrs);
+            if (attrs.*.override_redirect != 0 or attrs.*.map_state != xcb.XCB_MAP_STATE_VIEWABLE) continue;
+            _ = xcb.xcb_change_window_attributes(conn, children[i], xcb.XCB_CW_EVENT_MASK, &[_]u32{event_mask});
+        }
     }
     _ = xcb.xcb_flush(conn);
 }

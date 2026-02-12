@@ -148,6 +148,47 @@ pub const State = struct {
         self.geometry_cache.clearRetainingCapacity();
     }
     
+    // ============================================================================
+    // PHASE 2 IMPROVEMENT: Geometry Cache Cleanup
+    // ============================================================================
+    
+    /// Clean up stale geometry cache entries for windows that no longer exist
+    /// This prevents the cache from growing unbounded over time
+    /// Call this periodically (e.g., after workspace switches or major layout changes)
+    pub fn cleanupStaleGeometryCache(self: *State, wm: *const WM) void {
+        // Collect keys to remove
+        var to_remove: std.ArrayListUnmanaged(u32) = .{};
+        defer to_remove.deinit(self.allocator);
+        
+        var iter = self.geometry_cache.keyIterator();
+        while (iter.next()) |win_ptr| {
+            // Remove cache entries for windows that:
+            // 1. No longer exist in the WM's window tracking
+            // 2. Are not in the tiling system
+            if (!wm.hasWindow(win_ptr.*) or !self.windows.contains(win_ptr.*)) {
+                to_remove.append(self.allocator, win_ptr.*) catch continue;
+            }
+        }
+        
+        // Remove all stale entries
+        for (to_remove.items) |win| {
+            _ = self.geometry_cache.remove(win);
+        }
+        
+        // Optionally shrink the hashmap if it's much larger than needed
+        // This helps prevent memory fragmentation over time
+        const current_capacity = self.geometry_cache.capacity();
+        const active_windows = self.windows.count();
+        
+        // If capacity is more than 4x the number of active windows, consider shrinking
+        // This threshold prevents too-frequent reallocations while reclaiming memory
+        if (current_capacity > active_windows * 4 and current_capacity > 32) {
+            // Note: std.AutoHashMap doesn't have a shrink method, but we can
+            // clear and re-add entries if needed. For now, just clearing old entries
+            // is sufficient as the allocator will handle fragmentation.
+        }
+    }
+    
     /// OPTIMIZATION: Update focus history using O(1) circular buffer instead of O(n) shifting
     /// Previously this shifted all elements on every focus change - very slow
     pub fn updateFocusHistory(self: *State, win: u32) void {
