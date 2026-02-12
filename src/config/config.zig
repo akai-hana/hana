@@ -6,16 +6,8 @@ const debug = @import("debug");
 const parser = @import("parser");
 const xkb = @import("xkbcommon");
 
-// Consolidated color parsing
-pub fn parseColor(str: []const u8) !u32 {
-    if (str.len == 0) return error.InvalidColor;
-    const offset: u8 = if (str[0] == '#') 1 else if (str.len > 2 and str[0] == '0' and (str[1] == 'x' or str[1] == 'X')) 2 else 0;
-    const hex_part = str[offset..];
-    if (hex_part.len == 0) return error.InvalidColor;
-    const color = std.fmt.parseInt(u32, hex_part, 16) catch return error.InvalidColor;
-    if (color > 0xFFFFFF) return error.InvalidColor;
-    return color;
-}
+// CONSOLIDATED: Use parseColor from parser module (removed duplicate)
+const parseColor = parser.parseColor;
 
 fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
     const value = section.get(key) orelse return default;
@@ -108,6 +100,15 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
     }
 }
 
+// CONSOLIDATED: Extracted common config parsing logic
+fn parseConfigSections(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
+    parseWorkspaces(doc, cfg);
+    try parseKeybindings(allocator, doc, cfg);
+    try parseTiling(allocator, doc, cfg);
+    try parseBar(allocator, doc, cfg);
+    try parseRules(allocator, doc, cfg);
+}
+
 pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
@@ -142,11 +143,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
     defer doc.deinit();
 
     var cfg = getDefaultConfig(allocator);
-    parseWorkspaces(&doc, &cfg);
-    try parseKeybindings(allocator, &doc, &cfg);
-    try parseTiling(allocator, &doc, &cfg);
-    try parseBar(allocator, &doc, &cfg);
-    try parseRules(allocator, &doc, &cfg);
+    try parseConfigSections(allocator, &doc, &cfg);
     debug.info("Loaded: {s}", .{path});
     return cfg;
 }
@@ -159,11 +156,7 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
     defer doc.deinit();
 
     var cfg = getDefaultConfig(allocator);
-    parseWorkspaces(&doc, &cfg);
-    try parseKeybindings(allocator, &doc, &cfg);
-    try parseTiling(allocator, &doc, &cfg);
-    try parseBar(allocator, &doc, &cfg);
-    try parseRules(allocator, &doc, &cfg);
+    try parseConfigSections(allocator, &doc, &cfg);
 
     const terminal = try fallback.detectTerminal(allocator);
     for (cfg.keybindings.items) |*kb| {
