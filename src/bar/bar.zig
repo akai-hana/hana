@@ -6,7 +6,6 @@ const std     = @import("std");
 const defs    = @import("defs");
     const xcb = defs.xcb;
 const utils   = @import("utils");
-const dpi     = @import("dpi");
 
 const drawing = @import("drawing");
 const tiling  = @import("tiling");
@@ -32,28 +31,6 @@ const MAX_BAR_HEIGHT: u32 = 200;
 /// Default bar height if font metrics cannot be determined
 const DEFAULT_BAR_HEIGHT: u16 = 24;
 
-/// Result of finding a visual - contains both the structure and ID
-const VisualInfo = struct {
-    visual_type: ?*xcb.xcb_visualtype_t,
-    visual_id: u32,
-};
-
-/// Find a visual with the given depth, returning both structure and ID
-fn findVisualByDepth(screen: *xcb.xcb_screen_t, depth: u8) VisualInfo {
-    var depth_iter = xcb.xcb_screen_allowed_depths_iterator(screen);
-    while (depth_iter.rem > 0) : (xcb.xcb_depth_next(&depth_iter)) {
-        if (depth_iter.data.*.depth == depth) {
-            var visual_iter = xcb.xcb_depth_visuals_iterator(depth_iter.data);
-            if (visual_iter.rem > 0) {
-                const vt = visual_iter.data;
-                return .{ .visual_type = vt, .visual_id = vt.*.visual_id };
-            }
-        }
-    }
-    // Fallback to root visual
-    return .{ .visual_type = null, .visual_id = screen.root_visual };
-}
-
 const State = struct {
     window: u32,
     width: u16,
@@ -67,7 +44,6 @@ const State = struct {
     dirty: bool,
     dirty_clock: bool,
     last_second: i64,
-    alive: bool,
     visible: bool,  // OPTIMIZATION: Track actual visibility for timer control
     has_transparency: bool,  // Track if transparency is enabled
     allocator: std.mem.Allocator,
@@ -83,7 +59,7 @@ const State = struct {
             .status_text = .{},
             .cached_title = .{},
             .cached_title_window = null,
-            .dirty = false, .dirty_clock = false, .last_second = 0, .alive = true,
+            .dirty = false, .dirty_clock = false, .last_second = 0,
             .visible = true,  // OPTIMIZATION: Start visible, setBarState will update
             .has_transparency = has_transparency,
             .allocator = allocator,
@@ -212,10 +188,9 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
 pub fn init(wm: *defs.WM) !void {
     if (!wm.config.bar.enabled) return error.BarDisabled;
 
-    // Detect DPI and set scale factor
-    const dpi_info = try dpi.detect(wm.conn, wm.screen);
-    wm.config.bar.scale_factor = dpi_info.scale_factor;
-    debug.info("DPI: {d:.1}, Scale factor: {d:.2}x", .{dpi_info.dpi, dpi_info.scale_factor});
+    // Use DPI info already detected in main() — no need to detect again
+    wm.config.bar.scale_factor = wm.dpi_info.scale_factor;
+    debug.info("DPI: {d:.1}, Scale factor: {d:.2}x", .{wm.dpi_info.dpi, wm.dpi_info.scale_factor});
 
     const screen = wm.screen;
     const width = screen.width_in_pixels;
@@ -237,9 +212,9 @@ pub fn init(wm: *defs.WM) !void {
     
     // Find appropriate visual and depth for transparency
     const visual_info = if (want_transparency) 
-        findVisualByDepth(screen, 32)  // Use 32-bit depth for transparency
+        drawing.findVisualByDepth(screen, 32)  // Use 32-bit depth for transparency
     else 
-        VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
+        drawing.VisualInfo{ .visual_type = null, .visual_id = screen.root_visual };
     
     const depth: u8 = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
     
@@ -308,7 +283,6 @@ pub fn init(wm: *defs.WM) !void {
         width, 
         height, 
         visual_info.visual_id,
-        colormap,
         wm.dpi_info.dpi,
         want_transparency,  // is_argb flag
         wm.config.bar.transparency  // transparency value
