@@ -248,8 +248,13 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     if (fs_info) |info| {
         configureFullscreen(wm, info);
     } else {
-        // No fullscreen - position windows based on tiling state
-        if (wm.config.tiling.enabled) {
+        // No fullscreen - position windows based on RUNTIME tiling state
+        // CRITICAL FIX: Check tiling.State.enabled, not config.tiling.enabled!
+        // When user toggles tiling with Mod+N, it changes State.enabled, not config
+        const tiling_state = tiling.getState();
+        const tiling_enabled = if (tiling_state) |ts| ts.enabled else false;
+        
+        if (tiling_enabled) {
             // Tiling enabled - let tiling system position windows
             tiling.retileCurrentWorkspace(wm, false);
         } else {
