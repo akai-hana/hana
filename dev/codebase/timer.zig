@@ -1,9 +1,11 @@
 //! Timer management for bar clock updates
-//! OPTIMIZATION: Dynamic timer control to reduce idle CPU to near-zero
+//! Dynamic timer control to reduce idle CPU to near-zero
 
-const std = @import("std");
-const defs = @import("defs");
-const bar = @import("bar");
+//TODO: consolidate this file into the clock module itself
+
+const std   = @import("std");
+const defs  = @import("defs");
+const bar   = @import("bar");
 const debug = @import("debug");
 
 // Timer state for dynamic enable/disable to reduce idle CPU
@@ -18,9 +20,6 @@ pub fn setTimerFd(fd: i32) void {
 
 /// Check if clock should be running based on bar state
 fn shouldClockRun(wm: *defs.WM) bool {
-    // Don't run timer if bar is disabled
-    if (!wm.config.bar.enabled) return false;
-    
     // Don't run timer if bar is hidden (fullscreen)
     if (!bar.isVisible()) return false;
     
@@ -30,6 +29,7 @@ fn shouldClockRun(wm: *defs.WM) bool {
             if (seg == .clock) return true;
         }
     }
+
     return false;
 }
 

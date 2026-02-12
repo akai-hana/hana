@@ -265,11 +265,12 @@ pub const DrawContext = struct {
         _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
         
         // Flush to ensure the rectangle is drawn
+        // TODO: is this flush necessary? i commented it out and nothing seems broken, so is it?
         // _ = defs.xcb.xcb_flush(self.conn);
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
-        self.setColorForText(color);  // Text is ALWAYS opaque
+        self.setColorForText(color); // Text is opaque
         
         // Set text in Pango layout
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
@@ -282,21 +283,23 @@ pub const DrawContext = struct {
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
     }
     
-    pub fn drawTextEllipsis(self: *DrawContext, x: u16, y: u16, text: []const u8, 
-                           max_width: u16, color: u32) !void {
+    //TODO: comment on what this does
+    pub fn drawTextEllipsis(self: *DrawContext, x: u16, y: u16, text: []const u8, max_width: u16, color: u32) !void {
         // Set text
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
         // Set ellipsize mode and width
+        // TODO: what is an ellipsize mode?
         c.pango_layout_set_width(self.pango_layout, @intCast(@as(i32, max_width) * c.PANGO_SCALE));
         c.pango_layout_set_ellipsize(self.pango_layout, c.PANGO_ELLIPSIZE_END);
         
-        self.setColorForText(color);  // Text is ALWAYS opaque
+        self.setColorForText(color); // Text is opaque
         
-        // OPTIMIZATION: Use cached metrics instead of querying Pango
+        // Use cached metrics instead of querying Pango
         const asc, _ = self.getMetrics();
         const ascent_pixels: f64 = @floatFromInt(asc);
         
+        //TODO: comment
         c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - ascent_pixels);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
         
@@ -305,9 +308,11 @@ pub const DrawContext = struct {
         c.pango_layout_set_ellipsize(self.pango_layout, c.PANGO_ELLIPSIZE_NONE);
     }
     
+    //TODO: what does this do?
     pub fn textWidth(self: *DrawContext, text: []const u8) u16 {
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
         
+        //TODO: what does this do?
         var width: c_int = undefined;
         var height: c_int = undefined;
         c.pango_layout_get_pixel_size(self.pango_layout, &width, &height);
@@ -315,7 +320,7 @@ pub const DrawContext = struct {
         return @intCast(width);
     }
     
-    /// OPTIMIZATION: Get cached metrics or query and cache them
+    /// Get cached metrics or query and cache them
     pub fn getMetrics(self: *DrawContext) struct { i16, i16 } {
         if (self.cached_metrics) |m| {
             return .{ m.ascent, m.descent };
@@ -328,6 +333,7 @@ pub const DrawContext = struct {
         );
         defer c.pango_font_metrics_unref(metrics);
         
+        //TODO: what is this?
         const ascent = c.pango_font_metrics_get_ascent(metrics);
         const descent = c.pango_font_metrics_get_descent(metrics);
         
@@ -356,11 +362,14 @@ pub const DrawContext = struct {
     }
 };
 
-// Helper functions (unchanged)
+// Helper functions
+
+//TODO: comment
 fn findVisualType(conn: *c.xcb_connection_t, visual_id: u32) ?*c.xcb_visualtype_t {
     const setup = c.xcb_get_setup(conn);
     var screen_iter = c.xcb_setup_roots_iterator(setup);
     
+    //TODO: comment
     while (screen_iter.rem > 0) {
         const screen = screen_iter.data;
         var depth_iter = c.xcb_screen_allowed_depths_iterator(screen);
@@ -382,6 +391,7 @@ fn findVisualType(conn: *c.xcb_connection_t, visual_id: u32) ?*c.xcb_visualtype_
     return null;
 }
 
+//TODO: comment
 fn getDefaultVisualType(screen: *c.xcb_screen_t) *c.xcb_visualtype_t {
     var depth_iter = c.xcb_screen_allowed_depths_iterator(screen);
     while (depth_iter.rem > 0) {
@@ -394,6 +404,7 @@ fn getDefaultVisualType(screen: *c.xcb_screen_t) *c.xcb_visualtype_t {
     unreachable;
 }
 
+//TODO: comment
 fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const u8 {
     if (std.mem.indexOfScalar(u8, xft_name, ':') == null) {
         return xft_name;
@@ -446,4 +457,3 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     
     return result.toOwnedSlice(allocator);
 }
-
