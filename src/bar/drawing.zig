@@ -134,15 +134,17 @@ pub const DrawContext = struct {
     
     pub fn setAlphaOverride(self: *DrawContext, alpha: ?u16) void {
         self.alpha_override = alpha;
-        // self.last_color = null; // Invalidate color cache when alpha changes
+        // self.last_color = null; // Invalidate color cache when alpha changes //TODO: can this be removed safely? i commented it out and nothing seems broken, but should it stay commented? does it serve any purpose?
     }
     
     pub fn loadFont(self: *DrawContext, font_name: []const u8) !void {
+        //TODO: add comment
         if (self.current_font_desc) |desc| {
             c.pango_font_description_free(desc);
         }
         
         // Convert Xft-style font names to Pango format if needed
+        // TODO: is this needed?
         const pango_name = try convertFontName(self.allocator, font_name);
         defer if (pango_name.ptr != font_name.ptr) self.allocator.free(pango_name);
         
@@ -157,8 +159,9 @@ pub const DrawContext = struct {
         
         c.pango_layout_set_font_description(self.pango_layout, self.current_font_desc);
         
-        // OPTIMIZATION: Invalidate cached metrics when font changes
-        self.cached_metrics = null;
+        // Invalidate cached metrics when font changes
+        // TODO: when would font change? is this necessary?
+        // self.cached_metrics = null;
         
         debug.info("Cairo/Pango font loaded: {s}", .{pango_name});
     }
