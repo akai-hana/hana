@@ -90,7 +90,10 @@ fn updateClockIfNeeded(s: *State) void {
     // OPTIMIZATION: Skip clock update if bar is hidden (idle CPU reduction)
     if (!s.visible) return;
     
-    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch |e| {
+        debug.warnOnErr(e, "clock_gettime in updateClockIfNeeded");
+        return;
+    };
     if (ts.sec != s.last_second) {
         s.last_second = ts.sec;
         s.markClockDirty();
@@ -171,7 +174,10 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
         0, 0, 1, 1, 0, xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, wm.screen.root_visual, 0, null);
     defer _ = xcb.xcb_destroy_window(wm.conn, temp_win);
     
-    const temp_dc = drawing.DrawContext.init(wm.allocator, wm.conn, temp_win, 1, 1, wm.dpi_info.dpi) catch return DEFAULT_BAR_HEIGHT;
+    const temp_dc = drawing.DrawContext.init(wm.allocator, wm.conn, temp_win, 1, 1, wm.dpi_info.dpi) catch |e| {
+        debug.warnOnErr(e, "DrawContext.init in measureBarHeight");
+        return DEFAULT_BAR_HEIGHT;
+    };
     defer temp_dc.deinit();
     loadBarFonts(temp_dc, wm) catch {
         // If font loading fails, return default height instead of failing
@@ -316,7 +322,7 @@ fn setBarVisibility(wm: *defs.WM, visible: bool, reason: []const u8) void {
         if (visible) {
             _ = xcb.xcb_map_window(s.conn, s.window);
             utils.flush(wm.conn);
-            draw(s, wm) catch {};
+            draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setVisibility");
         } else {
             _ = xcb.xcb_unmap_window(s.conn, s.window);
         }
@@ -437,7 +443,7 @@ fn drawClockOnly(s: *State, wm: *defs.WM) !void {
 }
 
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
-    if (state) |s| if (event.window == s.window and event.count == 0) draw(s, wm) catch {};
+    if (state) |s| if (event.window == s.window and event.count == 0) draw(s, wm) catch |e| debug.warnOnErr(e, "draw in handleExpose");
 }
 
 pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *defs.WM) void {
@@ -445,7 +451,7 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
     
     // Handle root window property changes (status bar)
     if (event.window == wm.root and event.atom == xcb.XCB_ATOM_WM_NAME) {
-        status_segment.update(wm, &s.status_text, s.allocator) catch {};
+        status_segment.update(wm, &s.status_text, s.allocator) catch |e| debug.warnOnErr(e, "status_segment.update");
         s.markDirty();
         return;
     }
@@ -454,7 +460,10 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
     if (wm.focused_window) |focused_win| {
         if (event.window == focused_win and 
             (event.atom == xcb.XCB_ATOM_WM_NAME or 
-             event.atom == utils.getAtomCached("_NET_WM_NAME") catch return)) {
+             event.atom == (utils.getAtomCached("_NET_WM_NAME") catch |e| {
+                debug.warnOnErr(e, "getAtomCached _NET_WM_NAME in handlePropertyNotify");
+                return;
+            }))) {
             // Only mark dirty - the title will be re-rendered on next draw
             s.markDirty();
         }
