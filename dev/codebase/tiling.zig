@@ -53,36 +53,7 @@ pub const Layout = enum { master, monocle, grid, fibonacci };
 
 const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW | xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
 
-// Layout parameter struct
-const LayoutParams = struct {
-    windows: []const u32,
-    screen: utils.Rect,
-    master_count: u8,
-    master_width: f32,
-    master_side: defs.MasterSide,
-    margins: utils.Margins,
-};
 
-// Layout wrapper functions to adapt old interface to new
-fn layoutMaster(wm: *WM, params: LayoutParams) void {
-    const s = StateManager.get(true) orelse return;
-    master_layout.tileWithOffset(wm.conn, s, params.windows, params.screen.width, params.screen.height, @intCast(params.screen.y));
-}
-
-fn layoutMonocle(wm: *WM, params: LayoutParams) void {
-    const s = StateManager.get(true) orelse return;
-    monocle_layout.tileWithOffset(wm.conn, s, params.windows, params.screen.width, params.screen.height, @intCast(params.screen.y));
-}
-
-fn layoutGrid(wm: *WM, params: LayoutParams) void {
-    const s = StateManager.get(true) orelse return;
-    grid_layout.tileWithOffset(wm.conn, s, params.windows, params.screen.width, params.screen.height, @intCast(params.screen.y));
-}
-
-fn layoutFibonacci(wm: *WM, params: LayoutParams) void {
-    const s = StateManager.get(true) orelse return;
-    fibonacci_layout.tileWithOffset(wm.conn, s, params.windows, params.screen.width, params.screen.height, @intCast(params.screen.y));
-}
 
 // FIXED: Magic numbers replaced with named constants (shared with window.zig)
 /// Minimum X coordinate threshold for detecting off-screen windows
@@ -196,38 +167,13 @@ pub const State = struct {
     
     /// Update focus history when a window gains focus
     pub fn updateFocusHistory(self: *State, win: u32) void {
-        // Remove window from history if it exists
-        var i: usize = 0;
-        while (i < self.focus_history.len) {
-            if (self.focus_history.buffer[i] == win) {
-                // Shift all elements after this one left
-                var j = i;
-                while (j + 1 < self.focus_history.len) : (j += 1) {
-                    self.focus_history.buffer[j] = self.focus_history.buffer[j + 1];
-                }
-                self.focus_history.len -= 1;
-                break;
-            }
-            i += 1;
-        }
-        
-        // Insert at front (most recent)
-        if (self.focus_history.len < 16) {
-            // Shift everything right
-            var j = self.focus_history.len;
-            while (j > 0) : (j -= 1) {
-                self.focus_history.buffer[j] = self.focus_history.buffer[j - 1];
-            }
-            self.focus_history.buffer[0] = win;
-            self.focus_history.len += 1;
-        } else {
-            // Already at capacity, shift left and insert at front
-            var j: usize = 15;
-            while (j > 0) : (j -= 1) {
-                self.focus_history.buffer[j] = self.focus_history.buffer[j - 1];
-            }
-            self.focus_history.buffer[0] = win;
-        }
+        self.removeFocusHistory(win);
+        // Shift right and prepend, capping at capacity (16)
+        const end = @min(self.focus_history.len, 15);
+        var j = end;
+        while (j > 0) : (j -= 1) self.focus_history.buffer[j] = self.focus_history.buffer[j - 1];
+        self.focus_history.buffer[0] = win;
+        if (self.focus_history.len < 16) self.focus_history.len += 1;
     }
     
     /// Remove window from focus history
@@ -255,38 +201,45 @@ pub const State = struct {
 
 const StateManager = createModule(State);
 
-pub fn init(wm: *WM) void {
-    // Scale border widths and gaps based on DPI
-    // For percentage values, use screen height as reference dimension
+/// Extract scaled config values from wm and apply them to an existing state.
+/// Used by both init() and reloadConfig() to avoid duplication.
+fn applyConfigToState(wm: *WM, s: *State) void {
     const screen_height = wm.screen.height_in_pixels;
-    const scaled_border_width = dpi.scaleBorderWidth(wm.config.tiling.border_width, wm.dpi_info.scale_factor, screen_height);
-    const scaled_gaps = dpi.scaleGaps(wm.config.tiling.gaps, wm.dpi_info.scale_factor, screen_height);
-    
-    // Handle master_width (can be percentage or absolute pixels)
-    const master_width_value = dpi.scaleMasterWidth(wm.config.tiling.master_width);
-    const master_width: f32 = if (master_width_value < 0) blk: {
-        // Negative means it's absolute pixels - convert to ratio
-        const abs_pixels = -master_width_value;
-        const screen_width_f: f32 = @floatFromInt(wm.screen.width_in_pixels);
-        const ratio = abs_pixels / screen_width_f;
+    s.border_width = dpi.scaleBorderWidth(wm.config.tiling.border_width, wm.dpi_info.scale_factor, screen_height);
+    s.gaps        = dpi.scaleGaps(wm.config.tiling.gaps, wm.dpi_info.scale_factor, screen_height);
+
+    const mw = dpi.scaleMasterWidth(wm.config.tiling.master_width);
+    s.master_width = if (mw < 0) blk: {
+        const ratio = -mw / @as(f32, @floatFromInt(wm.screen.width_in_pixels));
         break :blk @min(MAX_MASTER_WIDTH, @max(defs.MIN_MASTER_WIDTH, ratio));
-    } else master_width_value;
-    
+    } else mw;
+
+    s.enabled         = wm.config.tiling.enabled;
+    s.layout          = parseLayout(wm.config.tiling.layout);
+    s.master_side     = wm.config.tiling.master_side;
+    s.master_count    = wm.config.tiling.master_count;
+    s.border_focused  = wm.config.tiling.border_focused;
+    s.border_unfocused = wm.config.tiling.border_unfocused;
+}
+
+pub fn init(wm: *WM) void {
+    var initial: State = undefined;
+    applyConfigToState(wm, &initial);
     StateManager.init(wm.allocator, .{
-        .enabled = wm.config.tiling.enabled,
-        .layout = parseLayout(wm.config.tiling.layout),
-        .master_side = wm.config.tiling.master_side,
-        .master_width = master_width,
-        .master_count = wm.config.tiling.master_count,
-        .gaps = scaled_gaps,
-        .border_width = scaled_border_width,
-        .border_focused = wm.config.tiling.border_focused,
-        .border_unfocused = wm.config.tiling.border_unfocused,
-        .windows = tracking.init(wm.allocator),
-        .dirty = false,
-        .geometry_cache = std.AutoHashMap(u32, utils.Rect).init(wm.allocator),
-        .focus_history = BoundedArray(u32, 16).init(0) catch unreachable,
-        .allocator = wm.allocator,
+        .enabled         = initial.enabled,
+        .layout          = initial.layout,
+        .master_side     = initial.master_side,
+        .master_width    = initial.master_width,
+        .master_count    = initial.master_count,
+        .gaps            = initial.gaps,
+        .border_width    = initial.border_width,
+        .border_focused  = initial.border_focused,
+        .border_unfocused = initial.border_unfocused,
+        .windows         = tracking.init(wm.allocator),
+        .dirty           = false,
+        .geometry_cache  = std.AutoHashMap(u32, utils.Rect).init(wm.allocator),
+        .focus_history   = BoundedArray(u32, 16).init(0) catch unreachable,
+        .allocator       = wm.allocator,
     }) catch |err| {
         debug.err("Failed to initialize tiling state: {}", .{err});
         return;
@@ -401,23 +354,15 @@ fn retile(wm: *WM, screen: utils.Rect) void {
         s.invalidateGeometry(win);
     }
     
-    const layout_fn: *const fn (*WM, LayoutParams) void = switch (s.layout) {
-        .master => layoutMaster,
-        .monocle => layoutMonocle,
-        .grid => layoutGrid,
-        .fibonacci => layoutFibonacci,
-    };
-    
-    const params = LayoutParams{
-        .windows = ws_windows.items,
-        .screen = screen,
-        .master_count = s.master_count,
-        .master_width = s.master_width,
-        .master_side = s.master_side,
-        .margins = s.margins(),
-    };
-    
-    layout_fn(wm, params);
+    const w = screen.width;
+    const h = screen.height;
+    const y: u16 = @intCast(screen.y);
+    switch (s.layout) {
+        .master    => master_layout.tileWithOffset(wm.conn, s, ws_windows.items, w, h, y),
+        .monocle   => monocle_layout.tileWithOffset(wm.conn, s, ws_windows.items, w, h, y),
+        .grid      => grid_layout.tileWithOffset(wm.conn, s, ws_windows.items, w, h, y),
+        .fibonacci => fibonacci_layout.tileWithOffset(wm.conn, s, ws_windows.items, w, h, y),
+    }
     updateWindowBorders(wm);
 }
 
@@ -450,22 +395,7 @@ fn updateWindowBorders(wm: *WM) void {
 }
 
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
-    const s = StateManager.get(true) orelse return;
-    
-    if (old_focused) |old_win| {
-        if (s.windows.contains(old_win)) {
-            const border_color = s.borderColor(wm, old_win);
-            _ = xcb.xcb_change_window_attributes(wm.conn, old_win, xcb.XCB_CW_BORDER_PIXEL, &border_color);
-        }
-    }
-    
-    if (new_focused) |new_win| {
-        if (s.windows.contains(new_win)) {
-            const border_color = s.borderColor(wm, new_win);
-            _ = xcb.xcb_change_window_attributes(wm.conn, new_win, xcb.XCB_CW_BORDER_PIXEL, &border_color);
-        }
-    }
-    
+    updateWindowFocusFast(wm, old_focused, new_focused);
     _ = xcb.xcb_flush(wm.conn);
 }
 
@@ -634,43 +564,17 @@ pub fn swapWithMaster(wm: *WM) void {
 pub fn promoteToMaster(wm: *WM) void {
     const s = StateManager.get(true) orelse return;
     const focused = wm.focused_window orelse return;
-    
     if (!s.windows.contains(focused)) return;
-    
+
     const windows = s.windows.items();
-    
     var focused_idx: ?usize = null;
     for (windows, 0..) |win, i| {
-        if (win == focused) {
-            focused_idx = i;
-            break;
-        }
+        if (win == focused) { focused_idx = i; break; }
     }
-    
     const from_idx = focused_idx orelse return;
-    if (from_idx == 0) return;  // Already at front
-    
-    // Move window to front (index 0)
-    if (s.windows.small) |*small| {
-        std.debug.assert(from_idx < small.items.len);
-        const window = small.items[from_idx];
-        // Shift everything from 0..from_idx one position right
-        var i = from_idx;
-        while (i > 0) : (i -= 1) {
-            small.items[i] = small.items[i - 1];
-        }
-        small.items[0] = window;
-    } else if (s.windows.large) |*large| {
-        std.debug.assert(from_idx < large.list.items.len);
-        const window = large.list.items[from_idx];
-        // Shift everything from 0..from_idx one position right
-        var i = from_idx;
-        while (i > 0) : (i -= 1) {
-            large.list.items[i] = large.list.items[i - 1];
-        }
-        large.list.items[0] = window;
-    }
-    
+    if (from_idx == 0) return;
+
+    moveWindowToIndex(s, from_idx, 0);
     s.markDirty();
     retileCurrentWorkspace(wm, false);
 }
@@ -717,57 +621,21 @@ fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
 
 pub fn moveToIndex(from_idx: usize) void {
     const s = StateManager.get(true) orelse return;
-    
-    // Move window at from_idx to front
-    if (s.windows.small) |*small| {
-        std.debug.assert(from_idx < small.items.len);
-        const window = small.items[from_idx];
-        // Shift everything from 0..from_idx one position right
-        var i = from_idx;
-        while (i > 0) : (i -= 1) {
-            small.items[i] = small.items[i - 1];
-        }
-        small.items[0] = window;
-    } else if (s.windows.large) |*large| {
-        std.debug.assert(from_idx < large.list.items.len);
-        const window = large.list.items[from_idx];
-        // Shift everything from 0..from_idx one position right
-        var i = from_idx;
-        while (i > 0) : (i -= 1) {
-            large.list.items[i] = large.list.items[i - 1];
-        }
-        large.list.items[0] = window;
-    }
+    moveWindowToIndex(s, from_idx, 0);
 }
 
 pub fn reloadConfig(wm: *WM) void {
     const s = StateManager.get(true) orelse return;
-    
-    // Scale border widths and gaps based on DPI
-    const screen_height = wm.screen.height_in_pixels;
-    const scaled_border_width = dpi.scaleBorderWidth(wm.config.tiling.border_width, wm.dpi_info.scale_factor, screen_height);
-    const scaled_gaps = dpi.scaleGaps(wm.config.tiling.gaps, wm.dpi_info.scale_factor, screen_height);
-    
-    // Handle master_width (can be percentage or absolute pixels)
-    const master_width_value = dpi.scaleMasterWidth(wm.config.tiling.master_width);
-    const master_width: f32 = if (master_width_value < 0) blk: {
-        // Negative means it's absolute pixels - convert to ratio
-        const abs_pixels = -master_width_value;
-        const screen_width_f: f32 = @floatFromInt(wm.screen.width_in_pixels);
-        const ratio = abs_pixels / screen_width_f;
-        break :blk @min(MAX_MASTER_WIDTH, @max(defs.MIN_MASTER_WIDTH, ratio));
-    } else master_width_value;
-    
-    s.enabled = wm.config.tiling.enabled;
-    s.layout = parseLayout(wm.config.tiling.layout);
-    s.master_side = wm.config.tiling.master_side;
-    s.master_width = master_width;
-    s.master_count = wm.config.tiling.master_count;
-    s.gaps = scaled_gaps;
-    s.border_width = scaled_border_width;
-    s.border_focused = wm.config.tiling.border_focused;
-    s.border_unfocused = wm.config.tiling.border_unfocused;
+    applyConfigToState(wm, s);
     if (s.enabled) retileCurrentWorkspace(wm, true);
+}
+
+/// Helper: complete a focus switch in tiling context.
+inline fn switchFocus(wm: *WM, s: *State, from: ?u32, to: u32) void {
+    focus.setFocus(wm, to, .tiling_operation);
+    wm.focused_window = to;
+    s.updateFocusHistory(to);
+    updateWindowFocus(wm, from, to);
 }
 
 /// Focus the previously focused window (alt+tab functionality)
@@ -780,10 +648,7 @@ pub fn focusPrevious(wm: *WM) void {
     for (s.focus_history.slice()) |hist_win| {
         if (hist_win == current_focused) continue;
         if (workspaces.isOnCurrentWorkspace(hist_win) and s.windows.contains(hist_win)) {
-            focus.setFocus(wm, hist_win, .tiling_operation);
-            wm.focused_window = hist_win;
-            s.updateFocusHistory(hist_win);
-            updateWindowFocus(wm, current_focused, hist_win);
+            switchFocus(wm, s, current_focused, hist_win);
             return;
         }
     }
@@ -804,21 +669,10 @@ pub fn focusPrevious(wm: *WM) void {
     const idx = focused_idx orelse return;
     const master_count = @min(s.master_count, @as(u8, @intCast(windows.len)));
     
-    // If focused is in master area and there are slaves, focus first slave
     if (idx < master_count and windows.len > master_count) {
-        const first_slave = windows[master_count];
-        focus.setFocus(wm, first_slave, .tiling_operation);
-        wm.focused_window = first_slave;
-        s.updateFocusHistory(first_slave);
-        updateWindowFocus(wm, current_focused, first_slave);
+        switchFocus(wm, s, current_focused, windows[master_count]);
     } else if (idx >= master_count) {
-        // If focused is a slave, cycle to next slave (or wrap to first master)
-        const next_idx = if (idx + 1 < windows.len) idx + 1 else 0;
-        const next_win = windows[next_idx];
-        focus.setFocus(wm, next_win, .tiling_operation);
-        wm.focused_window = next_win;
-        s.updateFocusHistory(next_win);
-        updateWindowFocus(wm, current_focused, next_win);
+        switchFocus(wm, s, current_focused, windows[if (idx + 1 < windows.len) idx + 1 else 0]);
     }
 }
 
@@ -839,11 +693,7 @@ pub fn focusSecondLast(wm: *WM) void {
             continue;
         }
         if (found_current and workspaces.isOnCurrentWorkspace(hist_win) and s.windows.contains(hist_win)) {
-            // Found valid second-last window on current workspace
-            focus.setFocus(wm, hist_win, .tiling_operation);
-            wm.focused_window = hist_win;
-            s.updateFocusHistory(hist_win);
-            updateWindowFocus(wm, current_focused, hist_win);
+            switchFocus(wm, s, current_focused, hist_win);
             return;
         }
     }
@@ -860,16 +710,10 @@ pub fn focusSecondLast(wm: *WM) void {
     const ws_win_count = current_ws_windows.len;
     if (ws_win_count < 2) return;
     
-    // Special case: exactly 2 windows - behave like mod+tab
     if (ws_win_count == 2) {
         const other_win = if (current_ws_windows.buffer[0] == current_focused.?) 
-            current_ws_windows.buffer[1] 
-        else 
-            current_ws_windows.buffer[0];
-        focus.setFocus(wm, other_win, .tiling_operation);
-        wm.focused_window = other_win;
-        s.updateFocusHistory(other_win);
-        updateWindowFocus(wm, current_focused, other_win);
+            current_ws_windows.buffer[1] else current_ws_windows.buffer[0];
+        switchFocus(wm, s, current_focused, other_win);
         return;
     }
     
@@ -890,35 +734,18 @@ pub fn focusSecondLast(wm: *WM) void {
     const idx = focused_idx orelse 0;
     
     if (idx < master_count) {
-        // Focused on master area
         if (master_count == 1) {
-            // Single master - swap with oldest window (last in list)
-            const oldest_win = current_ws_windows.buffer[ws_win_count - 1];
-            focus.setFocus(wm, oldest_win, .tiling_operation);
-            wm.focused_window = oldest_win;
-            s.updateFocusHistory(oldest_win);
-            updateWindowFocus(wm, current_focused, oldest_win);
+            switchFocus(wm, s, current_focused, current_ws_windows.buffer[ws_win_count - 1]);
         } else {
-            // Multiple masters - carousel masters
-            // Move to next master, or wrap to first master
             const next_master_idx = if (idx + 1 < master_count) idx + 1 else 0;
-            const next_win = current_ws_windows.buffer[next_master_idx];
-            focus.setFocus(wm, next_win, .tiling_operation);
-            wm.focused_window = next_win;
-            s.updateFocusHistory(next_win);
-            updateWindowFocus(wm, current_focused, next_win);
+            switchFocus(wm, s, current_focused, current_ws_windows.buffer[next_master_idx]);
         }
     } else {
-        // Focused on slave area - carousel slaves
         const slave_start = master_count;
         const slave_count = ws_win_count - master_count;
         const slave_idx = idx - slave_start;
         const next_slave_idx = if (slave_idx + 1 < slave_count) slave_idx + 1 else 0;
-        const next_win = current_ws_windows.buffer[slave_start + next_slave_idx];
-        focus.setFocus(wm, next_win, .tiling_operation);
-        wm.focused_window = next_win;
-        s.updateFocusHistory(next_win);
-        updateWindowFocus(wm, current_focused, next_win);
+        switchFocus(wm, s, current_focused, current_ws_windows.buffer[slave_start + next_slave_idx]);
     }
 }
 

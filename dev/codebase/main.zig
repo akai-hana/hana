@@ -198,7 +198,6 @@ fn handleConfigReload(wm: *WM) !void {
     if (new_config.tiling.master_width.value <= 0
     or new_config.tiling.master_width.value > 1.0) {
         debug.err("Invalid config: master_width must be between 0 and 1, keeping old", .{});
-        // new_config.deinit(wm.allocator);
         return error.InvalidConfig;
     }
 

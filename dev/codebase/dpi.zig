@@ -185,20 +185,8 @@ pub fn scaleBorderWidth(value: @import("parser").ScalableValue, scale_factor: f3
     }
 }
 
-/// Scale gap value between tiled windows
-/// Mirrors scaleBorderWidth: percentage values scale relative to screen height,
-/// absolute values are used as-is (DPI-independent).
-pub fn scaleGaps(value: @import("parser").ScalableValue, scale_factor: f32, reference_dimension: u16) u16 {
-    if (value.is_percentage) {
-        const dim_f: f32 = @floatFromInt(reference_dimension);
-        const gap_px = (value.value / 100.0) * 0.5 * dim_f * scale_factor;
-        const result: u16 = @intFromFloat(@max(0.0, @round(gap_px)));
-        return result;
-    } else {
-        const result: u16 = @intFromFloat(@max(0.0, @round(value.value)));
-        return result;
-    }
-}
+/// Scale gap value between tiled windows (same semantics as scaleBorderWidth)
+pub const scaleGaps = scaleBorderWidth;
 
 /// Scale master width value
 /// For absolute values: use the value as-is in pixels
