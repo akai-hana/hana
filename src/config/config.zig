@@ -73,6 +73,38 @@ fn getScalable(section: *const parser.Section, key: []const u8, default: parser.
     return section.getScalable(key) orelse default;
 }
 
+// CONSOLIDATED: Helper for workspace range validation
+fn validateWorkspace(ws_num: usize, max: usize, context: []const u8) bool {
+    if (ws_num < 1 or ws_num > max) {
+        debug.warn("Rule workspace {} for '{s}' exceeds count {}, skipping", .{ ws_num, context, max });
+        return false;
+    }
+    return true;
+}
+
+// CONSOLIDATED: Helper for creating and adding rules
+fn addRule(allocator: std.mem.Allocator, cfg: *defs.Config, class_name: []const u8, ws_num: usize) !void {
+    const rule = defs.Rule{
+        .class_name = try allocator.dupe(u8, class_name),
+        .workspace = @intCast(ws_num - 1),
+    };
+    try cfg.workspaces.rules.append(allocator, rule);
+}
+
+// CONSOLIDATED: Helper for initializing default bar layout
+fn initDefaultBarLayout(allocator: std.mem.Allocator, cfg: *defs.Config) !void {
+    const layout_defaults = [_]struct{pos: defs.BarPosition, seg: defs.BarSegment}{
+        .{.pos = .left, .seg = .workspaces},
+        .{.pos = .center, .seg = .title},
+        .{.pos = .right, .seg = .clock},
+    };
+    for (layout_defaults) |ld| {
+        var bar_layout = defs.BarLayout{ .position = ld.pos, .segments = std.ArrayList(defs.BarSegment){} };
+        try bar_layout.segments.append(allocator, ld.seg);
+        try cfg.bar.layout.append(allocator, bar_layout);
+    }
+}
+
 pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
     const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else ".";
     const config_home = if (std.c.getenv("XDG_CONFIG_HOME")) |ch|
@@ -193,16 +225,7 @@ fn getDefaultConfig(allocator: std.mem.Allocator) defs.Config {
         cfg.bar.workspace_icons.append(allocator, icon) catch {};
     }
     
-    const layout_defaults = [_]struct{pos: defs.BarPosition, seg: defs.BarSegment}{
-        .{.pos = .left, .seg = .workspaces},
-        .{.pos = .center, .seg = .title},
-        .{.pos = .right, .seg = .clock},
-    };
-    for (layout_defaults) |ld| {
-        var bar_layout = defs.BarLayout{ .position = ld.pos, .segments = std.ArrayList(defs.BarSegment){} };
-        bar_layout.segments.append(allocator, ld.seg) catch {};
-        cfg.bar.layout.append(allocator, bar_layout) catch {};
-    }
+    initDefaultBarLayout(allocator, &cfg) catch {};
     return cfg;
 }
 
@@ -646,16 +669,7 @@ fn parseBarLayout(allocator: std.mem.Allocator, section: *const parser.Section, 
     }
     
     if (cfg.bar.layout.items.len == 0) {
-        const layout_defaults = [_]struct{pos: defs.BarPosition, seg: defs.BarSegment}{
-            .{.pos = .left, .seg = .workspaces},
-            .{.pos = .center, .seg = .title},
-            .{.pos = .right, .seg = .clock},
-        };
-        for (layout_defaults) |ld| {
-            var bar_layout = defs.BarLayout{ .position = ld.pos, .segments = std.ArrayList(defs.BarSegment){} };
-            try bar_layout.segments.append(allocator, ld.seg);
-            try cfg.bar.layout.append(allocator, bar_layout);
-        }
+        try initDefaultBarLayout(allocator, cfg);
     }
 }
 
@@ -674,32 +688,18 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *d
             const ws_num = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
                 // Not a number, try old format
                 const ws = entry.value_ptr.*.asInt() orelse continue;
-                if (ws < 1 or ws > cfg.workspaces.count) {
-                    debug.warn("Rule workspace {} for '{s}' exceeds count {}, skipping", .{ ws, entry.key_ptr.*, cfg.workspaces.count });
-                    continue;
-                }
-                const rule = defs.Rule{
-                    .class_name = try allocator.dupe(u8, entry.key_ptr.*),
-                    .workspace = @intCast(ws - 1),
-                };
-                try cfg.workspaces.rules.append(allocator, rule);
+                if (!validateWorkspace(@intCast(ws), cfg.workspaces.count, entry.key_ptr.*)) continue;
+                try addRule(allocator, cfg, entry.key_ptr.*, @intCast(ws));
                 continue;
             };
             
             // New array format: key is workspace number, value is array of class names
-            if (ws_num < 1 or ws_num > cfg.workspaces.count) {
-                debug.warn("Rule workspace {} exceeds count {}, skipping", .{ ws_num, cfg.workspaces.count });
-                continue;
-            }
+            if (!validateWorkspace(ws_num, cfg.workspaces.count, entry.key_ptr.*)) continue;
             
             if (entry.value_ptr.*.asArray()) |arr| {
                 for (arr) |item| {
                     if (item.asString()) |class_name| {
-                        const rule = defs.Rule{
-                            .class_name = try allocator.dupe(u8, class_name),
-                            .workspace = @intCast(ws_num - 1),
-                        };
-                        try cfg.workspaces.rules.append(allocator, rule);
+                        try addRule(allocator, cfg, class_name, ws_num);
                     }
                 }
             }
@@ -711,15 +711,8 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *d
         var iter = section.pairs.iterator();
         while (iter.next()) |entry| {
             const ws_num = entry.value_ptr.*.asInt() orelse continue;
-            if (ws_num < 1 or ws_num > cfg.workspaces.count) {
-                debug.warn("Rule workspace {} for '{s}' exceeds count {}, skipping", .{ ws_num, entry.key_ptr.*, cfg.workspaces.count });
-                continue;
-            }
-            const rule = defs.Rule{
-                .class_name = try allocator.dupe(u8, entry.key_ptr.*),
-                .workspace = @intCast(ws_num - 1),
-            };
-            try cfg.workspaces.rules.append(allocator, rule);
+            if (!validateWorkspace(@intCast(ws_num), cfg.workspaces.count, entry.key_ptr.*)) continue;
+            try addRule(allocator, cfg, entry.key_ptr.*, @intCast(ws_num));
         }
     }
 
@@ -735,18 +728,11 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *d
             continue;
 
         const ws_num = std.fmt.parseInt(usize, ws_str, 10) catch continue;
-        if (ws_num < 1 or ws_num > cfg.workspaces.count) {
-            debug.warn("Section '{s}' workspace {} exceeds count {}, skipping", .{ name, ws_num, cfg.workspaces.count });
-            continue;
-        }
+        if (!validateWorkspace(ws_num, cfg.workspaces.count, name)) continue;
 
         var iter = entry.value_ptr.pairs.iterator();
         while (iter.next()) |class_entry| {
-            const rule = defs.Rule{
-                .class_name = try allocator.dupe(u8, class_entry.key_ptr.*),
-                .workspace = @intCast(ws_num - 1),
-            };
-            try cfg.workspaces.rules.append(allocator, rule);
+            try addRule(allocator, cfg, class_entry.key_ptr.*, ws_num);
         }
     }
 }
