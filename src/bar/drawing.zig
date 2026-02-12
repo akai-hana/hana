@@ -1,6 +1,8 @@
-//! Status bar text drawing/rendering using Cairo and Pango
+//! Status bar
+//! Text drawing/rendering with Cairo + Pango
 //! Cairo handles graphics and compositing, Pango handles text layout and fonts
-//! OPTIMIZED: Added metrics caching and color state tracking
+//!
+//! Added metrics caching and color state tracking
 
 const std = @import("std");
 const debug = @import("debug");
@@ -14,33 +16,35 @@ pub const DrawContext = struct {
     width: u16,
     height: u16,
     
-    // Cairo structures (for text rendering only)
+    // Cairo structures (text rendering only)
     surface: *c.cairo_surface_t,
     ctx: *c.cairo_t,
     
-    // XCB graphics context (for background rectangles - like window borders)
+    // XCB graphics context (background rectangles: window borders)
     gc: u32,
     
-    // Pango for text rendering
+    // Pango text rendering
     pango_layout: *c.PangoLayout,
     current_font_desc: ?*c.PangoFontDescription = null,
     
     // Alpha override for window opacity (not used for Cairo anymore)
+    // TODO: verify alpha_override serves any purpose at all? or if it's fine to remove it?
     alpha_override: ?u16 = null,
     
     // Track if this is an ARGB window (32-bit with alpha channel)
+    // TODO: is this variable necessary?
     is_argb: bool = false,
     
     // Transparency value for ARGB windows (0.0 = transparent, 1.0 = opaque)
     transparency: f32 = 1.0,
     
-    // OPTIMIZATION: Cache font metrics to avoid repeated Pango calls
+    // Cache font metrics to avoid calling Pango
     cached_metrics: ?struct {
         ascent: i16,
         descent: i16,
     } = null,
     
-    // OPTIMIZATION: Track last color to avoid redundant Cairo calls
+    // Track last color to avoid calling Cairo
     last_color: ?struct {
         color: u32,
         alpha: ?u16,
@@ -53,7 +57,7 @@ pub const DrawContext = struct {
     pub fn initWithVisual(allocator: std.mem.Allocator, conn: *c.xcb_connection_t, 
                           drawable: u32, width: u16, height: u16, 
                           visual_id: ?u32, colormap_id: u32, dpi: f32, is_argb: bool, transparency: f32) !*DrawContext {
-        _ = colormap_id; // Not needed for Cairo XCB
+        _ = colormap_id; // Not needed for Cairo XCB. TODO: can this line be removed?
         
         const dc = try allocator.create(DrawContext);
         errdefer allocator.destroy(dc);
@@ -90,7 +94,7 @@ pub const DrawContext = struct {
             return error.PangoLayoutCreateFailed;
         };
         
-        // CRITICAL: Set Pango's DPI resolution to match display
+        // Set Pango's DPI resolution to match display
         const pango_context = c.pango_layout_get_context(layout);
         c.pango_cairo_context_set_resolution(pango_context, @floatCast(dpi));
         
@@ -108,7 +112,7 @@ pub const DrawContext = struct {
             .transparency = transparency,
         };
         
-        // Create XCB graphics context for direct rectangle drawing (like window borders)
+        // Create XCB graphics context for direct rectangle drawing (window borders)
         dc.gc = defs.xcb.xcb_generate_id(conn);
         _ = defs.xcb.xcb_create_gc(conn, dc.gc, drawable, 0, null);
         
@@ -130,8 +134,7 @@ pub const DrawContext = struct {
     
     pub fn setAlphaOverride(self: *DrawContext, alpha: ?u16) void {
         self.alpha_override = alpha;
-        // OPTIMIZATION: Invalidate color cache when alpha changes
-        self.last_color = null;
+        // self.last_color = null; // Invalidate color cache when alpha changes
     }
     
     pub fn loadFont(self: *DrawContext, font_name: []const u8) !void {
