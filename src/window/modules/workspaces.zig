@@ -228,57 +228,49 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     const old_workspace = &s.workspaces[old_ws];
     const new_workspace = &s.workspaces[new_ws];
 
+    const fs_info = wm.fullscreen.getForWorkspace(new_ws);
+
     // Pre-set focused_window for correct border colors
     wm.focused_window = if (new_workspace.windows.items().len > 0)
         new_workspace.windows.items()[0] else null;
-
-    const old_fs_info = wm.fullscreen.getForWorkspace(old_ws);
-    const new_fs_info = wm.fullscreen.getForWorkspace(new_ws);
 
     // CRITICAL: Grab server for atomic switching (no intermediate frames)
     _ = xcb.xcb_grab_server(wm.conn);
     defer _ = xcb.xcb_ungrab_server(wm.conn);
 
-    // Step 1: Hide old workspace windows (but NOT fullscreen windows!)
+    // Step 1: Hide ALL old workspace windows
     for (old_workspace.windows.items()) |win| {
-        // Don't hide fullscreen windows - they should stay at their fullscreen geometry
-        if (old_fs_info) |fs| {
-            if (win == fs.window) continue;
-        }
         hideWindow(wm, win);
     }
 
-    // Step 2: Position new workspace windows
-    if (new_fs_info) |info| {
-        // Fullscreen window present - configure it to fullscreen
+    // Step 2: If there's a fullscreen window, configure it FIRST and ONLY
+    // Don't position any other windows - they should stay hidden
+    if (fs_info) |info| {
         configureFullscreen(wm, info);
-        // Hide all OTHER windows
-        for (new_workspace.windows.items()) |win| {
-            if (win != info.window) {
-                hideWindow(wm, win);
-            }
-        }
-    } else if (wm.config.tiling.enabled) {
-        // No fullscreen, tiling enabled - retile normally
-        tiling.retileCurrentWorkspace(wm, false);
     } else {
-        // Tiling disabled, no fullscreen - position windows manually
-        for (new_workspace.windows.items()) |win| {
-            const geom_cookie = xcb.xcb_get_geometry(wm.conn, win);
-            const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
-            
-            if (geom_reply) |reply| {
-                defer std.c.free(reply);
+        // No fullscreen - position windows based on tiling state
+        if (wm.config.tiling.enabled) {
+            // Tiling enabled - let tiling system position windows
+            tiling.retileCurrentWorkspace(wm, false);
+        } else {
+            // Tiling disabled - manually position windows to visible locations
+            for (new_workspace.windows.items()) |win| {
+                const geom_cookie = xcb.xcb_get_geometry(wm.conn, win);
+                const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
                 
-                const x: i16 = @divTrunc(@as(i16, @intCast(wm.screen.width_in_pixels)), 4);
-                const y: i16 = @divTrunc(@as(i16, @intCast(wm.screen.height_in_pixels)), 4);
-                
-                const values = [_]u32{
-                    @bitCast(@as(i32, x)),
-                    @bitCast(@as(i32, y)),
-                };
-                _ = xcb.xcb_configure_window(wm.conn, win,
-                    xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &values);
+                if (geom_reply) |reply| {
+                    defer std.c.free(reply);
+                    
+                    const x: i16 = @divTrunc(@as(i16, @intCast(wm.screen.width_in_pixels)), 4);
+                    const y: i16 = @divTrunc(@as(i16, @intCast(wm.screen.height_in_pixels)), 4);
+                    
+                    const values = [_]u32{
+                        @bitCast(@as(i32, x)),
+                        @bitCast(@as(i32, y)),
+                    };
+                    _ = xcb.xcb_configure_window(wm.conn, win,
+                        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &values);
+                }
             }
         }
     }
@@ -287,7 +279,7 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     utils.flush(wm.conn);
 
     // Bar state management (after positioning complete)
-    if (new_fs_info != null) {
+    if (fs_info != null) {
         bar.setBarState(wm, .hide_fullscreen);
         bar.raiseBar();
     } else {
