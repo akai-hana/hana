@@ -169,7 +169,6 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
 
     const instance_end = std.mem.indexOfScalar(u8, data[0..len], 0) orelse return null;
     const instance = allocator.dupe(u8, data[0..instance_end]) catch return null;
-    errdefer allocator.free(instance);
 
     const class_start = instance_end + 1;
     if (class_start >= len) {

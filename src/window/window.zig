@@ -224,9 +224,9 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     
     // Change focus
     if (wm.focused_window == win) return;
-        const old_focus = wm.focused_window;
-        focus.setFocus(wm, win, .mouse_enter);
-        tiling.updateWindowFocus(wm, old_focus, win);
+    const old_focus = wm.focused_window;
+    focus.setFocus(wm, win, .mouse_enter);
+    tiling.updateWindowFocus(wm, old_focus, win);
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
