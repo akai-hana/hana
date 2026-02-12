@@ -420,7 +420,7 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     // Store in cache
     font_conversion_cache.?.put(xft_name, converted) catch {};
     
-    return result.toOwnedSlice(allocator);
+    return converted;
 }
 
 /// Clean up font conversion cache (call on shutdown)
