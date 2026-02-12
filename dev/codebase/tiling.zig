@@ -115,6 +115,8 @@ pub const State = struct {
     geometry_cache: std.AutoHashMap(u32, utils.Rect),
     // Focus history for alt+tab functionality (most recent first)
     focus_history: BoundedArray(u32, 16),
+    // OPTIMIZATION: Reusable buffer for workspace windows to avoid repeated allocations
+    workspace_windows_buffer: std.ArrayListUnmanaged(u32),
     allocator: std.mem.Allocator,
 
     pub inline fn margins(self: *const State) utils.Margins {
@@ -196,6 +198,7 @@ pub const State = struct {
     pub fn deinit(self: *State) void {
         self.windows.deinit();
         self.geometry_cache.deinit();
+        self.workspace_windows_buffer.deinit(self.allocator);
     }
 };
 
@@ -239,6 +242,7 @@ pub fn init(wm: *WM) void {
         .dirty           = false,
         .geometry_cache  = std.AutoHashMap(u32, utils.Rect).init(wm.allocator),
         .focus_history   = BoundedArray(u32, 16).init(0) catch unreachable,
+        .workspace_windows_buffer = std.ArrayListUnmanaged(u32){},
         .allocator       = wm.allocator,
     }) catch |err| {
         debug.err("Failed to initialize tiling state: {}", .{err});
@@ -336,21 +340,21 @@ fn retile(wm: *WM, screen: utils.Rect) void {
         return; // Fullscreen window present - don't retile anything
     }
     
-    // Get windows on current workspace
-    var ws_windows = std.ArrayListUnmanaged(u32){};
-    defer ws_windows.deinit(wm.allocator);
+    // OPTIMIZATION: Reuse existing buffer instead of allocating new one each time
+    s.workspace_windows_buffer.clearRetainingCapacity();
     
     const all_windows = s.windows.items();
     for (all_windows) |win| {
         if (workspaces.isOnCurrentWorkspace(win)) {
-            ws_windows.append(wm.allocator, win) catch continue;
+            s.workspace_windows_buffer.append(wm.allocator, win) catch continue;
         }
     }
     
-    if (ws_windows.items.len == 0) return;
+    const ws_windows = s.workspace_windows_buffer.items;
+    if (ws_windows.len == 0) return;
     
     // Clear geometry cache for current workspace windows
-    for (ws_windows.items) |win| {
+    for (ws_windows) |win| {
         s.invalidateGeometry(win);
     }
     
@@ -358,10 +362,10 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     const h = screen.height;
     const y: u16 = @intCast(screen.y);
     switch (s.layout) {
-        .master    => master_layout.tileWithOffset(wm.conn, s, ws_windows.items, w, h, y),
-        .monocle   => monocle_layout.tileWithOffset(wm.conn, s, ws_windows.items, w, h, y),
-        .grid      => grid_layout.tileWithOffset(wm.conn, s, ws_windows.items, w, h, y),
-        .fibonacci => fibonacci_layout.tileWithOffset(wm.conn, s, ws_windows.items, w, h, y),
+        .master    => master_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
+        .monocle   => monocle_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
+        .grid      => grid_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
+        .fibonacci => fibonacci_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
     }
     updateWindowBorders(wm);
 }
@@ -382,11 +386,12 @@ pub fn retileCurrentWorkspace(wm: *WM, force: bool) void {
 
 fn updateWindowBorders(wm: *WM) void {
     const s = StateManager.get(true) orelse return;
-    const windows = s.windows.items();
     
-    for (windows) |win| {
-        if (!workspaces.isOnCurrentWorkspace(win)) continue;
-        
+    // OPTIMIZATION: Use already-filtered workspace windows from retile()
+    // No need to check isOnCurrentWorkspace() for every window
+    const ws_windows = s.workspace_windows_buffer.items;
+    
+    for (ws_windows) |win| {
         const border_color = s.borderColor(wm, win);
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &border_color);
     }
@@ -582,41 +587,29 @@ pub fn promoteToMaster(wm: *WM) void {
 fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
     if (from_idx == to_idx) return;
     
-    if (s.windows.small) |*small| {
-        std.debug.assert(from_idx < small.items.len);
-        std.debug.assert(to_idx < small.items.len);
-        const window = small.items[from_idx];
-        
-        if (from_idx < to_idx) {
-            var i = from_idx;
-            while (i < to_idx) : (i += 1) {
-                small.items[i] = small.items[i + 1];
-            }
-        } else {
-            var i = from_idx;
-            while (i > to_idx) : (i -= 1) {
-                small.items[i] = small.items[i - 1];
-            }
-        }
-        small.items[to_idx] = window;
-    } else if (s.windows.large) |*large| {
-        std.debug.assert(from_idx < large.list.items.len);
-        std.debug.assert(to_idx < large.list.items.len);
-        const window = large.list.items[from_idx];
-        
-        if (from_idx < to_idx) {
-            var i = from_idx;
-            while (i < to_idx) : (i += 1) {
-                large.list.items[i] = large.list.items[i + 1];
-            }
-        } else {
-            var i = from_idx;
-            while (i > to_idx) : (i -= 1) {
-                large.list.items[i] = large.list.items[i - 1];
-            }
-        }
-        large.list.items[to_idx] = window;
+    // OPTIMIZATION: Get items slice (convert array to slice for small variant)
+    const items = if (s.windows.small) |*small|
+        small.items[0..]  // Convert [16]u32 to []u32
+    else if (s.windows.large) |*large|
+        large.list.items  // Already []u32
+    else
+        return;
+    
+    std.debug.assert(from_idx < items.len);
+    std.debug.assert(to_idx < items.len);
+    
+    const window = items[from_idx];
+    
+    // Use std.mem for more efficient shifting
+    if (from_idx < to_idx) {
+        // Moving right: shift elements left
+        std.mem.copyForwards(u32, items[from_idx..to_idx], items[from_idx + 1..to_idx + 1]);
+    } else {
+        // Moving left: shift elements right
+        std.mem.copyBackwards(u32, items[to_idx + 1..from_idx + 1], items[to_idx..from_idx]);
     }
+    
+    items[to_idx] = window;
 }
 
 pub fn moveToIndex(from_idx: usize) void {
@@ -700,7 +693,8 @@ pub fn focusSecondLast(wm: *WM) void {
     
     // Fallback: second-last is on another workspace
     // Filter windows to only those on current workspace
-    var current_ws_windows = BoundedArray(u32, 256).init(0) catch unreachable;
+    // OPTIMIZATION: Reduced capacity from 256 to 64 (more realistic for most workspaces)
+    var current_ws_windows = BoundedArray(u32, 64).init(0) catch unreachable;
     for (windows) |win| {
         if (workspaces.isOnCurrentWorkspace(win)) {
             current_ws_windows.append(win) catch break;
