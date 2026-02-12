@@ -195,6 +195,7 @@ pub fn switchTo(wm: *WM, ws_id: u8) void {
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
     const old_ws = s.current;
     s.current = ws_id;
+    std.debug.assert(s.current < s.workspaces.len);  // Current workspace must be valid index
     executeSwitch(wm, old_ws, ws_id);
 }
 
@@ -233,6 +234,7 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     // Pre-set focused_window for correct border colors
     wm.focused_window = if (new_workspace.windows.items().len > 0)
         new_workspace.windows.items()[0] else null;
+    std.debug.assert(wm.focused_window == null or wm.hasWindow(wm.focused_window.?));  // Focused window must be valid if set
 
     // CRITICAL: Grab server for atomic switching (no intermediate frames)
     _ = xcb.xcb_grab_server(wm.conn);

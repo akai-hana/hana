@@ -54,6 +54,57 @@ pub const Layout = enum { master, monocle, grid, fibonacci };
 
 const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
+/// Simplified circular buffer for focus history (Phase 3 refactor)
+const FocusRing = struct {
+    buffer: [16]u32 = [_]u32{0} ** 16,
+    head: u8 = 0,
+    len: u8 = 0,
+    
+    pub fn push(self: *FocusRing, win: u32) void {
+        // Check if already at head
+        if (self.len > 0 and self.buffer[self.head] == win) return;
+        
+        // Remove from elsewhere if exists
+        self.removeWindow(win);
+        
+        // Add to front
+        self.head = if (self.head == 0) 15 else self.head - 1;
+        self.buffer[self.head] = win;
+        if (self.len < 16) self.len += 1;
+    }
+    
+    pub fn remove(self: *FocusRing, win: u32) void {
+        self.removeWindow(win);
+    }
+    
+    fn removeWindow(self: *FocusRing, win: u32) void {
+        var i: u8 = 0;
+        while (i < self.len) : (i += 1) {
+            const idx = (self.head + i) % 16;
+            if (self.buffer[idx] == win) {
+                // Shift remaining elements
+                var j = i;
+                while (j + 1 < self.len) : (j += 1) {
+                    const curr = (self.head + j) % 16;
+                    const next = (self.head + j + 1) % 16;
+                    self.buffer[curr] = self.buffer[next];
+                }
+                self.len -= 1;
+                return;
+            }
+        }
+    }
+    
+    pub fn iter(self: *const FocusRing) FocusHistoryIterator {
+        return FocusHistoryIterator{
+            .ring = &self.buffer,
+            .head = self.head,
+            .len = self.len,
+            .pos = 0,
+        };
+    }
+};
+
 /// Iterator for circular focus history buffer
 const FocusHistoryIterator = struct {
     ring: *const [16]u32,
@@ -92,10 +143,8 @@ pub const State = struct {
     dirty: bool,
     // OPTIMIZATION: Cache window geometries to reduce X11 queries
     geometry_cache: std.AutoHashMap(u32, utils.Rect),
-    // OPTIMIZATION: Circular buffer for focus history (60% faster than array shifting)
-    focus_ring: [16]u32,
-    focus_ring_head: u8,  // Index of most recent window
-    focus_ring_len: u8,   // Number of valid entries (0-16)
+    // OPTIMIZATION: Simplified circular buffer for focus history (Phase 3 refactor)
+    focus_ring: FocusRing,
     // OPTIMIZATION: Reusable buffer for workspace windows to avoid repeated allocations
     workspace_windows_buffer: std.ArrayListUnmanaged(u32),
     allocator: std.mem.Allocator,
@@ -189,65 +238,19 @@ pub const State = struct {
         }
     }
     
-    /// OPTIMIZATION: Update focus history using O(1) circular buffer instead of O(n) shifting
-    /// Previously this shifted all elements on every focus change - very slow
+    /// Update focus history using simplified FocusRing (Phase 3 refactor)
     pub fn updateFocusHistory(self: *State, win: u32) void {
-        // Quick check: if already at head, no-op
-        if (self.focus_ring_len > 0 and self.focus_ring[self.focus_ring_head] == win) return;
-        
-        // Remove if exists elsewhere (rare case, still O(n) but only when needed)
-        var found_idx: ?u8 = null;
-        for (0..self.focus_ring_len) |i| {
-            const idx = @as(u8, @intCast((self.focus_ring_head + i) % 16));
-            if (self.focus_ring[idx] == win and i > 0) {
-                found_idx = @intCast(i);
-                break;
-            }
-        }
-        
-        // If found elsewhere, compact by shifting
-        if (found_idx) |pos| {
-            var i = pos;
-            while (i > 0) : (i -= 1) {
-                const curr_idx = @as(u8, @intCast((self.focus_ring_head + i) % 16));
-                const prev_idx = @as(u8, @intCast((self.focus_ring_head + i - 1) % 16));
-                self.focus_ring[curr_idx] = self.focus_ring[prev_idx];
-            }
-            self.focus_ring_len -= 1;
-        }
-        
-        // Add to head - O(1) operation
-        self.focus_ring_head = if (self.focus_ring_head == 0) 15 else self.focus_ring_head - 1;
-        self.focus_ring[self.focus_ring_head] = win;
-        if (self.focus_ring_len < 16) self.focus_ring_len += 1;
+        self.focus_ring.push(win);
     }
     
     /// Remove window from focus history
     pub fn removeFocusHistory(self: *State, win: u32) void {
-        for (0..self.focus_ring_len) |i| {
-            const idx = @as(u8, @intCast((self.focus_ring_head + i) % 16));
-            if (self.focus_ring[idx] == win) {
-                // Shift remaining elements left
-                var j = i;
-                while (j + 1 < self.focus_ring_len) : (j += 1) {
-                    const curr_idx = @as(u8, @intCast((self.focus_ring_head + j) % 16));
-                    const next_idx = @as(u8, @intCast((self.focus_ring_head + j + 1) % 16));
-                    self.focus_ring[curr_idx] = self.focus_ring[next_idx];
-                }
-                self.focus_ring_len -= 1;
-                return;
-            }
-        }
+        self.focus_ring.remove(win);
     }
     
     /// Get focus history iterator (most recent first)
     pub fn focusHistoryIter(self: *const State) FocusHistoryIterator {
-        return FocusHistoryIterator{
-            .ring = &self.focus_ring,
-            .head = self.focus_ring_head,
-            .len = self.focus_ring_len,
-            .pos = 0,
-        };
+        return self.focus_ring.iter();
     }
     
     pub fn deinit(self: *State) void {
@@ -296,9 +299,7 @@ pub fn init(wm: *WM) void {
         .windows         = tracking.init(wm.allocator),
         .dirty           = false,
         .geometry_cache  = std.AutoHashMap(u32, utils.Rect).init(wm.allocator),
-        .focus_ring      = undefined,  // Will be filled as windows are focused
-        .focus_ring_head = 0,
-        .focus_ring_len  = 0,
+        .focus_ring      = FocusRing{},
         .workspace_windows_buffer = std.ArrayListUnmanaged(u32){},
         .allocator       = wm.allocator,
     }) catch |err| {
@@ -327,6 +328,7 @@ fn parseLayout(layout_str: []const u8) Layout {
 }
 
 pub fn addWindow(wm: *WM, window_id: u32) void {
+    std.debug.assert(window_id != 0);  // Window ID should never be 0
     const s = StateManager.get(true) orelse return;
     if (!s.enabled) return;
 
@@ -512,6 +514,7 @@ pub fn adjustMasterWidth(wm: *WM, delta: f32) void {
     
     const new_width = s.master_width + delta;
     s.master_width = @max(defs.MIN_MASTER_WIDTH, @min(MAX_MASTER_WIDTH, new_width));
+    std.debug.assert(s.master_width > 0 and s.master_width <= 1.0);  // Master width must be valid ratio
     s.markDirty();
     retileCurrentWorkspace(wm, false);
 }
@@ -667,6 +670,7 @@ pub fn reloadConfig(wm: *WM) void {
 
 /// Helper: complete a focus switch in tiling context.
 inline fn switchFocus(wm: *WM, s: *State, from: ?u32, to: u32) void {
+    std.debug.assert(to != 0 and wm.hasWindow(to));  // Focus target must be valid and tracked
     focus.setFocus(wm, to, .tiling_operation);
     wm.focused_window = to;
     s.updateFocusHistory(to);
