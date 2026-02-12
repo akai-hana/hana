@@ -14,7 +14,7 @@ const utils     = @import("utils");
 const bar       = @import("bar");
 const focus     = @import("focus");
 const tiling    = @import("tiling");
-const timer     = @import ("timer");
+const clock     = @import("clock");
 const dpi       = @import("dpi"); // ADD THIS
 
 const xcb = defs.xcb;
@@ -61,7 +61,7 @@ fn setupPollFds() !FDs {
     if (tfd < 0) return error.TimerFdFailed;
     
     // OPTIMIZATION: Start with timer disabled - will be enabled if clock is visible
-    timer.setTimerFd(@intCast(tfd));
+    clock.setTimerFd(@intCast(tfd));
     
     return .{ .signal = @intCast(sfd), .timer = @intCast(tfd) };
 }
@@ -222,7 +222,7 @@ fn handleConfigReload(wm: *WM) !void {
     tiling.reloadConfig(wm);
     
     // OPTIMIZATION: Update timer state in case clock visibility changed
-    timer.updateTimerState(wm);
+    clock.updateTimerState(wm);
     
     debug.info("Reload complete", .{});
 }
@@ -303,7 +303,7 @@ pub fn main() !void {
     defer bar.deinit();
 
     // OPTIMIZATION: Enable timer only if clock is visible
-    timer.updateTimerState(&wm);
+    clock.updateTimerState(&wm);
 
     try grabKeybindings(&wm);
     try setupExistingWindows(conn, root, allocator);
