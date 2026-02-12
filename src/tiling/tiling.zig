@@ -33,6 +33,7 @@ const defs = @import("defs");
 const xcb = defs.xcb;
 const WM = defs.WM;
 const utils = @import("utils");
+const constants = @import("constants");
 const focus = @import("focus");
 const workspaces = @import("workspaces");
 const bar = @import("bar");
@@ -51,7 +52,7 @@ const MAX_MASTER_WIDTH: f32 = 0.95;
 
 pub const Layout = enum { master, monocle, grid, fibonacci };
 
-const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW | xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
+const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
 /// Iterator for circular focus history buffer
 const FocusHistoryIterator = struct {
@@ -68,15 +69,6 @@ const FocusHistoryIterator = struct {
     }
 };
 
-
-
-// FIXED: Magic numbers replaced with named constants (shared with window.zig)
-/// Minimum X coordinate threshold for detecting off-screen windows
-const OFFSCREEN_THRESHOLD_MIN: i32 = -1000;
-
-/// Maximum X coordinate threshold for detecting off-screen windows  
-const OFFSCREEN_THRESHOLD_MAX: i32 = 10000;
-
 // OPTIMIZATION: Merged error handling directly into this module
 inline fn logError(err: anyerror, window: ?u32) void {
     if (window) |win| {
@@ -84,34 +76,6 @@ inline fn logError(err: anyerror, window: ?u32) void {
     } else {
         debug.err("Failed: {}", .{err});
     }
-}
-
-// Custom BoundedArray implementation to replace std.BoundedArray (which was removed)
-fn BoundedArray(comptime T: type, comptime capacity: usize) type {
-    return struct {
-        buffer: [capacity]T,
-        len: usize,
-
-        const Self = @This();
-
-        pub fn init(initial_len: usize) error{Overflow}!Self {
-            if (initial_len > capacity) return error.Overflow;
-            return Self{
-                .buffer = undefined,
-                .len = initial_len,
-            };
-        }
-
-        pub fn slice(self: *const Self) []const T {
-            return self.buffer[0..self.len];
-        }
-
-        pub fn append(self: *Self, item: T) error{Overflow}!void {
-            if (self.len >= capacity) return error.Overflow;
-            self.buffer[self.len] = item;
-            self.len += 1;
-        }
-    };
 }
 
 pub const State = struct {
@@ -670,14 +634,18 @@ inline fn switchFocus(wm: *WM, s: *State, from: ?u32, to: u32) void {
 
 /// OPTIMIZATION: Helper to filter windows on current workspace
 /// Reduces code duplication in focusPrevious and focusSecondLast
-fn filterWorkspaceWindows(s: *State, buf: *BoundedArray(u32, 64)) void {
-    buf.len = 0;  // Reset buffer
+/// Returns the number of windows copied to the buffer
+fn filterWorkspaceWindows(s: *State, buf: []u32) usize {
+    var count: usize = 0;
     const all_windows = s.windows.items();
     for (all_windows) |win| {
+        if (count >= buf.len) break;
         if (workspaces.isOnCurrentWorkspace(win)) {
-            buf.append(win) catch break;
+            buf[count] = win;
+            count += 1;
         }
     }
+    return count;
 }
 
 /// OPTIMIZATION: Get effective master count for current workspace
@@ -747,16 +715,17 @@ pub fn focusSecondLast(wm: *WM) void {
     }
     
     // Fallback: second-last is on another workspace
-    // OPTIMIZATION: Use helper function to filter workspace windows
-    var current_ws_windows = BoundedArray(u32, 64).init(0) catch unreachable;
-    filterWorkspaceWindows(s, &current_ws_windows);
+    // Stack-allocated buffer for workspace windows (max 64 windows)
+    var ws_windows_buffer: [64]u32 = undefined;
+    const ws_win_count = filterWorkspaceWindows(s, &ws_windows_buffer);
     
-    const ws_win_count = current_ws_windows.len;
     if (ws_win_count < 2) return;
     
+    const current_ws_windows = ws_windows_buffer[0..ws_win_count];
+    
     if (ws_win_count == 2) {
-        const other_win = if (current_ws_windows.buffer[0] == current_focused.?) 
-            current_ws_windows.buffer[1] else current_ws_windows.buffer[0];
+        const other_win = if (current_ws_windows[0] == current_focused.?) 
+            current_ws_windows[1] else current_ws_windows[0];
         switchFocus(wm, s, current_focused, other_win);
         return;
     }
@@ -766,23 +735,23 @@ pub fn focusSecondLast(wm: *WM) void {
     
     // Find current focused window index
     const idx = if (current_focused) |cf|
-        findWindowIndex(current_ws_windows.slice(), cf) orelse 0
+        findWindowIndex(current_ws_windows, cf) orelse 0
     else
         0;
     
     if (idx < master_count) {
         if (master_count == 1) {
-            switchFocus(wm, s, current_focused, current_ws_windows.buffer[ws_win_count - 1]);
+            switchFocus(wm, s, current_focused, current_ws_windows[ws_win_count - 1]);
         } else {
             const next_master_idx = if (idx + 1 < master_count) idx + 1 else 0;
-            switchFocus(wm, s, current_focused, current_ws_windows.buffer[next_master_idx]);
+            switchFocus(wm, s, current_focused, current_ws_windows[next_master_idx]);
         }
     } else {
         const slave_start = master_count;
         const slave_count = ws_win_count - master_count;
         const slave_idx = idx - slave_start;
         const next_slave_idx = if (slave_idx + 1 < slave_count) slave_idx + 1 else 0;
-        switchFocus(wm, s, current_focused, current_ws_windows.buffer[slave_start + next_slave_idx]);
+        switchFocus(wm, s, current_focused, current_ws_windows[slave_start + next_slave_idx]);
     }
 }
 

@@ -15,21 +15,11 @@ const bar       = @import("bar");
 const focus     = @import("focus");
 const tiling    = @import("tiling");
 const clock     = @import("clock");
-const dpi       = @import("dpi"); // ADD THIS
+const dpi       = @import("dpi");
+const constants = @import("constants");
 
 const xcb = defs.xcb;
 const WM = defs.WM;
-
-const WM_EVENT_MASK = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
-    xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | xcb.XCB_EVENT_MASK_KEY_PRESS |
-    xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
-
-/// Lock key combinations to grab: none, CapsLock, NumLock, and both.
-/// This ensures keybindings work regardless of lock key state.
-const LOCK_MODIFIERS = [_]u16{ 0, defs.MOD_LOCK, defs.MOD_2, defs.MOD_LOCK | defs.MOD_2 };
-
-const CURSOR_LEFT_PTR = 68;
-const CURSOR_LEFT_PTR_MASK = 69;
 
 // FIXED: Document thread safety guarantees
 /// Thread-safe: Written by signal handler, read by main loop
@@ -86,14 +76,14 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void 
     const font = xcb.xcb_generate_id(conn);
     const cursor = xcb.xcb_generate_id(conn);
     _ = xcb.xcb_open_font(conn, font, 6, "cursor");
-    _ = xcb.xcb_create_glyph_cursor(conn, cursor, font, font, CURSOR_LEFT_PTR, CURSOR_LEFT_PTR_MASK, 0, 0, 0, 65535, 65535, 65535);
+    _ = xcb.xcb_create_glyph_cursor(conn, cursor, font, font, constants.Cursors.LEFT_PTR, constants.Cursors.LEFT_PTR_MASK, 0, 0, 0, 65535, 65535, 65535);
     _ = xcb.xcb_change_window_attributes(conn, screen.*.root, xcb.XCB_CW_CURSOR, &[_]u32{cursor});
     _ = xcb.xcb_close_font(conn, font);
 }
 
 fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
     if (xcb.xcb_request_check(conn, xcb.xcb_change_window_attributes_checked(
-        conn, root, xcb.XCB_CW_EVENT_MASK, &[_]u32{WM_EVENT_MASK}))) |err| {
+        conn, root, xcb.XCB_CW_EVENT_MASK, &[_]u32{constants.EventMasks.ROOT_WINDOW}))) |err| {
         std.c.free(err);
         debug.err("Another window manager is running", .{});
         return error.AnotherWMRunning;
@@ -110,6 +100,8 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32, allocator: std.m
 
     var cookies: std.ArrayList(xcb.xcb_get_window_attributes_cookie_t) = .empty;
     defer cookies.deinit(allocator);
+    // Note: We use a minimal event mask here (enter/leave) for existing windows
+    // Full MANAGED_WINDOW mask is applied in window.zig when windows are properly managed
     const event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
     
     try cookies.ensureTotalCapacity(allocator, len);
@@ -131,7 +123,7 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32, allocator: std.m
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
     
-    const max_grabs = wm.config.keybindings.items.len * LOCK_MODIFIERS.len;
+    const max_grabs = wm.config.keybindings.items.len * constants.LOCK_MODIFIERS.len;
     if (max_grabs == 0) return;
     
     const cookies = try wm.allocator.alloc(xcb.xcb_void_cookie_t, max_grabs);
@@ -140,7 +132,7 @@ fn grabKeybindings(wm: *WM) !void {
     var cookie_idx: usize = 0;
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
-        for (LOCK_MODIFIERS) |lock| {
+        for (constants.LOCK_MODIFIERS) |lock| {
             cookies[cookie_idx] = xcb.xcb_grab_key_checked(wm.conn, 0, wm.root,
                 @intCast(kb.modifiers | lock), keycode, xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC);
             cookie_idx += 1;
@@ -166,7 +158,7 @@ fn grabKeybindings(wm: *WM) !void {
         for (wm.config.keybindings.items) |kb| {
             const keycode = kb.keycode orelse continue;
             var failed_this_kb = false;
-            for (LOCK_MODIFIERS) |lock| {
+            for (constants.LOCK_MODIFIERS) |lock| {
                 if (xcb.xcb_request_check(wm.conn, xcb.xcb_grab_key_checked(wm.conn, 0, wm.root,
                     @intCast(kb.modifiers | lock), keycode, xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC))) |err| {
                     std.c.free(err);
@@ -266,7 +258,7 @@ pub fn main() !void {
     // OPTIMIZATION: Pre-allocate WM windows hash map
     var wm_windows = std.AutoHashMap(u32, void).init(allocator);
     // FIXED: Log allocation failure instead of silently ignoring it
-    wm_windows.ensureTotalCapacity(32) catch |err| {
+    wm_windows.ensureTotalCapacity(constants.Sizes.DEFAULT_WINDOW_CAPACITY) catch |err| {
         debug.warn("Failed to pre-allocate window capacity: {}", .{err});
         // Continue with default capacity - not critical for functionality
     };

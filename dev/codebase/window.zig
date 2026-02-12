@@ -33,6 +33,8 @@ const defs       = @import("defs");
     const xcb    = defs.xcb;
     const WM     = defs.WM;
 const utils      = @import("utils");
+const constants  = @import("constants");
+const filters    = @import("filters");
 
 const focus      = @import("focus");
 const tiling     = @import("tiling");
@@ -42,26 +44,11 @@ const workspaces = @import("workspaces");
 
 const debug      = @import("debug");
 
-// FIXED: Magic numbers replaced with named constants
-/// X coordinate for positioning windows off-screen (far left)
-const OFFSCREEN_X_POSITION: i32 = -4000;
-
-/// Minimum X coordinate threshold for detecting off-screen windows
-const OFFSCREEN_THRESHOLD_MIN: i32 = -1000;
-
-/// Maximum X coordinate threshold for detecting off-screen windows
-const OFFSCREEN_THRESHOLD_MAX: i32 = 10000;
-
 /// Event mask for managed windows: enter/leave notifications, button press, and property changes
-const WINDOW_EVENT_MASK = xcb.XCB_EVENT_MASK_ENTER_WINDOW | 
-                          xcb.XCB_EVENT_MASK_LEAVE_WINDOW |
-                          xcb.XCB_EVENT_MASK_BUTTON_PRESS |
-                          xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
+const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
 /// Helper to check if a window is a system window (root, null, or bar)
-inline fn isSystemWindow(wm: *const WM, win: u32) bool {
-    return win == wm.root or win == 0 or bar.isBarWindow(win);
-}
+/// REMOVED: Now provided by filters module as filters.isSystemWindow()
 
 /// Manages button grabs for click-to-focus behavior.
 /// When a window is unfocused, we grab all button presses so we can intercept
@@ -110,7 +97,7 @@ inline fn queryAndCachePointer(wm: *WM) void {
 /// Positions a window off-screen (far to the left) to hide it without unmapping.
 /// Used for windows that are on inactive workspaces.
 inline fn positionOffScreen(conn: *xcb.xcb_connection_t, win: u32) void {
-    const values = [_]u32{@bitCast(OFFSCREEN_X_POSITION)};
+    const values = [_]u32{@bitCast(constants.OFFSCREEN_X_POSITION)};
     _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
 }
 
@@ -212,7 +199,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     const win = event.event;
     
     // Filter out system windows and invalid window IDs
-    if (isSystemWindow(wm, win)) return;
+    if (filters.isSystemWindow(wm, win)) return;
     
     // Check if this is a window we're managing
     // Note: win == 0 checks for null ID, hasWindow checks if we're tracking it
@@ -232,7 +219,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
     const win = event.event;
     
-    if (isSystemWindow(wm, win)) return;
+    if (filters.isSystemWindow(wm, win)) return;
     
     // CRITICAL: Only focus windows on the current workspace
     if (!workspaces.isOnCurrentWorkspace(win)) return;
@@ -302,12 +289,10 @@ fn focusWindowUnderPointer(wm: *WM) void {
         const child_win = reply.*.child;
         
         // If pointer is over a valid window, focus it
-        if (child_win != 0 and child_win != wm.root and !bar.isBarWindow(child_win)) {
-            if (wm.windows.contains(child_win) and workspaces.isOnCurrentWorkspace(child_win)) {
-                focus.setFocus(wm, child_win, .mouse_enter);
-                tiling.updateWindowFocus(wm, null, child_win);
-                return;
-            }
+        if (filters.isValidManagedWindow(wm, child_win) and workspaces.isOnCurrentWorkspace(child_win)) {
+            focus.setFocus(wm, child_win, .mouse_enter);
+            tiling.updateWindowFocus(wm, null, child_win);
+            return;
         }
     }
     
@@ -319,8 +304,7 @@ fn focusWindowUnderPointer(wm: *WM) void {
     if (windows.len == 0) return;
     
     for (windows) |workspace_win| {
-        if (workspace_win != 0 and workspace_win != wm.root and 
-            !bar.isBarWindow(workspace_win) and wm.windows.contains(workspace_win)) {
+        if (filters.isValidManagedWindow(wm, workspace_win)) {
             focus.setFocus(wm, workspace_win, .window_destroyed);
             tiling.updateWindowFocus(wm, null, workspace_win);
             return;
