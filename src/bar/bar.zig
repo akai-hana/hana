@@ -21,6 +21,9 @@ const workspaces             = @import("workspaces");
 // TODO: make adjustable through config.toml, adjust workspace width based off of monitor DPI
 pub const WORKSPACE_WIDTH: u8 = 50;
 
+// Clock format string constant for width calculation
+const CLOCK_FORMAT = "0000-00-00 00:00:00";
+
 // FIXED: Magic numbers replaced with named constants
 /// Minimum allowed bar height in pixels
 const MIN_BAR_HEIGHT: u32 = 20;
@@ -48,23 +51,35 @@ const State = struct {
     has_transparency: bool,  // Track if transparency is enabled
     allocator: std.mem.Allocator,
     cached_clock_width: u16,
+    cached_ws_width: u16,
+    cached_indicator_size: u16,
+    has_clock_segment: bool,
 
     fn init(allocator: std.mem.Allocator, conn: *xcb.xcb_connection_t, window: u32, width: u16, height: u16,
             dc: *drawing.DrawContext, config: defs.BarConfig, has_transparency: bool) !*State {
         const s = try allocator.create(State);
         const scaled_padding = config.scaledPadding();
+        
         s.* = State{
             .window = window, .width = width, .height = height, .dc = dc, .conn = conn,
             .config = config,
-            .status_text = .{},
-            .cached_title = .{},
+            .status_text = std.ArrayList(u8).empty,
+            .cached_title = std.ArrayList(u8).empty,
             .cached_title_window = null,
             .dirty = false, .dirty_clock = false, .last_second = 0,
             .visible = true,  // OPTIMIZATION: Start visible, setBarState will update
             .has_transparency = has_transparency,
             .allocator = allocator,
-            .cached_clock_width = dc.textWidth("0000-00-00 00:00:00") + 2 * scaled_padding,
+            .cached_clock_width = dc.textWidth(CLOCK_FORMAT) + 2 * scaled_padding,
+            .cached_ws_width = config.scaledWorkspaceWidth(),
+            .cached_indicator_size = config.scaledIndicatorSize(),
+            .has_clock_segment = State.detectClockSegment(&config),
         };
+        
+        // Pre-allocate capacity for performance
+        try s.status_text.ensureTotalCapacity(allocator, 256);
+        try s.cached_title.ensureTotalCapacity(allocator, 256);
+        
         try s.status_text.appendSlice(allocator, "hana");
         return s;
     }
@@ -79,6 +94,15 @@ const State = struct {
     fn markClockDirty(self: *State) void { self.dirty_clock = true; }
     fn clearDirty(self: *State) void { self.dirty = false; self.dirty_clock = false; }
     fn isDirty(self: *State) bool { return self.dirty or self.dirty_clock; }
+    
+    fn detectClockSegment(config: *const defs.BarConfig) bool {
+        for (config.layout.items) |layout| {
+            for (layout.segments.items) |seg| {
+                if (seg == .clock) return true;
+            }
+        }
+        return false;
+    }
 };
 
 // FIXED: Document thread safety - single-threaded access only
@@ -383,6 +407,13 @@ pub fn raiseBar() void {
 pub fn getBarHeight() u16 { return if (state) |s| s.height else 0; }
 pub fn isBarVisible() bool { return state != null; }
 
+// OPTIMIZATION: Cached workspace dimensions for fast access
+pub fn getCachedWorkspaceWidth() u16 { return if (state) |s| s.cached_ws_width else 50; }
+pub fn getCachedIndicatorSize() u16 { return if (state) |s| s.cached_indicator_size else 5; }
+
+// OPTIMIZATION: Cached clock segment detection
+pub fn hasClockSegment() bool { return if (state) |s| s.has_clock_segment else false; }
+
 // OPTIMIZATION: Check if bar is actually visible (not just created)
 pub fn isVisible() bool {
     if (state) |s| return s.visible;
@@ -484,7 +515,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.W
 
 fn calculateSegmentWidth(s: *State, segment: defs.BarSegment) u16 {
     return switch (segment) {
-        .workspaces => if (workspaces.getState()) |ws| @intCast(ws.workspaces.len * s.config.scaledWorkspaceWidth()) else 270,
+        .workspaces => if (workspaces.getState()) |ws| @intCast(ws.workspaces.len * s.cached_ws_width) else 270,
         .layout => 60,
         .title => 100,
         .clock => s.cached_clock_width,

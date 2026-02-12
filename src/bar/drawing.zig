@@ -35,6 +35,16 @@ pub fn findVisualByDepth(screen: *defs.xcb.xcb_screen_t, depth: u8) VisualInfo {
 
 // ─── DrawContext ──────────────────────────────────────────────────────────────
 
+// RGB color representation for caching
+const RGBColor = struct {
+    r: f64,
+    g: f64,
+    b: f64,
+};
+
+// Font name conversion cache to avoid repeated allocations
+var font_conversion_cache: ?std.StringHashMap([]const u8) = null;
+
 pub const DrawContext = struct {
     allocator: std.mem.Allocator,
     conn: *defs.xcb.xcb_connection_t,
@@ -67,6 +77,10 @@ pub const DrawContext = struct {
 
     // Track last text color to avoid redundant Cairo calls
     last_color: ?u32 = null,
+
+    // Color RGB cache to avoid repeated conversions
+    color_cache: std.AutoHashMap(u32, RGBColor) = undefined,
+    color_cache_initialized: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, conn: *defs.xcb.xcb_connection_t, drawable: u32, width: u16, height: u16, dpi: f32) !*DrawContext {
         return initWithVisual(allocator, conn, drawable, width, height, null, dpi, false, 1.0);
@@ -122,6 +136,8 @@ pub const DrawContext = struct {
             .gc           = 0, // Created below
             .is_argb      = is_argb,
             .transparency = transparency,
+            .color_cache  = std.AutoHashMap(u32, RGBColor).init(allocator),
+            .color_cache_initialized = true,
         };
 
         // Create XCB graphics context for direct rectangle drawing (window borders)
@@ -132,6 +148,9 @@ pub const DrawContext = struct {
     }
 
     pub fn deinit(self: *DrawContext) void {
+        if (self.color_cache_initialized) {
+            self.color_cache.deinit();
+        }
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
         _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
         c.g_object_unref(self.pango_layout);
@@ -145,7 +164,7 @@ pub const DrawContext = struct {
 
         // Convert Xft-style font names to Pango format if needed
         const pango_name = try convertFontName(self.allocator, font_name);
-        defer if (pango_name.ptr != font_name.ptr) self.allocator.free(pango_name);
+        // Note: Don't free pango_name - it's either cached or the same as font_name
 
         const pango_name_z = try self.allocator.dupeZ(u8, pango_name);
         defer self.allocator.free(pango_name_z);
@@ -173,18 +192,22 @@ pub const DrawContext = struct {
     }
 
     /// Extract Cairo RGB components from a packed 0xRRGGBB color value
-    inline fn colorToRGB(color: u32) struct { f64, f64, f64 } {
-        return .{
-            @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0,
-            @as(f64, @floatFromInt((color >> 8)  & 0xFF)) / 255.0,
-            @as(f64, @floatFromInt( color        & 0xFF)) / 255.0,
+    fn colorToRGB(self: *DrawContext, color: u32) struct { f64, f64, f64 } {
+        if (self.color_cache.get(color)) |rgb| return .{ rgb.r, rgb.g, rgb.b };
+        
+        const rgb = RGBColor{
+            .r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0,
+            .g = @as(f64, @floatFromInt((color >> 8)  & 0xFF)) / 255.0,
+            .b = @as(f64, @floatFromInt( color        & 0xFF)) / 255.0,
         };
+        self.color_cache.put(color, rgb) catch {};
+        return .{ rgb.r, rgb.g, rgb.b };
     }
 
     /// Set the Cairo source color, skipping the call if the color has not changed
     inline fn setColor(self: *DrawContext, color: u32) void {
         if (self.last_color == color) return;
-        const r, const g, const b = colorToRGB(color);
+        const r, const g, const b = self.colorToRGB(color);
         c.cairo_set_source_rgba(self.ctx, r, g, b, 1.0);
         self.last_color = color;
     }
@@ -341,6 +364,16 @@ fn getDefaultVisualType(screen: *defs.xcb.xcb_screen_t) *defs.xcb.xcb_visualtype
 /// Convert an Xft-style font name (e.g. "DejaVu Sans:size=11:weight=bold")
 /// to the Pango format expected by pango_font_description_from_string
 fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const u8 {
+    // Initialize cache on first use
+    if (font_conversion_cache == null) {
+        font_conversion_cache = std.StringHashMap([]const u8).init(allocator);
+    }
+    
+    // Check cache first
+    if (font_conversion_cache.?.get(xft_name)) |cached| {
+        return cached;
+    }
+    
     if (std.mem.indexOfScalar(u8, xft_name, ':') == null) return xft_name;
 
     var result = try std.ArrayList(u8).initCapacity(allocator, xft_name.len);
@@ -382,5 +415,25 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
         try result.appendSlice(allocator, s);
     }
 
+    const converted = try result.toOwnedSlice(allocator);
+    
+    // Store in cache
+    font_conversion_cache.?.put(xft_name, converted) catch {};
+    
     return result.toOwnedSlice(allocator);
+}
+
+/// Clean up font conversion cache (call on shutdown)
+pub fn deinitFontCache(allocator: std.mem.Allocator) void {
+    if (font_conversion_cache) |*cache| {
+        var iter = cache.iterator();
+        while (iter.next()) |entry| {
+            // Only free if we allocated it (not if it's the original xft_name)
+            if (entry.value_ptr.*.ptr != entry.key_ptr.*.ptr) {
+                allocator.free(entry.value_ptr.*);
+            }
+        }
+        cache.deinit();
+        font_conversion_cache = null;
+    }
 }

@@ -29,8 +29,8 @@ inline fn drawIndicator(dc: *drawing.DrawContext, x: u16, size: u16, filled: boo
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16) !u16 {
     const ws_state = workspaces.getState() orelse return start_x;
     var x = start_x;
-    const scaled_ws_width = config.scaledWorkspaceWidth();
-    const scaled_indicator_size = config.scaledIndicatorSize();
+    const scaled_ws_width = bar.getCachedWorkspaceWidth();
+    const scaled_indicator_size = bar.getCachedIndicatorSize();
 
     for (ws_state.workspaces, 0..) |*ws, i| {
         const is_current = i == ws_state.current;
