@@ -324,6 +324,60 @@ pub const DrawContext = struct {
     }
 };
 
+// ─── DrawBatch for batching rectangle operations ──────────────────────────────
+
+/// Batch multiple rectangle draw operations to reduce XCB round-trips
+pub const DrawBatch = struct {
+    rects: std.ArrayList(defs.xcb.xcb_rectangle_t),
+    color: u32,
+    allocator: std.mem.Allocator,
+    
+    pub fn init(allocator: std.mem.Allocator, color: u32) !DrawBatch {
+        return .{
+            .rects = std.ArrayList(defs.xcb.xcb_rectangle_t).init(allocator),
+            .color = color,
+            .allocator = allocator,
+        };
+    }
+    
+    pub fn deinit(self: *DrawBatch) void {
+        self.rects.deinit();
+    }
+    
+    pub fn addRect(self: *DrawBatch, x: u16, y: u16, w: u16, h: u16) !void {
+        try self.rects.append(self.allocator, .{
+            .x = @intCast(x),
+            .y = @intCast(y),
+            .width = w,
+            .height = h,
+        });
+    }
+    
+    pub fn flush(self: *DrawBatch, dc: *DrawContext) void {
+        if (self.rects.items.len == 0) return;
+        
+        // Set color for all rectangles
+        const final_color = if (dc.is_argb) blk: {
+            const alpha_f32 = std.math.clamp(dc.transparency, 0.0, 1.0);
+            const alpha_byte: u32 = @intFromFloat(@round(alpha_f32 * 255.0));
+            break :blk (alpha_byte << 24) | (self.color & 0xFFFFFF);
+        } else self.color;
+        
+        _ = defs.xcb.xcb_change_gc(dc.conn, dc.gc, 
+            defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
+        
+        // Draw all rectangles in one XCB call
+        _ = defs.xcb.xcb_poly_fill_rectangle(dc.conn, dc.drawable, dc.gc,
+            @intCast(self.rects.items.len), self.rects.items.ptr);
+        
+        self.rects.clearRetainingCapacity();
+    }
+    
+    pub fn clear(self: *DrawBatch) void {
+        self.rects.clearRetainingCapacity();
+    }
+};
+
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 /// Search all screens for a visual matching the given visual_id

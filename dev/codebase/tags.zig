@@ -49,7 +49,10 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
         // Even if fallback fonts are used, align to the primary font's baseline
         const text_y = dc.baselineY(height);
         
-        try dc.drawText(x + (scaled_ws_width - dc.textWidth(label)) / 2, text_y, label, fg);
+        // Get cached label width from bar if available, otherwise calculate
+        const label_width = bar.getCachedLabelWidth(i) orelse dc.textWidth(label);
+        const text_x = x + (scaled_ws_width - label_width) / 2;
+        try dc.drawText(text_x, text_y, label, fg);
 
         // FIXED: Use count() method instead of .list.items.len
         // This works with both small-array and large tracking implementations
