@@ -182,7 +182,10 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     // Query pointer position BEFORE mapping to establish baseline
     if (is_current_workspace) queryAndCachePointer(wm);
 
-    setupWindow(wm, win, is_current_workspace, validated_ws) catch return;
+    setupWindow(wm, win, is_current_workspace, validated_ws) catch |err| {
+        debug.logError(err, win);
+        return;
+    };
     _ = xcb.xcb_map_window(wm.conn, win);
     setupTiling(wm, win, is_current_workspace);
     utils.flush(wm.conn);

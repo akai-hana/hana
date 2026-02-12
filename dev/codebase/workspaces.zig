@@ -154,7 +154,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
             }
             return;
         };
-        s.window_to_workspace.put(win, target_ws) catch {};
+        s.window_to_workspace.put(win, target_ws) catch |e| debug.warnOnErr(e, "window_to_workspace after untracked add");
         return;
     };
 
@@ -165,14 +165,14 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
     s.workspaces[target_ws].add(win) catch |err| {
         debug.err("Failed to add window to workspace {}: {}", .{ target_ws, err });
         // CRITICAL: Rollback - add back to original workspace to maintain consistency
-        s.workspaces[from_ws].add(win) catch {};
+        s.workspaces[from_ws].add(win) catch |e| debug.warnOnErr(e, "workspace rollback re-add");
         // Also ensure it's removed from tiling if add failed
         if (tiling_state) |ts| {
             _ = ts.windows.remove(win);
         }
         return;
     };
-    s.window_to_workspace.put(win, target_ws) catch {};
+    s.window_to_workspace.put(win, target_ws) catch |e| debug.warnOnErr(e, "window_to_workspace after move");
 
     // OPTIMIZATION: Simplified visibility handling using dwm approach
     if (from_ws == s.current) {

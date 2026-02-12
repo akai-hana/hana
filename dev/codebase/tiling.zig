@@ -120,15 +120,6 @@ const FocusHistoryIterator = struct {
     }
 };
 
-// OPTIMIZATION: Merged error handling directly into this module
-inline fn logError(err: anyerror, window: ?u32) void {
-    if (window) |win| {
-        debug.err("Failed: {} (window: 0x{x})", .{ err, win });
-    } else {
-        debug.err("Failed: {}", .{err});
-    }
-}
-
 pub const State = struct {
     enabled: bool,
     layout: Layout,
@@ -180,7 +171,7 @@ pub const State = struct {
         
         // Cache miss - query X11 and cache result
         if (utils.getGeometry(conn, win)) |rect| {
-            self.geometry_cache.put(win, rect) catch {};  // Best-effort caching
+            self.geometry_cache.put(win, rect) catch |e| debug.warnOnErr(e, "geometry cache put"); // best-effort
             return rect;
         }
         
@@ -333,7 +324,7 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     if (!s.enabled) return;
 
     s.windows.add(window_id) catch |err| {
-        logError(err, window_id);
+        debug.logError(err, window_id);
         return;
     };
     
@@ -654,7 +645,7 @@ fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
     if (to_idx >= j) temp[j] = window;
     
     for (items) |win| _ = s.windows.remove(win);
-    for (temp[0..len]) |win| s.windows.add(win) catch {};
+    for (temp[0..len]) |win| s.windows.add(win) catch |e| debug.warnOnErr(e, "moveWindowToIndex re-add");
 }
 
 pub fn moveToIndex(from_idx: usize) void {
