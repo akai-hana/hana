@@ -577,11 +577,16 @@ pub fn swapWithMaster(wm: *WM) void {
     
     if (!s.windows.contains(focused)) return;
     
-    const windows = s.windows.items();
-    if (windows.len < 2) return;
+    // CRITICAL FIX: Work with current workspace windows only
+    const ws_state = workspaces.getState() orelse return;
+    const current_workspace = &ws_state.workspaces[ws_state.current];
+    const current_ws = current_workspace.windows.items();
     
+    if (current_ws.len < 2) return;
+    
+    // Find focused window's index in current workspace
     var focused_idx: ?usize = null;
-    for (windows, 0..) |win, i| {
+    for (current_ws, 0..) |win, i| {
         if (win == focused) {
             focused_idx = i;
             break;
@@ -590,20 +595,38 @@ pub fn swapWithMaster(wm: *WM) void {
     
     const idx = focused_idx orelse return;
     
-    // BUGFIX: If focused is already master, swap with first slave (top of slave stack)
+    // Allocate temp array for swapping
+    const temp_windows = wm.allocator.alloc(u32, current_ws.len) catch return;
+    defer wm.allocator.free(temp_windows);
+    
+    // Copy all windows to temp array
+    @memcpy(temp_windows, current_ws);
+    
+    // Perform the swap in temp array
     if (idx == 0) {
-        // Master is focused - swap with first slave (window at index 1)
-        // After swap: slave becomes new master, old master becomes first slave
-        moveWindowToIndex(s, 1, 0);
-        // Force retile with cache clear to ensure proper positioning
-        retileCurrentWorkspace(wm, true);
-        return;
+        // Master focused - swap with first slave
+        const t = temp_windows[0];
+        temp_windows[0] = temp_windows[1];
+        temp_windows[1] = t;
+    } else {
+        // Slave focused - swap with master
+        const t = temp_windows[0];
+        temp_windows[0] = temp_windows[idx];
+        temp_windows[idx] = t;
     }
     
-    // Focused is not master - swap with master
-    // After swap: focused slave becomes new master, old master moves to slave position
-    moveWindowToIndex(s, idx, 0);
-    // Force retile with cache clear to ensure proper positioning
+    // Clear workspace windows and re-add in new order
+    // Remove all windows first
+    for (current_ws) |win| {
+        _ = current_workspace.remove(win);
+    }
+    
+    // Add back in swapped order
+    for (temp_windows) |win| {
+        current_workspace.add(win) catch {};
+    }
+    
+    s.markDirty();
     retileCurrentWorkspace(wm, true);
 }
 
