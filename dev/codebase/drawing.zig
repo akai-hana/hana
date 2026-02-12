@@ -169,17 +169,18 @@ pub const DrawContext = struct {
     pub fn loadFonts(self: *DrawContext, font_names: []const []const u8) !void {
         // Pango handles font fallback automatically via fontconfig
         if (font_names.len > 0) {
-            try self.loadFont(font_names[0]);
+            try self.loadFont(font_names[0]); //TODO: add comment
             
             if (font_names.len > 1) {
-                debug.info("Font fallback: Pango will automatically use {} additional fonts for missing glyphs", .{font_names.len - 1});
+                debug.info("More than one font detected ({}). Pango will use these alongside primary font set.", .{font_names.len - 1});
             }
         } else {
-            try self.loadFont("monospace:size=10");
+            try self.loadFont("monospace:size=10"); // Fallback font
         }
     }
     
-    /// Helper: Convert RGB color to Cairo RGBA components
+    /// (Helper) Convert RGB color to Cairo RGBA components
+    /// TODO: can this process be simplified in any way?
     inline fn rgbToRGBA(color: u32, alpha_override: ?u16) struct { f64, f64, f64, f64 } {
         const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
         const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
@@ -191,7 +192,8 @@ pub const DrawContext = struct {
         return .{ r, g, b, a };
     }
     
-    /// OPTIMIZATION: Set color only if changed (for backgrounds, uses alpha_override)
+    /// Set color only if changed (for backgrounds, uses alpha_override)
+    /// TODO: can this be simplified or removed? the purpose is not clear to me
     inline fn setColorForBackground(self: *DrawContext, color: u32) void {
         if (self.last_color) |last| {
             if (last.color == color and last.alpha == self.alpha_override) {
@@ -204,7 +206,8 @@ pub const DrawContext = struct {
         self.last_color = .{ .color = color, .alpha = self.alpha_override };
     }
     
-    /// OPTIMIZATION: Set color for text (ALWAYS opaque, ignores alpha_override)
+    /// Set text color (always opaque)
+    /// TODO: can anything inside this function be simplified, even if minor things?
     inline fn setColorForText(self: *DrawContext, color: u32) void {
         if (self.last_color) |last| {
             if (last.color == color and last.alpha == null) {
@@ -212,37 +215,38 @@ pub const DrawContext = struct {
             }
         }
         
-        const r, const g, const b, const a = rgbToRGBA(color, null); // Force opaque
+        const r, const g, const b, const a = rgbToRGBA(color, null); // Force opaqueness
         c.cairo_set_source_rgba(self.ctx, r, g, b, a);
         self.last_color = .{ .color = color, .alpha = null };
     }
     
-    /// Clear the entire surface to fully transparent (for ARGB windows)
-    /// This must be called before drawing when using transparency to properly
-    /// initialize the alpha channel. Without this, the window will be opaque
-    /// regardless of the alpha values used in drawing operations.
+    /// Clear surface to set it fully transparent (ARGB windows)
+    /// This must be called before drawing when using transparency, to properly init the alpha channel.
+    /// Without this, the window will be opaque regardless of the alpha values used in drawing operations.
+    /// TODO: this sounds a bit weird. can't this be inlined, or some other process simplified, in order for this to not be needed anymore? or is it strictly necessary?
     pub fn clearTransparent(self: *DrawContext) void {
         c.cairo_save(self.ctx);
         c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_CLEAR);
         c.cairo_paint(self.ctx);
         c.cairo_restore(self.ctx);
         
-        // CRITICAL: Explicitly set operator to OVER for proper alpha blending
+        // Explicitly set operator to OVER for proper alpha blending
         // Without this, subsequent drawing operations may not blend correctly
         c.cairo_set_operator(self.ctx, c.CAIRO_OPERATOR_OVER);
         
-        // OPTIMIZATION: Invalidate color cache after clearing
+        // Invalidate color cache after clearing
         self.last_color = null;
     }
     
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        // CRITICAL: Use XCB to draw rectangles directly (like window borders)
-        // This avoids Cairo's premultiplied alpha - we use raw RGB pixel values
-        // The compositor will apply transparency, just like with window borders
+        // Use XCB to draw rectangles directly (like window borders)
+        // I previously used Cairo, but Cairo's alpha is premultiplied, which darkens the bar significantly.
+        // Using XCB we can just use raw RGB pixel values and solve this issue.
+        // The compositor will apply transparency, making bar and window borders identical in color tone.
         
         // For ARGB windows, automatically add alpha channel based on transparency setting
         const final_color = if (self.is_argb) blk: {
-            // Convert transparency (0.0-1.0) to alpha byte (0-255)
+            // Convert transparency [0.0-1.0] to alpha byte [0-255]
             const alpha_f32 = std.math.clamp(self.transparency, 0.0, 1.0);
             const alpha_byte: u32 = @intFromFloat(@round(alpha_f32 * 255.0));
             break :blk (alpha_byte << 24) | (color & 0xFFFFFF);
@@ -261,7 +265,7 @@ pub const DrawContext = struct {
         _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
         
         // Flush to ensure the rectangle is drawn
-        _ = defs.xcb.xcb_flush(self.conn);
+        // _ = defs.xcb.xcb_flush(self.conn);
     }
     
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
