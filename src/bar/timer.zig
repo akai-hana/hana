@@ -39,7 +39,7 @@ fn enableTimer() void {
     
     const spec = std.os.linux.itimerspec{
         .it_interval = .{ .sec = 1, .nsec = 0 },
-        .it_value = .{ .sec = 1, .nsec = 0 }
+        .it_value    = .{ .sec = 1, .nsec = 0 }
     };
     
     if (std.os.linux.timerfd_settime(@intCast(global_timer_fd), .{}, &spec, null) >= 0) {
@@ -50,16 +50,19 @@ fn enableTimer() void {
 
 /// Disable the timer (stops ticks, reduces idle CPU)
 fn disableTimer() void {
-    if (!timer_enabled) return;
+    if (!timer_enabled) {
+        debug.info("Timer is already disabled...", .{});
+        return;
+    } 
     
     const spec = std.os.linux.itimerspec{
         .it_interval = .{ .sec = 0, .nsec = 0 },
-        .it_value = .{ .sec = 0, .nsec = 0 }
+        .it_value    = .{ .sec = 0, .nsec = 0 }
     };
     
     if (std.os.linux.timerfd_settime(@intCast(global_timer_fd), .{}, &spec, null) >= 0) {
         timer_enabled = false;
-        debug.info("Clock timer disabled (idle CPU optimization)", .{});
+        debug.info("Clock timer disabled", .{});
     }
 }
 
