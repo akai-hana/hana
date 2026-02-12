@@ -62,7 +62,7 @@ fonts = [
 ]
 
 # Font size as percentage of bar height (e.g., 16% = font takes up 16% of the bar's vertical space)
-font_size = 32
+font_size = 16%
 
 # Spacing between each segment/module inside the bar
 segment_spacing = 8%
