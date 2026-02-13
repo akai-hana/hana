@@ -52,7 +52,9 @@ const State = struct {
     has_transparency: bool,  // Track if transparency is enabled
     allocator: std.mem.Allocator,
     cached_clock_width: u16,
+    cached_clock_x: ?u16,  // FIXED 2.2: Cache clock X position to skip width calculation
     cached_ws_width: u16,
+    cached_workspace_x: u16,  // FIXED 2.7: Cache workspace segment X offset for click handling
     cached_indicator_size: u16,
     has_clock_segment: bool,
     cache_manager: *cache.CacheManager,  // Unified caching layer
@@ -77,7 +79,9 @@ const State = struct {
             .has_transparency = has_transparency,
             .allocator = allocator,
             .cached_clock_width = dc.textWidth(CLOCK_FORMAT) + 2 * scaled_padding,
+            .cached_clock_x = null,  // FIXED 2.2: Populated on first full draw
             .cached_ws_width = config.scaledWorkspaceWidth(),
+            .cached_workspace_x = 0,  // FIXED 2.7: Populated during draw
             .cached_indicator_size = config.scaledIndicatorSize(),
             .has_clock_segment = State.detectClockSegment(&config),
             .cache_manager = cache_mgr,
@@ -102,7 +106,10 @@ const State = struct {
         self.allocator.destroy(self);
     }
 
-    fn markDirty(self: *State) void { self.dirty = true; }
+    fn markDirty(self: *State) void { 
+        self.dirty = true; 
+        self.cached_clock_x = null;  // FIXED 2.2: Invalidate clock position cache
+    }
     fn markClockDirty(self: *State) void { self.dirty_clock = true; }
     fn clearDirty(self: *State) void { self.dirty = false; self.dirty_clock = false; }
     fn isDirty(self: *State) bool { return self.dirty or self.dirty_clock; }
@@ -174,8 +181,9 @@ inline fn setProp(conn: *xcb.xcb_connection_t, win: u32, name: []const u8, type_
         try utils.getAtom(conn, name), type_, 32, data.len, data);
 }
 
-fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
-    // FIXED: Removed dead want_transparency and alpha parameters
+fn setWindowProperties(wm: *defs.WM, window: u32, height: u16, want_transparency: bool, alpha: u16) !void {
+    _ = want_transparency;
+    _ = alpha;
     
     const strut: [12]u32 = if (wm.config.bar.vertical_position == .bottom)
         .{ 0, 0, 0, height, 0, 0, 0, 0, 0, 0, 0, wm.screen.width_in_pixels }
@@ -359,7 +367,7 @@ pub fn init(wm: *defs.WM) !void {
     const window = createBarWindow(wm, height, visual_setup);
     
     // Step 5: Set window properties
-    try setWindowProperties(wm, window, height);
+    try setWindowProperties(wm, window, height, visual_setup.has_transparency, wm.config.bar.getAlpha16());
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
 
@@ -381,12 +389,9 @@ pub fn init(wm: *defs.WM) !void {
 pub fn deinit() void {
     if (state) |s| {
         const conn, const window = .{ s.conn, s.window };
-        const allocator = s.allocator;
         s.dc.deinit();
         s.deinit();
         _ = xcb.xcb_destroy_window(conn, window);
-        // FIXED: Free font cache on shutdown
-        drawing.deinitFontCache(allocator);
         state = null;
     }
 }
@@ -433,7 +438,9 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
             xcb.XCB_CONFIG_WINDOW_Y, &values);
         
         // Update window properties for new position
-        try setWindowProperties(wm, s.window, s.height);
+        const alpha = wm.config.bar.getAlpha16();
+        const want_transparency = alpha < 0xFFFF;
+        try setWindowProperties(wm, s.window, s.height, want_transparency, alpha);
         
         utils.flush(wm.conn);
         debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
@@ -513,6 +520,14 @@ pub fn checkClockUpdate() !void {
 }
 
 fn drawClockOnly(s: *State, wm: *defs.WM) !void {
+    // FIXED 2.2: Use cached clock position instead of recalculating
+    if (s.cached_clock_x) |clock_x| {
+        _ = try clock_segment.draw(s.dc, s.config, s.height, clock_x);
+        s.dc.flush();
+        return;
+    }
+    
+    // Fallback if cache not populated yet (shouldn't happen normally)
     for (s.config.layout.items) |layout| {
         if (layout.position != .right) continue;
         
@@ -523,6 +538,7 @@ fn drawClockOnly(s: *State, wm: *defs.WM) !void {
             right_x -= calculateSegmentWidth(s, segment);
             
             if (segment == .clock) {
+                s.cached_clock_x = right_x;  // Cache for next time
                 _ = try clock_segment.draw(s.dc, s.config, s.height, right_x);
                 s.dc.flush();
                 return;
@@ -565,7 +581,9 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.W
     if (state) |s| if (event.event == s.window) {
         const ws_state = workspaces.getState() orelse return;
         const scaled_ws_width = s.config.scaledWorkspaceWidth();
-        const clicked_ws: usize = @intCast(@max(0, @divFloor(event.event_x, scaled_ws_width)));
+        // FIXED 2.7: Account for left-side segments before workspace segment
+        const click_x = @max(0, event.event_x - s.cached_workspace_x);
+        const clicked_ws: usize = @intCast(@divFloor(click_x, scaled_ws_width));
         if (clicked_ws < ws_state.workspaces.len) {
             workspaces.switchTo(wm, clicked_ws);
             s.markDirty();
@@ -588,6 +606,10 @@ fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment)
     for (0..segments.len) |i| {
         const idx = segments.len - 1 - i;
         right_x -= calculateSegmentWidth(s, segments[idx]);
+        // FIXED 2.2: Cache clock position for drawClockOnly optimization
+        if (segments[idx] == .clock) {
+            s.cached_clock_x = right_x;
+        }
         _ = try drawSegment(s, wm, segments[idx], right_x, null);
         if (i < segments.len - 1) right_x -= scaled_spacing;
     }
@@ -637,6 +659,10 @@ fn draw(s: *State, wm: *defs.WM) !void {
 }
 
 fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, width: ?u16) !u16 {
+    // FIXED 2.7: Cache workspace segment X offset for click handling
+    if (segment == .workspaces) {
+        s.cached_workspace_x = x;
+    }
     return switch (segment) {
         .workspaces => try workspaces_segment.draw(s.dc, s.config, s.height, x),
         .layout => try layout_segment.draw(s.dc, s.config, s.height, x),

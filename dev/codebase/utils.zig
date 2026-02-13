@@ -300,6 +300,51 @@ pub fn getAtomCached(comptime name: []const u8) !u32 {
     };
 }
 
+// OPTIMIZATION 2.1: Cache WM_TAKE_FOCUS support to avoid ~50µs roundtrip per focus
+// WM_PROTOCOLS is immutable after window creation, so cache it once per window
+var wm_take_focus_cache: ?std.AutoHashMap(u32, bool) = null;
+
+pub fn initWMTakeFocusCache(allocator: std.mem.Allocator) void {
+    wm_take_focus_cache = std.AutoHashMap(u32, bool).init(allocator);
+}
+
+pub fn deinitWMTakeFocusCache() void {
+    if (wm_take_focus_cache) |*cache| {
+        cache.deinit();
+        wm_take_focus_cache = null;
+    }
+}
+
+/// Cache WM_TAKE_FOCUS support for a window (call on MapRequest)
+pub fn cacheWMTakeFocus(conn: *xcb.xcb_connection_t, win: u32) void {
+    if (wm_take_focus_cache) |*cache| {
+        const supports = supportsWMTakeFocusUncached(conn, win);
+        cache.put(win, supports) catch {}; // Ignore allocation errors - will fall back to uncached
+    }
+}
+
+/// Remove cached WM_TAKE_FOCUS support (call on DestroyNotify)
+pub fn uncacheWMTakeFocus(win: u32) void {
+    if (wm_take_focus_cache) |*cache| {
+        _ = cache.remove(win);
+    }
+}
+
+/// Check if window supports WM_TAKE_FOCUS (cached version for performance)
+pub fn supportsWMTakeFocusCached(conn: *xcb.xcb_connection_t, win: u32) bool {
+    if (wm_take_focus_cache) |*cache| {
+        if (cache.get(win)) |cached| {
+            return cached;
+        }
+    }
+    // Not in cache - query and cache for next time
+    const supports = supportsWMTakeFocusUncached(conn, win);
+    if (wm_take_focus_cache) |*cache| {
+        cache.put(win, supports) catch {}; // Best effort
+    }
+    return supports;
+}
+
 pub const WMClass = struct {
     instance: []const u8,
     class: []const u8,
@@ -311,39 +356,48 @@ pub const WMClass = struct {
 };
 
 pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allocator) ?WMClass {
+    const class_atom = getAtom(conn, "WM_CLASS") catch return null;
+    
     const reply = xcb.xcb_get_property_reply(conn,
-        xcb.xcb_get_property(conn, 0, win, xcb.XCB_ATOM_WM_CLASS, xcb.XCB_ATOM_STRING, 0, MAX_PROPERTY_LENGTH), null) orelse return null;
+        xcb.xcb_get_property(conn, 0, win, class_atom, xcb.XCB_ATOM_STRING, 0, MAX_PROPERTY_LENGTH), null) orelse return null;
     defer std.c.free(reply);
     
     if (reply.*.format != 8 or reply.*.value_len == 0) return null;
-
+    
     const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
     const len: usize = @intCast(reply.*.value_len);
-
-    const instance_end = std.mem.indexOfScalar(u8, data[0..len], 0) orelse return null;
-    const instance = allocator.dupe(u8, data[0..instance_end]) catch return null;
-
-    const class_start = instance_end + 1;
+    
+    // Find null separator
+    var null_idx: ?usize = null;
+    for (data[0..len], 0..) |byte, i| {
+        if (byte == 0) {
+            null_idx = i;
+            break;
+        }
+    }
+    
+    if (null_idx == null) return null;
+    const sep = null_idx.?;
+    
+    const instance = allocator.dupe(u8, data[0..sep]) catch return null;
+    errdefer allocator.free(instance);
+    
+    const class_start = sep + 1;
     if (class_start >= len) {
         allocator.free(instance);
         return null;
     }
-
-    const class_end = if (std.mem.indexOfScalar(u8, data[class_start..len], 0)) |idx|
-        class_start + idx
-    else
-        len;
-
-    const class = allocator.dupe(u8, data[class_start..class_end]) catch {
+    
+    const class = allocator.dupe(u8, data[class_start..len]) catch {
         allocator.free(instance);
         return null;
     };
-
-    return WMClass{ .instance = instance, .class = class };
+    
+    return .{ .instance = instance, .class = class };
 }
 
-// Check if window supports WM_TAKE_FOCUS protocol
-pub fn supportsWMTakeFocus(conn: *xcb.xcb_connection_t, win: u32) bool {
+/// Original uncached version (renamed, now private)
+fn supportsWMTakeFocusUncached(conn: *xcb.xcb_connection_t, win: u32) bool {
     const protocols_atom = getAtomCached("WM_PROTOCOLS") catch return false;
     
     const reply = xcb.xcb_get_property_reply(conn,

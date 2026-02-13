@@ -259,9 +259,27 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
         if (tiling_enabled) {
             // Tiling enabled - let tiling system position windows
             tiling.retileCurrentWorkspace(wm, false);
+        } else {
+            // Tiling disabled - manually position windows to visible locations
+            for (new_workspace.windows.items()) |win| {
+                const geom_cookie = xcb.xcb_get_geometry(wm.conn, win);
+                const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
+                
+                if (geom_reply) |reply| {
+                    defer std.c.free(reply);
+                    
+                    const x: i16 = @divTrunc(@as(i16, @intCast(wm.screen.width_in_pixels)), 4);
+                    const y: i16 = @divTrunc(@as(i16, @intCast(wm.screen.height_in_pixels)), 4);
+                    
+                    const values = [_]u32{
+                        @bitCast(@as(i32, x)),
+                        @bitCast(@as(i32, y)),
+                    };
+                    _ = xcb.xcb_configure_window(wm.conn, win,
+                        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &values);
+                }
+            }
         }
-        // FIXED: Don't reposition floating windows - they retain their last position
-        // Previously all windows were stacked at (screen_w/4, screen_h/4)
     }
 
     // Step 3: NOW flush everything atomically
