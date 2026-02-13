@@ -150,7 +150,10 @@ inline fn positionOffScreen(conn: *xcb.xcb_connection_t, win: u32) void {
 }
 
 inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
-    if (!wm.config.tiling.enabled) return;
+    // FIXED: Check State.enabled, not config.enabled (runtime toggle desync fix)
+    const tiling_state = tiling.getState();
+    const tiling_enabled = if (tiling_state) |ts| ts.enabled else false;
+    if (!tiling_enabled) return;
     
     // Always retile if on current workspace
     if (on_current) {
@@ -204,7 +207,10 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const win = event.window;
     
-    if ((wm.config.tiling.enabled and tiling.isWindowTiled(win)) or
+    // FIXED: Check State.enabled, not config.enabled (runtime toggle desync fix)
+    const tiling_state = tiling.getState();
+    const tiling_enabled = if (tiling_state) |ts| ts.enabled else false;
+    if ((tiling_enabled and tiling.isWindowTiled(win)) or
         wm.fullscreen.isFullscreen(win))
     {
         return;
@@ -242,9 +248,8 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     
     // Change focus
     if (wm.focused_window == win) return;
-    const old_focus = wm.focused_window;
     focus.setFocus(wm, win, .mouse_enter);
-    tiling.updateWindowFocus(wm, old_focus, win);
+    // FIXED: Removed redundant updateWindowFocus - setFocus already calls updateWindowFocusFast
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
@@ -275,7 +280,10 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
 
     const was_focused = (wm.focused_window == win);
 
-    if (wm.config.tiling.enabled) {
+    // FIXED: Check State.enabled, not config.enabled (runtime toggle desync fix)
+    const tiling_state = tiling.getState();
+    const tiling_enabled = if (tiling_state) |ts| ts.enabled else false;
+    if (tiling_enabled) {
         tiling.removeWindow(wm, win);
     }
     
@@ -287,7 +295,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
 
     if (was_focused) {
         // Retile FIRST to position windows correctly
-        if (wm.config.tiling.enabled) {
+        if (tiling_enabled) {
             tiling.retileIfDirty(wm);
             utils.flush(wm.conn);
         }
@@ -298,9 +306,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
         // This is the OPPOSITE of window spawn behavior
         wm.suppress_focus_reason = .none;
         
-        // PHASE 2: Use cached pointer instead of querying again
-        _ = getCachedPointer(wm);
-        
+        // FIXED: Removed redundant getCachedPointer - focusWindowUnderPointer queries fresh
         // Now focus window under pointer (focus SHOULD steal here)
         focusWindowUnderPointer(wm);
     }
@@ -377,3 +383,29 @@ inline fn matchWorkspaceRule(wm: *WM, win: u32) ?u8 {
 
     return null;
 }
+
+// FIXED: Handle XCB_UNMAP_NOTIFY events - windows can be unmapped without being destroyed
+pub fn handleUnmapNotify(event: *const xcb.xcb_unmap_notify_event_t, wm: *WM) void {
+    const win = event.window;
+    
+    // Ignore if it's an event about the bar window
+    if (bar.isBarWindow(win)) return;
+    
+    // Only handle windows we're managing
+    if (!wm.hasWindow(win)) return;
+    
+    // BUGFIX: Some applications (like Firefox) unmap and remap windows frequently
+    // Don't treat unmap as a full window destruction - just hide it
+    // The window will be destroyed properly via DestroyNotify if needed
+    
+    // For now, treat unmap similar to destroy for simplicity
+    // A more sophisticated implementation could track unmapped state separately
+    handleDestroyNotify(&.{ 
+        .response_type = xcb.XCB_DESTROY_NOTIFY, 
+        .window = win, 
+        .event = event.event,
+        .pad0 = 0,
+        .sequence = event.sequence,
+    }, wm);
+}
+

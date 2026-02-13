@@ -161,11 +161,13 @@ fn calculateScaleFromResolution(screen: *xcb.xcb_screen_t) f32 {
 /// 
 /// Uses caching to avoid redundant detection calls
 pub fn detect(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) !DpiInfo {
-    // Create screen signature from dimensions
-    const sig = (@as(u64, screen.width_in_pixels) << 32) | 
-                (@as(u64, screen.height_in_pixels) << 16) |
-                (@as(u64, screen.width_in_millimeters) << 8) |
-                screen.height_in_millimeters;
+    // FIXED: Use non-overlapping 16-bit boundaries for cache signature
+    // width_in_pixels (48-63), height_in_pixels (32-47), 
+    // width_in_millimeters (16-31), height_in_millimeters (0-15)
+    const sig = (@as(u64, screen.width_in_pixels) << 48) | 
+                (@as(u64, screen.height_in_pixels) << 32) |
+                (@as(u64, screen.width_in_millimeters) << 16) |
+                @as(u64, screen.height_in_millimeters);
     
     // Return cached if screen hasn't changed
     if (dpi_cache.result) |cached| {

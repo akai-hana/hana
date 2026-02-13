@@ -48,6 +48,7 @@ const dispatch_table = blk: {
     table[xcb.XCB_ENTER_NOTIFY] = @ptrCast(&window.handleEnterNotify);
     table[xcb.XCB_MAP_REQUEST] = @ptrCast(&window.handleMapRequest);
     table[xcb.XCB_CONFIGURE_REQUEST] = @ptrCast(&window.handleConfigureRequest);
+    table[xcb.XCB_UNMAP_NOTIFY] = @ptrCast(&window.handleUnmapNotify);  // FIXED: Added UNMAP_NOTIFY handler
     table[xcb.XCB_DESTROY_NOTIFY] = @ptrCast(&window.handleDestroyNotify);
     table[xcb.XCB_EXPOSE] = @ptrCast(&bar.handleExpose);
     table[xcb.XCB_PROPERTY_NOTIFY] = @ptrCast(&bar.handlePropertyNotify);

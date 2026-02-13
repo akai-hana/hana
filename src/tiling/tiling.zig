@@ -37,7 +37,7 @@ const constants = @import("constants");
 const focus = @import("focus");
 const workspaces = @import("workspaces");
 const bar = @import("bar");
-const tracking = @import("tracking").tracking;
+const tracking = @import("tracking").Tracking;
 const createModule = @import("module").module;
 const debug = @import("debug");
 
@@ -130,7 +130,7 @@ pub const State = struct {
     border_width: u16,
     border_focused: u32,
     border_unfocused: u32,
-    windows: tracking,
+    windows: tracking,  // FIXED: tracking is now the Tracking type alias
     dirty: bool,
     // OPTIMIZATION: Cache window geometries to reduce X11 queries
     geometry_cache: std.AutoHashMap(u32, utils.Rect),
@@ -277,6 +277,14 @@ fn applyConfigToState(wm: *WM, s: *State) void {
 pub fn init(wm: *WM) void {
     var initial: State = undefined;
     applyConfigToState(wm, &initial);
+    
+    // FIXED: Construct sub-objects separately with errdefer to prevent leak
+    var windows_tracking = tracking.init(wm.allocator);
+    errdefer windows_tracking.deinit();
+    
+    var geom_cache = std.AutoHashMap(u32, utils.Rect).init(wm.allocator);
+    errdefer geom_cache.deinit();
+    
     StateManager.init(wm.allocator, .{
         .enabled         = initial.enabled,
         .layout          = initial.layout,
@@ -287,9 +295,9 @@ pub fn init(wm: *WM) void {
         .border_width    = initial.border_width,
         .border_focused  = initial.border_focused,
         .border_unfocused = initial.border_unfocused,
-        .windows         = tracking.init(wm.allocator),
+        .windows         = windows_tracking,
         .dirty           = false,
-        .geometry_cache  = std.AutoHashMap(u32, utils.Rect).init(wm.allocator),
+        .geometry_cache  = geom_cache,
         .focus_ring      = FocusRing{},
         .workspace_windows_buffer = std.ArrayListUnmanaged(u32){},
         .allocator       = wm.allocator,
@@ -345,7 +353,7 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
 
 pub fn removeWindow(wm: *WM, window_id: u32) void {
     const s = StateManager.get(true) orelse return;
-    if (s.windows.remove(window_id)) {
+    if (s.windows.removeOrdered(window_id)) {
         s.markDirty();
         s.invalidateGeometry(window_id);
         s.removeFocusHistory(window_id);
@@ -644,7 +652,7 @@ fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
     }
     if (to_idx >= j) temp[j] = window;
     
-    for (items) |win| _ = s.windows.remove(win);
+    for (items) |win| _ = s.windows.removeOrdered(win);
     for (temp[0..len]) |win| s.windows.add(win) catch |e| debug.warnOnErr(e, "moveWindowToIndex re-add");
 }
 
@@ -663,7 +671,7 @@ pub fn reloadConfig(wm: *WM) void {
 inline fn switchFocus(wm: *WM, s: *State, from: ?u32, to: u32) void {
     std.debug.assert(to != 0 and wm.hasWindow(to));  // Focus target must be valid and tracked
     focus.setFocus(wm, to, .tiling_operation);
-    wm.focused_window = to;
+    // FIXED: Removed redundant wm.focused_window assignment - setFocus already does this
     s.updateFocusHistory(to);
     updateWindowFocus(wm, from, to);
 }
@@ -731,7 +739,8 @@ pub fn focusPrevious(wm: *WM) void {
 /// With intelligent fallback and carousel behavior
 pub fn focusSecondLast(wm: *WM) void {
     const s = StateManager.get(true) orelse return;
-    const current_focused = wm.focused_window;
+    // FIXED: Guard against null focus to prevent panic
+    const current_focused = wm.focused_window orelse return;
     
     const windows = s.windows.items();
     if (windows.len < 2) return;
@@ -740,7 +749,7 @@ pub fn focusSecondLast(wm: *WM) void {
     var found_current = false;
     var iter = s.focusHistoryIter();
     while (iter.next()) |hist_win| {
-        if (hist_win == current_focused.?) {
+        if (hist_win == current_focused) {
             found_current = true;
             continue;
         }

@@ -174,9 +174,8 @@ inline fn setProp(conn: *xcb.xcb_connection_t, win: u32, name: []const u8, type_
         try utils.getAtom(conn, name), type_, 32, data.len, data);
 }
 
-fn setWindowProperties(wm: *defs.WM, window: u32, height: u16, want_transparency: bool, alpha: u16) !void {
-    _ = want_transparency;
-    _ = alpha;
+fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
+    // FIXED: Removed dead want_transparency and alpha parameters
     
     const strut: [12]u32 = if (wm.config.bar.vertical_position == .bottom)
         .{ 0, 0, 0, height, 0, 0, 0, 0, 0, 0, 0, wm.screen.width_in_pixels }
@@ -360,7 +359,7 @@ pub fn init(wm: *defs.WM) !void {
     const window = createBarWindow(wm, height, visual_setup);
     
     // Step 5: Set window properties
-    try setWindowProperties(wm, window, height, visual_setup.has_transparency, wm.config.bar.getAlpha16());
+    try setWindowProperties(wm, window, height);
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
 
@@ -382,9 +381,12 @@ pub fn init(wm: *defs.WM) !void {
 pub fn deinit() void {
     if (state) |s| {
         const conn, const window = .{ s.conn, s.window };
+        const allocator = s.allocator;
         s.dc.deinit();
         s.deinit();
         _ = xcb.xcb_destroy_window(conn, window);
+        // FIXED: Free font cache on shutdown
+        drawing.deinitFontCache(allocator);
         state = null;
     }
 }
@@ -431,9 +433,7 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
             xcb.XCB_CONFIG_WINDOW_Y, &values);
         
         // Update window properties for new position
-        const alpha = wm.config.bar.getAlpha16();
-        const want_transparency = alpha < 0xFFFF;
-        try setWindowProperties(wm, s.window, s.height, want_transparency, alpha);
+        try setWindowProperties(wm, s.window, s.height);
         
         utils.flush(wm.conn);
         debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});

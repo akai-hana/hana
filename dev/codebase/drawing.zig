@@ -142,7 +142,12 @@ pub const DrawContext = struct {
 
         // Create XCB graphics context for direct rectangle drawing (window borders)
         dc.gc = defs.xcb.xcb_generate_id(conn);
-        _ = defs.xcb.xcb_create_gc(conn, dc.gc, drawable, 0, null);
+        const gc_cookie = defs.xcb.xcb_create_gc_checked(conn, dc.gc, drawable, 0, null);
+        // FIXED: Check GC creation result instead of discarding
+        if (defs.xcb.xcb_request_check(conn, gc_cookie)) |err| {
+            std.c.free(err);
+            return error.GCCreationFailed;
+        }
 
         return dc;
     }

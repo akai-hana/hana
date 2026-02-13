@@ -22,7 +22,7 @@ const std = @import("std");
 const SMALL_THRESHOLD = 16;
 const DEMOTION_THRESHOLD = SMALL_THRESHOLD / 2;  // Demote from large to small at this count
 
-pub const tracking = struct {
+pub const Tracking = struct {
     // Storage variants based on size
     small: ?struct {
         items: [SMALL_THRESHOLD]u32,
@@ -34,7 +34,7 @@ pub const tracking = struct {
     },
     allocator: std.mem.Allocator,
     
-    pub fn init(allocator: std.mem.Allocator) tracking {
+    pub fn init(allocator: std.mem.Allocator) Tracking {
         return .{
             // FIXED: Zero-initialize array to avoid undefined behavior
             // Elements beyond .len are unused, but accessing them should be safe
@@ -44,7 +44,7 @@ pub const tracking = struct {
         };
     }
     
-    pub fn deinit(self: *tracking) void {
+    pub fn deinit(self: *Tracking) void {
         if (self.large) |*l| {
             l.list.deinit(self.allocator);
             l.set.deinit();
@@ -53,7 +53,7 @@ pub const tracking = struct {
     
     /// OPTIMIZATION: O(n) for small (n<=16), O(1) for large
     /// Small array search is faster than hash lookup for n<=16 due to cache locality
-    pub inline fn contains(self: *const tracking, win: u32) bool {
+    pub inline fn contains(self: *const Tracking, win: u32) bool {
         if (self.small) |s| {
             // Linear search is faster than hash for small n
             for (s.items[0..s.len]) |w| {
@@ -66,7 +66,7 @@ pub const tracking = struct {
         return false;
     }
     
-    pub fn add(self: *tracking, win: u32) !void {
+    pub fn add(self: *Tracking, win: u32) !void {
         std.debug.assert(win != 0);  // Catch bugs early - window ID should never be 0
         if (self.contains(win)) return;
         
@@ -87,7 +87,7 @@ pub const tracking = struct {
     }
     
     /// OPTIMIZATION: Improved addFront for small array
-    pub fn addFront(self: *tracking, win: u32) !void {
+    pub fn addFront(self: *Tracking, win: u32) !void {
         if (self.contains(win)) return;
         
         if (self.small) |*s| {
@@ -105,26 +105,13 @@ pub const tracking = struct {
                 try self.addFront(win);
             }
         } else if (self.large) |*l| {
-            // Reserve space first to avoid reallocation
-            try l.list.ensureUnusedCapacity(self.allocator, 1);
-            
-            const list_items = l.list.items;
-            if (list_items.len > 0) {
-                l.list.items.len += 1;
-                var i: usize = list_items.len;
-                while (i > 0) : (i -= 1) {
-                    l.list.items[i] = l.list.items[i - 1];
-                }
-                l.list.items[0] = win;
-            } else {
-                try l.list.append(self.allocator, win);
-            }
-            
+            // FIXED: Use safe insert instead of manual length manipulation
+            try l.list.insert(self.allocator, 0, win);
             try l.set.put(win, {});
         }
     }
     
-    fn removeImpl(self: *tracking, win: u32, comptime ordered: bool) bool {
+    fn removeImpl(self: *Tracking, win: u32, comptime ordered: bool) bool {
         if (self.small) |*s| {
             for (s.items[0..s.len], 0..) |w, i| {
                 if (w == win) {
@@ -147,10 +134,10 @@ pub const tracking = struct {
         return false;
     }
 
-    pub fn remove(self: *tracking, win: u32) bool { return self.removeImpl(win, false); }
-    pub fn removeOrdered(self: *tracking, win: u32) bool { return self.removeImpl(win, true); }
+    pub fn remove(self: *Tracking, win: u32) bool { return self.removeImpl(win, false); }
+    pub fn removeOrdered(self: *Tracking, win: u32) bool { return self.removeImpl(win, true); }
     
-    pub inline fn items(self: *const tracking) []const u32 {
+    pub inline fn items(self: *const Tracking) []const u32 {
         if (self.small) |s| {
             return s.items[0..s.len];
         } else if (self.large) |l| {
@@ -159,7 +146,7 @@ pub const tracking = struct {
         return &[_]u32{};
     }
     
-    pub inline fn count(self: *const tracking) usize {
+    pub inline fn count(self: *const Tracking) usize {
         if (self.small) |s| {
             return s.len;
         } else if (self.large) |l| {
@@ -168,7 +155,7 @@ pub const tracking = struct {
         return 0;
     }
     
-    pub inline fn clear(self: *tracking) void {
+    pub inline fn clear(self: *Tracking) void {
         if (self.small) |*s| {
             s.len = 0;
         } else if (self.large) |*l| {
@@ -177,18 +164,18 @@ pub const tracking = struct {
         }
     }
     
-    pub inline fn last(self: *const tracking) ?u32 {
+    pub inline fn last(self: *const Tracking) ?u32 {
         const items_slice = self.items();
         return if (items_slice.len > 0) items_slice[items_slice.len - 1] else null;
     }
     
-    pub inline fn first(self: *const tracking) ?u32 {
+    pub inline fn first(self: *const Tracking) ?u32 {
         const items_slice = self.items();
         return if (items_slice.len > 0) items_slice[0] else null;
     }
     
     /// INTERNAL: Promote from small array to large hash+list
-    fn promoteToLarge(self: *tracking) !void {
+    fn promoteToLarge(self: *Tracking) !void {
         const s = self.small.?;
         
         var list: std.ArrayList(u32) = .empty;
@@ -209,7 +196,7 @@ pub const tracking = struct {
     }
     
     /// INTERNAL: Demote from large hash+list back to small array
-    fn demoteToSmall(self: *tracking) void {
+    fn demoteToSmall(self: *Tracking) void {
         // FIXED: Use early return pattern and consume large before freeing
         // to prevent potential double-free if called multiple times
         var large = self.large orelse return;

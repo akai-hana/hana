@@ -79,6 +79,8 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void 
     _ = xcb.xcb_create_glyph_cursor(conn, cursor, font, font, constants.Cursors.LEFT_PTR, constants.Cursors.LEFT_PTR_MASK, 0, 0, 0, 65535, 65535, 65535);
     _ = xcb.xcb_change_window_attributes(conn, screen.*.root, xcb.XCB_CW_CURSOR, &[_]u32{cursor});
     _ = xcb.xcb_close_font(conn, font);
+    // FIXED: Free cursor resource after setting it
+    _ = xcb.xcb_free_cursor(conn, cursor);
 }
 
 fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
@@ -186,10 +188,14 @@ fn grabKeybindings(wm: *WM) !void {
             const keycode = kb.keycode orelse continue;
             var failed_this_kb = false;
             for (constants.LOCK_MODIFIERS) |lock| {
+                const mod_combo = @as(u16, @intCast(kb.modifiers | lock));
                 if (xcb.xcb_request_check(wm.conn, xcb.xcb_grab_key_checked(wm.conn, 0, wm.root,
-                    @intCast(kb.modifiers | lock), keycode, xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC))) |err| {
+                    mod_combo, keycode, xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC))) |err| {
                     std.c.free(err);
                     failed_this_kb = true;
+                } else {
+                    // FIXED: Ungrab diagnostic grabs to prevent duplicates
+                    _ = xcb.xcb_ungrab_key(wm.conn, keycode, wm.root, mod_combo);
                 }
             }
             if (failed_this_kb) {
@@ -211,7 +217,6 @@ fn handleConfigReload(wm: *WM) !void {
     // FIXED: Validate config before applying it
     if (new_config.tiling.master_count == 0) {
         debug.err("Invalid config: master_count must be > 0, keeping old", .{});
-        new_config.deinit(wm.allocator);
         return error.InvalidConfig;
     }
     if (new_config.tiling.master_width.value <= 0
