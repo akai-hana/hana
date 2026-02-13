@@ -10,11 +10,7 @@ const DEFAULT_STATUS = "hana";
 
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16, status_text: []const u8) !u16 {
     if (status_text.len == 0) return start_x;
-    const scaled_padding = config.scaledPadding();
-    const width = dc.textWidth(status_text) + scaled_padding * 2;
-    dc.fillRect(start_x, 0, width, height, config.bg);
-    try dc.drawText(start_x + scaled_padding, dc.baselineY(height), status_text, config.fg);
-    return start_x + width;
+    return dc.drawSegment(start_x, height, status_text, config.scaledPadding(), config.bg, config.fg);
 }
 
 pub fn update(wm: *defs.WM, status_text: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {

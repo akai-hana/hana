@@ -43,6 +43,29 @@ const RGBColor = cache_module.RGBColor;
 // Font name conversion cache to avoid repeated allocations
 var font_conversion_cache: ?std.StringHashMap([]const u8) = null;
 
+// ─── Helper Functions ─────────────────────────────────────────────────────────
+
+/// Create XCB rectangle with coordinate casting
+inline fn makeRect(x: u16, y: u16, width: u16, height: u16) defs.xcb.xcb_rectangle_t {
+    return .{
+        .x = @intCast(x),
+        .y = @intCast(y),
+        .width = width,
+        .height = height,
+    };
+}
+
+/// Extract RGB color components from packed 0xRRGGBB value
+inline fn extractRGBComponents(color: u32) struct { u8, u8, u8 } {
+    return .{
+        @intCast((color >> 16) & 0xFF),
+        @intCast((color >> 8)  & 0xFF),
+        @intCast( color        & 0xFF),
+    };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 pub const DrawContext = struct {
     allocator: std.mem.Allocator,
     conn: *defs.xcb.xcb_connection_t,
@@ -212,10 +235,11 @@ pub const DrawContext = struct {
     fn colorToRGB(self: *DrawContext, color: u32) struct { f64, f64, f64 } {
         if (self.color_cache.get(color)) |rgb| return .{ rgb.r, rgb.g, rgb.b };
         
+        const r, const g, const b = extractRGBComponents(color);
         const rgb = RGBColor{
-            .r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0,
-            .g = @as(f64, @floatFromInt((color >> 8)  & 0xFF)) / 255.0,
-            .b = @as(f64, @floatFromInt( color        & 0xFF)) / 255.0,
+            .r = @as(f64, @floatFromInt(r)) / 255.0,
+            .g = @as(f64, @floatFromInt(g)) / 255.0,
+            .b = @as(f64, @floatFromInt(b)) / 255.0,
         };
         self.color_cache.put(color, rgb) catch {};
         return .{ rgb.r, rgb.g, rgb.b };
@@ -242,6 +266,16 @@ pub const DrawContext = struct {
         c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
     }
 
+    /// Convert Pango units to pixels (f64)
+    inline fn pangoToPixelsF64(pango_units: c_int) f64 {
+        return @as(f64, @floatFromInt(pango_units)) / @as(f64, @floatFromInt(c.PANGO_SCALE));
+    }
+
+    /// Convert Pango units to pixels (i16)
+    inline fn pangoToPixelsI16(pango_units: c_int) i16 {
+        return @intCast(@divTrunc(pango_units, c.PANGO_SCALE));
+    }
+
     /// Clear the surface to fully transparent before drawing on ARGB windows.
     /// Required so the compositor can apply transparency correctly.
     pub fn clearTransparent(self: *DrawContext) void {
@@ -263,12 +297,7 @@ pub const DrawContext = struct {
 
         _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
 
-        const rect = defs.xcb.xcb_rectangle_t{
-            .x      = @intCast(x),
-            .y      = @intCast(y),
-            .width  = width,
-            .height = height,
-        };
+        const rect = makeRect(x, y, width, height);
         _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
     }
 
@@ -279,7 +308,7 @@ pub const DrawContext = struct {
 
         // Offset move_to by the baseline so text sits at the correct vertical position
         const baseline = c.pango_layout_get_baseline(self.pango_layout);
-        const baseline_pixels: f64 = @as(f64, @floatFromInt(baseline)) / @as(f64, @floatFromInt(c.PANGO_SCALE));
+        const baseline_pixels = pangoToPixelsF64(baseline);
 
         c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - baseline_pixels);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
@@ -328,8 +357,8 @@ pub const DrawContext = struct {
         const descent = c.pango_font_metrics_get_descent(metrics);
 
         const result = .{
-            @as(i16, @intCast(@divTrunc(ascent,  c.PANGO_SCALE))),
-            @as(i16, @intCast(@divTrunc(descent, c.PANGO_SCALE))),
+            pangoToPixelsI16(ascent),
+            pangoToPixelsI16(descent),
         };
 
         self.cached_metrics = .{ .ascent = result[0], .descent = result[1] };
@@ -346,6 +375,23 @@ pub const DrawContext = struct {
         const total_pad = @as(i32, bar_height) - text_height;
         const top_pad: i32 = @max(0, @divTrunc(total_pad, 2));
         return @intCast(top_pad + asc);
+    }
+
+    /// Draw a simple text segment with background and padding
+    /// Common pattern for status bar segments (clock, layout, status, etc.)
+    pub fn drawSegment(
+        self: *DrawContext,
+        x: u16,
+        height: u16,
+        text: []const u8,
+        padding: u16,
+        bg: u32,
+        fg: u32,
+    ) !u16 {
+        const width = self.textWidth(text) + padding * 2;
+        self.fillRect(x, 0, width, height, bg);
+        try self.drawText(x + padding, self.baselineY(height), text, fg);
+        return x + width;
     }
 };
 
@@ -373,12 +419,7 @@ pub const DrawBatch = struct {
     }
     
     pub fn addRect(self: *DrawBatch, x: u16, y: u16, w: u16, h: u16) !void {
-        try self.rects.append(self.allocator, .{
-            .x = @intCast(x),
-            .y = @intCast(y),
-            .width = w,
-            .height = h,
-        });
+        try self.rects.append(self.allocator, makeRect(x, y, w, h));
     }
     
     pub fn flush(self: *DrawBatch, dc: *DrawContext) void {
@@ -431,10 +472,9 @@ fn findVisualType(conn: *defs.xcb.xcb_connection_t, visual_id: u32) ?*defs.xcb.x
 /// Return the first available visual type on the given screen (used as a fallback)
 fn getDefaultVisualType(screen: *defs.xcb.xcb_screen_t) *defs.xcb.xcb_visualtype_t {
     var depth_iter = defs.xcb.xcb_screen_allowed_depths_iterator(screen);
-    while (depth_iter.rem > 0) {
+    while (depth_iter.rem > 0) : (defs.xcb.xcb_depth_next(&depth_iter)) {
         var visual_iter = defs.xcb.xcb_depth_visuals_iterator(depth_iter.data);
         if (visual_iter.rem > 0) return visual_iter.data;
-        defs.xcb.xcb_depth_next(&depth_iter);
     }
     unreachable;
 }
