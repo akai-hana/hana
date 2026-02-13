@@ -229,6 +229,19 @@ pub const DrawContext = struct {
         self.last_color = color;
     }
 
+    /// Apply transparency to a color for ARGB windows
+    inline fn applyTransparency(self: *DrawContext, color: u32) u32 {
+        if (!self.is_argb) return color;
+        const alpha_f32 = std.math.clamp(self.transparency, 0.0, 1.0);
+        const alpha_byte: u32 = @intFromFloat(@round(alpha_f32 * 255.0));
+        return (alpha_byte << 24) | (color & 0xFFFFFF);
+    }
+
+    /// Set Pango layout text (helper to avoid repeated intCast)
+    inline fn setPangoText(self: *DrawContext, text: []const u8) void {
+        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
+    }
+
     /// Clear the surface to fully transparent before drawing on ARGB windows.
     /// Required so the compositor can apply transparency correctly.
     pub fn clearTransparent(self: *DrawContext) void {
@@ -246,12 +259,7 @@ pub const DrawContext = struct {
         // Cairo's premultiplied alpha darkens colors significantly; raw XCB avoids this.
         // The compositor applies transparency, keeping bar and window border colors identical.
 
-        // For ARGB windows, embed the alpha channel from the transparency setting
-        const final_color = if (self.is_argb) blk: {
-            const alpha_f32 = std.math.clamp(self.transparency, 0.0, 1.0);
-            const alpha_byte: u32 = @intFromFloat(@round(alpha_f32 * 255.0));
-            break :blk (alpha_byte << 24) | (color & 0xFFFFFF);
-        } else color;
+        const final_color = self.applyTransparency(color);
 
         _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
 
@@ -267,7 +275,7 @@ pub const DrawContext = struct {
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
         self.setColor(color);
 
-        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
+        self.setPangoText(text);
 
         // Offset move_to by the baseline so text sits at the correct vertical position
         const baseline = c.pango_layout_get_baseline(self.pango_layout);
@@ -279,7 +287,7 @@ pub const DrawContext = struct {
 
     /// Draw text with end-ellipsis truncation when it exceeds max_width pixels
     pub fn drawTextEllipsis(self: *DrawContext, x: u16, y: u16, text: []const u8, max_width: u16, color: u32) !void {
-        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
+        self.setPangoText(text);
         c.pango_layout_set_width(self.pango_layout, @intCast(@as(i32, max_width) * c.PANGO_SCALE));
         c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.END);
 
@@ -298,7 +306,7 @@ pub const DrawContext = struct {
 
     /// Return the rendered pixel width of a string using the current font
     pub fn textWidth(self: *DrawContext, text: []const u8) u16 {
-        c.pango_layout_set_text(self.pango_layout, text.ptr, @intCast(text.len));
+        self.setPangoText(text);
         var width: c_int = undefined;
         var height: c_int = undefined;
         c.pango_layout_get_pixel_size(self.pango_layout, &width, &height);
@@ -377,11 +385,7 @@ pub const DrawBatch = struct {
         if (self.rects.items.len == 0) return;
         
         // Set color for all rectangles
-        const final_color = if (dc.is_argb) blk: {
-            const alpha_f32 = std.math.clamp(dc.transparency, 0.0, 1.0);
-            const alpha_byte: u32 = @intFromFloat(@round(alpha_f32 * 255.0));
-            break :blk (alpha_byte << 24) | (self.color & 0xFFFFFF);
-        } else self.color;
+        const final_color = dc.applyTransparency(self.color);
         
         _ = defs.xcb.xcb_change_gc(dc.conn, dc.gc, 
             defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});

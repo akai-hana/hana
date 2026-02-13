@@ -28,6 +28,13 @@ const debug = @import("debug");
 // Constants for X11 property queries
 const MAX_PROPERTY_LENGTH: u32 = 256;
 
+/// Maximum length to read from XCB property values (in bytes)
+/// Prevents excessive memory usage when fetching window/root properties
+pub const XCB_PROPERTY_MAX_VALUE_LENGTH: usize = 1024;
+
+/// Flag for xcb_get_property - do not delete the property after reading
+pub const XCB_PROPERTY_NO_DELETE: u8 = 0;
+
 pub inline fn flush(conn: *xcb.xcb_connection_t) void {
     _ = xcb.xcb_flush(conn);
 }
@@ -299,6 +306,43 @@ pub fn getAtomCached(comptime name: []const u8) !u32 {
         .UTF8_STRING => cache.utf8_string,
     };
 }
+
+// ============================================================================
+// XCB Property Fetching Helpers
+// ============================================================================
+
+/// Fetch an XCB property and write its value to an ArrayList buffer.
+/// Limits the value to XCB_PROPERTY_MAX_VALUE_LENGTH bytes to prevent excessive memory usage.
+///
+/// Returns the buffer contents on success, or empty slice if property doesn't exist or is invalid.
+/// The buffer is cleared before writing, making this safe to call repeatedly with the same buffer.
+///
+/// Common usage: Fetching window titles, status text, and other text properties.
+pub fn fetchPropertyToBuffer(
+    conn: *xcb.xcb_connection_t,
+    window: u32,
+    atom: u32,
+    atom_type: u32,
+    buffer: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+) ![]const u8 {
+    const reply = xcb.xcb_get_property_reply(conn,
+        xcb.xcb_get_property(conn, XCB_PROPERTY_NO_DELETE, window, atom, atom_type, 0, MAX_PROPERTY_LENGTH),
+        null
+    ) orelse return "";
+    defer std.c.free(reply);
+    
+    if (reply.*.format != 8 or reply.*.value_len == 0) return "";
+    
+    buffer.clearRetainingCapacity();
+    const actual_len = @min(@as(usize, @intCast(reply.*.value_len)), XCB_PROPERTY_MAX_VALUE_LENGTH);
+    const value_ptr: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
+    try buffer.appendSlice(allocator, value_ptr[0..actual_len]);
+    
+    return buffer.items;
+}
+
+// ============================================================================
 
 // OPTIMIZATION 2.1: Cache WM_TAKE_FOCUS support to avoid ~50µs roundtrip per focus
 // WM_PROTOCOLS is immutable after window creation, so cache it once per window
