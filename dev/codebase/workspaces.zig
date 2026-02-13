@@ -260,22 +260,32 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
             // Tiling enabled - let tiling system position windows
             tiling.retileCurrentWorkspace(wm, false);
         } else {
-            // Tiling disabled - manually position windows to visible locations
+            // FIXED 2.6: Pre-batch geometry cookies BEFORE positioning
+            // Prevents blocking geometry queries during server grab
+            const GeometryInfo = struct { cookie: xcb.xcb_get_geometry_cookie_t, win: u32 };
+            var geom_infos = std.ArrayList(GeometryInfo).empty;
+            defer geom_infos.deinit(wm.allocator);
+            
+            // Send all geometry requests first (non-blocking)
             for (new_workspace.windows.items()) |win| {
-                const geom_cookie = xcb.xcb_get_geometry(wm.conn, win);
-                const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, geom_cookie, null);
-                
+                const cookie = xcb.xcb_get_geometry(wm.conn, win);
+                geom_infos.append(wm.allocator, .{ .cookie = cookie, .win = win }) catch continue;
+            }
+            
+            // Tiling disabled - manually position windows to visible locations
+            const x: i16 = @divTrunc(@as(i16, @intCast(wm.screen.width_in_pixels)), 4);
+            const y: i16 = @divTrunc(@as(i16, @intCast(wm.screen.height_in_pixels)), 4);
+            
+            for (geom_infos.items) |info| {
+                const geom_reply = xcb.xcb_get_geometry_reply(wm.conn, info.cookie, null);
                 if (geom_reply) |reply| {
                     defer std.c.free(reply);
-                    
-                    const x: i16 = @divTrunc(@as(i16, @intCast(wm.screen.width_in_pixels)), 4);
-                    const y: i16 = @divTrunc(@as(i16, @intCast(wm.screen.height_in_pixels)), 4);
                     
                     const values = [_]u32{
                         @bitCast(@as(i32, x)),
                         @bitCast(@as(i32, y)),
                     };
-                    _ = xcb.xcb_configure_window(wm.conn, win,
+                    _ = xcb.xcb_configure_window(wm.conn, info.win,
                         xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &values);
                 }
             }
@@ -312,7 +322,9 @@ pub inline fn getCurrentWorkspace() ?u8 {
 
 pub inline fn isOnCurrentWorkspace(win: u32) bool {
     const s = StateManager.get(true) orelse return false;
-    return s.workspaces[s.current].contains(win);
+    // FIXED 2.13: O(1) hashmap lookup instead of O(n) linear scan
+    const ws_idx = s.window_to_workspace.get(win) orelse return false;
+    return ws_idx == s.current;
 }
 
 pub inline fn getState() ?*State {

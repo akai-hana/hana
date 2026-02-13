@@ -144,6 +144,9 @@ fn updateClockIfNeeded(s: *State) void {
 }
 
 // FIXED: Use stack buffer for common case to avoid heap allocation
+// NOTE 2.8: Result is always heap-allocated because caller needs owned memory
+// The stack buffer optimization reduces allocator overhead but still requires
+// final heap allocation since callers (loadBarFonts) free the result later
 fn sizeFont(alloc: std.mem.Allocator, font: []const u8, size: u16) ![]const u8 {
     if (size == 0) return font;
     
@@ -212,6 +215,9 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16, want_transparency
 fn calculateBarHeight(wm: *defs.WM) !u16 {
     if (wm.config.bar.height) |h| return h;
     
+    // TODO 2.3: Optimization opportunity - create real bar window first with provisional
+    // height, load fonts on real DrawContext, measure, then resize if needed
+    // This would eliminate temporary window creation + 2 extra X11 roundtrips
     const temp_win = xcb.xcb_generate_id(wm.conn);
     _ = xcb.xcb_create_window(wm.conn, xcb.XCB_COPY_FROM_PARENT, temp_win, wm.screen.root,
         0, 0, 1, 1, 0, xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, wm.screen.root_visual, 0, null);
@@ -507,7 +513,9 @@ pub fn setBarState(wm: *defs.WM, action: BarAction) void {
 
 pub fn updateIfDirty(wm: *defs.WM) !void {
     if (state) |s| {
-        updateClockIfNeeded(s);
+        // FIXED 2.11: Removed updateClockIfNeeded - timerfd handles clock updates
+        // updateClockIfNeeded does clock_gettime on every event, but the timer
+        // fd fires exactly once per second, making the syscall here redundant
         if (s.isDirty()) {
             if (s.dirty) try draw(s, wm) else if (s.dirty_clock) try drawClockOnly(s, wm);
             s.clearDirty();

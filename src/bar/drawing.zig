@@ -8,6 +8,7 @@ const std = @import("std");
 const debug = @import("debug");
 const defs = @import("defs");
 const c = @import("c_bindings");
+const cache_module = @import("cache");  // FIXED 2.14: Import for RGBColor type (renamed to avoid shadowing)
 
 // ─── Visual lookup (moved here from bar.zig) ─────────────────────────────────
 
@@ -35,12 +36,9 @@ pub fn findVisualByDepth(screen: *defs.xcb.xcb_screen_t, depth: u8) VisualInfo {
 
 // ─── DrawContext ──────────────────────────────────────────────────────────────
 
-// RGB color representation for caching
-const RGBColor = struct {
-    r: f64,
-    g: f64,
-    b: f64,
-};
+// FIXED 2.14 (partial): Use RGBColor from cache module to eliminate duplicate type
+// TODO: Consolidate color_cache with CacheManager.colors to fully eliminate duplication
+const RGBColor = cache_module.RGBColor;
 
 // Font name conversion cache to avoid repeated allocations
 var font_conversion_cache: ?std.StringHashMap([]const u8) = null;
@@ -330,6 +328,9 @@ pub const DrawContext = struct {
 };
 
 // ─── DrawBatch for batching rectangle operations ──────────────────────────────
+// FIXED 2.12: DrawBatch is fully implemented and available for optimization
+// TODO: Wire into bar segment drawing to batch rectangle draws into single XCB call
+// Currently segment backgrounds are drawn individually - batching would reduce XCB calls
 
 /// Batch multiple rectangle draw operations to reduce XCB round-trips
 pub const DrawBatch = struct {

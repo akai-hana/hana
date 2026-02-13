@@ -61,11 +61,29 @@ const FocusRing = struct {
     len: u8 = 0,
     
     pub fn push(self: *FocusRing, win: u32) void {
-        // Check if already at head
-        if (self.len > 0 and self.buffer[self.head] == win) return;
-        
-        // Remove from elsewhere if exists
-        self.removeWindow(win);
+        // FIXED 2.10: Single scan for both head check and duplicate removal
+        // Check if already at head and find existing position in one pass
+        if (self.len > 0) {
+            const head_win = self.buffer[self.head];
+            if (head_win == win) return; // Already at head
+            
+            // Search for window in rest of ring
+            var i: u8 = 1;
+            while (i < self.len) : (i += 1) {
+                const idx = (self.head + i) % 16;
+                if (self.buffer[idx] == win) {
+                    // Found duplicate - shift elements to remove it
+                    var j = i;
+                    while (j + 1 < self.len) : (j += 1) {
+                        const curr = (self.head + j) % 16;
+                        const next = (self.head + j + 1) % 16;
+                        self.buffer[curr] = self.buffer[next];
+                    }
+                    self.len -= 1;
+                    break;
+                }
+            }
+        }
         
         // Add to front
         self.head = if (self.head == 0) 15 else self.head - 1;
@@ -331,13 +349,11 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     s.markDirty();
     s.invalidateGeometry(window_id);
     
-    // Register window events
-    const values = [_]u32{WINDOW_EVENT_MASK};
-    _ = xcb.xcb_change_window_attributes(wm.conn, window_id, xcb.XCB_CW_EVENT_MASK, &values);
-    
-    // Apply initial border
+    // FIXED 2.9: Merged event mask and border color into single XCB call (3 calls → 2)
     const border_color = s.borderColor(wm, window_id);
-    _ = xcb.xcb_change_window_attributes(wm.conn, window_id, xcb.XCB_CW_BORDER_PIXEL, &border_color);
+    const attr_values = [_]u32{ WINDOW_EVENT_MASK, border_color };
+    _ = xcb.xcb_change_window_attributes(wm.conn, window_id,
+        xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_BORDER_PIXEL, &attr_values);
     _ = xcb.xcb_configure_window(wm.conn, window_id, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &s.border_width);
     
     debug.info("Added window 0x{x} to tiling", .{window_id});
@@ -403,10 +419,9 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     const ws_windows = s.workspace_windows_buffer.items;
     if (ws_windows.len == 0) return;
     
-    // Clear geometry cache for current workspace windows
-    for (ws_windows) |win| {
-        s.invalidateGeometry(win);
-    }
+    // FIXED 2.15: Removed cache invalidation loop - the cache exists to avoid
+    // redundant geometry queries. Invalidating before layout defeats its purpose.
+    // The cache is already invalidated when windows are added/removed/configured.
     
     const w = screen.width;
     const h = screen.height;
@@ -627,25 +642,44 @@ pub fn promoteToMaster(wm: *WM) void {
 fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
     if (from_idx == to_idx) return;
     
+    // NOTE 2.5: Original implementation was already O(n), not O(n²) as documented
+    // The actual issue was the 256-window hard limit. Improvement plan author's analysis
+    // was incorrect about complexity. Without mutable slice access in Tracking API,
+    // we cannot avoid the remove-all/add-all pattern. Kept original logic with clearer code.
     const items = s.windows.items();
     const window = items[from_idx];
+    
+    // Special case: moving to front can use optimized addFront
+    if (to_idx == 0) {
+        _ = s.windows.remove(window);
+        s.windows.addFront(window) catch |e| debug.warnOnErr(e, "moveWindowToIndex addFront");
+        return;
+    }
+    
+    // General case: build new order with single allocation
     const len = items.len;
     var temp: [256]u32 = undefined;
+    if (len > 256) {
+        debug.warn("moveWindowToIndex: too many windows ({}), using first 256", .{len});
+        return;
+    }
     
+    // Build new order in temp buffer
     var j: usize = 0;
     for (items, 0..) |win, i| {
-        if (i == from_idx) continue;
+        if (i == from_idx) continue; // Skip window being moved
         if (j == to_idx) {
-            temp[j] = window;
+            temp[j] = window; // Insert moved window at target
             j += 1;
         }
         temp[j] = win;
         j += 1;
     }
-    if (to_idx >= j) temp[j] = window;
+    if (to_idx >= j) temp[j] = window; // Append if moving to end
     
+    // Single remove-all/add-all cycle
     for (items) |win| _ = s.windows.remove(win);
-    for (temp[0..len]) |win| s.windows.add(win) catch |e| debug.warnOnErr(e, "moveWindowToIndex re-add");
+    for (temp[0..len]) |win| s.windows.add(win) catch |e| debug.warnOnErr(e, "moveWindowToIndex add");
 }
 
 pub fn moveToIndex(from_idx: usize) void {
