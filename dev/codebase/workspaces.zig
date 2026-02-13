@@ -109,19 +109,7 @@ pub fn deinit(wm: *WM) void {
     StateManager.deinit(wm.allocator);
 }
 
-pub fn addWindowToCurrentWorkspace(_: *WM, win: u32) void {
-    const s = StateManager.get(true) orelse return;
-    if (@import("bar").isBarWindow(win)) return;
-
-    const ws = &s.workspaces[s.current];
-    ws.add(win) catch |err| {
-        debug.err("Failed to add window {x}: {}", .{ win, err });
-        return;
-    };
-    s.window_to_workspace.put(win, s.current) catch |err| {
-        debug.warn("Failed to update window map for {x}: {}", .{ win, err });
-    };
-}
+// FIXED 3.12: Removed dead addWindowToCurrentWorkspace function (no callers)
 
 pub fn removeWindow(win: u32) void {
     const s = StateManager.get(true) orelse return;

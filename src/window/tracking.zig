@@ -29,7 +29,8 @@ pub const Tracking = struct {
         len: u8,
     },
     large: ?struct {
-        list: std.ArrayList(u32),
+        // FIXED 3.25: Corrected type to match unmanaged API usage
+        list: std.ArrayListUnmanaged(u32),
         set: std.AutoHashMap(u32, void),
     },
     allocator: std.mem.Allocator,
@@ -134,8 +135,10 @@ pub const Tracking = struct {
         return false;
     }
 
-    pub fn remove(self: *Tracking, win: u32) bool { return self.removeImpl(win, false); }
-    pub fn removeOrdered(self: *Tracking, win: u32) bool { return self.removeImpl(win, true); }
+    /// FIXED 3.5: Swapped naming - ordered removal is now the safe default
+    /// Use removeUnordered for performance-critical paths where order doesn't matter
+    pub fn remove(self: *Tracking, win: u32) bool { return self.removeImpl(win, true); }
+    pub fn removeUnordered(self: *Tracking, win: u32) bool { return self.removeImpl(win, false); }
     
     pub inline fn items(self: *const Tracking) []const u32 {
         if (self.small) |s| {
@@ -178,7 +181,8 @@ pub const Tracking = struct {
     fn promoteToLarge(self: *Tracking) !void {
         const s = self.small.?;
         
-        var list: std.ArrayList(u32) = .empty;
+        // FIXED 3.25: Use ArrayListUnmanaged to match type annotation
+        var list: std.ArrayListUnmanaged(u32) = .empty;
         var set = std.AutoHashMap(u32, void).init(self.allocator);
         
         // Pre-allocate to avoid reallocation

@@ -214,9 +214,10 @@ pub const State = struct {
     /// This prevents the cache from growing unbounded over time
     /// Call this periodically (e.g., after workspace switches or major layout changes)
     pub fn cleanupStaleGeometryCache(self: *State, wm: *const WM) void {
-        // Collect keys to remove
-        var to_remove: std.ArrayListUnmanaged(u32) = .{};
-        defer to_remove.deinit(self.allocator);
+        // FIXED 3.16: Use stack buffer instead of heap allocation
+        // Geometry cache >64 entries is extremely rare
+        var to_remove: [64]u32 = undefined;
+        var count: usize = 0;
         
         var iter = self.geometry_cache.keyIterator();
         while (iter.next()) |win_ptr| {
@@ -224,12 +225,15 @@ pub const State = struct {
             // 1. No longer exist in the WM's window tracking
             // 2. Are not in the tiling system
             if (!wm.hasWindow(win_ptr.*) or !self.windows.contains(win_ptr.*)) {
-                to_remove.append(self.allocator, win_ptr.*) catch continue;
+                if (count < to_remove.len) {
+                    to_remove[count] = win_ptr.*;
+                    count += 1;
+                }
             }
         }
         
         // Remove all stale entries
-        for (to_remove.items) |win| {
+        for (to_remove[0..count]) |win| {
             _ = self.geometry_cache.remove(win);
         }
         
@@ -324,16 +328,9 @@ pub fn deinit(wm: *WM) void {
     StateManager.deinit(wm.allocator);
 }
 
+// FIXED 3.6: Use std.meta.stringToEnum instead of manual string comparisons
 fn parseLayout(layout_str: []const u8) Layout {
-    if (std.mem.eql(u8, layout_str, "monocle")) {
-        return .monocle;
-    } else if (std.mem.eql(u8, layout_str, "grid")) {
-        return .grid;
-    } else if (std.mem.eql(u8, layout_str, "fibonacci")) {
-        return .fibonacci;
-    } else {
-        return .master;
-    }
+    return std.meta.stringToEnum(Layout, layout_str) orelse .master;
 }
 
 pub fn addWindow(wm: *WM, window_id: u32) void {
@@ -488,13 +485,7 @@ pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void
     }
 }
 
-pub fn onFocusChange(wm: *WM, window_id: u32) void {
-    const s = StateManager.get(true) orelse return;
-    const old_focused = wm.focused_window;
-    
-    s.updateFocusHistory(window_id);
-    updateWindowFocus(wm, old_focused, window_id);
-}
+// FIXED 3.13: Removed dead onFocusChange export (no callers)
 
 pub fn adjustMasterCount(wm: *WM, delta: i8) void {
     const s = StateManager.get(true) orelse return;

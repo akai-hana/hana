@@ -183,11 +183,25 @@ pub const DrawContext = struct {
     }
 
     pub fn loadFonts(self: *DrawContext, font_names: []const []const u8) !void {
-        // Pango handles font fallback automatically via fontconfig
+        // FIXED 3.22: Compose all fonts into comma-separated fallback list for Pango
+        // Pango natively supports multiple fonts via font description strings
         if (font_names.len > 0) {
-            try self.loadFont(font_names[0]);
-            if (font_names.len > 1) {
-                debug.info("More than one font detected ({}). Pango will use these alongside primary font set.", .{font_names.len - 1});
+            if (font_names.len == 1) {
+                try self.loadFont(font_names[0]);
+            } else {
+                // Compose comma-separated font list for Pango fallback
+                var font_list = std.ArrayList(u8){};
+                defer font_list.deinit(self.allocator);
+                
+                for (font_names, 0..) |font, i| {
+                    try font_list.appendSlice(self.allocator, font);
+                    if (i < font_names.len - 1) {
+                        try font_list.append(self.allocator, ',');
+                    }
+                }
+                
+                try self.loadFont(font_list.items);
+                debug.info("Loaded {} fonts with fallback support", .{font_names.len});
             }
         } else {
             try self.loadFont("monospace:size=10");
@@ -340,14 +354,14 @@ pub const DrawBatch = struct {
     
     pub fn init(allocator: std.mem.Allocator, color: u32) !DrawBatch {
         return .{
-            .rects = std.ArrayList(defs.xcb.xcb_rectangle_t).init(allocator),
+            .rects = std.ArrayList(defs.xcb.xcb_rectangle_t){},
             .color = color,
             .allocator = allocator,
         };
     }
     
     pub fn deinit(self: *DrawBatch) void {
-        self.rects.deinit();
+        self.rects.deinit(self.allocator);
     }
     
     pub fn addRect(self: *DrawBatch, x: u16, y: u16, w: u16, h: u16) !void {
@@ -436,7 +450,8 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     
     if (std.mem.indexOfScalar(u8, xft_name, ':') == null) return xft_name;
 
-    var result = try std.ArrayList(u8).initCapacity(allocator, xft_name.len);
+    var result = std.ArrayList(u8){};
+    try result.ensureTotalCapacity(allocator, xft_name.len);
     errdefer result.deinit(allocator);
 
     var parts = std.mem.splitScalar(u8, xft_name, ':');

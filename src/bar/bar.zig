@@ -83,7 +83,7 @@ const State = struct {
             .cached_ws_width = config.scaledWorkspaceWidth(),
             .cached_workspace_x = 0,  // FIXED 2.7: Populated during draw
             .cached_indicator_size = config.scaledIndicatorSize(),
-            .has_clock_segment = State.detectClockSegment(&config),
+            .has_clock_segment = State.detectClockSegment(&config),  // TODO 3.8: Needs updating on config reload
             .cache_manager = cache_mgr,
         };
         
@@ -91,7 +91,7 @@ const State = struct {
         try s.status_text.ensureTotalCapacity(allocator, 256);
         try s.cached_title.ensureTotalCapacity(allocator, 256);
         
-        try s.status_text.appendSlice(allocator, "hana");
+        // FIXED 3.21: Removed "hana" debug leftover - start with empty status
         
         // Initialize workspace label cache
         try s.cache_manager.updateWorkspaceLabels(dc, &config);

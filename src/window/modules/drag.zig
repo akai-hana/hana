@@ -74,7 +74,4 @@ pub inline fn isDragging(wm: *WM) bool {
     return wm.drag_state.active;
 }
 
-pub inline fn flushPendingUpdate(wm: *WM) void {
-    // No-op: throttling removed, no pending updates to flush
-    _ = wm;
-}
+// FIXED 3.2: Removed flushPendingUpdate - was a no-op with no callers
