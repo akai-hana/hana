@@ -44,10 +44,6 @@ const KeybindState = struct {
         self.map.deinit();
     }
 
-    inline fn get(self: *KeybindState, key: u64) ?*const defs.Action {
-        return self.map.get(key);
-    }
-
     fn rebuild(self: *KeybindState, wm: *WM) !void {
         self.map.clearRetainingCapacity();
         try self.map.ensureTotalCapacity(@intCast(wm.config.keybindings.items.len));
@@ -127,7 +123,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     const keysym = xkb_ptr.keycodeToKeysym(event.detail);
     const key = makeHash(mods, keysym);
 
-    if (state.get(key)) |action| {
+    if (state.map.get(key)) |action| {
         // REMOVED: No longer need to reset event counters
         // The new approach doesn't use counters - it uses context-aware suppression
         executeAction(action, wm) catch |err| {

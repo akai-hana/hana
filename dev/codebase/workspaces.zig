@@ -12,6 +12,13 @@ const tracking = @import("tracking").Tracking;
 const createModule = @import("module").module;
 const debug = @import("debug");
 
+// OPTIMIZATION: Static workspace names (no heap allocation)
+const WORKSPACE_NAMES = blk: {
+    var names: [20][]const u8 = undefined;
+    for (&names, 1..) |*name, i| name.* = std.fmt.comptimePrint("{d}", .{i});
+    break :blk names;
+};
+
 pub const Workspace = struct {
     id: u8,  // OPTIMIZED: u8 instead of usize
     windows: tracking,
@@ -55,7 +62,7 @@ const StateManager = createModule(State);
 inline fn cleanupWorkspaces(workspaces: []Workspace, allocator: std.mem.Allocator) void {
     for (workspaces) |*ws| {
         ws.deinit();
-        allocator.free(ws.name);
+        // Note: workspace names are now static (WORKSPACE_NAMES), no need to free
     }
     allocator.free(workspaces);
 }
@@ -67,10 +74,10 @@ pub fn init(wm: *WM) void {
         return;
     };
     
-    // OPTIMIZATION: Single loop for initialization
+    // OPTIMIZATION: Single loop for initialization with static names
     for (workspaces_array, 0..) |*ws, i| {
         const ws_id: u8 = @intCast(i);
-        const name = std.fmt.allocPrint(wm.allocator, "{}", .{i + 1}) catch "?";
+        const name = if (i < WORKSPACE_NAMES.len) WORKSPACE_NAMES[i] else "?";
         ws.* = Workspace.init(wm.allocator, ws_id, name) catch {
             debug.err("Failed to init workspace {}", .{i});
             cleanupWorkspaces(workspaces_array[0..i], wm.allocator);

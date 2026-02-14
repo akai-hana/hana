@@ -30,7 +30,6 @@
 // Window event handlers - IMPROVED: Intelligent focus-follows-mouse
 
 const std        = @import("std");
-const builtin    = @import("builtin");
 const defs       = @import("defs");
     const xcb    = defs.xcb;
     const WM     = defs.WM;
@@ -87,24 +86,10 @@ fn validateWorkspace(target_workspace: ?u8, current_workspace: u8) u8 {
 /// Prevents redundant X11 roundtrips when pointer hasn't moved significantly
 const POINTER_CACHE_VALIDITY_MS: i64 = 50;
 
-/// Helper to convert Instant to milliseconds for cache comparison
+/// Convert Instant to milliseconds for cache comparison
 inline fn getMilliTimestamp(instant: std.time.Instant) i64 {
-    // Check OS at compile time (same logic as Instant.is_posix)
-    const is_posix = switch (builtin.os.tag) {
-        .windows, .uefi, .wasi => false,
-        else => true,
-    };
-    
-    // For POSIX systems, extract seconds from timespec
-    if (is_posix) {
-        const sec = instant.timestamp.sec;
-        const nsec = instant.timestamp.nsec;
-        return sec * std.time.ms_per_s + @divFloor(nsec, @as(i64, std.time.ns_per_ms));
-    } else {
-        // For Windows/WASI/UEFI, timestamp is in nanoseconds or QPC ticks
-        // Convert to milliseconds (this is an approximation for cache timing)
-        return @divFloor(@as(i64, @intCast(instant.timestamp)), std.time.ns_per_ms);
-    }
+    return instant.timestamp.sec * std.time.ms_per_s +
+           @divFloor(instant.timestamp.nsec, @as(i64, std.time.ns_per_ms));
 }
 
 /// Queries the current pointer (mouse) position and caches it in the WM state.
@@ -265,15 +250,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     utils.flush(wm.conn);
 }
 
-pub fn handleUnmapNotify(event: *const xcb.xcb_unmap_notify_event_t, wm: *WM) void {
-    const win = event.window;
-
-    if (bar.isBarWindow(win)) return;
-    
-    // Check if this is a window we're managing
-    if (!wm.hasWindow(win)) return;
-
-    // Clean up fullscreen state if window was fullscreen
+fn unmanageWindow(wm: *WM, win: u32) void {
     if (wm.fullscreen.isFullscreen(win)) {
         cleanupFullscreenWindow(wm, win);
         bar.setBarState(wm, .show_fullscreen);
@@ -281,34 +258,19 @@ pub fn handleUnmapNotify(event: *const xcb.xcb_unmap_notify_event_t, wm: *WM) vo
 
     const was_focused = (wm.focused_window == win);
 
-    if (wm.config.tiling.enabled) {
-        tiling.removeWindow(wm, win);
-    }
-    
-    // OPTIMIZATION: Invalidate cached geometry when window is unmapped
+    if (wm.config.tiling.enabled) tiling.removeWindow(win);
     tiling.invalidateWindowGeometry(win);
-    // FIXED 2.1: Remove from WM_TAKE_FOCUS cache
     utils.uncacheWMTakeFocus(win);
-
     workspaces.removeWindow(win);
     wm.removeWindow(win);
 
     if (was_focused) {
-        // Retile FIRST to position windows correctly
         if (wm.config.tiling.enabled) {
             tiling.retileIfDirty(wm);
             utils.flush(wm.conn);
         }
-        
         focus.clearFocus(wm);
-        
-        // IMPROVED: Explicitly enable focus-follows-mouse after window unmap
         wm.suppress_focus_reason = .none;
-        
-        // PHASE 2: Use cached pointer instead of querying again
-        _ = getCachedPointer(wm);
-        
-        // Now focus window under pointer
         focusWindowUnderPointer(wm);
     }
 
@@ -316,53 +278,17 @@ pub fn handleUnmapNotify(event: *const xcb.xcb_unmap_notify_event_t, wm: *WM) vo
     utils.flush(wm.conn);
 }
 
+pub fn handleUnmapNotify(event: *const xcb.xcb_unmap_notify_event_t, wm: *WM) void {
+    const win = event.window;
+    if (bar.isBarWindow(win)) return;
+    if (!wm.hasWindow(win)) return;
+    unmanageWindow(wm, win);
+}
+
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM) void {
     const win = event.window;
-
     if (bar.isBarWindow(win)) return;
-
-    // Clean up fullscreen state
-    if (wm.fullscreen.isFullscreen(win)) {
-        cleanupFullscreenWindow(wm, win);
-        bar.setBarState(wm, .show_fullscreen);
-    }
-
-    const was_focused = (wm.focused_window == win);
-
-    if (wm.config.tiling.enabled) {
-        tiling.removeWindow(wm, win);
-    }
-    
-    // OPTIMIZATION: Invalidate cached geometry when window is destroyed
-    tiling.invalidateWindowGeometry(win);
-    // FIXED 2.1: Remove from WM_TAKE_FOCUS cache
-    utils.uncacheWMTakeFocus(win);
-
-    workspaces.removeWindow(win);
-    wm.removeWindow(win);
-
-    if (was_focused) {
-        // Retile FIRST to position windows correctly
-        if (wm.config.tiling.enabled) {
-            tiling.retileIfDirty(wm);
-            utils.flush(wm.conn);
-        }
-        
-        focus.clearFocus(wm);
-        
-        // IMPROVED: Explicitly enable focus-follows-mouse after window destruction
-        // This is the OPPOSITE of window spawn behavior
-        wm.suppress_focus_reason = .none;
-        
-        // PHASE 2: Use cached pointer instead of querying again
-        _ = getCachedPointer(wm);
-        
-        // Now focus window under pointer (focus SHOULD steal here)
-        focusWindowUnderPointer(wm);
-    }
-
-    bar.markDirty();
-    utils.flush(wm.conn);
+    unmanageWindow(wm, win);
 }
 
 // Focus the window currently under the pointer
@@ -393,9 +319,6 @@ fn focusWindowUnderPointer(wm: *WM) void {
     // Fallback: focus first window in workspace if pointer isn't over anything valid
     const ws = workspaces.getCurrentWorkspaceObject() orelse return;
     const windows = ws.windows.items();
-    
-    // FIXED: Add early return if no windows to iterate
-    if (windows.len == 0) return;
     
     for (windows) |workspace_win| {
         if (filters.isValidManagedWindow(wm, workspace_win)) {

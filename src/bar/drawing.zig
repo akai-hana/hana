@@ -55,15 +55,6 @@ inline fn makeRect(x: u16, y: u16, width: u16, height: u16) defs.xcb.xcb_rectang
     };
 }
 
-/// Extract RGB color components from packed 0xRRGGBB value
-inline fn extractRGBComponents(color: u32) struct { u8, u8, u8 } {
-    return .{
-        @intCast((color >> 16) & 0xFF),
-        @intCast((color >> 8)  & 0xFF),
-        @intCast( color        & 0xFF),
-    };
-}
-
 // ──────────────────────────────────────────────────────────────────────────────
 
 pub const DrawContext = struct {
@@ -206,40 +197,22 @@ pub const DrawContext = struct {
     }
 
     pub fn loadFonts(self: *DrawContext, font_names: []const []const u8) !void {
-        // FIXED 3.22: Compose all fonts into comma-separated fallback list for Pango
-        // Pango natively supports multiple fonts via font description strings
-        if (font_names.len > 0) {
-            if (font_names.len == 1) {
-                try self.loadFont(font_names[0]);
-            } else {
-                // Compose comma-separated font list for Pango fallback
-                var font_list = std.ArrayList(u8){};
-                defer font_list.deinit(self.allocator);
-                
-                for (font_names, 0..) |font, i| {
-                    try font_list.appendSlice(self.allocator, font);
-                    if (i < font_names.len - 1) {
-                        try font_list.append(self.allocator, ',');
-                    }
-                }
-                
-                try self.loadFont(font_list.items);
-                debug.info("Loaded {} fonts with fallback support", .{font_names.len});
-            }
-        } else {
-            try self.loadFont("monospace:size=10");
-        }
+        if (font_names.len == 0) return self.loadFont("monospace:size=10");
+        if (font_names.len == 1) return self.loadFont(font_names[0]);
+
+        const font_list = try std.mem.join(self.allocator, ",", font_names);
+        defer self.allocator.free(font_list);
+        try self.loadFont(font_list);
+        debug.info("Loaded {} fonts with fallback support", .{font_names.len});
     }
 
     /// Extract Cairo RGB components from a packed 0xRRGGBB color value
     fn colorToRGB(self: *DrawContext, color: u32) struct { f64, f64, f64 } {
         if (self.color_cache.get(color)) |rgb| return .{ rgb.r, rgb.g, rgb.b };
-        
-        const r, const g, const b = extractRGBComponents(color);
         const rgb = RGBColor{
-            .r = @as(f64, @floatFromInt(r)) / 255.0,
-            .g = @as(f64, @floatFromInt(g)) / 255.0,
-            .b = @as(f64, @floatFromInt(b)) / 255.0,
+            .r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0,
+            .g = @as(f64, @floatFromInt((color >> 8)  & 0xFF)) / 255.0,
+            .b = @as(f64, @floatFromInt( color        & 0xFF)) / 255.0,
         };
         self.color_cache.put(color, rgb) catch {};
         return .{ rgb.r, rgb.g, rgb.b };

@@ -29,16 +29,11 @@ var running = std.atomic.Value(bool).init(true);
 
 const FDs = struct { signal: posix.fd_t, timer: posix.fd_t };
 
-inline fn setupSignalSet() std.os.linux.sigset_t {
+fn setupPollFds() !FDs {
     var sigset: std.os.linux.sigset_t = std.mem.zeroes(std.os.linux.sigset_t);
     std.os.linux.sigaddset(&sigset, posix.SIG.HUP);
     std.os.linux.sigaddset(&sigset, posix.SIG.TERM);
     std.os.linux.sigaddset(&sigset, posix.SIG.INT);
-    return sigset;
-}
-
-fn setupPollFds() !FDs {
-    var sigset = setupSignalSet();
     _ = std.os.linux.sigprocmask(posix.SIG.BLOCK, &sigset, null);
     const sfd = std.os.linux.signalfd(-1, &sigset, std.os.linux.SFD.NONBLOCK | std.os.linux.SFD.CLOEXEC);
     if (sfd < 0) return error.SignalFdFailed;
@@ -166,7 +161,6 @@ fn handleConfigReload(wm: *WM) !void {
     // Validate config before applying it
     if (new_config.tiling.master_count == 0) {
         debug.err("Invalid config: master_count must be > 0, keeping old", .{});
-        new_config.deinit(wm.allocator);
         return error.InvalidConfig;
     }
     if (new_config.tiling.master_width.value <= 0
@@ -320,9 +314,7 @@ pub fn main() !void {
         if (pollfds[2].revents & posix.POLL.IN != 0) {
             var expiration: u64 = 0;
             _ = posix.read(fds.timer, std.mem.asBytes(&expiration)) catch {};
-            bar.checkClockUpdate() catch |err| {
-                debug.err("Clock update failed: {}", .{err});
-            };
+            bar.checkClockUpdate();
         }
         
         // Error handling
