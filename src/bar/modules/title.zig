@@ -94,11 +94,16 @@ fn drawSegmentedTitles(
     std.mem.sort(WindowInfo, window_infos.items, {}, compareWindows);
     
     // Calculate segment width for each window
-    const segment_width: u16 = width / @as(u16, @intCast(window_infos.items.len));
+    const num_windows: u32 = @intCast(window_infos.items.len);
+    const segment_width: u16 = @intCast(@divFloor(@as(u32, width), num_windows));
+    
+    // Ensure segment width is at least 1 pixel
+    if (segment_width == 0) return;
     
     // Draw each window's segment
     for (window_infos.items, 0..) |info, i| {
-        const segment_x = start_x + @as(u16, @intCast(i)) * segment_width;
+        const i_u32: u32 = @intCast(i);
+        const segment_x = start_x + @as(u16, @intCast(i_u32 * @as(u32, segment_width)));
         const is_focused_window = wm.focused_window == info.window;
         
         // Simple color logic: focused uses accent, unfocused uses unfocused accent
@@ -109,8 +114,8 @@ fn drawSegmentedTitles(
         // Draw segment background
         dc.fillRect(segment_x, 0, segment_width, height, accent);
         
-        // Draw window title if available
-        if (info.title.len > 0) {
+        // Draw window title if available and segment is wide enough
+        if (info.title.len > 0 and segment_width > scaled_padding * 2) {
             const text_color = if (is_focused_window) config.selected_fg else config.fg;
             try dc.drawTextEllipsis(
                 segment_x + scaled_padding,
@@ -173,7 +178,7 @@ fn getWindowTitleDirect(conn: *xcb.xcb_connection_t, window: u32, allocator: std
 }
 
 fn fetchPropertyDirect(conn: *xcb.xcb_connection_t, win: u32, atom: u32, atom_type: u32, allocator: std.mem.Allocator) !?[]const u8 {
-    const cookie = xcb.xcb_get_property(conn, 0, win, atom, atom_type, 0, 1024);
+    const cookie = xcb.xcb_get_property(conn, 0, win, atom, atom_type, 0, 8192);
     const reply = xcb.xcb_get_property_reply(conn, cookie, null) orelse return null;
     defer std.c.free(reply);
     
