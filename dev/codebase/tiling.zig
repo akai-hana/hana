@@ -344,6 +344,10 @@ pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     _ = xcb.xcb_flush(wm.conn);
 }
 
+pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
+    updateBorderForFocusChange(wm, old_focused, new_focused);
+}
+
 inline fn updateBorderForFocusChange(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     const s = getState() orelse return;
     if (old_focused) |win| if (s.windows.contains(win)) {

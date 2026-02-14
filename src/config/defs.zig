@@ -447,6 +447,8 @@ pub const WM = struct {
     focused_window: ?u32 = null,
     fullscreen: FullscreenState,
     xkb_state: ?*xkbcommon.XkbState,
+    should_reload_config: *std.atomic.Value(bool),
+    running: *std.atomic.Value(bool),
     dpi_info: dpi.DpiInfo,
     drag_state: DragState = .{},
     
