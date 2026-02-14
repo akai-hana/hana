@@ -339,7 +339,10 @@ pub inline fn isWindowTiled(window_id: u32) bool {
 
 // Helper function to calculate screen area available for tiling
 fn calculateScreenArea(wm: *WM) utils.Rect {
-    const bar_height = bar.getBarHeight();
+    // Only reserve space for the bar if it is actually visible on screen.
+    // When the user hides the bar (mod+b), bar.isVisible() returns false and we
+    // use the full screen height so tiling doesn't leave an empty gap.
+    const bar_height: u16 = if (bar.isVisible()) bar.getBarHeight() else 0;
     const bar_at_bottom = wm.config.bar.vertical_position == .bottom;
     
     return .{

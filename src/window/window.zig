@@ -138,9 +138,16 @@ inline fn positionOffScreen(conn: *xcb.xcb_connection_t, win: u32) void {
 inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (!wm.config.tiling.enabled) return;
     
-    // Always retile if on current workspace
+    // Always register the window with the tiling system, even if it spawned on
+    // a different workspace.  If we skip addWindow() here, the tiling tracker
+    // never learns about the window, so switching to its workspace later will
+    // leave it invisible — the retile loop only processes windows it knows about.
+    tiling.addWindow(wm, win);
+    
+    // Only trigger a retile for the current workspace; windows on inactive
+    // workspaces will be positioned correctly the next time their workspace
+    // becomes active and retileCurrentWorkspace() is called.
     if (on_current) {
-        tiling.addWindow(wm, win);
         tiling.retileCurrentWorkspace(wm, false);
     }
 }
