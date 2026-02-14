@@ -1,15 +1,10 @@
 /// Common layout interface and utilities
-/// Eliminates duplication across all layout modules
-/// OPTIMIZED: Direct XCB calls instead of batch overhead
 
-const std = @import("std");
+const std   = @import("std");
 const utils = @import("utils");
-const tiling = @import("tiling");
 const debug = @import("debug");
-const defs = @import("defs");
-const xcb = defs.xcb;
-
-const State = tiling.State;
+const defs  = @import("defs");
+const xcb   = defs.xcb;
 
 /// Unified error-handling wrapper for configure operations
 /// Provides consistent error logging across all layouts

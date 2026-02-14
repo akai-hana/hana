@@ -16,6 +16,7 @@ const focus     = @import("focus");
 const tiling    = @import("tiling");
 const clock     = @import("clock");
 const dpi       = @import("dpi");
+const drawing   = @import("drawing");
 const constants = @import("constants");
 
 const xcb = defs.xcb;
@@ -250,6 +251,7 @@ pub fn main() !void {
     try utils.initAtomCache(conn);
     utils.initWMTakeFocusCache(wm.allocator);
     defer utils.deinitWMTakeFocusCache();
+    defer drawing.deinitFontCache(allocator);
     
     const fds = try setupPollFds();
     defer posix.close(fds.signal);

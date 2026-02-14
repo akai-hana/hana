@@ -106,10 +106,7 @@ pub fn init(wm: *WM) void {
 
 pub fn deinit(wm: *WM) void {
     if (StateManager.get()) |s| {
-        for (s.workspaces) |*ws| {
-            ws.deinit();
-            wm.allocator.free(ws.name);
-        }
+        for (s.workspaces) |*ws| ws.deinit();
         wm.allocator.free(s.workspaces);
         s.window_to_workspace.deinit();
     }
@@ -178,11 +175,10 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
         }
         if (tiling_state) |ts| ts.markDirty();
     } else if (target_ws == s.current) {
-        // Window moving to current workspace - map it in case it was deferred
+        // Window moving to current workspace — map it in case it was deferred
         // (workspace-bound windows that spawned while this workspace was inactive
         // are kept unmapped until shown).
         _ = xcb.xcb_map_window(s.wm.conn, win);
-        // Will be shown on next retile
         if (tiling_state) |ts| ts.markDirty();
     }
 }

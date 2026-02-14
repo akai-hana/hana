@@ -403,7 +403,9 @@ pub fn raiseBar() void {
         xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 }
 pub fn getBarHeight() u16 { return if (state) |s| s.height else 0; }
-pub fn isBarVisible() bool { return state != null; }
+/// Returns true if the bar was successfully initialised (not necessarily visible on screen).
+/// Use isVisible() to check whether the bar is currently shown.
+pub fn isBarInitialized() bool { return state != null; }
 
 // OPTIMIZATION: Cached workspace dimensions for fast access
 pub fn getCachedWorkspaceWidth() u16 { return if (state) |s| s.cached_ws_width else 50; }

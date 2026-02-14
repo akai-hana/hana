@@ -202,38 +202,6 @@ pub const State = struct {
         self.geometry_cache.clearRetainingCapacity();
     }
     
-    // ============================================================================
-    // PHASE 2 IMPROVEMENT: Geometry Cache Cleanup
-    // ============================================================================
-    
-    /// Clean up stale geometry cache entries for windows that no longer exist
-    /// This prevents the cache from growing unbounded over time
-    /// Call this periodically (e.g., after workspace switches or major layout changes)
-    pub fn cleanupStaleGeometryCache(self: *State, wm: *const WM) void {
-        // FIXED 3.16: Use stack buffer instead of heap allocation
-        // Geometry cache >64 entries is extremely rare
-        var to_remove: [64]u32 = undefined;
-        var count: usize = 0;
-        
-        var iter = self.geometry_cache.keyIterator();
-        while (iter.next()) |win_ptr| {
-            // Remove cache entries for windows that:
-            // 1. No longer exist in the WM's window tracking
-            // 2. Are not in the tiling system
-            if (!wm.hasWindow(win_ptr.*) or !self.windows.contains(win_ptr.*)) {
-                if (count < to_remove.len) {
-                    to_remove[count] = win_ptr.*;
-                    count += 1;
-                }
-            }
-        }
-        
-        // Remove all stale entries
-        for (to_remove[0..count]) |win| {
-            _ = self.geometry_cache.remove(win);
-        }
-    }
-    
     pub fn deinit(self: *State) void {
         self.windows.deinit();
         self.geometry_cache.deinit();
@@ -339,16 +307,15 @@ pub inline fn isWindowTiled(window_id: u32) bool {
 
 // Helper function to calculate screen area available for tiling
 fn calculateScreenArea(wm: *WM) utils.Rect {
-    // Only reserve space for the bar if it is actually visible on screen.
+    // Only reserve space for the bar when it is actually visible on screen.
     // When the user hides the bar (mod+b), bar.isVisible() returns false and we
     // use the full screen height so tiling doesn't leave an empty gap.
     const bar_height: u16 = if (bar.isVisible()) bar.getBarHeight() else 0;
     const bar_at_bottom = wm.config.bar.vertical_position == .bottom;
-    
     return .{
-        .x = 0,
-        .y = if (bar_at_bottom) 0 else @intCast(bar_height),
-        .width = wm.screen.width_in_pixels,
+        .x      = 0,
+        .y      = if (bar_at_bottom) 0 else @intCast(bar_height),
+        .width  = wm.screen.width_in_pixels,
         .height = wm.screen.height_in_pixels - bar_height,
     };
 }

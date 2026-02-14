@@ -128,40 +128,22 @@ pub fn getCachedPointer(wm: *WM) struct { x: i16, y: i16 } {
 
 // ============================================================================
 
-/// Positions a window off-screen (far to the left) to hide it without unmapping.
-/// Used for windows that are on inactive workspaces.
-inline fn positionOffScreen(conn: *xcb.xcb_connection_t, win: u32) void {
-    const values = [_]u32{@bitCast(constants.OFFSCREEN_X_POSITION)};
-    _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X, &values);
-}
 
 inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (!wm.config.tiling.enabled) return;
-    
-    // Always register the window with the tiling tracker regardless of which
-    // workspace it lands on.  Without this, switching to the target workspace
-    // later will leave the window invisible — retile only processes windows it
-    // knows about.
+    // Always register with the tiling tracker regardless of which workspace the
+    // window lands on.  Without this, retileCurrentWorkspace() never sees the
+    // window and it stays invisible when that workspace is first visited.
     tiling.addWindow(wm, win);
-    
-    // Only retile immediately if the window is on the current workspace.
-    // Windows on inactive workspaces will be positioned when their workspace
-    // becomes active and executeSwitch() triggers retileCurrentWorkspace().
-    if (on_current) {
-        tiling.retileCurrentWorkspace(wm, false);
-    }
+    // Only retile immediately for the current workspace.
+    if (on_current) tiling.retileCurrentWorkspace(wm, false);
 }
 
 inline fn setupWindow(wm: *WM, win: u32, on_current_workspace: bool, workspace_index: u8) !void {
     _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
-    
     try wm.addWindow(win);
     workspaces.moveWindowTo(wm, win, workspace_index);
-
-    if (!on_current_workspace) {
-        // Prevent visual flicker when spawning windows on inactive workspaces
-        positionOffScreen(wm.conn, win);
-    }
+    _ = on_current_workspace; // position is set by retile; unmapped windows need no pre-placement
 }
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
@@ -179,12 +161,10 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         debug.logError(err, win);
         return;
     };
-    // Only map immediately for windows landing on the current workspace.
+    // Only map immediately when landing on the current workspace.
     // Workspace-bound windows going to an inactive workspace are left unmapped:
-    // the compositor never allocates a buffer for them off-screen, so there is
-    // no cold buffer to flush when their workspace is first visited.
-    // executeSwitch() maps them atomically inside the server grab, at which
-    // point tiling has already calculated their correct position.
+    // no compositor buffer is created, eliminating the first-visit stutter.
+    // executeSwitch() maps them atomically inside the server grab after retiling.
     if (is_current_workspace) _ = xcb.xcb_map_window(wm.conn, win);
     // FIXED 2.1: Cache WM_TAKE_FOCUS support once per window
     utils.cacheWMTakeFocus(wm.conn, win);
