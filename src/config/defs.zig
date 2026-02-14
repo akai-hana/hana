@@ -260,7 +260,7 @@ pub const BarConfig = struct {
     
     pub inline fn scaledIndicatorSize(self: *const BarConfig) u16 {
         // Base indicator size is 4px when percentage is 100%
-        const base_size: f32 = 6.0;
+        const base_size: f32 = 5.0;
         const size: f32 = if (self.indicator_size.is_percentage)
             base_size * (self.indicator_size.value / 100.0) * self.scale_factor
         else
