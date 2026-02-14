@@ -196,19 +196,40 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             if (wm.focused_window) |win| closeWindow(wm, win);
         },
         .reload_config => wm.should_reload_config.store(true, .release),
-        .toggle_layout => tiling.toggleLayout(wm),
-        .toggle_layout_reverse => tiling.toggleLayoutReverse(wm),
+        .toggle_layout => {
+            tiling.toggleLayout(wm);
+            bar.markDirty();  // Force immediate bar update for layout indicator
+        },
+        .toggle_layout_reverse => {
+            tiling.toggleLayoutReverse(wm);
+            bar.markDirty();  // Force immediate bar update for layout indicator
+        },
         .toggle_bar_visibility => bar.setBarState(wm, .toggle),
         .toggle_bar_position => {
             bar.toggleBarPosition(wm) catch |err| {
                 debug.warn("Failed to toggle bar position: {}", .{err});
             };
         },
-        .increase_master => tiling.increaseMasterWidth(wm),
-        .decrease_master => tiling.decreaseMasterWidth(wm),
-        .increase_master_count => tiling.increaseMasterCount(wm),
-        .decrease_master_count => tiling.decreaseMasterCount(wm),
-        .toggle_tiling => tiling.toggleTiling(wm),
+        .increase_master => {
+            tiling.increaseMasterWidth(wm);
+            bar.markDirty();  // Update bar to reflect layout changes
+        },
+        .decrease_master => {
+            tiling.decreaseMasterWidth(wm);
+            bar.markDirty();  // Update bar to reflect layout changes
+        },
+        .increase_master_count => {
+            tiling.increaseMasterCount(wm);
+            bar.markDirty();  // Update bar to reflect layout changes
+        },
+        .decrease_master_count => {
+            tiling.decreaseMasterCount(wm);
+            bar.markDirty();  // Update bar to reflect layout changes
+        },
+        .toggle_tiling => {
+            tiling.toggleTiling(wm);
+            bar.markDirty();  // Update bar to reflect tiling state
+        },
         .swap_master => tiling.swapWithMaster(wm),  // NEW: Handle swap_master action
         .dump_state => dumpState(wm),
         .emergency_recover => emergencyRecover(wm),

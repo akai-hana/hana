@@ -121,11 +121,10 @@ fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32, allocator: std.m
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
     
-    var failed_count: usize = 0;
+    var failed_keybinds: usize = 0;
     
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
-        var failed_this_kb = false;
         
         for (constants.LOCK_MODIFIERS) |lock| {
             const cookie = xcb.xcb_grab_key_checked(
@@ -138,18 +137,15 @@ fn grabKeybindings(wm: *WM) !void {
             
             if (xcb.xcb_request_check(wm.conn, cookie)) |err| {
                 std.c.free(err);
-                failed_this_kb = true;
-                failed_count += 1;
+                debug.warn("Failed to grab keycode: {}", .{keycode});
+                failed_keybinds += 1;
+                break;  // Don't try other lock modifiers if one fails
             }
-        }
-        
-        if (failed_this_kb) {
-            debug.warn("Failed to grab keycode: {}", .{keycode});
         }
     }
     
-    if (failed_count > 0) {
-        debug.warn("{} grab(s) failed", .{failed_count});
+    if (failed_keybinds > 0) {
+        debug.warn("{} keybinding(s) failed to grab", .{failed_keybinds});
     }
     
     _ = xcb.xcb_flush(wm.conn);

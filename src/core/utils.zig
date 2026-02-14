@@ -67,7 +67,7 @@ pub inline fn normalizeModifiers(state: u16) u16 {
     return state & defs.MOD_MASK_RELEVANT;
 }
 
-// ─── Atom cache ───────────────────────────────────────────────────────────────
+// Atom cache
 
 const AtomCache = struct {
     wm_protocols:  u32,
@@ -119,7 +119,7 @@ pub fn getAtomCached(name: []const u8) !u32 {
     };
 }
 
-// ─── Property helpers ─────────────────────────────────────────────────────────
+// Property helpers ─────────────────────────────────────────────────────────
 
 pub fn fetchPropertyToBuffer(
     conn:      *xcb.xcb_connection_t,
@@ -143,7 +143,7 @@ pub fn fetchPropertyToBuffer(
     return buffer.items;
 }
 
-// ─── WM_TAKE_FOCUS caching ────────────────────────────────────────────────────
+// WM_TAKE_FOCUS caching ────────────────────────────────────────────────────
 
 var wm_take_focus_cache: ?std.AutoHashMap(u32, bool) = null;
 
@@ -177,7 +177,7 @@ pub fn supportsWMTakeFocusCached(conn: *xcb.xcb_connection_t, win: u32) bool {
     return supports;
 }
 
-// ─── WM_CLASS ─────────────────────────────────────────────────────────────────
+// WM_CLASS──
 
 pub const WMClass = struct {
     instance: []const u8,
@@ -212,7 +212,7 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
     return .{ .instance = instance, .class = class };
 }
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
+// Private helpers ──────────────────────────────────────────────────────────
 
 fn queryWMTakeFocusSupport(conn: *xcb.xcb_connection_t, win: u32) bool {
     const protocols_atom  = getAtomCached("WM_PROTOCOLS")  catch return false;

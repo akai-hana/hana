@@ -15,7 +15,7 @@ const debug      = @import("debug");
 
 const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
-// ─── Button grabs ─────────────────────────────────────────────────────────────
+// Button grabs ─────────────────────────────────────────────────────────────
 
 /// For unfocused windows we grab all buttons in sync mode so we can intercept
 /// the click, focus the window, and replay the event.  For focused windows we
@@ -31,7 +31,7 @@ pub fn grabButtons(wm: *WM, win: u32, focused: bool) void {
     }
 }
 
-// ─── Workspace rule matching ──────────────────────────────────────────────────
+// Workspace rule matching ──────────────────────────────────────────────────
 
 fn matchWorkspaceRule(wm: *WM, win: u32) ?u8 {
     const rules = wm.config.workspaces.rules.items;
@@ -54,7 +54,7 @@ fn validateWorkspace(target: ?u8, current: u8) u8 {
     return if (ws < s.workspaces.len) ws else current;
 }
 
-// ─── Setup helpers ────────────────────────────────────────────────────────────
+// Setup helpers ────────────────────────────────────────────────────────────
 
 inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (!wm.config.tiling.enabled) return;
@@ -68,7 +68,7 @@ inline fn setupWindow(wm: *WM, win: u32, workspace_index: u8) !void {
     workspaces.moveWindowTo(wm, win, workspace_index);
 }
 
-// ─── Map request ──────────────────────────────────────────────────────────────
+// Map request ──────────────────────────────────────────────────────────────
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win          = event.window;
@@ -97,7 +97,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     bar.markDirty();
 }
 
-// ─── Configure request ────────────────────────────────────────────────────────
+// Configure request ────────────────────────────────────────────────────────
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const win = event.window;
@@ -110,11 +110,10 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
         @intCast(event.width), @intCast(event.height),
         @intCast(event.border_width),
     });
-    tiling.invalidateWindowGeometry(win);
     utils.flush(wm.conn);
 }
 
-// ─── Focus events ─────────────────────────────────────────────────────────────
+// Focus events ─────────────────────────────────────────────────────────────
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     const win = event.event;
@@ -137,7 +136,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     utils.flush(wm.conn);
 }
 
-// ─── Unmap / destroy ──────────────────────────────────────────────────────────
+// Unmap / destroy ──────────────────────────────────────────────────────────
 
 fn unmanageWindow(wm: *WM, win: u32) void {
     if (wm.fullscreen.isFullscreen(win)) {
@@ -155,7 +154,6 @@ fn unmanageWindow(wm: *WM, win: u32) void {
     const was_focused = (wm.focused_window == win);
 
     if (wm.config.tiling.enabled) tiling.removeWindow(win);
-    tiling.invalidateWindowGeometry(win);
     utils.uncacheWMTakeFocus(win);
     workspaces.removeWindow(win);
     wm.removeWindow(win);
@@ -186,7 +184,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     unmanageWindow(wm, win);
 }
 
-// ─── Post-unmanage focus recovery ─────────────────────────────────────────────
+// Post-unmanage focus recovery ─────────────────────────────────────────────
 
 fn focusWindowUnderPointer(wm: *WM) void {
     const reply = xcb.xcb_query_pointer_reply(

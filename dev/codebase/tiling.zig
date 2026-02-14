@@ -25,7 +25,7 @@ const MAX_WS_WINDOWS: usize = 128;
 
 pub const Layout = enum { master, monocle, grid, fibonacci };
 
-// ─── Focus ring ───────────────────────────────────────────────────────────────
+// Focus ring
 // Fixed-capacity circular buffer of recently-focused window IDs.
 // Newest entry is always at buffer[head].
 
@@ -44,13 +44,7 @@ const FocusRing = struct {
         while (i < self.len) : (i += 1) {
             const idx = (self.head + i) % RING_CAP;
             if (self.buffer[idx] == win) {
-                var j = i;
-                while (j + 1 < self.len) : (j += 1) {
-                    const cur  = (self.head + j)     % RING_CAP;
-                    const next = (self.head + j + 1) % RING_CAP;
-                    self.buffer[cur] = self.buffer[next];
-                }
-                self.len -= 1;
+                self.compactFrom(i);
                 break;
             }
         }
@@ -65,15 +59,19 @@ const FocusRing = struct {
         while (i < self.len) : (i += 1) {
             const idx = (self.head + i) % RING_CAP;
             if (self.buffer[idx] != win) continue;
-            var j = i;
-            while (j + 1 < self.len) : (j += 1) {
-                const cur  = (self.head + j)     % RING_CAP;
-                const next = (self.head + j + 1) % RING_CAP;
-                self.buffer[cur] = self.buffer[next];
-            }
-            self.len -= 1;
+            self.compactFrom(i);
             return;
         }
+    }
+
+    inline fn compactFrom(self: *FocusRing, start: u8) void {
+        var j = start;
+        while (j + 1 < self.len) : (j += 1) {
+            const cur  = (self.head + j)     % RING_CAP;
+            const next = (self.head + j + 1) % RING_CAP;
+            self.buffer[cur] = self.buffer[next];
+        }
+        self.len -= 1;
     }
 
     pub fn iter(self: *const FocusRing) Iterator {
@@ -93,7 +91,7 @@ const FocusRing = struct {
     };
 };
 
-// ─── State ────────────────────────────────────────────────────────────────────
+// State─────
 
 pub const State = struct {
     enabled:          bool,
@@ -107,16 +105,13 @@ pub const State = struct {
     border_unfocused: u32,
     windows:          Tracking,
     dirty:            bool,
-    geometry_cache:   std.AutoHashMap(u32, utils.Rect),
     focus_ring:       FocusRing,
-    allocator:        std.mem.Allocator,
 
     pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.gaps, .border = self.border_width };
     }
 
     pub inline fn borderColor(self: *const State, wm: *const WM, win: u32) u32 {
-        if (!self.windows.contains(win)) return self.border_unfocused;
         if (wm.fullscreen.isFullscreen(win)) return 0;
         return if (wm.focused_window == win) self.border_focused else self.border_unfocused;
     }
@@ -125,36 +120,18 @@ pub const State = struct {
     pub inline fn isDirty(self: *const State) bool { return self.dirty;  }
     pub inline fn clearDirty(self: *State)    void { self.dirty = false; }
 
-    pub fn getGeometry(self: *State, conn: *xcb.xcb_connection_t, win: u32) ?utils.Rect {
-        if (self.geometry_cache.get(win)) |rect| return rect;
-        if (utils.getGeometry(conn, win)) |rect| {
-            self.geometry_cache.put(win, rect) catch {};
-            return rect;
-        }
-        return null;
-    }
-
-    pub inline fn invalidateGeometry(self: *State, win: u32) void {
-        _ = self.geometry_cache.remove(win);
-    }
-
-    pub inline fn clearGeometryCache(self: *State) void {
-        self.geometry_cache.clearRetainingCapacity();
-    }
-
     pub fn deinit(self: *State) void {
         self.windows.deinit();
-        self.geometry_cache.deinit();
     }
 };
 
-// ─── Module singleton ─────────────────────────────────────────────────────────
+// Module singleton ─────────────────────────────────────────────────────────
 
 var g_state: ?State = null;
 
 pub fn getState() ?*State { return if (g_state != null) &g_state.? else null; }
 
-// ─── Config ───────────────────────────────────────────────────────────────────
+// Config────
 
 /// Build a complete State from the current WM configuration.
 fn buildState(wm: *WM) State {
@@ -180,9 +157,7 @@ fn buildState(wm: *WM) State {
         .border_unfocused = wm.config.tiling.border_unfocused,
         .windows          = Tracking.init(wm.allocator),
         .dirty            = false,
-        .geometry_cache   = std.AutoHashMap(u32, utils.Rect).init(wm.allocator),
         .focus_ring       = .{},
-        .allocator        = wm.allocator,
     };
 }
 
@@ -198,10 +173,9 @@ pub fn deinit(_: *WM) void {
 pub fn reloadConfig(wm: *WM) void {
     const s = getState() orelse return;
     
-    // Preserve runtime tracking and cache; rebuild everything else from config.
+    // Preserve runtime tracking; rebuild everything else from config.
     const saved_windows    = s.windows;
     const saved_focus_ring = s.focus_ring;
-    const saved_geo_cache  = s.geometry_cache;
     
     const screen_height = wm.screen.height_in_pixels;
     const border_width  = dpi.scaleBorderWidth(wm.config.tiling.border_width, wm.dpi_info.scale_factor, screen_height);
@@ -225,15 +199,13 @@ pub fn reloadConfig(wm: *WM) void {
         .border_unfocused = wm.config.tiling.border_unfocused,
         .windows          = saved_windows,
         .dirty            = false,
-        .geometry_cache   = saved_geo_cache,
         .focus_ring       = saved_focus_ring,
-        .allocator        = wm.allocator,
     };
     
     if (g_state.?.enabled) retileCurrentWorkspace(wm, true);
 }
 
-// ─── Window management ────────────────────────────────────────────────────────
+// Window management ────────────────────────────────────────────────────────
 
 pub fn addWindow(wm: *WM, window_id: u32) void {
     std.debug.assert(window_id != 0);
@@ -242,7 +214,6 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
 
     s.windows.add(window_id) catch |err| { debug.logError(err, window_id); return; };
     s.markDirty();
-    s.invalidateGeometry(window_id);
 
     const border_color = s.borderColor(wm, window_id);
     _ = xcb.xcb_change_window_attributes(wm.conn, window_id,
@@ -253,11 +224,17 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     debug.info("Added window 0x{x} to tiling", .{window_id});
 }
 
+/// Invalidate cached geometry for a window (no-op in current implementation).
+/// Called when window geometry is changed externally (e.g., fullscreen toggle).
+pub fn invalidateWindowGeometry(_: u32) void {
+    // Currently no per-window geometry cache to invalidate.
+    // Retiling will recalculate all geometries as needed.
+}
+
 pub fn removeWindow(window_id: u32) void {
     const s = getState() orelse return;
     if (s.windows.remove(window_id)) {
         s.markDirty();
-        s.invalidateGeometry(window_id);
         s.focus_ring.remove(window_id);
         debug.info("Removed window 0x{x} from tiling", .{window_id});
     }
@@ -268,7 +245,7 @@ pub inline fn isWindowTiled(window_id: u32) bool {
     return s.windows.contains(window_id);
 }
 
-// ─── Screen area ──────────────────────────────────────────────────────────────
+// Screen area ──────────────────────────────────────────────────────────────
 
 fn calculateScreenArea(wm: *WM) utils.Rect {
     const bar_height: u16 = if (bar.isVisible()) bar.getBarHeight() else 0;
@@ -281,7 +258,7 @@ fn calculateScreenArea(wm: *WM) utils.Rect {
     };
 }
 
-// ─── Retiling ─────────────────────────────────────────────────────────────────
+// Retiling──
 
 pub fn retileIfDirty(wm: *WM) void {
     const s = getState() orelse return;
@@ -293,7 +270,7 @@ pub fn retileIfDirty(wm: *WM) void {
 pub fn retileCurrentWorkspace(wm: *WM, force: bool) void {
     const s = getState() orelse return;
     if (!s.enabled) return;
-    if (force) s.clearGeometryCache();
+    _ = force;  // unused, kept for API compatibility
     retile(wm, calculateScreenArea(wm));
     s.clearDirty();
 }
@@ -306,14 +283,7 @@ fn retile(wm: *WM, screen: utils.Rect) void {
 
     // Collect windows for the current workspace into a stack-local buffer.
     var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
-    var ws_count: usize = 0;
-    for (s.windows.items()) |win| {
-        if (ws_count >= MAX_WS_WINDOWS) break;
-        if (workspaces.isOnCurrentWorkspace(win)) {
-            ws_buf[ws_count] = win;
-            ws_count += 1;
-        }
-    }
+    const ws_count = filterWorkspaceWindows(s, &ws_buf);
     const ws_windows = ws_buf[0..ws_count];
     if (ws_windows.len == 0) return;
 
@@ -337,7 +307,7 @@ fn updateBorders(wm: *WM, ws_windows: []const u32) void {
     }
 }
 
-// ─── Focus border updates ─────────────────────────────────────────────────────
+// Focus border updates ─────────────────────────────────────────────────────
 
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     updateBorderForFocusChange(wm, old_focused, new_focused);
@@ -360,7 +330,7 @@ inline fn updateBorderForFocusChange(wm: *WM, old_focused: ?u32, new_focused: ?u
     };
 }
 
-// ─── Window reordering ────────────────────────────────────────────────────────
+// Window reordering ────────────────────────────────────────────────────────
 
 /// Move the window at `from_idx` to `to_idx` in tiling order.
 fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
@@ -428,7 +398,7 @@ pub fn promoteToMaster(wm: *WM) void {
     retileCurrentWorkspace(wm, false);
 }
 
-// ─── Layout and master controls ───────────────────────────────────────────────
+// Layout and master controls ───────────────────────────────────────────────
 
 pub fn toggleTiling(wm: *WM) void {
     const s = getState() orelse return;
@@ -481,7 +451,7 @@ pub fn adjustMasterWidth(wm: *WM, delta: f32) void {
 pub inline fn increaseMasterWidth(wm: *WM) void { adjustMasterWidth(wm,  0.05); }
 pub inline fn decreaseMasterWidth(wm: *WM) void { adjustMasterWidth(wm, -0.05); }
 
-// ─── Focus cycling ────────────────────────────────────────────────────────────
+// Focus cycling ────────────────────────────────────────────────────────────
 
 inline fn switchFocus(wm: *WM, s: *State, from: ?u32, to: u32) void {
     std.debug.assert(to != 0 and wm.hasWindow(to));
@@ -522,15 +492,18 @@ pub fn focusPrevious(wm: *WM) void {
         }
     }
 
-    // Fallback: nothing useful in history — find a neighbour in tiling order.
-    const all = s.windows.items();
-    if (all.len < 2) return;
-    const idx = findWindowIndex(all, cur) orelse return;
-    const mc  = getMasterCount(s, all.len);
-    if (idx < mc and all.len > mc) {
-        switchFocus(wm, s, cur, all[mc]);
+    // Fallback: nothing useful in history — find a neighbour in current workspace.
+    var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
+    const ws_count = filterWorkspaceWindows(s, &ws_buf);
+    if (ws_count < 2) return;
+    const ws_windows = ws_buf[0..ws_count];
+    
+    const idx = findWindowIndex(ws_windows, cur) orelse return;
+    const mc  = getMasterCount(s, ws_count);
+    if (idx < mc and ws_count > mc) {
+        switchFocus(wm, s, cur, ws_windows[mc]);
     } else if (idx >= mc) {
-        switchFocus(wm, s, cur, all[if (idx + 1 < all.len) idx + 1 else 0]);
+        switchFocus(wm, s, cur, ws_windows[if (idx + 1 < ws_count) idx + 1 else 0]);
     }
 }
 
@@ -551,7 +524,7 @@ pub fn focusSecondLast(wm: *WM) void {
     }
 
     // Fallback: carousel within workspace windows.
-    var buf: [64]u32 = undefined;
+    var buf: [MAX_WS_WINDOWS]u32 = undefined;
     const ws_count = filterWorkspaceWindows(s, &buf);
     if (ws_count < 2) return;
     const ws_wins = buf[0..ws_count];
@@ -574,9 +547,4 @@ pub fn focusSecondLast(wm: *WM) void {
         const next_si     = if (si + 1 < slave_count) si + 1 else 0;
         switchFocus(wm, s, cur, ws_wins[mc + next_si]);
     }
-}
-
-pub inline fn invalidateWindowGeometry(win: u32) void {
-    const s = getState() orelse return;
-    s.invalidateGeometry(win);
 }

@@ -365,7 +365,7 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
         debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
         
         // Retile workspace to adjust for new bar position
-        // BUGFIX: Don't retile if there's a fullscreen window on the current workspace
+        // Don't retile if there's a fullscreen window on the current workspace
         // Fullscreen windows should remain fullscreen and not have their geometry updated
         const current_ws = workspaces.getCurrentWorkspace() orelse return;
         if (wm.fullscreen.getForWorkspace(current_ws) == null) {
@@ -501,10 +501,23 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
                 debug.warnOnErr(e, "getAtomCached _NET_WM_NAME in handlePropertyNotify");
                 return;
             }))) {
-            // Only mark dirty - the title will be re-rendered on next draw
+            // Invalidate cached title to force re-fetch on next draw
+            s.cached_title_window = null;
             s.markDirty();
         }
     }
+}
+
+/// Enable property change monitoring for the focused window
+/// Call this when a window gains focus to receive title change events
+pub fn monitorFocusedWindow(wm: *defs.WM) void {
+    const win = wm.focused_window orelse return;
+    
+    // Add XCB_EVENT_MASK_PROPERTY_CHANGE to the window's event mask
+    // This ensures we receive PropertyNotify events when the window's title changes
+    const mask = xcb.XCB_CW_EVENT_MASK;
+    const values = [_]u32{xcb.XCB_EVENT_MASK_PROPERTY_CHANGE};
+    _ = xcb.xcb_change_window_attributes(wm.conn, win, mask, &values);
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.WM) void {
