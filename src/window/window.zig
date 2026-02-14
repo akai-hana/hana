@@ -138,16 +138,9 @@ inline fn positionOffScreen(conn: *xcb.xcb_connection_t, win: u32) void {
 inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (!wm.config.tiling.enabled) return;
     
-    // Always register the window with the tiling system, even if it spawned on
-    // a different workspace.  If we skip addWindow() here, the tiling tracker
-    // never learns about the window, so switching to its workspace later will
-    // leave it invisible — the retile loop only processes windows it knows about.
-    tiling.addWindow(wm, win);
-    
-    // Only trigger a retile for the current workspace; windows on inactive
-    // workspaces will be positioned correctly the next time their workspace
-    // becomes active and retileCurrentWorkspace() is called.
+    // Always retile if on current workspace
     if (on_current) {
+        tiling.addWindow(wm, win);
         tiling.retileCurrentWorkspace(wm, false);
     }
 }
@@ -179,7 +172,13 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         debug.logError(err, win);
         return;
     };
-    _ = xcb.xcb_map_window(wm.conn, win);
+    // Only map immediately if the window lands on the current workspace.
+    // For workspace-bound windows going to an inactive workspace, deferring the
+    // map prevents the compositor from creating a cold off-screen buffer that
+    // would cause a stutter on the first workspace switch.  executeSwitch() will
+    // map these windows atomically (inside the server grab) when their workspace
+    // becomes active.
+    if (is_current_workspace) _ = xcb.xcb_map_window(wm.conn, win);
     // FIXED 2.1: Cache WM_TAKE_FOCUS support once per window
     utils.cacheWMTakeFocus(wm.conn, win);
     setupTiling(wm, win, is_current_workspace);

@@ -178,7 +178,11 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
         }
         if (tiling_state) |ts| ts.markDirty();
     } else if (target_ws == s.current) {
-        // Window moving to current workspace - will be shown on next retile
+        // Window moving to current workspace - map it in case it was deferred
+        // (workspace-bound windows that spawned while this workspace was inactive
+        // are kept unmapped until shown, so we must map them explicitly here).
+        _ = xcb.xcb_map_window(wm.conn, win);
+        // Will be shown on next retile
         if (tiling_state) |ts| ts.markDirty();
     }
 }
@@ -245,6 +249,13 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     if (fs_info) |info| {
         configureFullscreen(wm, info);
     } else {
+        // Map any windows that were deferred (e.g. workspace-bound windows that
+        // spawned while this workspace was inactive).  xcb_map_window is a no-op
+        // for windows that are already mapped, so this is always safe to call.
+        for (new_workspace.windows.items()) |win| {
+            _ = xcb.xcb_map_window(wm.conn, win);
+        }
+
         // No fullscreen - position windows based on RUNTIME tiling state
         // CRITICAL FIX: Check tiling.State.enabled, not config.tiling.enabled!
         // When user toggles tiling with Mod+N, it changes State.enabled, not config
