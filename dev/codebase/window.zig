@@ -138,9 +138,16 @@ inline fn positionOffScreen(conn: *xcb.xcb_connection_t, win: u32) void {
 inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (!wm.config.tiling.enabled) return;
     
-    // Always retile if on current workspace
+    // Always register the window with the tiling tracker regardless of which
+    // workspace it lands on.  Without this, switching to the target workspace
+    // later will leave the window invisible — retile only processes windows it
+    // knows about.
+    tiling.addWindow(wm, win);
+    
+    // Only retile immediately if the window is on the current workspace.
+    // Windows on inactive workspaces will be positioned when their workspace
+    // becomes active and executeSwitch() triggers retileCurrentWorkspace().
     if (on_current) {
-        tiling.addWindow(wm, win);
         tiling.retileCurrentWorkspace(wm, false);
     }
 }
@@ -172,12 +179,12 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         debug.logError(err, win);
         return;
     };
-    // Only map immediately if the window lands on the current workspace.
-    // For workspace-bound windows going to an inactive workspace, deferring the
-    // map prevents the compositor from creating a cold off-screen buffer that
-    // would cause a stutter on the first workspace switch.  executeSwitch() will
-    // map these windows atomically (inside the server grab) when their workspace
-    // becomes active.
+    // Only map immediately for windows landing on the current workspace.
+    // Workspace-bound windows going to an inactive workspace are left unmapped:
+    // the compositor never allocates a buffer for them off-screen, so there is
+    // no cold buffer to flush when their workspace is first visited.
+    // executeSwitch() maps them atomically inside the server grab, at which
+    // point tiling has already calculated their correct position.
     if (is_current_workspace) _ = xcb.xcb_map_window(wm.conn, win);
     // FIXED 2.1: Cache WM_TAKE_FOCUS support once per window
     utils.cacheWMTakeFocus(wm.conn, win);
