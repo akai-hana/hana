@@ -25,8 +25,7 @@ pub const WORKSPACE_WIDTH: u8 = 50;
 // Clock format string constant for width calculation
 const CLOCK_FORMAT = "0000-00-00 00:00:00";
 
-// FIXED: Magic numbers replaced with named constants
-/// Minimum allowed bar height in pixels
+// Minimum allowed bar height in pixels
 const MIN_BAR_HEIGHT: u32 = 20;
 
 /// Maximum allowed bar height in pixels
@@ -51,9 +50,9 @@ const State = struct {
     has_transparency: bool,  // Track if transparency is enabled
     allocator: std.mem.Allocator,
     cached_clock_width: u16,
-    cached_clock_x: ?u16,  // FIXED 2.2: Cache clock X position to skip width calculation
+    cached_clock_x: ?u16,  // Cache clock X position to skip width calculation
     cached_ws_width: u16,
-    cached_workspace_x: u16,  // FIXED 2.7: Cache workspace segment X offset for click handling
+    cached_workspace_x: u16,  // Cache workspace segment X offset for click handling
     cached_indicator_size: u16,
     has_clock_segment: bool,
     cache_manager: cache.CacheManager,  // Embedded by value — State is already heap-allocated
@@ -100,7 +99,7 @@ const State = struct {
 
     fn markDirty(self: *State) void { 
         self.dirty = true; 
-        self.cached_clock_x = null;  // FIXED 2.2: Invalidate clock position cache
+        self.cached_clock_x = null;  // Invalidate clock position cache
     }
     fn markClockDirty(self: *State) void { self.dirty_clock = true; }
     fn clearDirty(self: *State) void { self.dirty = false; self.dirty_clock = false; }
@@ -116,7 +115,6 @@ const State = struct {
     }
 };
 
-// FIXED: Document thread safety - single-threaded access only
 /// Single-threaded: Only accessed from main event loop
 /// NOT thread-safe: Do not access from signal handlers or other threads
 var state: ?*State = null;
@@ -173,8 +171,7 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
     // DON'T set _NET_WM_WINDOW_OPACITY - let picom handle transparency like it does for borders
     // This ensures the bar and borders render the same way
     
-    // CRITICAL: Prevent bar from being moved or resized
-    // Set allowed actions to only allow closing (for shutdown), but not move/resize
+    // Prevent bar from being moved or resized by restricting allowed actions
     const allowed_actions = [_]u32{
         try utils.getAtom(wm.conn, "_NET_WM_ACTION_CLOSE"),
         try utils.getAtom(wm.conn, "_NET_WM_ACTION_ABOVE"),
@@ -186,9 +183,9 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
 fn calculateBarHeight(wm: *defs.WM) !u16 {
     if (wm.config.bar.height) |h| return h;
     
-    // TODO 2.3: Optimization opportunity - create real bar window first with provisional
-    // height, load fonts on real DrawContext, measure, then resize if needed
-    // This would eliminate temporary window creation + 2 extra X11 roundtrips
+    // Create a temporary window to measure font height, then calculate bar height.
+    // Optimization: Could create the real bar window with a provisional height,
+    // measure on the real DrawContext, then resize if needed.
     const temp_win = xcb.xcb_generate_id(wm.conn);
     _ = xcb.xcb_create_window(wm.conn, xcb.XCB_COPY_FROM_PARENT, temp_win, wm.screen.root,
         0, 0, 1, 1, 0, xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, wm.screen.root_visual, 0, null);
@@ -400,10 +397,8 @@ pub fn getCachedLabelWidth(index: usize) ?u16 {
     return null;
 }
 
-// OPTIMIZATION: Cached clock segment detection
 pub fn hasClockSegment() bool { return if (state) |s| s.has_clock_segment else false; }
 
-// OPTIMIZATION: Check if bar is actually visible (not just created)
 pub fn isVisible() bool {
     if (state) |s| return s.visible;
     return false;
@@ -453,7 +448,7 @@ pub fn checkClockUpdate() void {
 }
 
 fn drawClockOnly(s: *State, wm: *defs.WM) !void {
-    // FIXED 2.2: Use cached clock position instead of recalculating
+    // Use cached clock position if available to avoid recalculating layout
     if (s.cached_clock_x) |clock_x| {
         _ = try clock_segment.draw(s.dc, s.config, s.height, clock_x);
         s.dc.flush();
@@ -514,7 +509,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.W
     if (state) |s| if (event.event == s.window) {
         const ws_state = workspaces.getState() orelse return;
         const scaled_ws_width = s.config.scaledWorkspaceWidth();
-        // FIXED 2.7: Account for left-side segments before workspace segment
+        // Account for left-side segments before workspace segment
         const click_x = @max(0, event.event_x - s.cached_workspace_x);
         const clicked_ws: usize = @intCast(@divFloor(click_x, scaled_ws_width));
         if (clicked_ws < ws_state.workspaces.len) {
@@ -539,7 +534,7 @@ fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment)
     for (0..segments.len) |i| {
         const idx = segments.len - 1 - i;
         right_x -= calculateSegmentWidth(s, segments[idx]);
-        // FIXED 2.2: Cache clock position for drawClockOnly optimization
+        // Cache clock position for drawClockOnly optimization
         if (segments[idx] == .clock) {
             s.cached_clock_x = right_x;
         }
@@ -592,7 +587,7 @@ fn draw(s: *State, wm: *defs.WM) !void {
 }
 
 fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, width: ?u16) !u16 {
-    // FIXED 2.7: Cache workspace segment X offset for click handling
+    // Cache workspace segment X offset for click handling
     if (segment == .workspaces) {
         s.cached_workspace_x = x;
     }

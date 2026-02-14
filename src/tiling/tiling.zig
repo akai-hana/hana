@@ -197,14 +197,39 @@ pub fn deinit(_: *WM) void {
 
 pub fn reloadConfig(wm: *WM) void {
     const s = getState() orelse return;
-    // Preserve runtime tracking; rebuild everything else from config.
+    
+    // Preserve runtime tracking and cache; rebuild everything else from config.
     const saved_windows    = s.windows;
     const saved_focus_ring = s.focus_ring;
     const saved_geo_cache  = s.geometry_cache;
-    g_state = buildState(wm);
-    g_state.?.windows        = saved_windows;
-    g_state.?.focus_ring     = saved_focus_ring;
-    g_state.?.geometry_cache = saved_geo_cache;
+    
+    const screen_height = wm.screen.height_in_pixels;
+    const border_width  = dpi.scaleBorderWidth(wm.config.tiling.border_width, wm.dpi_info.scale_factor, screen_height);
+    const gaps          = dpi.scaleGaps(wm.config.tiling.gaps, wm.dpi_info.scale_factor, screen_height);
+
+    const raw_mw = dpi.scaleMasterWidth(wm.config.tiling.master_width);
+    const master_width: f32 = if (raw_mw < 0) blk: {
+        const ratio = -raw_mw / @as(f32, @floatFromInt(wm.screen.width_in_pixels));
+        break :blk @min(MAX_MASTER_WIDTH, @max(defs.MIN_MASTER_WIDTH, ratio));
+    } else raw_mw;
+
+    g_state = .{
+        .enabled          = wm.config.tiling.enabled,
+        .layout           = std.meta.stringToEnum(Layout, wm.config.tiling.layout) orelse .master,
+        .master_side      = wm.config.tiling.master_side,
+        .master_width     = master_width,
+        .master_count     = wm.config.tiling.master_count,
+        .gaps             = gaps,
+        .border_width     = border_width,
+        .border_focused   = wm.config.tiling.border_focused,
+        .border_unfocused = wm.config.tiling.border_unfocused,
+        .windows          = saved_windows,
+        .dirty            = false,
+        .geometry_cache   = saved_geo_cache,
+        .focus_ring       = saved_focus_ring,
+        .allocator        = wm.allocator,
+    };
+    
     if (g_state.?.enabled) retileCurrentWorkspace(wm, true);
 }
 
@@ -381,10 +406,11 @@ pub fn swapWithMaster(wm: *WM) void {
 
     if (focused_pos == master_pos) {
         // Already master: swap with the next workspace window.
-        for (all, 0..) |win, i| {
-            if (i == master_pos or !workspaces.isOnCurrentWorkspace(win)) continue;
-            moveWindowToIndex(s, i, master_pos);
-            break;
+        for (all[master_pos + 1..], master_pos + 1..) |win, i| {
+            if (workspaces.isOnCurrentWorkspace(win)) {
+                moveWindowToIndex(s, i, master_pos);
+                break;
+            }
         }
     } else {
         moveWindowToIndex(s, focused_pos, master_pos);
@@ -522,13 +548,13 @@ pub fn focusPrevious(wm: *WM) void {
 /// Focus the second-most-recently-focused window (shift+alt+tab).
 pub fn focusSecondLast(wm: *WM) void {
     const s   = getState() orelse return;
-    const cur = wm.focused_window;
+    const cur = wm.focused_window orelse return;
     if (s.windows.count() < 2) return;
 
     var found = false;
     var it = s.focus_ring.iter();
     while (it.next()) |win| {
-        if (win == cur.?) { found = true; continue; }
+        if (win == cur) { found = true; continue; }
         if (found and workspaces.isOnCurrentWorkspace(win) and s.windows.contains(win)) {
             switchFocus(wm, s, cur, win);
             return;
@@ -542,13 +568,13 @@ pub fn focusSecondLast(wm: *WM) void {
     const ws_wins = buf[0..ws_count];
 
     if (ws_count == 2) {
-        const other = if (ws_wins[0] == cur.?) ws_wins[1] else ws_wins[0];
+        const other = if (ws_wins[0] == cur) ws_wins[1] else ws_wins[0];
         switchFocus(wm, s, cur, other);
         return;
     }
 
     const mc  = getMasterCount(s, ws_count);
-    const idx = if (cur) |c| findWindowIndex(ws_wins, c) orelse 0 else 0;
+    const idx = findWindowIndex(ws_wins, cur) orelse 0;
 
     if (idx < mc) {
         const next = if (mc == 1) ws_count - 1 else (if (idx + 1 < mc) idx + 1 else 0);
