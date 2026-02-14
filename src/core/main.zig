@@ -247,8 +247,6 @@ pub fn main() !void {
         .focused_window = null,
         .fullscreen = defs.FullscreenState.init(allocator),
         .xkb_state = xkb_state,
-        .should_reload_config = &should_reload,
-        .running = &running,
         .dpi_info = dpi_info,
     };
     defer wm.deinit();

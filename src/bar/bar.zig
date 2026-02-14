@@ -19,9 +19,6 @@ const workspaces             = @import("workspaces");
     const clock_segment      = @import("clock");
     const status_segment     = @import("status");
 
-// TODO: make adjustable through config.toml, adjust workspace width based off of monitor DPI
-pub const WORKSPACE_WIDTH: u8 = 50;
-
 // Clock format string constant for width calculation
 const CLOCK_FORMAT = "0000-00-00 00:00:00";
 
@@ -33,6 +30,11 @@ const MAX_BAR_HEIGHT: u32 = 200;
 
 /// Default bar height if font metrics cannot be determined
 const DEFAULT_BAR_HEIGHT: u16 = 24;
+
+// Segment width constants
+const FALLBACK_WORKSPACES_WIDTH: u16 = 270;
+const LAYOUT_SEGMENT_WIDTH: u16 = 60;
+const TITLE_SEGMENT_MIN_WIDTH: u16 = 100;
 
 const State = struct {
     window: u32,
@@ -521,9 +523,9 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.W
 
 fn calculateSegmentWidth(s: *State, segment: defs.BarSegment) u16 {
     return switch (segment) {
-        .workspaces => if (workspaces.getState()) |ws| @intCast(ws.workspaces.len * s.cached_ws_width) else 270,
-        .layout => 60,
-        .title => 100,
+        .workspaces => if (workspaces.getState()) |ws| @intCast(ws.workspaces.len * s.cached_ws_width) else FALLBACK_WORKSPACES_WIDTH,
+        .layout => LAYOUT_SEGMENT_WIDTH,
+        .title => TITLE_SEGMENT_MIN_WIDTH,
         .clock => s.cached_clock_width,
     };
 }

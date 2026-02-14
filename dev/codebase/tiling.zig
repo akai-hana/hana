@@ -293,7 +293,7 @@ pub fn retileIfDirty(wm: *WM) void {
 pub fn retileCurrentWorkspace(wm: *WM, force: bool) void {
     const s = getState() orelse return;
     if (!s.enabled) return;
-    if (force) { s.markDirty(); s.clearGeometryCache(); }
+    if (force) s.clearGeometryCache();
     retile(wm, calculateScreenArea(wm));
     s.clearDirty();
 }
@@ -342,10 +342,6 @@ fn updateBorders(wm: *WM, ws_windows: []const u32) void {
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     updateBorderForFocusChange(wm, old_focused, new_focused);
     _ = xcb.xcb_flush(wm.conn);
-}
-
-pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
-    updateBorderForFocusChange(wm, old_focused, new_focused);
 }
 
 inline fn updateBorderForFocusChange(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
@@ -415,7 +411,6 @@ pub fn swapWithMaster(wm: *WM) void {
     } else {
         moveWindowToIndex(s, focused_pos, master_pos);
     }
-    s.markDirty();
     retileCurrentWorkspace(wm, true);
 }
 
@@ -426,13 +421,7 @@ pub fn promoteToMaster(wm: *WM) void {
     const idx = findWindowIndex(s.windows.items(), focused) orelse return;
     if (idx == 0) return;
     moveWindowToIndex(s, idx, 0);
-    s.markDirty();
     retileCurrentWorkspace(wm, false);
-}
-
-pub fn moveToIndex(from_idx: usize) void {
-    const s = getState() orelse return;
-    moveWindowToIndex(s, from_idx, 0);
 }
 
 // ─── Layout and master controls ───────────────────────────────────────────────
@@ -452,7 +441,6 @@ pub fn toggleLayout(wm: *WM) void {
         .grid      => .fibonacci,
         .fibonacci => .master,
     };
-    s.markDirty();
     retileCurrentWorkspace(wm, false);
     debug.info("Layout: {s}", .{@tagName(s.layout)});
 }
@@ -465,7 +453,6 @@ pub fn toggleLayoutReverse(wm: *WM) void {
         .grid      => .monocle,
         .monocle   => .master,
     };
-    s.markDirty();
     retileCurrentWorkspace(wm, false);
     debug.info("Layout (reverse): {s}", .{@tagName(s.layout)});
 }
@@ -475,7 +462,6 @@ pub fn adjustMasterCount(wm: *WM, delta: i8) void {
     const new: i16 = @as(i16, s.master_count) + delta;
     if (new < 0) return;
     s.master_count = @intCast(@min(new, 10));
-    s.markDirty();
     retileCurrentWorkspace(wm, false);
 }
 
@@ -485,7 +471,6 @@ pub inline fn decreaseMasterCount(wm: *WM) void { adjustMasterCount(wm, -1); }
 pub fn adjustMasterWidth(wm: *WM, delta: f32) void {
     const s = getState() orelse return;
     s.master_width = @max(defs.MIN_MASTER_WIDTH, @min(MAX_MASTER_WIDTH, s.master_width + delta));
-    s.markDirty();
     retileCurrentWorkspace(wm, false);
 }
 
