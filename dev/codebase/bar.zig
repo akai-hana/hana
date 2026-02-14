@@ -56,16 +56,12 @@ const State = struct {
     cached_workspace_x: u16,  // FIXED 2.7: Cache workspace segment X offset for click handling
     cached_indicator_size: u16,
     has_clock_segment: bool,
-    cache_manager: *cache.CacheManager,  // Unified caching layer
+    cache_manager: cache.CacheManager,  // Embedded by value — State is already heap-allocated
 
     fn init(allocator: std.mem.Allocator, conn: *xcb.xcb_connection_t, window: u32, width: u16, height: u16,
             dc: *drawing.DrawContext, config: defs.BarConfig, has_transparency: bool) !*State {
         const s = try allocator.create(State);
         const scaled_padding = config.scaledPadding();
-        
-        // Create cache manager
-        const cache_mgr = try cache.CacheManager.init(allocator);
-        errdefer cache_mgr.deinit();
         
         s.* = State{
             .window = window, .width = width, .height = height, .dc = dc, .conn = conn,
@@ -78,19 +74,17 @@ const State = struct {
             .has_transparency = has_transparency,
             .allocator = allocator,
             .cached_clock_width = dc.textWidth(CLOCK_FORMAT) + 2 * scaled_padding,
-            .cached_clock_x = null,  // FIXED 2.2: Populated on first full draw
+            .cached_clock_x = null,
             .cached_ws_width = config.scaledWorkspaceWidth(),
-            .cached_workspace_x = 0,  // FIXED 2.7: Populated during draw
+            .cached_workspace_x = 0,
             .cached_indicator_size = config.scaledIndicatorSize(),
-            .has_clock_segment = State.detectClockSegment(&config),  // TODO 3.8: Needs updating on config reload
-            .cache_manager = cache_mgr,
+            .has_clock_segment = State.detectClockSegment(&config),
+            .cache_manager = cache.CacheManager.init(),
         };
         
         // Pre-allocate capacity for performance
         try s.status_text.ensureTotalCapacity(allocator, 256);
         try s.cached_title.ensureTotalCapacity(allocator, 256);
-        
-        // FIXED 3.21: Removed "hana" debug leftover - start with empty status
         
         // Initialize workspace label cache
         try s.cache_manager.updateWorkspaceLabels(dc, &config);
@@ -99,7 +93,6 @@ const State = struct {
     }
 
     fn deinit(self: *State) void {
-        self.cache_manager.deinit();
         self.status_text.deinit(self.allocator);
         self.cached_title.deinit(self.allocator);
         self.allocator.destroy(self);
@@ -128,28 +121,34 @@ const State = struct {
 /// NOT thread-safe: Do not access from signal handlers or other threads
 var state: ?*State = null;
 
-fn sizeFont(alloc: std.mem.Allocator, font: []const u8, size: u16) ![]const u8 {
-    if (size == 0) return font;
-    return std.fmt.allocPrint(alloc, "{s}:size={}", .{font, size});
+/// Append `:size=N` to a font name when size > 0.
+/// Returns null when no modification is needed (use original font name as-is).
+/// Caller must free the returned slice when it is non-null.
+fn sizeFont(alloc: std.mem.Allocator, font: []const u8, size: u16) !?[]const u8 {
+    if (size == 0) return null;
+    return std.fmt.allocPrint(alloc, "{s}:size={}", .{ font, size });
 }
 
 fn loadBarFonts(dc: *drawing.DrawContext, wm: *defs.WM) !void {
-    const cfg = wm.config.bar;
-    const alloc = wm.allocator;
+    const cfg        = wm.config.bar;
+    const alloc      = wm.allocator;
     const scaled_size = cfg.scaledFontSize();
-    
+
     if (cfg.fonts.items.len > 0) {
         var sized = std.ArrayList([]const u8){};
         defer {
-            for (sized.items) |s| if (scaled_size > 0) alloc.free(s);
+            for (sized.items, 0..) |s, i| if (s.ptr != cfg.fonts.items[i].ptr) alloc.free(s);
             sized.deinit(alloc);
         }
-        for (cfg.fonts.items) |f| try sized.append(alloc, try sizeFont(alloc, f, scaled_size));
+        for (cfg.fonts.items) |f| {
+            const s = (try sizeFont(alloc, f, scaled_size)) orelse f;
+            try sized.append(alloc, s);
+        }
         return dc.loadFonts(sized.items);
     }
-    
-    const font_str = try sizeFont(alloc, cfg.font, scaled_size);
-    defer if (scaled_size > 0) alloc.free(font_str);
+
+    const font_str = (try sizeFont(alloc, cfg.font, scaled_size)) orelse cfg.font;
+    defer if (font_str.ptr != cfg.font.ptr) alloc.free(font_str);
     try dc.loadFont(font_str);
 }
 
