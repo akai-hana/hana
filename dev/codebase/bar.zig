@@ -126,7 +126,7 @@ var state: ?*State = null;
 /// Caller must free the returned slice when it is non-null.
 fn sizeFont(alloc: std.mem.Allocator, font: []const u8, size: u16) !?[]const u8 {
     if (size == 0) return null;
-    return std.fmt.allocPrint(alloc, "{s}:size={}", .{ font, size });
+    return @as(?[]const u8, try std.fmt.allocPrint(alloc, "{s}:size={}", .{ font, size }));
 }
 
 fn loadBarFonts(dc: *drawing.DrawContext, wm: *defs.WM) !void {
