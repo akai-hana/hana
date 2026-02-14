@@ -322,7 +322,7 @@ pub fn init(wm: *WM) void {
 }
 
 pub fn deinit(wm: *WM) void {
-    if (StateManager.get(true)) |s| {
+    if (StateManager.get()) |s| {
         s.deinit();
     }
     StateManager.deinit(wm.allocator);
@@ -335,7 +335,7 @@ fn parseLayout(layout_str: []const u8) Layout {
 
 pub fn addWindow(wm: *WM, window_id: u32) void {
     std.debug.assert(window_id != 0);  // Window ID should never be 0
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     if (!s.enabled) return;
 
     s.windows.add(window_id) catch |err| {
@@ -357,7 +357,7 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
 }
 
 pub fn removeWindow(wm: *WM, window_id: u32) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     if (s.windows.remove(window_id)) {
         s.markDirty();
         s.invalidateGeometry(window_id);
@@ -368,7 +368,7 @@ pub fn removeWindow(wm: *WM, window_id: u32) void {
 }
 
 pub inline fn isWindowTiled(window_id: u32) bool {
-    const s = StateManager.get(true) orelse return false;
+    const s = StateManager.get() orelse return false;
     return s.windows.contains(window_id);
 }
 
@@ -386,7 +386,7 @@ fn calculateScreenArea(wm: *WM) utils.Rect {
 }
 
 pub fn retileIfDirty(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     if (!s.enabled or !s.dirty) return;
 
     const screen_area = calculateScreenArea(wm);
@@ -395,7 +395,7 @@ pub fn retileIfDirty(wm: *WM) void {
 }
 
 fn retile(wm: *WM, screen: utils.Rect) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     
     // Don't retile if there's a fullscreen window on current workspace
     const current_ws = workspaces.getCurrentWorkspace() orelse return;
@@ -433,7 +433,7 @@ fn retile(wm: *WM, screen: utils.Rect) void {
 }
 
 pub fn retileCurrentWorkspace(wm: *WM, force: bool) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     if (!s.enabled) return;
 
     if (force) {
@@ -447,7 +447,7 @@ pub fn retileCurrentWorkspace(wm: *WM, force: bool) void {
 }
 
 fn updateWindowBorders(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     
     // OPTIMIZATION: Use already-filtered workspace windows from retile()
     // No need to check isOnCurrentWorkspace() for every window
@@ -468,7 +468,7 @@ pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
 
 // Fast version without flush - for use in focus management
 pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     
     if (old_focused) |old_win| {
         if (s.windows.contains(old_win)) {
@@ -488,7 +488,7 @@ pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void
 // FIXED 3.13: Removed dead onFocusChange export (no callers)
 
 pub fn adjustMasterCount(wm: *WM, delta: i8) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     
     const new_count: i16 = @as(i16, s.master_count) + delta;
     if (new_count < 0) return;
@@ -507,7 +507,7 @@ pub inline fn decreaseMasterCount(wm: *WM) void {
 }
 
 pub fn adjustMasterWidth(wm: *WM, delta: f32) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     
     const new_width = s.master_width + delta;
     s.master_width = @max(defs.MIN_MASTER_WIDTH, @min(MAX_MASTER_WIDTH, new_width));
@@ -525,7 +525,7 @@ pub inline fn decreaseMasterWidth(wm: *WM) void {
 }
 
 pub fn toggleTiling(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     s.enabled = !s.enabled;
     
     if (s.enabled) {
@@ -536,7 +536,7 @@ pub fn toggleTiling(wm: *WM) void {
 }
 
 pub fn cycleLayout(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     
     s.layout = switch (s.layout) {
         .master => .monocle,
@@ -555,7 +555,7 @@ pub fn toggleLayout(wm: *WM) void {
 }
 
 pub fn toggleLayoutReverse(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     
     s.layout = switch (s.layout) {
         .master => .fibonacci,
@@ -570,7 +570,7 @@ pub fn toggleLayoutReverse(wm: *WM) void {
 }
 
 pub fn swapWithMaster(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     const focused = wm.focused_window orelse return;
     
     if (!s.windows.contains(focused)) return;
@@ -617,7 +617,7 @@ pub fn swapWithMaster(wm: *WM) void {
 }
 
 pub fn promoteToMaster(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     const focused = wm.focused_window orelse return;
     if (!s.windows.contains(focused)) return;
 
@@ -674,12 +674,12 @@ fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
 }
 
 pub fn moveToIndex(from_idx: usize) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     moveWindowToIndex(s, from_idx, 0);
 }
 
 pub fn reloadConfig(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     applyConfigToState(wm, s);
     if (s.enabled) retileCurrentWorkspace(wm, true);
 }
@@ -725,7 +725,7 @@ inline fn findWindowIndex(windows: []const u32, target: u32) ?usize {
 /// Focus the previously focused window (alt+tab functionality)
 /// Fallback: if previous window is on another workspace, focus the first slave if current is master
 pub fn focusPrevious(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     const current_focused = wm.focused_window orelse return;
     
     // OPTIMIZATION: Use circular buffer iterator instead of slice
@@ -755,7 +755,7 @@ pub fn focusPrevious(wm: *WM) void {
 /// Focus the second-last focused window (mod+shift+tab functionality)
 /// With intelligent fallback and carousel behavior
 pub fn focusSecondLast(wm: *WM) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     const current_focused = wm.focused_window;
     
     const windows = s.windows.items();
@@ -817,11 +817,11 @@ pub fn focusSecondLast(wm: *WM) void {
 }
 
 pub inline fn getState() ?*State {
-    return StateManager.get(true);
+    return StateManager.get();
 }
 
 // OPTIMIZATION: Invalidate cached geometry when window is moved/resized
 pub inline fn invalidateWindowGeometry(win: u32) void {
-    const s = StateManager.get(true) orelse return;
+    const s = StateManager.get() orelse return;
     s.invalidateGeometry(win);
 }
