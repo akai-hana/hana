@@ -193,6 +193,7 @@ pub const BarConfig = struct {
     accent_color: u32 = 0x61AFEF,
     workspaces_accent: ?u32 = null,
     title_accent_color: ?u32 = null,
+    title_unfocused_accent: ?u32 = null,
     clock_accent: ?u32 = null,
 
     workspace_icons: std.ArrayList([]const u8),
@@ -234,6 +235,10 @@ pub const BarConfig = struct {
 
     pub inline fn getTitleAccent(self: *const BarConfig) u32 {
         return self.title_accent_color orelse self.accent_color;
+    }
+
+    pub fn getTitleUnfocusedAccent(self: BarConfig) u32 {
+        return self.title_unfocused_accent orelse self.accent_color;
     }
 
     pub inline fn getClockAccent(self: *const BarConfig) u32 {

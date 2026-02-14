@@ -114,6 +114,8 @@ accent_color = "#ac3232"
 [bar.colors]
 workspaces = "#b9c0a8"  # Custom accent for workspace indicators
 title = "#ac3232"       # Custom accent for title segment  
+title_unfocused = "#52263e"
+
 clock = "#ac3232"       # Custom accent for clock segment
 
 # Configurable bar layout
