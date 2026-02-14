@@ -338,26 +338,7 @@ pub fn deinit() void {
     }
 }
 
-fn setBarVisibility(wm: *defs.WM, visible: bool, reason: []const u8) void {
-    if (state) |s| {
-        // OPTIMIZATION: Update visibility state for timer control
-        s.visible = visible;
-        
-        if (visible) {
-            _ = xcb.xcb_map_window(s.conn, s.window);
-            draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setVisibility");
-        } else {
-            _ = xcb.xcb_unmap_window(s.conn, s.window);
-        }
-        utils.flush(wm.conn);
-        debug.info("Bar {s} ({s})", .{ if (visible) "shown" else "hidden", reason });
-        
-        // OPTIMIZATION: Update timer state when visibility changes
-        clock_segment.updateTimerState(wm);
-        
-        tiling.retileCurrentWorkspace(wm, true);
-    }
-}
+
 
 // NEW: Toggle bar position between top and bottom
 pub fn toggleBarPosition(wm: *defs.WM) !void {
@@ -433,17 +414,33 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 pub fn setBarState(wm: *defs.WM, action: BarAction) void {
     if (action == .show_fullscreen and !wm.config.bar.enabled) return;
     if (action == .toggle) wm.config.bar.enabled = !wm.config.bar.enabled;
-    const show, const reason = switch (action) {
-        .toggle          => .{ wm.config.bar.enabled, "toggle" },
-        .hide_fullscreen => .{ false,                 "fullscreen" },
-        .show_fullscreen => .{ true,                  "exit fullscreen" },
+
+    const show = switch (action) {
+        .toggle          => wm.config.bar.enabled,
+        .hide_fullscreen => false,
+        .show_fullscreen => true,
     };
-    setBarVisibility(wm, show, reason);
+
+    if (state) |s| {
+        s.visible = show;
+        if (show) {
+            _ = xcb.xcb_map_window(s.conn, s.window);
+            draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setBarState");
+        } else {
+            _ = xcb.xcb_unmap_window(s.conn, s.window);
+        }
+        utils.flush(wm.conn);
+        debug.info("Bar {s} ({s})", .{
+            if (show) "shown" else "hidden",
+            @tagName(action),
+        });
+        clock_segment.updateTimerState(wm);
+        tiling.retileCurrentWorkspace(wm, true);
+    }
 }
 
 pub fn updateIfDirty(wm: *defs.WM) !void {
     if (state) |s| {
-        // FIXED 2.11: Clock updates driven by timerfd (fires once/sec), not polling
         if (s.isDirty()) {
             if (s.dirty) try draw(s, wm) else if (s.dirty_clock) try drawClockOnly(s, wm);
             s.clearDirty();
