@@ -367,7 +367,7 @@ pub fn setGlobalVisibility(visible: bool) void {
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 
 /// Set bar visibility state
-/// - toggle: Toggle global bar visibility (user-initiated)
+/// - toggle: Toggle global bar visibility (user-initiated) - retiles ALL workspaces
 /// - hide_fullscreen: Temporarily hide bar due to fullscreen (doesn't change global state)
 /// - show_fullscreen: Show bar based on global state when exiting fullscreen
 pub fn setBarState(wm: *defs.WM, action: BarAction) void {
@@ -384,7 +384,7 @@ pub fn setBarState(wm: *defs.WM, action: BarAction) void {
     };
 
     // Only update if visibility actually changes
-    if (s.visible == show) return;
+    if (s.visible == show and action != .toggle) return;
     
     s.visible = show;
     if (show) {
@@ -399,7 +399,46 @@ pub fn setBarState(wm: *defs.WM, action: BarAction) void {
         @tagName(action),
     });
     clock_segment.updateTimerState(wm);
-    tiling.retileCurrentWorkspace(wm, true);
+    
+    // For toggle: retile ALL workspaces to prevent flicker when switching
+    // For fullscreen show/hide: only retile current workspace
+    if (action == .toggle) {
+        retileAllWorkspaces(wm);
+    } else {
+        tiling.retileCurrentWorkspace(wm, true);
+    }
+}
+
+/// Retile all workspaces when bar is toggled globally
+/// This prevents flicker when switching to other workspaces
+fn retileAllWorkspaces(wm: *defs.WM) void {
+    const ws_state = workspaces.getState() orelse return;
+    const ts = if (wm.config.tiling.enabled) tiling.getState() else null;
+    const tiling_active = if (ts) |t| t.enabled else false;
+    
+    if (!tiling_active) {
+        // For floating mode, just retile current workspace
+        tiling.retileCurrentWorkspace(wm, true);
+        return;
+    }
+    
+    const current = ws_state.current;
+    
+    // Retile each workspace
+    for (ws_state.workspaces, 0..) |*ws, idx| {
+        if (ws.windows.items().len == 0) continue;
+        
+        // Skip fullscreen workspaces - they don't need retiling
+        if (wm.fullscreen.getForWorkspace(@intCast(idx)) != null) continue;
+        
+        // Temporarily switch to this workspace for retiling
+        ws_state.current = @intCast(idx);
+        tiling.retileCurrentWorkspace(wm, true);
+    }
+    
+    // Restore original workspace
+    ws_state.current = current;
+    utils.flush(wm.conn);
 }
 
 pub fn updateIfDirty(wm: *defs.WM) !void {
