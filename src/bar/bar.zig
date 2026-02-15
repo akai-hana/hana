@@ -229,16 +229,21 @@ pub fn init(wm: *defs.WM) !void {
         0;
     
     // Check if transparency is supported and enabled
-    const visual_id = wm.screen.root_visual;
-    const depth_iter = xcb.xcb_screen_allowed_depths_iterator(wm.screen);
+    var visual_id = wm.screen.root_visual;  // Default to root visual
     var has_argb_visual = false;
     
     if (wm.config.bar.transparency > 0) {
-        var depth_it = depth_iter;
+        // Find the 32-bit ARGB visual for transparency
+        var depth_it = xcb.xcb_screen_allowed_depths_iterator(wm.screen);
         while (depth_it.rem > 0) : (xcb.xcb_depth_next(&depth_it)) {
             if (depth_it.data.*.depth == 32) {
-                has_argb_visual = true;
-                break;
+                // Found 32-bit depth, now get its visual
+                var visual_it = xcb.xcb_depth_visuals_iterator(depth_it.data);
+                if (visual_it.rem > 0) {
+                    visual_id = visual_it.data.*.visual_id;  // Use the 32-bit visual!
+                    has_argb_visual = true;
+                    break;
+                }
             }
         }
     }
@@ -247,24 +252,24 @@ pub fn init(wm: *defs.WM) !void {
     const window = xcb.xcb_generate_id(wm.conn);
     const colormap = if (has_argb_visual) blk: {
         const cmap = xcb.xcb_generate_id(wm.conn);
-        _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, cmap, wm.root, visual_id);
+        _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, cmap, wm.screen.root, visual_id);
         break :blk cmap;
     } else 0;
-    defer {
-        if (has_argb_visual) {
-            _ = xcb.xcb_free_colormap(wm.conn, colormap);
-        }
-    }
+    // NOTE: Don't free the colormap here - the window needs it to persist
+    // It will be freed when the window is destroyed
     
+    // CRITICAL FOR TRANSPARENCY: These values must be set correctly or transparency will break
+    // - BACK_PIXEL MUST be 0 (not 0xFF000000 | bg - that forces opaque alpha!)
+    // - OVERRIDE_REDIRECT MUST be included (tells WM not to manage this window)
     const value_mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL | 
                        xcb.XCB_CW_OVERRIDE_REDIRECT | xcb.XCB_CW_EVENT_MASK |
                        if (has_argb_visual) xcb.XCB_CW_COLORMAP else 0;
     const value_list = [_]u32{ 
-        0, // XCB_CW_BACK_PIXEL
+        0, // XCB_CW_BACK_PIXEL - DO NOT use 0xFF000000 | bg (breaks transparency!)
         0, // XCB_CW_BORDER_PIXEL
-        1, // XCB_CW_OVERRIDE_REDIRECT
+        1, // XCB_CW_OVERRIDE_REDIRECT - Required for bar behavior
         xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS, // XCB_CW_EVENT_MASK
-        colormap, // XCB_CW_COLORMAP (ignored if not has_argb_visual)
+        colormap, // XCB_CW_COLORMAP (only used when has_argb_visual is true)
     };
     
     _ = xcb.xcb_create_window(wm.conn, depth, window, wm.root,
