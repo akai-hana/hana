@@ -431,7 +431,6 @@ fn retileAllWorkspaces(wm: *defs.WM) void {
     
     // Grab server so all geometry updates are atomic - prevents windows from flashing on screen
     _ = xcb.xcb_grab_server(wm.conn);
-    defer _ = xcb.xcb_ungrab_server(wm.conn);
     
     // Retile each workspace
     for (ws_state.workspaces, 0..) |*ws, idx| {
@@ -454,10 +453,27 @@ fn retileAllWorkspaces(wm: *defs.WM) void {
                     xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, -4000))});
             }
         }
+        
+        // Flush geometry changes for this workspace immediately
+        _ = xcb.xcb_flush(wm.conn);
     }
     
     // Restore original workspace
     ws_state.current = original_ws;
+    
+    // Final flush while server is still grabbed to ensure all commands are sent
+    _ = xcb.xcb_flush(wm.conn);
+    
+    // Now ungrab - all changes will appear atomically
+    _ = xcb.xcb_ungrab_server(wm.conn);
+    
+    // CRITICAL: Wait for X server to process all geometry updates before returning
+    // This ensures windows have correct geometry immediately
+    const cookie = xcb.xcb_get_input_focus(wm.conn);
+    const reply = xcb.xcb_get_input_focus_reply(wm.conn, cookie, null);
+    if (reply != null) std.c.free(reply);
+    
+    // Final flush
     utils.flush(wm.conn);
 }
 
