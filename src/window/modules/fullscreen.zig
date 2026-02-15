@@ -57,6 +57,16 @@ fn enterFullscreen(wm: *WM, win: u32, ws: u8) void {
         return;
     };
 
+    // Hide all other windows in the workspace immediately
+    if (workspaces.getCurrentWorkspaceObject()) |ws_obj| {
+        for (ws_obj.windows.items()) |other_win| {
+            if (other_win != win) {
+                _ = xcb.xcb_configure_window(wm.conn, other_win,
+                    xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, -4000))});
+            }
+        }
+    }
+
     // Hide bar temporarily for fullscreen - doesn't change global state
     bar.setBarState(wm, .hide_fullscreen);
 
@@ -73,6 +83,7 @@ fn enterFullscreen(wm: *WM, win: u32, ws: u8) void {
     _ = xcb.xcb_configure_window(wm.conn, win,
         xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
+    utils.flush(wm.conn);
     tiling.invalidateWindowGeometry(win);
 }
 
@@ -87,6 +98,7 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
     bar.setBarState(wm, .show_fullscreen);
 
     if (tiling.isWindowTiled(win)) {
+        // Retiling will show all windows and position them correctly
         tiling.retileCurrentWorkspace(wm, true);
         tiling.invalidateWindowGeometry(win);
         // Retiling resets geometry but may not restore borders zeroed during fullscreen.
@@ -95,6 +107,7 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
         _ = xcb.xcb_change_window_attributes(wm.conn, win,
             xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(wm, win)});
     } else {
+        // For floating mode, restore the saved geometry
         const values = [_]u32{
             @bitCast(@as(i32, saved.x)),
             @bitCast(@as(i32, saved.y)),
@@ -109,5 +122,19 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
         _ = xcb.xcb_change_window_attributes(wm.conn, win,
             xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(wm, win)});
         tiling.invalidateWindowGeometry(win);
+        
+        // Also restore other windows to on-screen positions for floating mode
+        if (workspaces.getCurrentWorkspaceObject()) |ws_obj| {
+            const x: u32 = @intCast(wm.screen.width_in_pixels  / 4);
+            const y: u32 = @intCast(wm.screen.height_in_pixels / 4);
+            for (ws_obj.windows.items()) |other_win| {
+                if (other_win != win) {
+                    _ = xcb.xcb_configure_window(wm.conn, other_win,
+                        xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{ x, y });
+                }
+            }
+        }
     }
+    
+    utils.flush(wm.conn);
 }
