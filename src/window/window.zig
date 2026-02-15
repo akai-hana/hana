@@ -117,13 +117,18 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     const win = event.event;
-    if (filters.isSystemWindow(wm, win)) return;
-    if (!wm.hasWindow(win)) return;
-    if (!workspaces.isOnCurrentWorkspace(win)) return;
-    if (wm.focused_window == win) return;
+    
+    // Resolve child windows to their managed parent (for Electron apps etc.)
+    const managed_window = utils.findManagedWindow(wm.conn, win, wm);
+    
+    if (filters.isSystemWindow(wm, managed_window)) return;
+    if (!wm.hasWindow(managed_window)) return;
+    if (!workspaces.isOnCurrentWorkspace(managed_window)) return;
+    if (wm.focused_window == managed_window) return;
+    
     const old = wm.focused_window;
-    focus.setFocus(wm, win, .mouse_enter);
-    tiling.updateWindowFocus(wm, old, win);
+    focus.setFocus(wm, managed_window, .mouse_enter);
+    tiling.updateWindowFocus(wm, old, managed_window);
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {

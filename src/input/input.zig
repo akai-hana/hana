@@ -127,13 +127,23 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
         return;
     }
     
+    // Resolve child windows to their managed parent (for Electron apps etc.)
+    const managed_window = utils.findManagedWindow(wm.conn, clicked_window, wm);
+    
+    // Skip if we couldn't find a managed window
+    if (managed_window == 0 or managed_window == wm.root or !wm.hasWindow(managed_window)) {
+        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, xcb.XCB_CURRENT_TIME);
+        utils.flush(wm.conn);
+        return;
+    }
+    
     const has_super = (event.state & defs.MOD_SUPER) != 0;
     if (has_super and (event.detail == MOUSE_BUTTON_LEFT or event.detail == MOUSE_BUTTON_RIGHT)) {
         // Super+Button drag operation
-        drag.startDrag(wm, clicked_window, event.detail, event.root_x, event.root_y);
+        drag.startDrag(wm, managed_window, event.detail, event.root_x, event.root_y);
     } else {
         // Normal click-to-focus operation
-        focus.setFocus(wm, clicked_window, .mouse_click);
+        focus.setFocus(wm, managed_window, .mouse_click);
     }
     
     // CRITICAL: Always release SYNC grabs to prevent permanent input freeze

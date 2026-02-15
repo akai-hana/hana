@@ -289,3 +289,37 @@ pub fn getInputModel(conn: *xcb.xcb_connection_t, win: u32) InputModel {
         return if (accepts_input) .passive else .no_input;
     }
 }
+
+// Child window resolution ──────────────────────────────────────────────────
+
+/// Find the top-level window that the WM manages, starting from a potentially
+/// child window. Electron apps and other toolkits often use child windows for
+/// rendering, but the WM only manages the top-level parent.
+pub fn findManagedWindow(conn: *xcb.xcb_connection_t, win: u32, wm: anytype) u32 {
+    var current = win;
+    var depth: u8 = 0;
+    const MAX_DEPTH = 10; // Prevent infinite loops
+    
+    while (depth < MAX_DEPTH) : (depth += 1) {
+        // If this window is managed by the WM, we're done
+        if (wm.hasWindow(current)) return current;
+        
+        // Query parent window
+        const tree_reply = xcb.xcb_query_tree_reply(
+            conn,
+            xcb.xcb_query_tree(conn, current),
+            null,
+        ) orelse return win; // Failed to query - return original
+        defer std.c.free(tree_reply);
+        
+        const parent = tree_reply.*.parent;
+        const root = tree_reply.*.root;
+        
+        // If parent is root, we've gone too far
+        if (parent == root or parent == 0) return win;
+        
+        current = parent;
+    }
+    
+    return win; // Exceeded max depth - return original
+}
