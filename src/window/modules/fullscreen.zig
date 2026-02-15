@@ -95,13 +95,12 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
     wm.fullscreen.removeForWorkspace(ws);
     
     // Restore bar based on global visibility state
+    // This will also retile the current workspace, so we don't need to do it again below
     bar.setBarState(wm, .show_fullscreen);
 
     if (tiling.isWindowTiled(win)) {
-        // Retiling will show all windows and position them correctly
-        tiling.retileCurrentWorkspace(wm, true);
+        // bar.setBarState already retiled, just restore border
         tiling.invalidateWindowGeometry(win);
-        // Retiling resets geometry but may not restore borders zeroed during fullscreen.
         _ = xcb.xcb_configure_window(wm.conn, win,
             xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{saved.border_width});
         _ = xcb.xcb_change_window_attributes(wm.conn, win,

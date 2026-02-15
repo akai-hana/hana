@@ -373,14 +373,19 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 pub fn setBarState(wm: *defs.WM, action: BarAction) void {
     const s = state orelse return;
     
+    // Check if current workspace is fullscreen
+    const current_ws = workspaces.getCurrentWorkspace() orelse 0;
+    const is_fullscreen = wm.fullscreen.getForWorkspace(current_ws) != null;
+    
     const show = switch (action) {
         .toggle => blk: {
             // Toggle global state
             s.global_visible = !s.global_visible;
-            break :blk s.global_visible;
+            // If we're in a fullscreen workspace, keep bar hidden regardless of global state
+            break :blk if (is_fullscreen) false else s.global_visible;
         },
         .hide_fullscreen => false,  // Temporarily hide, don't change global state
-        .show_fullscreen => s.global_visible,  // Use global state
+        .show_fullscreen => if (is_fullscreen) false else s.global_visible,  // Use global state, but respect fullscreen
     };
 
     // Only update if visibility actually changes
