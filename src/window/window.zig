@@ -76,10 +76,16 @@ pub fn handleCreateNotify(event: *const xcb.xcb_create_notify_event_t, wm: *WM) 
     const child = event.window;
     const parent = event.parent;
     
+    // DEBUG: Log child window creation
+    debug.info("CreateNotify: child={x}, parent={x}, parent_managed={}", 
+        .{child, parent, wm.hasWindow(parent)});
+    
     // If parent is managed, set event mask on the new child window
     // This catches child windows created after initial mapping (e.g., Electron apps)
     if (wm.hasWindow(parent)) {
-        _ = xcb.xcb_change_window_attributes(wm.conn, child, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
+        const child_mask = WINDOW_EVENT_MASK | xcb.XCB_EVENT_MASK_ENTER_WINDOW;
+        _ = xcb.xcb_change_window_attributes(wm.conn, child, xcb.XCB_CW_EVENT_MASK, &[_]u32{child_mask});
+        debug.info("  -> Set event mask on child {x}", .{child});
     }
 }
 
@@ -137,8 +143,15 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     const win = event.event;
     
+    // DEBUG: Log all EnterNotify events to see what we're receiving
+    debug.info("EnterNotify: win={x}, child={x}, mode={}, detail={}", 
+        .{win, event.child, event.mode, event.detail});
+    
     // Resolve child windows to their managed parent (for Electron apps etc.)
     const managed_window = utils.findManagedWindow(wm.conn, win, wm);
+    
+    debug.info("  -> Resolved to managed: {x}, is_managed={}", 
+        .{managed_window, wm.hasWindow(managed_window)});
     
     if (filters.isSystemWindow(wm, managed_window)) return;
     if (!wm.hasWindow(managed_window)) return;

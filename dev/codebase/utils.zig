@@ -327,6 +327,16 @@ pub fn findManagedWindow(conn: *xcb.xcb_connection_t, win: u32, wm: anytype) u32
 /// Recursively set event masks on all child windows so we receive EnterNotify
 /// events from them. Needed for Electron apps that use child windows for content.
 pub fn setupChildWindowEvents(conn: *xcb.xcb_connection_t, win: u32, event_mask: u32) void {
+    const debug_module = @import("debug");
+    debug_module.info("setupChildWindowEvents: win={x}, mask={x}", .{win, event_mask});
+    setupChildWindowEventsRecursive(conn, win, event_mask, 0);
+}
+
+fn setupChildWindowEventsRecursive(conn: *xcb.xcb_connection_t, win: u32, event_mask: u32, depth: u8) void {
+    const debug_module = @import("debug");
+    
+    if (depth >= 3) return; // Limit recursion depth to avoid going too deep
+    
     const tree_reply = xcb.xcb_query_tree_reply(
         conn,
         xcb.xcb_query_tree(conn, win),
@@ -339,10 +349,16 @@ pub fn setupChildWindowEvents(conn: *xcb.xcb_connection_t, win: u32, event_mask:
     
     const children: [*]const u32 = @ptrCast(@alignCast(xcb.xcb_query_tree_children(tree_reply)));
     
+    debug_module.info("  depth={}, found {} children", .{depth, children_len});
+    
     // Set event mask on each child so we receive EnterNotify from them
+    // Explicitly include ENTER_WINDOW to ensure we get the events
+    const child_mask = event_mask | xcb.XCB_EVENT_MASK_ENTER_WINDOW;
+    
     for (children[0..@intCast(children_len)]) |child| {
-        _ = xcb.xcb_change_window_attributes(conn, child, xcb.XCB_CW_EVENT_MASK, &[_]u32{event_mask});
-        // Recursively process grandchildren (but don't go too deep)
-        // Most Electron apps have 1-2 levels of children
+        _ = xcb.xcb_change_window_attributes(conn, child, xcb.XCB_CW_EVENT_MASK, &[_]u32{child_mask});
+        debug_module.info("    set mask {x} on child {x}", .{child_mask, child});
+        // Recurse to handle grandchildren
+        setupChildWindowEventsRecursive(conn, child, event_mask, depth + 1);
     }
 }
