@@ -228,16 +228,15 @@ pub fn init(wm: *defs.WM) !void {
     else
         0;
     
-    // Check if transparency is supported and enabled
-    var visual_id = wm.screen.root_visual;  // Default to root visual
+    // Check if transparency is supported and find the ARGB visual
+    var visual_id = wm.screen.root_visual;
     var has_argb_visual = false;
     
     if (wm.config.bar.transparency > 0) {
-        // Find the 32-bit ARGB visual for transparency
         var depth_it = xcb.xcb_screen_allowed_depths_iterator(wm.screen);
         while (depth_it.rem > 0) : (xcb.xcb_depth_next(&depth_it)) {
             if (depth_it.data.*.depth == 32) {
-                // Found 32-bit depth, now get its visual
+                // Found depth 32, now get the actual visual for it
                 var visual_it = xcb.xcb_depth_visuals_iterator(depth_it.data);
                 if (visual_it.rem > 0) {
                     visual_id = visual_it.data.*.visual_id;  // Use the 32-bit visual!
@@ -272,7 +271,7 @@ pub fn init(wm: *defs.WM) !void {
         colormap, // XCB_CW_COLORMAP (only used when has_argb_visual is true)
     };
     
-    _ = xcb.xcb_create_window(wm.conn, depth, window, wm.root,
+    _ = xcb.xcb_create_window(wm.conn, depth, window, wm.screen.root,
         0, y_pos, screen_width, height, 0,
         xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual_id,
         @intCast(value_mask), &value_list);
@@ -281,24 +280,7 @@ pub fn init(wm: *defs.WM) !void {
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
     
-    // CRITICAL: Use initWithVisual to enable transparency support
-    // Using .init() would hardcode is_argb=false which breaks transparency!
-    const transparency_value: f32 = if (has_argb_visual)
-        1.0 - (wm.config.bar.transparency / 100.0)
-    else
-        1.0;
-    
-    const dc = try drawing.DrawContext.initWithVisual(
-        wm.allocator,
-        wm.conn,
-        window,
-        screen_width,
-        height,
-        if (has_argb_visual) visual_id else null,
-        wm.dpi_info.dpi,
-        has_argb_visual,  // Tell DrawContext we're using ARGB
-        transparency_value,
-    );
+    const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, window, screen_width, height, wm.dpi_info.dpi);
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
