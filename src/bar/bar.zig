@@ -48,7 +48,8 @@ const State = struct {
     cached_title_window: ?u32,
     dirty: bool,
     dirty_clock: bool,
-    visible: bool,
+    visible: bool,  // Current actual visibility (whether bar is mapped)
+    global_visible: bool,  // Global bar state - what visibility should be when not fullscreen
     has_transparency: bool,  // Track if transparency is enabled
     allocator: std.mem.Allocator,
     cached_clock_width: u16,
@@ -72,6 +73,7 @@ const State = struct {
             .cached_title_window = null,
             .dirty = false, .dirty_clock = false,
             .visible = true,
+            .global_visible = true,  // Initialize global state to true (bar shown by default)
             .has_transparency = has_transparency,
             .allocator = allocator,
             .cached_clock_width = dc.textWidth(CLOCK_FORMAT) + 2 * scaled_padding,
@@ -200,146 +202,98 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
     defer temp_dc.deinit();
     loadBarFonts(temp_dc, wm) catch {
         // If font loading fails, return default height instead of failing
-        debug.warn("Failed to load bar fonts for height calculation, using default", .{});
+        debug.warn("Failed to load fonts for height calculation, using default", .{});
         return DEFAULT_BAR_HEIGHT;
     };
     
+    // Get actual font height
     const asc, const desc = temp_dc.getMetrics();
-    const font_height: u32 = @intCast(asc + desc);  // Both are positive, add them
-    const scaled_padding = wm.config.bar.scaledPadding();
-    return @intCast(std.math.clamp(font_height + 2 * scaled_padding, MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
+    const font_height: u32 = @intCast(asc + desc);
+    const scaled_padding: u32 = @intCast(wm.config.bar.scaledPadding());
+    
+    // Calculate bar height with padding
+    const computed_height: u32 = font_height + (2 * scaled_padding);
+    
+    // Clamp to reasonable bounds
+    return @intCast(@min(@max(computed_height, MIN_BAR_HEIGHT), MAX_BAR_HEIGHT));
 }
-
-const VisualSetup = struct {
-    depth: u8,
-    visual_id: u32,
-    has_transparency: bool,
-    colormap: u32,
-};
-
-fn setupVisual(wm: *defs.WM) VisualSetup {
-    const alpha = wm.config.bar.getAlpha16();
-    const want_transparency = alpha < 0xFFFF;
-    
-    debug.info("Bar transparency: {s}", .{if (want_transparency) "enabled (ARGB, compositor-driven)" else "disabled (opaque)"});
-    
-    // Find appropriate visual and depth for transparency
-    const visual_info = if (want_transparency) 
-        drawing.findVisualByDepth(wm.screen, 32)
-    else 
-        drawing.VisualInfo{ .visual_type = null, .visual_id = wm.screen.root_visual };
-    
-    const depth: u8 = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
-    
-    // Create colormap for ARGB visual if needed
-    const colormap = if (want_transparency) blk: {
-        const cmap = xcb.xcb_generate_id(wm.conn);
-        _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, cmap, wm.screen.root, visual_info.visual_id);
-        break :blk cmap;
-    } else 0;
-    
-    
-    return .{
-        .depth = depth,
-        .visual_id = visual_info.visual_id,
-        .has_transparency = want_transparency,
-        .colormap = colormap,
-    };
-}
-
-fn createBarWindow(wm: *defs.WM, height: u16, visual_setup: VisualSetup) u32 {
-    const screen = wm.screen;
-    const width = screen.width_in_pixels;
-    const y_pos: i16 = if (wm.config.bar.vertical_position == .bottom)
-        @as(i16, @intCast(screen.height_in_pixels)) - @as(i16, @intCast(height))
-    else 0;
-    
-    const window = xcb.xcb_generate_id(wm.conn);
-    const event_mask = xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS;
-    
-    var values: [4]u32 = undefined;
-    var value_mask: u32 = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_EVENT_MASK;
-    var value_count: usize = 2;
-    
-    if (visual_setup.has_transparency) {
-        values[0] = 0xFF000000 | wm.config.bar.bg;
-        values[1] = 0;  // border pixel
-        values[2] = event_mask;
-        values[3] = visual_setup.colormap;
-        value_mask |= xcb.XCB_CW_BORDER_PIXEL | xcb.XCB_CW_COLORMAP;
-        value_count = 4;
-    } else {
-        values[0] = wm.config.bar.bg;
-        values[1] = event_mask;
-    }
-    
-    _ = xcb.xcb_create_window(
-        wm.conn, 
-        visual_setup.depth,
-        window, 
-        screen.root,
-        0, y_pos, width, height, 0,
-        xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, 
-        visual_setup.visual_id,
-        value_mask,
-        @as(?*const anyopaque, @ptrCast(values[0..value_count].ptr)),
-    );
-    
-    return window;
-}
-
 
 pub fn init(wm: *defs.WM) !void {
     if (!wm.config.bar.enabled) return error.BarDisabled;
-
-    wm.config.bar.scale_factor = wm.dpi_info.scale_factor;
-
-    // Step 2: Calculate bar height
+    
     const height = try calculateBarHeight(wm);
+    const screen_width = wm.screen.width_in_pixels;
+    const y_pos: i16 = if (wm.config.bar.vertical_position == .bottom)
+        @intCast(@as(i32, wm.screen.height_in_pixels) - height)
+    else
+        0;
     
-    // Step 3: Setup visual for transparency
-    const visual_setup = setupVisual(wm);
-
-    // Step 4: Create bar window
-    const window = createBarWindow(wm, height, visual_setup);
+    // Check if transparency is supported and enabled
+    const visual_id = wm.screen.root_visual;
+    const depth_iter = xcb.xcb_screen_allowed_depths_iterator(wm.screen);
+    var has_argb_visual = false;
     
-    // Step 5: Set window properties
+    if (wm.config.bar.transparency > 0) {
+        var depth_it = depth_iter;
+        while (depth_it.rem > 0) : (xcb.xcb_depth_next(&depth_it)) {
+            if (depth_it.data.*.depth == 32) {
+                has_argb_visual = true;
+                break;
+            }
+        }
+    }
+    
+    const depth: u8 = if (has_argb_visual) 32 else xcb.XCB_COPY_FROM_PARENT;
+    const window = xcb.xcb_generate_id(wm.conn);
+    const colormap = if (has_argb_visual) blk: {
+        const cmap = xcb.xcb_generate_id(wm.conn);
+        _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, cmap, wm.root, visual_id);
+        break :blk cmap;
+    } else 0;
+    defer {
+        if (has_argb_visual) {
+            _ = xcb.xcb_free_colormap(wm.conn, colormap);
+        }
+    }
+    
+    const value_mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL | 
+                       xcb.XCB_CW_OVERRIDE_REDIRECT | xcb.XCB_CW_EVENT_MASK |
+                       if (has_argb_visual) xcb.XCB_CW_COLORMAP else 0;
+    const value_list = [_]u32{ 
+        0, // XCB_CW_BACK_PIXEL
+        0, // XCB_CW_BORDER_PIXEL
+        1, // XCB_CW_OVERRIDE_REDIRECT
+        xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS, // XCB_CW_EVENT_MASK
+        colormap, // XCB_CW_COLORMAP (ignored if not has_argb_visual)
+    };
+    
+    _ = xcb.xcb_create_window(wm.conn, depth, window, wm.root,
+        0, y_pos, screen_width, height, 0,
+        xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual_id,
+        @intCast(value_mask), &value_list);
+    
     try setWindowProperties(wm, window, height);
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
-
-    // Step 6: Initialize draw context
-    const dc = try drawing.DrawContext.initWithVisual(
-        wm.allocator, wm.conn, window, wm.screen.width_in_pixels, height,
-        visual_setup.visual_id, wm.dpi_info.dpi,
-        visual_setup.has_transparency, wm.config.bar.transparency,
-    );
-    errdefer dc.deinit();
     
-    // Step 7: Load fonts
+    const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, window, screen_width, height, wm.dpi_info.dpi);
+    errdefer dc.deinit();
     try loadBarFonts(dc, wm);
-    debug.info("Bar uses XCB rendering for backgrounds (like borders), Pango for text", .{});
-
-    // Step 8: Create state and perform initial draw
-    const s = try State.init(wm.allocator, wm.conn, window, wm.screen.width_in_pixels, height, dc, wm.config.bar, visual_setup.has_transparency);
-    try draw(s, wm);
-    utils.flush(wm.conn);
-    state = s;
+    
+    state = try State.init(wm.allocator, wm.conn, window, screen_width, height, dc, wm.config.bar, has_argb_visual);
+    state.?.markDirty();
 }
 
 pub fn deinit() void {
     if (state) |s| {
-        const conn, const window = .{ s.conn, s.window };
         s.dc.deinit();
         s.deinit();
-        _ = xcb.xcb_destroy_window(conn, window);
         state = null;
     }
 }
 
+// Public API functions ─────────────────────────────────────────────────────
 
-
-// NEW: Toggle bar position between top and bottom
 pub fn toggleBarPosition(wm: *defs.WM) !void {
     if (state) |s| {
         // Toggle the position in config
@@ -365,8 +319,6 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
         debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
         
         // Retile workspace to adjust for new bar position
-        // Don't retile if there's a fullscreen window on the current workspace
-        // Fullscreen windows should remain fullscreen and not have their geometry updated
         const current_ws = workspaces.getCurrentWorkspace() orelse return;
         if (wm.fullscreen.getForWorkspace(current_ws) == null) {
             tiling.retileCurrentWorkspace(wm, true);
@@ -376,21 +328,12 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
 
 pub fn getBarWindow() u32 { return if (state) |s| s.window else 0; }
 pub fn isBarWindow(win: u32) bool { return if (state) |s| s.window == win else false; }
-pub fn markDirty() void { if (state) |s| s.markDirty(); }
-pub fn raiseBar() void {
-    if (state) |s| _ = xcb.xcb_configure_window(s.conn, s.window,
-        xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
-}
 pub fn getBarHeight() u16 { return if (state) |s| s.height else 0; }
-/// Returns true if the bar was successfully initialised (not necessarily visible on screen).
-/// Use isVisible() to check whether the bar is currently shown.
 pub fn isBarInitialized() bool { return state != null; }
 
-// OPTIMIZATION: Cached workspace dimensions for fast access
+// Cached dimension accessors for performance
 pub fn getCachedWorkspaceWidth() u16 { return if (state) |s| s.cached_ws_width else 50; }
 pub fn getCachedIndicatorSize() u16 { return if (state) |s| s.cached_indicator_size else 5; }
-
-// OPTIMIZATION: Cached workspace label width
 pub fn getCachedLabelWidth(index: usize) ?u16 {
     if (state) |s| {
         const width = s.cache_manager.getWorkspaceLabelWidth(index);
@@ -401,39 +344,62 @@ pub fn getCachedLabelWidth(index: usize) ?u16 {
 
 pub fn hasClockSegment() bool { return if (state) |s| s.has_clock_segment else false; }
 
+pub inline fn markDirty() void { if (state) |s| s.markDirty(); }
+pub inline fn raiseBar() void {
+    if (state) |s| _ = xcb.xcb_configure_window(s.conn, s.window,
+        xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+}
+
 pub fn isVisible() bool {
-    if (state) |s| return s.visible;
-    return false;
+    return if (state) |s| s.visible else false;
+}
+
+pub fn getGlobalVisibility() bool {
+    return if (state) |s| s.global_visible else false;
+}
+
+pub fn setGlobalVisibility(visible: bool) void {
+    if (state) |s| {
+        s.global_visible = visible;
+    }
 }
 
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 
+/// Set bar visibility state
+/// - toggle: Toggle global bar visibility (user-initiated)
+/// - hide_fullscreen: Temporarily hide bar due to fullscreen (doesn't change global state)
+/// - show_fullscreen: Show bar based on global state when exiting fullscreen
 pub fn setBarState(wm: *defs.WM, action: BarAction) void {
-    if (action == .show_fullscreen and !wm.config.bar.enabled) return;
-    if (action == .toggle) wm.config.bar.enabled = !wm.config.bar.enabled;
-
+    const s = state orelse return;
+    
     const show = switch (action) {
-        .toggle          => wm.config.bar.enabled,
-        .hide_fullscreen => false,
-        .show_fullscreen => true,
+        .toggle => blk: {
+            // Toggle global state
+            s.global_visible = !s.global_visible;
+            break :blk s.global_visible;
+        },
+        .hide_fullscreen => false,  // Temporarily hide, don't change global state
+        .show_fullscreen => s.global_visible,  // Use global state
     };
 
-    if (state) |s| {
-        s.visible = show;
-        if (show) {
-            _ = xcb.xcb_map_window(s.conn, s.window);
-            draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setBarState");
-        } else {
-            _ = xcb.xcb_unmap_window(s.conn, s.window);
-        }
-        utils.flush(wm.conn);
-        debug.info("Bar {s} ({s})", .{
-            if (show) "shown" else "hidden",
-            @tagName(action),
-        });
-        clock_segment.updateTimerState(wm);
-        tiling.retileCurrentWorkspace(wm, true);
+    // Only update if visibility actually changes
+    if (s.visible == show) return;
+    
+    s.visible = show;
+    if (show) {
+        _ = xcb.xcb_map_window(s.conn, s.window);
+        draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setBarState");
+    } else {
+        _ = xcb.xcb_unmap_window(s.conn, s.window);
     }
+    utils.flush(wm.conn);
+    debug.info("Bar {s} ({s})", .{
+        if (show) "shown" else "hidden",
+        @tagName(action),
+    });
+    clock_segment.updateTimerState(wm);
+    tiling.retileCurrentWorkspace(wm, true);
 }
 
 pub fn updateIfDirty(wm: *defs.WM) !void {

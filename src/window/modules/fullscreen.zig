@@ -57,6 +57,7 @@ fn enterFullscreen(wm: *WM, win: u32, ws: u8) void {
         return;
     };
 
+    // Hide bar temporarily for fullscreen - doesn't change global state
     bar.setBarState(wm, .hide_fullscreen);
 
     const values = [_]u32{
@@ -81,6 +82,8 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
 
     const saved = fs_info.saved_geometry;
     wm.fullscreen.removeForWorkspace(ws);
+    
+    // Restore bar based on global visibility state
     bar.setBarState(wm, .show_fullscreen);
 
     if (tiling.isWindowTiled(win)) {
