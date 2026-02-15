@@ -241,10 +241,16 @@ pub fn init(wm: *defs.WM) !void {
                 if (visual_it.rem > 0) {
                     visual_id = visual_it.data.*.visual_id;  // Use the 32-bit visual!
                     has_argb_visual = true;
+                    debug.info("Found 32-bit ARGB visual: ID={} (transparency={}%)", .{visual_id, wm.config.bar.transparency});
                     break;
                 }
             }
         }
+        if (!has_argb_visual) {
+            debug.warn("Transparency requested but no 32-bit ARGB visual found", .{});
+        }
+    } else {
+        debug.info("Bar transparency disabled (transparency=0)", .{});
     }
     
     const depth: u8 = if (has_argb_visual) 32 else xcb.XCB_COPY_FROM_PARENT;
@@ -280,7 +286,20 @@ pub fn init(wm: *defs.WM) !void {
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
     
-    const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, window, screen_width, height, wm.dpi_info.dpi);
+    // Must use initWithVisual when transparency is enabled so DrawContext knows
+    // to add alpha channel to colors. Using init() sets is_argb=false which
+    // makes applyTransparency() do nothing, resulting in opaque rendering.
+    const dc = if (has_argb_visual) blk: {
+        // transparency field: 1.0 = opaque, 0.0 = fully transparent
+        // config.bar.transparency: 0 = opaque, 100 = fully transparent
+        const transp: f32 = 1.0 - (wm.config.bar.transparency / 100.0);
+        break :blk try drawing.DrawContext.initWithVisual(
+            wm.allocator, wm.conn, window, screen_width, height,
+            visual_id, wm.dpi_info.dpi, true, transp,
+        );
+    } else 
+        try drawing.DrawContext.init(wm.allocator, wm.conn, window, screen_width, height, wm.dpi_info.dpi);
+    
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
