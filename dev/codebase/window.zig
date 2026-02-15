@@ -63,12 +63,25 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
 }
 
 inline fn setupWindow(wm: *WM, win: u32, workspace_index: u8) !void {
-    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
+    // Set event mask on parent window, including SubstructureNotify to catch child creation
+    const parent_mask = WINDOW_EVENT_MASK | xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY;
+    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{parent_mask});
     try wm.addWindow(win);
     workspaces.moveWindowTo(wm, win, workspace_index);
 }
 
 // Map request ──
+
+pub fn handleCreateNotify(event: *const xcb.xcb_create_notify_event_t, wm: *WM) void {
+    const child = event.window;
+    const parent = event.parent;
+    
+    // If parent is managed, set event mask on the new child window
+    // This catches child windows created after initial mapping (e.g., Electron apps)
+    if (wm.hasWindow(parent)) {
+        _ = xcb.xcb_change_window_attributes(wm.conn, child, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
+    }
+}
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win          = event.window;
@@ -84,6 +97,12 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     if (is_current) _ = xcb.xcb_map_window(wm.conn, win);
 
     utils.cacheWMTakeFocus(wm.conn, win);
+    
+    // Set up event masks on child windows so we receive EnterNotify from them
+    // This is needed for Electron apps (Discord, YouTube Music, etc.) that use
+    // child windows for their content area
+    utils.setupChildWindowEvents(wm.conn, win, WINDOW_EVENT_MASK);
+    
     setupTiling(wm, win, is_current);
     utils.flush(wm.conn);
 

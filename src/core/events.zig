@@ -20,6 +20,7 @@ const dispatch_table = blk: {
     table[xcb.XCB_BUTTON_RELEASE]    = @ptrCast(&input.handleButtonRelease);
     table[xcb.XCB_MOTION_NOTIFY]     = @ptrCast(&input.handleMotionNotify);
     table[xcb.XCB_ENTER_NOTIFY]      = @ptrCast(&window.handleEnterNotify);
+    table[xcb.XCB_CREATE_NOTIFY]     = @ptrCast(&window.handleCreateNotify);
     table[xcb.XCB_MAP_REQUEST]       = @ptrCast(&window.handleMapRequest);
     table[xcb.XCB_CONFIGURE_REQUEST] = @ptrCast(&window.handleConfigureRequest);
     table[xcb.XCB_UNMAP_NOTIFY]      = @ptrCast(&window.handleUnmapNotify);

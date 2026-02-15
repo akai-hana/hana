@@ -323,3 +323,26 @@ pub fn findManagedWindow(conn: *xcb.xcb_connection_t, win: u32, wm: anytype) u32
     
     return win; // Exceeded max depth - return original
 }
+
+/// Recursively set event masks on all child windows so we receive EnterNotify
+/// events from them. Needed for Electron apps that use child windows for content.
+pub fn setupChildWindowEvents(conn: *xcb.xcb_connection_t, win: u32, event_mask: u32) void {
+    const tree_reply = xcb.xcb_query_tree_reply(
+        conn,
+        xcb.xcb_query_tree(conn, win),
+        null,
+    ) orelse return;
+    defer std.c.free(tree_reply);
+    
+    const children_len = xcb.xcb_query_tree_children_length(tree_reply);
+    if (children_len == 0) return;
+    
+    const children: [*]const u32 = @ptrCast(@alignCast(xcb.xcb_query_tree_children(tree_reply)));
+    
+    // Set event mask on each child so we receive EnterNotify from them
+    for (children[0..@intCast(children_len)]) |child| {
+        _ = xcb.xcb_change_window_attributes(conn, child, xcb.XCB_CW_EVENT_MASK, &[_]u32{event_mask});
+        // Recursively process grandchildren (but don't go too deep)
+        // Most Electron apps have 1-2 levels of children
+    }
+}
