@@ -84,7 +84,7 @@ padding = 99
 
 # Bar transparency (0 = fully transparent, 1 = fully opaque)
 # With picom's gaussian blur, the bar will show blurred content behind it
-transparency = 0% # [0.0 - 1.0] / [0% - 100%]
+transparency = 100% # [0.0 - 1.0] / [0% - 100%]
 
 # Main color palette
 ## Bar
