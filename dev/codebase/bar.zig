@@ -281,7 +281,24 @@ pub fn init(wm: *defs.WM) !void {
     _ = xcb.xcb_map_window(wm.conn, window);
     utils.flush(wm.conn);
     
-    const dc = try drawing.DrawContext.init(wm.allocator, wm.conn, window, screen_width, height, wm.dpi_info.dpi);
+    // CRITICAL: Use initWithVisual to enable transparency support
+    // Using .init() would hardcode is_argb=false which breaks transparency!
+    const transparency_value: f32 = if (has_argb_visual)
+        1.0 - (wm.config.bar.transparency / 100.0)
+    else
+        1.0;
+    
+    const dc = try drawing.DrawContext.initWithVisual(
+        wm.allocator,
+        wm.conn,
+        window,
+        screen_width,
+        height,
+        if (has_argb_visual) visual_id else null,
+        wm.dpi_info.dpi,
+        has_argb_visual,  // Tell DrawContext we're using ARGB
+        transparency_value,
+    );
     errdefer dc.deinit();
     try loadBarFonts(dc, wm);
     
