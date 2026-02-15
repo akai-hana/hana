@@ -244,3 +244,48 @@ pub fn sendWMTakeFocus(conn: *xcb.xcb_connection_t, win: u32) void {
 
     _ = xcb.xcb_send_event(conn, 0, win, xcb.XCB_EVENT_MASK_NO_EVENT, @ptrCast(&event));
 }
+
+// WM_HINTS input checking ──────────────────────────────────────────────────
+
+pub const InputModel = enum {
+    no_input,        // input=False, no WM_TAKE_FOCUS - window doesn't want focus
+    passive,         // input=True,  no WM_TAKE_FOCUS - set focus via XSetInputFocus
+    locally_active,  // input=True,  WM_TAKE_FOCUS    - set focus + send protocol
+    globally_active, // input=False, WM_TAKE_FOCUS    - only send protocol
+};
+
+/// Query WM_HINTS to determine if window accepts input via XSetInputFocus.
+/// Returns true if input field is absent (assume True) or explicitly True.
+fn queryWMHintsInput(conn: *xcb.xcb_connection_t, win: u32) bool {
+    const reply = xcb.xcb_get_property_reply(conn,
+        xcb.xcb_get_property(conn, 0, win, xcb.XCB_ATOM_WM_HINTS, xcb.XCB_ATOM_WM_HINTS, 0, 9),
+        null,
+    ) orelse return true; // Default to true if WM_HINTS absent
+    defer std.c.free(reply);
+    
+    if (reply.*.format != 32 or reply.*.value_len < 1) return true;
+    
+    const hints: [*]const u32 = @ptrCast(@alignCast(xcb.xcb_get_property_value(reply)));
+    const flags = hints[0];
+    const INPUT_HINT_FLAG: u32 = (1 << 0);
+    
+    // If InputHint flag is set, check the input field (hints[1])
+    if ((flags & INPUT_HINT_FLAG) != 0 and reply.*.value_len >= 2) {
+        return hints[1] != 0;
+    }
+    
+    // InputHint not set - assume window accepts input
+    return true;
+}
+
+/// Determine the ICCCM input model for a window.
+pub fn getInputModel(conn: *xcb.xcb_connection_t, win: u32) InputModel {
+    const accepts_input = queryWMHintsInput(conn, win);
+    const supports_take_focus = supportsWMTakeFocusCached(conn, win);
+    
+    if (supports_take_focus) {
+        return if (accepts_input) .locally_active else .globally_active;
+    } else {
+        return if (accepts_input) .passive else .no_input;
+    }
+}
