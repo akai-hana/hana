@@ -409,8 +409,8 @@ pub fn setBarState(wm: *defs.WM, action: BarAction) void {
     }
 }
 
-/// Retile all workspaces when bar is toggled globally
-/// This prevents flicker when switching to other workspaces
+/// Retile all workspaces when bar is toggled, keeping non-current workspaces off-screen
+/// This ensures windows have correct geometry when switching workspaces (prevents flicker)
 fn retileAllWorkspaces(wm: *defs.WM) void {
     const ws_state = workspaces.getState() orelse return;
     const ts = if (wm.config.tiling.enabled) tiling.getState() else null;
@@ -422,22 +422,37 @@ fn retileAllWorkspaces(wm: *defs.WM) void {
         return;
     }
     
-    const current = ws_state.current;
+    const original_ws = ws_state.current;
+    
+    // Grab server so all geometry updates are atomic - prevents windows from flashing on screen
+    _ = xcb.xcb_grab_server(wm.conn);
+    defer _ = xcb.xcb_ungrab_server(wm.conn);
     
     // Retile each workspace
     for (ws_state.workspaces, 0..) |*ws, idx| {
         if (ws.windows.items().len == 0) continue;
         
-        // Skip fullscreen workspaces - they don't need retiling
+        // Skip fullscreen workspaces - they don't need geometry updates
         if (wm.fullscreen.getForWorkspace(@intCast(idx)) != null) continue;
         
-        // Temporarily switch to this workspace for retiling
+        // Temporarily switch to this workspace
         ws_state.current = @intCast(idx);
+        
+        // Retile to update geometry (calculates correct Y position and height for bar state)
         tiling.retileCurrentWorkspace(wm, true);
+        
+        // If this isn't the original workspace, move windows back off-screen
+        // They now have correct Y/height but need to stay invisible
+        if (@as(u8, @intCast(idx)) != original_ws) {
+            for (ws.windows.items()) |win| {
+                _ = xcb.xcb_configure_window(wm.conn, win,
+                    xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, -4000))});
+            }
+        }
     }
     
     // Restore original workspace
-    ws_state.current = current;
+    ws_state.current = original_ws;
     utils.flush(wm.conn);
 }
 

@@ -200,7 +200,8 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
         const tiling_active = if (ts) |t| t.enabled else false;
 
         if (tiling_active) {
-            // Force-retile so bar visibility / screen area are always current.
+            // Retile to position windows correctly on-screen
+            // Windows should already have correct height from bar toggle, but need X positioning
             tiling.retileCurrentWorkspace(wm, true);
         } else {
             // Floating: move all windows to a sensible on-screen position.
