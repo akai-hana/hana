@@ -125,27 +125,25 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
 // Focus events ─
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
-    // Use dwm's exact filtering logic (see dwm.c line 766)
-    // Filter out: mode != Normal OR detail == Inferior (unless it's root window)
+    // dwm filtering
     if ((event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or 
          event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR) and 
         event.event != wm.root) {
         return;
     }
     
-    const win = event.event;
+    // Use event.child directly - this tells us which child window was entered
+    const child = event.child;
+    if (child == 0 or child == wm.root) return;
     
-    // Resolve child windows to their managed parent (for Electron apps etc.)
-    const managed_window = utils.findManagedWindow(wm.conn, win, wm);
+    const managed = utils.findManagedWindow(wm.conn, child, wm);
+    if (managed == 0) return;
+    if (filters.isSystemWindow(wm, managed)) return;
+    if (!wm.hasWindow(managed)) return;
+    if (!workspaces.isOnCurrentWorkspace(managed)) return;
+    if (wm.focused_window == managed) return;
     
-    if (filters.isSystemWindow(wm, managed_window)) return;
-    if (!wm.hasWindow(managed_window)) return;
-    if (!workspaces.isOnCurrentWorkspace(managed_window)) return;
-    if (wm.focused_window == managed_window) return;
-    
-    const old = wm.focused_window;
-    focus.setFocus(wm, managed_window, .mouse_enter);
-    tiling.updateWindowFocus(wm, old, managed_window);
+    focus.setFocus(wm, managed, .mouse_enter);
 }
 
 /// Check window under pointer and focus it if different from current focus.
@@ -269,7 +267,6 @@ fn focusWindowUnderPointer(wm: *WM) void {
     const child = reply.*.child;
     if (filters.isValidManagedWindow(wm, child) and workspaces.isOnCurrentWorkspace(child)) {
         focus.setFocus(wm, child, .mouse_enter);
-        tiling.updateWindowFocus(wm, null, child);
         return;
     }
     focusFallback(wm);
@@ -281,7 +278,6 @@ fn focusFallback(wm: *WM) void {
     for (ws.windows.items()) |win| {
         if (filters.isValidManagedWindow(wm, win)) {
             focus.setFocus(wm, win, .window_destroyed);
-            tiling.updateWindowFocus(wm, null, win);
             return;
         }
     }

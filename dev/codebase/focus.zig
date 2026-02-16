@@ -54,12 +54,12 @@ fn setFocusImpl(wm: *WM, win: u32, reason: Reason, do_flush: bool) void {
         defer std.c.free(reply);
         const curr = reply.*.focus;
         if (curr == win) {
-            if (static.count % 50 == 0) {
+            if (false) {
                 debug.info("setFocus: {x} already focused ({}x)", .{win, static.count});
             }
             return;
         }
-        if (static.count % 20 == 0) {
+        if (false) {
             debug.info("setFocus #{}: {x} <- {x}", .{static.count, win, curr});
         }
     }

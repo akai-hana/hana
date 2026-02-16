@@ -164,20 +164,8 @@ pub fn handleButtonRelease(_: *const xcb.xcb_button_release_event_t, wm: *WM) vo
 pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
     if (drag.isDragging(wm)) {
         drag.updateDrag(wm, event.root_x, event.root_y);
-        return;
     }
-    
-    const win = event.event;
-    if (win == 0) return;
-    // REMOVED: if (win == wm.root) return;  <- This was blocking everything!
-    
-    const managed = utils.findManagedWindow(wm.conn, win, wm);
-    if (managed == 0) return;
-    if (filters.isSystemWindow(wm, managed)) return;
-    if (!wm.hasWindow(managed)) return;
-    if (!workspaces.isOnCurrentWorkspace(managed)) return;
-    
-    focus.setFocus(wm, managed, .mouse_enter);
+    // Focus-follows-mouse uses EnterNotify, not MotionNotify
 }
 
 fn closeWindow(wm: *WM, win: u32) void {
