@@ -108,10 +108,16 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     if ((wm.config.tiling.enabled and tiling.isWindowTiled(win)) or
         wm.fullscreen.isFullscreen(win)) return;
 
+    // X11 configure requests have signed coordinates (i16) but xcb_configure_window expects u32
+    // Use bitcast to handle negative coordinates correctly (e.g., -4000 for offscreen)
+    const x: u32 = @bitCast(@as(i32, event.x));
+    const y: u32 = @bitCast(@as(i32, event.y));
+    const width: u32 = event.width;
+    const height: u32 = event.height;
+    const border_width: u32 = event.border_width;
+    
     _ = xcb.xcb_configure_window(wm.conn, win, event.value_mask, &[_]u32{
-        @intCast(event.x), @intCast(event.y),
-        @intCast(event.width), @intCast(event.height),
-        @intCast(event.border_width),
+        x, y, width, height, border_width,
     });
     utils.flush(wm.conn);
 }

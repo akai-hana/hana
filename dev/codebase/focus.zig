@@ -27,6 +27,16 @@ pub fn setFocusBatch(wm: *WM, win: u32, reason: Reason, do_flush: bool) void {
     setFocusImpl(wm, win, reason, do_flush);
 }
 
+pub fn clearFocus(wm: *WM) void {
+    if (wm.focused_window) |old_win| {
+        window.grabButtons(wm, old_win, false);
+        tiling.updateWindowFocusFast(wm, old_win, null);
+    }
+    wm.focused_window = null;
+    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, wm.root, xcb.XCB_CURRENT_TIME);
+    bar.markDirty();
+}
+
 fn setFocusImpl(wm: *WM, win: u32, reason: Reason, do_flush: bool) void {
     if (win == wm.root or win == 0 or bar.isBarWindow(win) or wm.focused_window == win) return;
 
@@ -69,19 +79,5 @@ fn setFocusImpl(wm: *WM, win: u32, reason: Reason, do_flush: bool) void {
     tiling.updateWindowFocusFast(wm, old, win);
     
     if (do_flush) utils.flush(wm.conn);
-    bar.markDirty();
-}
-
-pub fn clearFocus(wm: *WM) void {
-    const old = wm.focused_window;
-    wm.focused_window = null;
-    _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, wm.root, xcb.XCB_CURRENT_TIME);
-
-    if (old) |old_win| {
-        window.grabButtons(wm, old_win, false);
-        tiling.updateWindowFocusFast(wm, old_win, null);
-    }
-    
-    utils.flush(wm.conn);
     bar.markDirty();
 }
