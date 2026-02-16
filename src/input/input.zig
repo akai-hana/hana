@@ -162,10 +162,14 @@ pub fn handleButtonRelease(_: *const xcb.xcb_button_release_event_t, wm: *WM) vo
 pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
     if (drag.isDragging(wm)) {
         drag.updateDrag(wm, event.root_x, event.root_y);
+        return;
     }
-    // Pointer position tracking removed - only update on EnterNotify
-    // This prevents MotionNotify from "racing" EnterNotify and making it think
-    // the pointer didn't move when hovering between windows
+    
+    // For focus-follows-mouse: check if pointer is over a different window
+    // Only process if motion is on root window
+    if (event.event == wm.root) {
+        window.checkPointerFocus(wm);
+    }
 }
 
 fn closeWindow(wm: *WM, win: u32) void {
