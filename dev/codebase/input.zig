@@ -164,8 +164,33 @@ pub fn handleButtonRelease(_: *const xcb.xcb_button_release_event_t, wm: *WM) vo
 pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
     if (drag.isDragging(wm)) {
         drag.updateDrag(wm, event.root_x, event.root_y);
+        return;
     }
-    // Focus-follows-mouse uses EnterNotify, not MotionNotify
+    
+    // Throttle to every 20th event to reduce overhead
+    const static = struct { var counter: u8 = 0; };
+    static.counter +%= 1;
+    if (static.counter % 20 != 0) return;
+    
+    // Query which window pointer is over
+    const reply = xcb.xcb_query_pointer_reply(
+        wm.conn,
+        xcb.xcb_query_pointer(wm.conn, wm.root),
+        null,
+    ) orelse return;
+    defer std.c.free(reply);
+    
+    const child = reply.*.child;
+    if (child == 0 or child == wm.root) return;
+    
+    const managed = utils.findManagedWindow(wm.conn, child, wm);
+    if (managed == 0) return;
+    if (filters.isSystemWindow(wm, managed)) return;
+    if (!wm.hasWindow(managed)) return;
+    if (!workspaces.isOnCurrentWorkspace(managed)) return;
+    if (wm.focused_window == managed) return;
+    
+    focus.setFocus(wm, managed, .mouse_enter);
 }
 
 fn closeWindow(wm: *WM, win: u32) void {

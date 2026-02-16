@@ -132,11 +132,10 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
         return;
     }
     
-    // Use event.child directly - this tells us which child window was entered
-    const child = event.child;
-    if (child == 0 or child == wm.root) return;
+    const win = event.event;  // The window that received the event
+    if (win == wm.root or win == 0) return;
     
-    const managed = utils.findManagedWindow(wm.conn, child, wm);
+    const managed = utils.findManagedWindow(wm.conn, win, wm);
     if (managed == 0) return;
     if (filters.isSystemWindow(wm, managed)) return;
     if (!wm.hasWindow(managed)) return;
