@@ -63,7 +63,10 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
 }
 
 inline fn setupWindow(wm: *WM, win: u32, workspace_index: u8) !void {
-    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
+    // CRITICAL: Must include ENTER_WINDOW mask to receive EnterNotify events!
+    // This is what dwm does - see dwm.c line 1071
+    const event_mask = WINDOW_EVENT_MASK | xcb.XCB_EVENT_MASK_ENTER_WINDOW;
+    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{event_mask});
     try wm.addWindow(win);
     workspaces.moveWindowTo(wm, win, workspace_index);
 }
@@ -116,14 +119,13 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
 // Focus events ─
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
-    // Filter out grab/ungrab pseudo-motion events
-    if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL) return;
-    
-    // CRITICAL: Do NOT filter out NotifyInferior!
-    // When you hover from parent→child, parent gets EnterNotify with detail=NotifyInferior
-    // We NEED these events to detect hovering over Electron app content areas
-    // Only filter out Virtual events (intermediate ancestors during pointer crossing)
-    if (event.detail == xcb.XCB_NOTIFY_DETAIL_VIRTUAL) return;
+    // Use dwm's exact filtering logic (see dwm.c line 766)
+    // Filter out: mode != Normal OR detail == Inferior (unless it's root window)
+    if ((event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or 
+         event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR) and 
+        event.event != wm.root) {
+        return;
+    }
     
     const win = event.event;
     
