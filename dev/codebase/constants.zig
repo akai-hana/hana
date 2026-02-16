@@ -22,7 +22,7 @@ pub const EventMasks = struct {
                             xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
                             xcb.XCB_EVENT_MASK_KEY_PRESS |
                             xcb.XCB_EVENT_MASK_BUTTON_PRESS |
-                            xcb.XCB_EVENT_MASK_POINTER_MOTION |  // ← CRITICAL FOR HOVER FOCUS
+                            // xcb.XCB_EVENT_MASK_POINTER_MOTION |  // ← CRITICAL FOR HOVER FOCUS
                             xcb.XCB_EVENT_MASK_ENTER_WINDOW |
                             xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
     
@@ -30,6 +30,7 @@ pub const EventMasks = struct {
     pub const MANAGED_WINDOW = xcb.XCB_EVENT_MASK_ENTER_WINDOW |
                                xcb.XCB_EVENT_MASK_LEAVE_WINDOW |
                                xcb.XCB_EVENT_MASK_BUTTON_PRESS |
+                               xcb.XCB_EVENT_MASK_POINTER_MOTION |  // ← CRITICAL FOR HOVER FOCUS
                                xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY |
                                xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
 };

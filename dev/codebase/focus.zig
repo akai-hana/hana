@@ -6,6 +6,7 @@ const tiling = @import("tiling");
 const utils = @import("utils");
 const bar = @import("bar");
 const window = @import("window");
+const debug = @import("debug");
 const xcb = defs.xcb;
 const WM = defs.WM;
 
@@ -40,22 +41,30 @@ pub fn clearFocus(wm: *WM) void {
 fn setFocusImpl(wm: *WM, win: u32, reason: Reason, do_flush: bool) void {
     if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
 
-    // Query actual X11 input focus instead of trusting wm.focused_window
-    // This prevents out-of-sync state where we think a window is focused but it's not
     const focus_reply = xcb.xcb_get_input_focus_reply(
         wm.conn,
         xcb.xcb_get_input_focus(wm.conn),
         null,
     );
+    
+    const static = struct { var count: u32 = 0; };
+    static.count += 1;
+    
     if (focus_reply) |reply| {
         defer std.c.free(reply);
-        if (reply.*.focus == win) return; // Already has actual X11 focus
+        const curr = reply.*.focus;
+        if (curr == win) {
+            if (static.count % 50 == 0) {
+                debug.info("setFocus: {x} already focused ({}x)", .{win, static.count});
+            }
+            return;
+        }
+        if (static.count % 20 == 0) {
+            debug.info("setFocus #{}: {x} <- {x}", .{static.count, win, curr});
+        }
     }
 
-    // Determine ICCCM input model for this window
     const input_model = utils.getInputModel(wm.conn, win);
-    
-    // Don't focus windows that don't want input at all
     if (input_model == .no_input) return;
 
     const old = wm.focused_window;

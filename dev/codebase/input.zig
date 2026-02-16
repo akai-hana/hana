@@ -7,6 +7,7 @@ const utils = @import("utils");
 const focus = @import("focus");
 const tiling = @import("tiling");
 const workspaces = @import("workspaces");
+const filters = @import("filters");
 const drag = @import("drag");
 const fullscreen = @import("fullscreen");
 const bar = @import("bar");
@@ -166,9 +167,29 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
         return;
     }
     
-    // For focus-follows-mouse: check pointer position
-    // The xcb_get_input_focus check in setFocusImpl prevents unnecessary work
-    window.checkPointerFocus(wm);
+    const static = struct { var count: u32 = 0; };
+    static.count += 1;
+    if (static.count % 100 == 0) {
+        debug.info("Motion #{}: event={x} root={x}", .{static.count, event.event, wm.root});
+    }
+    
+    const win = event.event;
+    if (win == 0 or win == wm.root) return;
+    
+    const managed = utils.findManagedWindow(wm.conn, win, wm);
+    if (static.count % 100 == 0) {
+        debug.info("  -> managed={x} has={} sys={} ws={}", 
+            .{managed, wm.hasWindow(managed), 
+              filters.isSystemWindow(wm, managed),
+              workspaces.isOnCurrentWorkspace(managed)});
+    }
+    
+    if (managed == 0) return;
+    if (filters.isSystemWindow(wm, managed)) return;
+    if (!wm.hasWindow(managed)) return;
+    if (!workspaces.isOnCurrentWorkspace(managed)) return;
+    
+    focus.setFocus(wm, managed, .mouse_enter);
 }
 
 fn closeWindow(wm: *WM, win: u32) void {

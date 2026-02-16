@@ -152,29 +152,52 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
 /// This can be called periodically (e.g. from a timer) to implement hover-focus
 /// for Electron apps that don't deliver EnterNotify events from child windows.
 pub fn checkPointerFocus(wm: *WM) void {
-    // Query pointer position
     const reply = xcb.xcb_query_pointer_reply(
         wm.conn,
         xcb.xcb_query_pointer(wm.conn, wm.root),
         null,
-    ) orelse return;
+    ) orelse {
+        debug.info("checkPointerFocus: query failed", .{});
+        return;
+    };
     defer std.c.free(reply);
     
-    // child field contains the window under the pointer
     const child = reply.*.child;
-    if (child == 0 or child == wm.root) return;
     
-    // Resolve to managed window
+    const static = struct { 
+        var count: u32 = 0;
+        var zero_count: u32 = 0;
+        var root_count: u32 = 0;
+    };
+    static.count += 1;
+    
+    if (child == 0) {
+        static.zero_count += 1;
+        if (static.zero_count % 50 == 0) {
+            debug.info("checkPointerFocus: child=0 ({} times)", .{static.zero_count});
+        }
+        return;
+    }
+    
+    if (child == wm.root) {
+        static.root_count += 1;
+        if (static.root_count % 50 == 0) {
+            debug.info("checkPointerFocus: child=root ({} times)", .{static.root_count});
+        }
+        return;
+    }
+    
     const managed_window = utils.findManagedWindow(wm.conn, child, wm);
+    
+    if (static.count % 10 == 0) {
+        debug.info("checkPointerFocus #{}: child={x} managed={x}", .{static.count, child, managed_window});
+    }
     
     if (filters.isSystemWindow(wm, managed_window)) return;
     if (!wm.hasWindow(managed_window)) return;
     if (!workspaces.isOnCurrentWorkspace(managed_window)) return;
     
-    // Let setFocusImpl handle the "already focused" check by querying actual X11 state
-    const old = wm.focused_window;
     focus.setFocus(wm, managed_window, .mouse_enter);
-    tiling.updateWindowFocus(wm, old, managed_window);
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
