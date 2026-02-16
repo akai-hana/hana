@@ -167,23 +167,11 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
         return;
     }
     
-    const static = struct { var count: u32 = 0; };
-    static.count += 1;
-    if (static.count % 100 == 0) {
-        debug.info("Motion #{}: event={x} root={x}", .{static.count, event.event, wm.root});
-    }
-    
     const win = event.event;
-    if (win == 0 or win == wm.root) return;
+    if (win == 0) return;
+    // REMOVED: if (win == wm.root) return;  <- This was blocking everything!
     
     const managed = utils.findManagedWindow(wm.conn, win, wm);
-    if (static.count % 100 == 0) {
-        debug.info("  -> managed={x} has={} sys={} ws={}", 
-            .{managed, wm.hasWindow(managed), 
-              filters.isSystemWindow(wm, managed),
-              workspaces.isOnCurrentWorkspace(managed)});
-    }
-    
     if (managed == 0) return;
     if (filters.isSystemWindow(wm, managed)) return;
     if (!wm.hasWindow(managed)) return;
