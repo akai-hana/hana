@@ -39,7 +39,8 @@ layouts = [
 # - 0-100%: Linear scaling where 100% = 50% of window space (half window, half gaps/border)
 # - 100-200%: Can go extreme, where 200% = entire window consumed by gaps/border
 # This keeps the 0-100% range "sane" while allowing extreme customization if needed
-gaps             = 2.5%
+# gaps             = 2.5%
+gaps             = 0%
 border_width     = 0%
 border_focused   = '#ac3232'
 border_unfocused = '#52263e' # Letters can also be MAJUS/minus
