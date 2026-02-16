@@ -63,31 +63,12 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
 }
 
 inline fn setupWindow(wm: *WM, win: u32, workspace_index: u8) !void {
-    // Set event mask on parent window, including SubstructureNotify to catch child creation
-    const parent_mask = WINDOW_EVENT_MASK | xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY;
-    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{parent_mask});
+    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
     try wm.addWindow(win);
     workspaces.moveWindowTo(wm, win, workspace_index);
 }
 
 // Map request ──
-
-pub fn handleCreateNotify(event: *const xcb.xcb_create_notify_event_t, wm: *WM) void {
-    const child = event.window;
-    const parent = event.parent;
-    
-    // DEBUG: Log child window creation
-    debug.info("CreateNotify: child={x}, parent={x}, parent_managed={}", 
-        .{child, parent, wm.hasWindow(parent)});
-    
-    // If parent is managed, set event mask on the new child window
-    // This catches child windows created after initial mapping (e.g., Electron apps)
-    if (wm.hasWindow(parent)) {
-        const child_mask = WINDOW_EVENT_MASK | xcb.XCB_EVENT_MASK_ENTER_WINDOW;
-        _ = xcb.xcb_change_window_attributes(wm.conn, child, xcb.XCB_CW_EVENT_MASK, &[_]u32{child_mask});
-        debug.info("  -> Set event mask on child {x}", .{child});
-    }
-}
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win          = event.window;
@@ -103,12 +84,6 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     if (is_current) _ = xcb.xcb_map_window(wm.conn, win);
 
     utils.cacheWMTakeFocus(wm.conn, win);
-    
-    // Set up event masks on child windows so we receive EnterNotify from them
-    // This is needed for Electron apps (Discord, YouTube Music, etc.) that use
-    // child windows for their content area
-    utils.setupChildWindowEvents(wm.conn, win, WINDOW_EVENT_MASK);
-    
     setupTiling(wm, win, is_current);
     utils.flush(wm.conn);
 
@@ -141,23 +116,55 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
 // Focus events ─
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
-    const win = event.event;
+    // Filter out grab/ungrab pseudo-motion events
+    if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL) return;
     
-    // DEBUG: Log all EnterNotify events to see what we're receiving
-    debug.info("EnterNotify: win={x}, child={x}, mode={}, detail={}", 
-        .{win, event.child, event.mode, event.detail});
+    // CRITICAL: Do NOT filter out NotifyInferior!
+    // When you hover from parent→child, parent gets EnterNotify with detail=NotifyInferior
+    // We NEED these events to detect hovering over Electron app content areas
+    // Only filter out Virtual events (intermediate ancestors during pointer crossing)
+    if (event.detail == xcb.XCB_NOTIFY_DETAIL_VIRTUAL) return;
+    
+    const win = event.event;
     
     // Resolve child windows to their managed parent (for Electron apps etc.)
     const managed_window = utils.findManagedWindow(wm.conn, win, wm);
-    
-    debug.info("  -> Resolved to managed: {x}, is_managed={}", 
-        .{managed_window, wm.hasWindow(managed_window)});
     
     if (filters.isSystemWindow(wm, managed_window)) return;
     if (!wm.hasWindow(managed_window)) return;
     if (!workspaces.isOnCurrentWorkspace(managed_window)) return;
     if (wm.focused_window == managed_window) return;
     
+    const old = wm.focused_window;
+    focus.setFocus(wm, managed_window, .mouse_enter);
+    tiling.updateWindowFocus(wm, old, managed_window);
+}
+
+/// Check window under pointer and focus it if different from current focus.
+/// This can be called periodically (e.g. from a timer) to implement hover-focus
+/// for Electron apps that don't deliver EnterNotify events from child windows.
+pub fn checkPointerFocus(wm: *WM) void {
+    // Query pointer position
+    const reply = xcb.xcb_query_pointer_reply(
+        wm.conn,
+        xcb.xcb_query_pointer(wm.conn, wm.root),
+        null,
+    ) orelse return;
+    defer std.c.free(reply);
+    
+    // child field contains the window under the pointer
+    const child = reply.*.child;
+    if (child == 0 or child == wm.root) return;
+    
+    // Resolve to managed window
+    const managed_window = utils.findManagedWindow(wm.conn, child, wm);
+    
+    if (filters.isSystemWindow(wm, managed_window)) return;
+    if (!wm.hasWindow(managed_window)) return;
+    if (!workspaces.isOnCurrentWorkspace(managed_window)) return;
+    if (wm.focused_window == managed_window) return;
+    
+    // Focus changed!
     const old = wm.focused_window;
     focus.setFocus(wm, managed_window, .mouse_enter);
     tiling.updateWindowFocus(wm, old, managed_window);
