@@ -38,7 +38,19 @@ pub fn clearFocus(wm: *WM) void {
 }
 
 fn setFocusImpl(wm: *WM, win: u32, reason: Reason, do_flush: bool) void {
-    if (win == wm.root or win == 0 or bar.isBarWindow(win) or wm.focused_window == win) return;
+    if (win == wm.root or win == 0 or bar.isBarWindow(win)) return;
+
+    // Query actual X11 input focus instead of trusting wm.focused_window
+    // This prevents out-of-sync state where we think a window is focused but it's not
+    const focus_reply = xcb.xcb_get_input_focus_reply(
+        wm.conn,
+        xcb.xcb_get_input_focus(wm.conn),
+        null,
+    );
+    if (focus_reply) |reply| {
+        defer std.c.free(reply);
+        if (reply.*.focus == win) return; // Already has actual X11 focus
+    }
 
     // Determine ICCCM input model for this window
     const input_model = utils.getInputModel(wm.conn, win);
