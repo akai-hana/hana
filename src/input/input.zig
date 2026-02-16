@@ -166,11 +166,9 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
         return;
     }
     
-    // For focus-follows-mouse: check if pointer is over a different window
-    // Only process if motion is on root window
-    if (event.event == wm.root) {
-        window.checkPointerFocus(wm);
-    }
+    // For focus-follows-mouse: check pointer position
+    // The xcb_get_input_focus check in setFocusImpl prevents unnecessary work
+    window.checkPointerFocus(wm);
 }
 
 fn closeWindow(wm: *WM, win: u32) void {
