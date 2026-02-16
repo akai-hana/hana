@@ -63,10 +63,7 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
 }
 
 inline fn setupWindow(wm: *WM, win: u32, workspace_index: u8) !void {
-    // CRITICAL: Must include ENTER_WINDOW mask to receive EnterNotify events!
-    // This is what dwm does - see dwm.c line 1071
-    const event_mask = WINDOW_EVENT_MASK | xcb.XCB_EVENT_MASK_ENTER_WINDOW;
-    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{event_mask});
+    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
     try wm.addWindow(win);
     workspaces.moveWindowTo(wm, win, workspace_index);
 }
@@ -108,16 +105,10 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     if ((wm.config.tiling.enabled and tiling.isWindowTiled(win)) or
         wm.fullscreen.isFullscreen(win)) return;
 
-    // X11 configure requests have signed coordinates (i16) but xcb_configure_window expects u32
-    // Use bitcast to handle negative coordinates correctly (e.g., -4000 for offscreen)
-    const x: u32 = @bitCast(@as(i32, event.x));
-    const y: u32 = @bitCast(@as(i32, event.y));
-    const width: u32 = event.width;
-    const height: u32 = event.height;
-    const border_width: u32 = event.border_width;
-    
     _ = xcb.xcb_configure_window(wm.conn, win, event.value_mask, &[_]u32{
-        x, y, width, height, border_width,
+        @intCast(event.x), @intCast(event.y),
+        @intCast(event.width), @intCast(event.height),
+        @intCast(event.border_width),
     });
     utils.flush(wm.conn);
 }
@@ -125,76 +116,18 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
 // Focus events ─
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
-    // dwm filtering
-    if ((event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or 
-         event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR) and 
-        event.event != wm.root) {
-        return;
-    }
+    const win = event.event;
     
-    const win = event.event;  // The window that received the event
-    if (win == wm.root or win == 0) return;
+    // Resolve child windows to their managed parent (for Electron apps)
+    const managed_win = utils.findManagedWindow(wm.conn, win, wm);
     
-    const managed = utils.findManagedWindow(wm.conn, win, wm);
-    if (managed == 0) return;
-    if (filters.isSystemWindow(wm, managed)) return;
-    if (!wm.hasWindow(managed)) return;
-    if (!workspaces.isOnCurrentWorkspace(managed)) return;
-    if (wm.focused_window == managed) return;
-    
-    focus.setFocus(wm, managed, .mouse_enter);
-}
-
-/// Check window under pointer and focus it if different from current focus.
-/// This can be called periodically (e.g. from a timer) to implement hover-focus
-/// for Electron apps that don't deliver EnterNotify events from child windows.
-pub fn checkPointerFocus(wm: *WM) void {
-    const reply = xcb.xcb_query_pointer_reply(
-        wm.conn,
-        xcb.xcb_query_pointer(wm.conn, wm.root),
-        null,
-    ) orelse {
-        debug.info("checkPointerFocus: query failed", .{});
-        return;
-    };
-    defer std.c.free(reply);
-    
-    const child = reply.*.child;
-    
-    const static = struct { 
-        var count: u32 = 0;
-        var zero_count: u32 = 0;
-        var root_count: u32 = 0;
-    };
-    static.count += 1;
-    
-    if (child == 0) {
-        static.zero_count += 1;
-        if (static.zero_count % 50 == 0) {
-            debug.info("checkPointerFocus: child=0 ({} times)", .{static.zero_count});
-        }
-        return;
-    }
-    
-    if (child == wm.root) {
-        static.root_count += 1;
-        if (static.root_count % 50 == 0) {
-            debug.info("checkPointerFocus: child=root ({} times)", .{static.root_count});
-        }
-        return;
-    }
-    
-    const managed_window = utils.findManagedWindow(wm.conn, child, wm);
-    
-    if (static.count % 10 == 0) {
-        debug.info("checkPointerFocus #{}: child={x} managed={x}", .{static.count, child, managed_window});
-    }
-    
-    if (filters.isSystemWindow(wm, managed_window)) return;
-    if (!wm.hasWindow(managed_window)) return;
-    if (!workspaces.isOnCurrentWorkspace(managed_window)) return;
-    
-    focus.setFocus(wm, managed_window, .mouse_enter);
+    if (filters.isSystemWindow(wm, managed_win)) return;
+    if (!wm.hasWindow(managed_win)) return;
+    if (!workspaces.isOnCurrentWorkspace(managed_win)) return;
+    if (wm.focused_window == managed_win) return;
+    const old = wm.focused_window;
+    focus.setFocus(wm, managed_win, .mouse_enter);
+    tiling.updateWindowFocus(wm, old, managed_win);
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
@@ -266,6 +199,7 @@ fn focusWindowUnderPointer(wm: *WM) void {
     const child = reply.*.child;
     if (filters.isValidManagedWindow(wm, child) and workspaces.isOnCurrentWorkspace(child)) {
         focus.setFocus(wm, child, .mouse_enter);
+        tiling.updateWindowFocus(wm, null, child);
         return;
     }
     focusFallback(wm);
@@ -277,6 +211,7 @@ fn focusFallback(wm: *WM) void {
     for (ws.windows.items()) |win| {
         if (filters.isValidManagedWindow(wm, win)) {
             focus.setFocus(wm, win, .window_destroyed);
+            tiling.updateWindowFocus(wm, null, win);
             return;
         }
     }

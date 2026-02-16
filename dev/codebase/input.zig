@@ -170,7 +170,7 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
     // Throttle to every 20th event to reduce overhead
     const static = struct { var counter: u8 = 0; };
     static.counter +%= 1;
-    if (static.counter % 20 != 0) return;
+    if (static.counter % 5 != 0) return;
     
     // Query which window pointer is over
     const reply = xcb.xcb_query_pointer_reply(
