@@ -84,22 +84,12 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     const current_ws = workspaces.getCurrentWorkspace() orelse 0;
 
     // Subscribe to events on this window before anything else so no
-    // state-change events escape between the map and our setup.
+    // state-change events escape between setup and the map.
     _ = xcb.xcb_change_window_attributes(
         wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK},
     );
 
-    // Fire all property requests as cookies — no blocking yet.
-    // WM_CLASS is only needed when workspace rules are configured.
-    const has_rules  = wm.config.workspaces.rules.items.len > 0;
-    const c_class: ?xcb.xcb_get_property_cookie_t = if (has_rules)
-        xcb.xcb_get_property(
-            wm.conn, 0, win,
-            utils.getAtomCached("WM_CLASS") catch 0,
-            xcb.XCB_ATOM_STRING, 0, 256,
-        )
-    else null;
-
+    // Fire focus-cache property cookies — always needed, no blocking.
     const c_protocols = xcb.xcb_get_property(
         wm.conn, 0, win,
         utils.getAtomCached("WM_PROTOCOLS") catch 0,
@@ -109,43 +99,52 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         wm.conn, 0, win, xcb.XCB_ATOM_WM_HINTS, xcb.XCB_ATOM_WM_HINTS, 0, 9,
     );
 
-    // Map immediately and flush — the window is visible NOW, before any
-    // property round-trip has completed.  All requests queued above are
-    // sent to the server in the same write as the map command.
-    _ = xcb.xcb_map_window(wm.conn, win);
-    utils.flush(wm.conn);
-
-    // Collect property replies.  The flush above sent all get_property
-    // requests to the server alongside the map; replies are typically
-    // already in the socket read buffer by the time we call _reply.
-    const validated_ws = blk: {
-        const target = if (c_class) |cookie| collectWorkspaceRule(wm, cookie) else null;
+    // Determine target workspace.
+    // No-rules (common path): purely local — zero round-trips.
+    // With rules: one WM_CLASS round-trip; xcb_get_property_reply flushes
+    //             the output buffer implicitly before blocking, so the focus
+    //             cookies above also land at the server during that wait.
+    const validated_ws: u8 = blk: {
+        if (wm.config.workspaces.rules.items.len == 0) break :blk current_ws;
+        const c_class = xcb.xcb_get_property(
+            wm.conn, 0, win,
+            utils.getAtomCached("WM_CLASS") catch 0,
+            xcb.XCB_ATOM_STRING, 0, 256,
+        );
+        const target = collectWorkspaceRule(wm, c_class);
         break :blk validateWorkspace(target, current_ws);
     };
-    utils.populateFocusCacheFromCookies(wm.conn, win, c_protocols, c_hints);
-
     const is_current = (validated_ws == current_ws);
 
+    // All local state — no X11 round-trips.
     wm.addWindow(win) catch |err| {
-        // OOM — the window is already visible; unmap it cleanly.
         debug.logError(err, win);
-        _ = xcb.xcb_unmap_window(wm.conn, win);
         utils.flush(wm.conn);
         return;
     };
     workspaces.moveWindowTo(wm, win, validated_ws);
 
-    if (!is_current) {
-        // The window mapped on the current workspace by default since we
-        // couldn't know the target workspace before flushing.  Unmap it so
-        // it stays off-screen; executeSwitch() re-maps it when its workspace
-        // is selected.  This causes a brief visual flash for workspace-rule
-        // windows, which is the accepted trade-off for instant mapping.
-        _ = xcb.xcb_unmap_window(wm.conn, win);
+    if (is_current) {
+        // Queue the tiled geometry configure BEFORE the map command.  XCB
+        // guarantees in-order processing within a connection, so the server
+        // applies the geometry first — the window appears at its correct
+        // tiled position with no intermediate geometry flash.
+        setupTiling(wm, win, true);
+        _ = xcb.xcb_map_window(wm.conn, win);
     }
+    // Off-screen windows are intentionally never mapped here.
+    // executeSwitch() maps them inside the server grab when their workspace
+    // is activated, so the compositor never allocates a buffer for them.
 
-    setupTiling(wm, win, is_current);
+    // Single flush covers: change_window_attributes + focus cookies +
+    // (for is_current) all configure_window calls + map_window.
     utils.flush(wm.conn);
+
+    // Collect focus property replies.  On the no-rules path these were
+    // fired before any blocking and the flush just pushed them to the
+    // server; replies are typically already in the socket read buffer.
+    // On the rules path the WM_CLASS blocking step also flushed them.
+    utils.populateFocusCacheFromCookies(wm.conn, win, c_protocols, c_hints);
 
     if (is_current) {
         focus.setFocus(wm, win, .window_spawn);
