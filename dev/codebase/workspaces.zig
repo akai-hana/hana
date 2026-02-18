@@ -224,12 +224,12 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
         const tiling_active = if (ts) |t| t.enabled else false;
 
         if (tiling_active) {
-            // Windows on the old workspace were moved to OFFSCREEN_X_POSITION,
-            // so the geometry cache is stale for every window on the incoming
-            // workspace.  Discard it so retile sends configure_window for all
-            // of them rather than skipping on false cache hits.
-            tiling.invalidateGeomCache();
-            tiling.retileCurrentWorkspace(wm);
+            // Fast path: replay cached tiled positions without running the layout
+            // algorithm.  Falls back to a full retile only if the workspace is dirty
+            // (window added/removed/layout changed while away) or the cache is cold.
+            if (!tiling.restoreWorkspaceGeom(wm)) {
+                tiling.retileCurrentWorkspace(wm);
+            }
         } else {
             // Floating: move all non-minimized windows to a sensible on-screen position.
             // Minimized windows stay at the offscreen X position — do not touch them.

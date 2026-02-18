@@ -242,14 +242,40 @@ pub fn removeWindow(window_id: u32) void {
     }
 }
 
-/// Discard all cached window geometry.
-/// Must be called before retiling a workspace whose windows were moved
-/// offscreen (e.g. during a workspace switch) — otherwise configureSafe
-/// would see stale cache hits and skip the configure_window calls that
-/// bring the windows back to their correct tiled positions.
-pub fn invalidateGeomCache() void {
-    const s = getState() orelse return;
-    s.geom_cache.clearRetainingCapacity();
+/// Restore windows on the current workspace to their cached tiled positions,
+/// bypassing the layout algorithm entirely.
+///
+/// Returns true  — all windows were in cache; positions replayed, borders updated.
+/// Returns false — cache miss or dirty flag set; caller must fall back to
+///                 retileCurrentWorkspace so the layout reruns and fills the cache.
+///
+/// This is the fast path for workspace switches: windows whose tiling hasn't
+/// changed since we left just need their geometry resent (they were moved to
+/// OFFSCREEN_X_POSITION), not recalculated.
+pub fn restoreWorkspaceGeom(wm: *WM) bool {
+    const s = getState() orelse return false;
+    // Dirty means a window was added/removed/layout changed while we were away.
+    if (s.dirty) return false;
+
+    var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
+    const ws_count = filterWorkspaceWindows(s, &ws_buf);
+    const ws_windows = ws_buf[0..ws_count];
+    if (ws_windows.len == 0) return true;
+
+    // Verify the cache covers every window before sending any XCB calls.
+    // A single miss means layout may have changed — fall back to full retile.
+    for (ws_windows) |win| {
+        if (!s.geom_cache.contains(win)) return false;
+    }
+
+    // Replay: send only the configure_window calls needed to bring windows
+    // back on-screen.  No layout math, no unnecessary XCB traffic.
+    for (ws_windows) |win| {
+        const rect = s.geom_cache.get(win).?;
+        utils.configureWindow(wm.conn, win, rect);
+    }
+    updateBorders(wm, ws_windows);
+    return true;
 }
 
 pub inline fn isWindowTiled(window_id: u32) bool {
