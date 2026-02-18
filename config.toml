@@ -105,18 +105,13 @@ indicator_size = 125%
 # accent_color = "#ac3232"
 accent_color = "#ac3232"
 
-# "#007373"
-# 009691
-# 85a796
-
 # Per-segment accent colors (overrides default accent_color)
 # These are now properly working - each segment can have its own accent color
 [bar.colors]
 workspaces = "#b9c0a8"  # Custom accent for workspace indicators
 title = "#ac3232"       # Custom accent for title segment  
 title_unfocused = "#52263e"
-# title_minimized = "#007373"
-title_minimized = "#0d0d14"
+title_minimized = "#007373"
 
 clock = "#ac3232"       # Custom accent for clock segment
 
