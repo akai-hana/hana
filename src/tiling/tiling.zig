@@ -242,6 +242,16 @@ pub fn removeWindow(window_id: u32) void {
     }
 }
 
+/// Discard all cached window geometry.
+/// Must be called before retiling a workspace whose windows were moved
+/// offscreen (e.g. during a workspace switch) — otherwise configureSafe
+/// would see stale cache hits and skip the configure_window calls that
+/// bring the windows back to their correct tiled positions.
+pub fn invalidateGeomCache() void {
+    const s = getState() orelse return;
+    s.geom_cache.clearRetainingCapacity();
+}
+
 pub inline fn isWindowTiled(window_id: u32) bool {
     const s = getState() orelse return false;
     return s.windows.contains(window_id);
