@@ -237,11 +237,21 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             tiling.toggleLayoutReverse(wm);
             bar.markDirty();
         },
-        .toggle_bar_visibility => bar.setBarState(wm, .toggle),
+        .toggle_bar_visibility => {
+            bar.setBarState(wm, .toggle);
+            // Reconfigure all offscreen workspace windows to the new bar-adjusted
+            // geometry immediately, so there is no resize flicker when the user
+            // switches to them later.  Windows on inactive workspaces are already
+            // offscreen, so this is invisible.
+            tiling.retileAllWorkspaces(wm);
+        },
         .toggle_bar_position => {
             bar.toggleBarPosition(wm) catch |err| {
                 debug.warn("Failed to toggle bar position: {}", .{err});
             };
+            // Same rationale as toggle_bar_visibility: bar position changes the
+            // effective screen area for all workspaces.
+            tiling.retileAllWorkspaces(wm);
         },
         .increase_master => {
             tiling.increaseMasterWidth(wm);
@@ -371,4 +381,3 @@ fn emergencyRecover(wm: *WM) void {
     utils.flush(wm.conn);
     debug.warn("Recovery complete - all windows mapped, special modes disabled", .{});
 }
-
