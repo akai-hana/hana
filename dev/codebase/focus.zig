@@ -28,10 +28,13 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
 
     // EnterNotify / LeaveNotify are only delivered for mapped, viewable windows —
     // the X server guarantees this.  Skip the round-trip for hover focus.
-    // For all other reasons (click, spawn, workspace switch, destroy) we guard
-    // against the race where a window is destroyed between the triggering event
-    // and our focus call, which would produce a BadMatch X error.
-    if (reason != .mouse_enter and !isWindowMapped(wm.conn, win)) return;
+    // For .window_spawn, xcb_map_window was sent on this same connection moments
+    // before this call; XCB's in-order delivery means the get_window_attributes
+    // reply will always reflect the already-mapped state — the check can never
+    // fail, so skip it.  For all other reasons (click, workspace switch, destroy
+    // recovery) the window could be destroyed between the triggering event and
+    // this call, so we guard against that BadMatch race.
+    if (reason != .mouse_enter and reason != .window_spawn and !isWindowMapped(wm.conn, win)) return;
 
     const input_model = utils.getInputModelCached(wm.conn, win);
     if (input_model == .no_input) return;

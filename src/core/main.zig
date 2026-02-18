@@ -83,34 +83,56 @@ fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
 
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
-    
-    var failed_keybinds: usize = 0;
-    
+
+    // Count total grabs needed so we can pre-size the cookie array.
+    var total: usize = 0;
+    for (wm.config.keybindings.items) |kb| {
+        if (kb.keycode != null) total += constants.LOCK_MODIFIERS.len;
+    }
+    if (total == 0) {
+        _ = xcb.xcb_flush(wm.conn);
+        return;
+    }
+
+    const CookieEntry = struct {
+        cookie:  xcb.xcb_void_cookie_t,
+        keycode: u8,
+    };
+    const cookies = try wm.allocator.alloc(CookieEntry, total);
+    defer wm.allocator.free(cookies);
+
+    // Fire every grab request without waiting for a reply — all requests are
+    // written to the output buffer in one shot before any are flushed.
+    var n: usize = 0;
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
-        
         for (constants.LOCK_MODIFIERS) |lock| {
-            const cookie = xcb.xcb_grab_key_checked(
-                wm.conn, 0, wm.root,
-                @intCast(kb.modifiers | lock), 
-                keycode, 
-                xcb.XCB_GRAB_MODE_ASYNC, 
-                xcb.XCB_GRAB_MODE_ASYNC
-            );
-            
-            if (xcb.xcb_request_check(wm.conn, cookie)) |err| {
-                std.c.free(err);
-                debug.warn("Failed to grab keycode: {}", .{keycode});
-                failed_keybinds += 1;
-                break;  // Don't try other lock modifiers if one fails
-            }
+            cookies[n] = .{
+                .cookie = xcb.xcb_grab_key_checked(
+                    wm.conn, 0, wm.root,
+                    @intCast(kb.modifiers | lock),
+                    keycode,
+                    xcb.XCB_GRAB_MODE_ASYNC,
+                    xcb.XCB_GRAB_MODE_ASYNC,
+                ),
+                .keycode = keycode,
+            };
+            n += 1;
         }
     }
-    
-    if (failed_keybinds > 0) {
-        debug.warn("{} keybinding(s) failed to grab", .{failed_keybinds});
+
+    // Now collect all results.  The first xcb_request_check flushes the buffer
+    // and waits; subsequent calls find replies already in the read buffer.
+    var failed: usize = 0;
+    for (cookies[0..n]) |entry| {
+        if (xcb.xcb_request_check(wm.conn, entry.cookie)) |err| {
+            std.c.free(err);
+            debug.warn("Failed to grab keycode: {}", .{entry.keycode});
+            failed += 1;
+        }
     }
-    
+
+    if (failed > 0) debug.warn("{} keybinding(s) failed to grab", .{failed});
     _ = xcb.xcb_flush(wm.conn);
 }
 
@@ -245,7 +267,7 @@ pub fn main() !void {
         .{ .fd = fds.timer, .events = posix.POLL.IN, .revents = 0 },
     };
     
-    while (running.load(.seq_cst)) {
+    while (running.load(.acquire)) {
         _ = posix.poll(&pollfds, -1) catch |err| {
             if (err == error.Interrupted) continue;
             debug.err("Poll error: {}", .{err});
