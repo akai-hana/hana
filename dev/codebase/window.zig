@@ -33,14 +33,35 @@ pub fn grabButtons(wm: *WM, win: u32, focused: bool) void {
 
 // Workspace rule matching ──────────────────────────────────────────────────
 
-fn matchWorkspaceRule(wm: *WM, win: u32) ?u8 {
-    const rules = wm.config.workspaces.rules.items;
-    if (rules.len == 0) return null;
-    const wm_class = utils.getWMClass(wm.conn, win, wm.allocator) orelse return null;
-    defer wm_class.deinit(wm.allocator);
-    for (rules) |rule| {
-        if (std.mem.eql(u8, rule.class_name, wm_class.class) or
-            std.mem.eql(u8, rule.class_name, wm_class.instance))
+fn validateWorkspace(target: ?u8, current: u8) u8 {
+    const ws = target orelse return current;
+    const s  = workspaces.getState() orelse return current;
+    return if (ws < s.workspaces.len) ws else current;
+}
+
+/// Collect a pre-fired WM_CLASS property cookie and match it against workspace
+/// rules.  Parses instance/class directly from the reply buffer — no allocation.
+/// Returns the target workspace index, or null if no rule matched or no reply.
+fn collectWorkspaceRule(wm: *WM, cookie: xcb.xcb_get_property_cookie_t) ?u8 {
+    const reply = xcb.xcb_get_property_reply(wm.conn, cookie, null) orelse return null;
+    defer std.c.free(reply);
+    if (reply.*.format != 8 or reply.*.value_len == 0) return null;
+
+    const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
+    // Strip trailing null bytes that some clients include in value_len.
+    var len: usize = @intCast(reply.*.value_len);
+    while (len > 0 and data[len - 1] == 0) len -= 1;
+
+    const sep = std.mem.indexOfScalar(u8, data[0..len], 0) orelse return null;
+    const class_start = sep + 1;
+    if (class_start >= len) return null;
+
+    const instance = data[0..sep];
+    const class    = data[class_start..len];
+
+    for (wm.config.workspaces.rules.items) |rule| {
+        if (std.mem.eql(u8, rule.class_name, class) or
+            std.mem.eql(u8, rule.class_name, instance))
         {
             return rule.workspace;
         }
@@ -48,13 +69,7 @@ fn matchWorkspaceRule(wm: *WM, win: u32) ?u8 {
     return null;
 }
 
-fn validateWorkspace(target: ?u8, current: u8) u8 {
-    const ws = target orelse return current;
-    const s  = workspaces.getState() orelse return current;
-    return if (ws < s.workspaces.len) ws else current;
-}
-
-// Setup helpers 
+// Setup helper
 
 inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (!wm.config.tiling.enabled) return;
@@ -62,40 +77,78 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (on_current) tiling.retileCurrentWorkspace(wm, false);
 }
 
-inline fn setupWindow(wm: *WM, win: u32, workspace_index: u8) !void {
-    _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK});
-    try wm.addWindow(win);
-    workspaces.moveWindowTo(wm, win, workspace_index);
-}
-
-// Map request ──
+// Map request ──────────────────────────────────────────────────────────────
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
-    const win          = event.window;
-    const current_ws   = workspaces.getCurrentWorkspace() orelse 0;
-    const validated_ws = validateWorkspace(matchWorkspaceRule(wm, win), current_ws);
-    const is_current   = (validated_ws == current_ws);
+    const win        = event.window;
+    const current_ws = workspaces.getCurrentWorkspace() orelse 0;
 
-    setupWindow(wm, win, validated_ws) catch |err| { debug.logError(err, win); return; };
+    // Subscribe to events on this window before anything else so no
+    // state-change events escape between the map and our setup.
+    _ = xcb.xcb_change_window_attributes(
+        wm.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{WINDOW_EVENT_MASK},
+    );
 
-    // Only map immediately for the current workspace.  Windows on inactive
-    // workspaces are left unmapped so the compositor never allocates a buffer
-    // for off-screen content.  executeSwitch() maps them inside the server grab.
-    if (is_current) _ = xcb.xcb_map_window(wm.conn, win);
+    // Fire all property requests as cookies — no blocking yet.
+    // WM_CLASS is only needed when workspace rules are configured.
+    const has_rules  = wm.config.workspaces.rules.items.len > 0;
+    const c_class: ?xcb.xcb_get_property_cookie_t = if (has_rules)
+        xcb.xcb_get_property(
+            wm.conn, 0, win,
+            utils.getAtomCached("WM_CLASS") catch 0,
+            xcb.XCB_ATOM_STRING, 0, 256,
+        )
+    else null;
 
-    utils.cacheWindowFocusProps(wm.conn, win);
+    const c_protocols = xcb.xcb_get_property(
+        wm.conn, 0, win,
+        utils.getAtomCached("WM_PROTOCOLS") catch 0,
+        xcb.XCB_ATOM_ATOM, 0, 256,
+    );
+    const c_hints = xcb.xcb_get_property(
+        wm.conn, 0, win, xcb.XCB_ATOM_WM_HINTS, xcb.XCB_ATOM_WM_HINTS, 0, 9,
+    );
+
+    // Map immediately and flush — the window is visible NOW, before any
+    // property round-trip has completed.  All requests queued above are
+    // sent to the server in the same write as the map command.
+    _ = xcb.xcb_map_window(wm.conn, win);
+    utils.flush(wm.conn);
+
+    // Collect property replies.  The flush above sent all get_property
+    // requests to the server alongside the map; replies are typically
+    // already in the socket read buffer by the time we call _reply.
+    const validated_ws = blk: {
+        const target = if (c_class) |cookie| collectWorkspaceRule(wm, cookie) else null;
+        break :blk validateWorkspace(target, current_ws);
+    };
+    utils.populateFocusCacheFromCookies(wm.conn, win, c_protocols, c_hints);
+
+    const is_current = (validated_ws == current_ws);
+
+    wm.addWindow(win) catch |err| {
+        // OOM — the window is already visible; unmap it cleanly.
+        debug.logError(err, win);
+        _ = xcb.xcb_unmap_window(wm.conn, win);
+        utils.flush(wm.conn);
+        return;
+    };
+    workspaces.moveWindowTo(wm, win, validated_ws);
+
+    if (!is_current) {
+        // The window mapped on the current workspace by default since we
+        // couldn't know the target workspace before flushing.  Unmap it so
+        // it stays off-screen; executeSwitch() re-maps it when its workspace
+        // is selected.  This causes a brief visual flash for workspace-rule
+        // windows, which is the accepted trade-off for instant mapping.
+        _ = xcb.xcb_unmap_window(wm.conn, win);
+    }
+
     setupTiling(wm, win, is_current);
     utils.flush(wm.conn);
 
     if (is_current) {
         focus.setFocus(wm, win, .window_spawn);
-        // Re-arm POINTER_MOTION_HINT so the next mouse movement generates a
-        // fresh MotionNotify.  Without this, the hint consumed before the spawn
-        // is never replaced, handleMotionNotify never fires, and
-        // suppress_focus_reason stays .window_spawn until the user clicks.
-        if (xcb.xcb_query_pointer_reply(
-            wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
-        )) |reply| std.c.free(reply);
     } else {
         grabButtons(wm, win, false);
     }

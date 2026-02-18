@@ -200,20 +200,16 @@ pub fn deinitInputModelCache() void {
     }
 }
 
-/// Populate both caches for a newly mapped window.  Call from handleMapRequest.
-/// Pipelines WM_PROTOCOLS and WM_HINTS requests into a single round-trip.
-pub fn cacheWindowFocusProps(conn: *xcb.xcb_connection_t, win: u32) void {
-    const protocols_atom = getAtomCached("WM_PROTOCOLS") catch return;
-
-    // Fire both property requests before waiting for either reply.
-    const c_protocols = xcb.xcb_get_property(
-        conn, 0, win, protocols_atom, xcb.XCB_ATOM_ATOM, 0, MAX_PROPERTY_LENGTH,
-    );
-    const c_hints = xcb.xcb_get_property(
-        conn, 0, win, xcb.XCB_ATOM_WM_HINTS, xcb.XCB_ATOM_WM_HINTS, 0, 9,
-    );
-
-    // Collect WM_PROTOCOLS reply — determine WM_TAKE_FOCUS support.
+/// Collect pre-fired WM_PROTOCOLS and WM_HINTS cookies and populate both
+/// focus caches.  The caller is responsible for having fired the cookies
+/// before calling this — typically after xcb_map_window + flush, so the
+/// server processes the property requests in parallel with the map.
+pub fn populateFocusCacheFromCookies(
+    conn: *xcb.xcb_connection_t,
+    win:  u32,
+    c_protocols: xcb.xcb_get_property_cookie_t,
+    c_hints:     xcb.xcb_get_property_cookie_t,
+) void {
     const take_focus_atom = getAtomCached("WM_TAKE_FOCUS") catch return;
     var supports = false;
     if (xcb.xcb_get_property_reply(conn, c_protocols, null)) |r| {
@@ -226,8 +222,7 @@ pub fn cacheWindowFocusProps(conn: *xcb.xcb_connection_t, win: u32) void {
         }
     }
 
-    // Collect WM_HINTS reply — determine input field.
-    var accepts = true; // default: window accepts input
+    var accepts = true;
     if (xcb.xcb_get_property_reply(conn, c_hints, null)) |r| {
         defer std.c.free(r);
         if (r.*.format == 32 and r.*.value_len >= 1) {
