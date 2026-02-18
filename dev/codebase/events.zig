@@ -48,7 +48,7 @@ pub fn initModules(wm: *defs.WM) void {
     input.init(wm);
     workspaces.init(wm);
     tiling.init(wm);
-    minimize.init(wm.allocator);
+    minimize.init(wm.allocator, wm.config.workspaces.count);
 }
 
 pub fn deinitModules(wm: *defs.WM) void {

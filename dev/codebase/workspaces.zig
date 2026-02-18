@@ -130,6 +130,9 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
     };
     s.window_to_workspace.put(win, target_ws) catch |e| debug.warnOnErr(e, "w2ws put after move");
 
+    // Keep minimize tracking coherent when a minimized window is moved.
+    if (minimize.isMinimized(win)) minimize.moveToWorkspace(win, from_ws, target_ws);
+
     if (from_ws == s.current) {
         // Bug fix: if the window is fullscreen on this workspace, tear down
         // the fullscreen state before hiding it.  Without this the bar stays

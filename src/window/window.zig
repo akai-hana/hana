@@ -210,6 +210,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
 
     if (!filters.isValidManagedWindow(wm, win)) return;
     if (!workspaces.isOnCurrentWorkspace(win)) return;
+    if (minimize.isMinimized(win)) return;
     if (wm.focused_window == win) return;
 
     focus.setFocus(wm, win, .mouse_enter);
@@ -238,6 +239,7 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) vo
 
     if (!filters.isValidManagedWindow(wm, target)) return;
     if (!workspaces.isOnCurrentWorkspace(target)) return;
+    if (minimize.isMinimized(target)) return;
     if (wm.focused_window == target) return;
 
     focus.setFocus(wm, target, .mouse_enter);
