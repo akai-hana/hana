@@ -11,6 +11,7 @@ const tiling   = @import("tiling");
 const Tracking = @import("tracking").Tracking;
 const constants = @import("constants");
 const debug    = @import("debug");
+const minimize = @import("minimize");
 
 // Comptime-generated workspace name strings ("1".."20"), never heap-allocated.
 const WORKSPACE_NAMES = blk: {
@@ -166,13 +167,23 @@ pub fn switchTo(wm: *WM, ws_id: u8) void {
     executeSwitch(wm, old, ws_id);
 }
 
+/// Return the first non-minimized window in `ws`, or null if all windows are
+/// minimized (or the workspace is empty).  Used when switching workspaces so
+/// that a minimized-only workspace never receives keyboard focus.
+fn firstNonMinimized(ws: *const Workspace) ?u32 {
+    for (ws.windows.items()) |win| {
+        if (!minimize.isMinimized(win)) return win;
+    }
+    return null;
+}
+
 fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     const s          = getState().?;
     const old_ws_obj = &s.workspaces[old_ws];
     const new_ws_obj = &s.workspaces[new_ws];
     const fs_info    = wm.fullscreen.getForWorkspace(new_ws);
 
-    wm.focused_window        = new_ws_obj.windows.first();
+    wm.focused_window        = firstNonMinimized(new_ws_obj);
     wm.suppress_focus_reason = .none;
     std.debug.assert(wm.focused_window == null or wm.hasWindow(wm.focused_window.?));
 
@@ -212,10 +223,12 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
         if (tiling_active) {
             tiling.retileCurrentWorkspace(wm);
         } else {
-            // Floating: move all windows to a sensible on-screen position.
+            // Floating: move all non-minimized windows to a sensible on-screen position.
+            // Minimized windows stay at the offscreen X position — do not touch them.
             const x: u32 = @intCast(wm.screen.width_in_pixels  / 4);
             const y: u32 = @intCast(wm.screen.height_in_pixels / 4);
             for (new_ws_obj.windows.items()) |win| {
+                if (minimize.isMinimized(win)) continue;
                 _ = xcb.xcb_configure_window(wm.conn, win,
                     xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{ x, y });
             }

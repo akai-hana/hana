@@ -12,10 +12,11 @@ var net_wm_name: ?u32 = null;
 var utf8_string: ?u32 = null;
 
 const WindowInfo = struct {
-    window: u32,
-    x: i16,
-    y: i16,
-    title: []const u8,
+    window:    u32,
+    x:         i16,
+    y:         i16,
+    title:     []const u8,
+    minimized: bool,
 };
 
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16, width: u16,
@@ -105,19 +106,26 @@ fn drawSegmentedTitles(
     
     const windows = workspace.windows.items();
     for (windows) |win| {
-        const geom = getWindowGeometry(wm.conn, win) catch continue; // Skip windows we can't query
+        const is_min = minimize.isMinimized(win);
+        // Skip the geometry round-trip for minimized windows — they are
+        // off-screen and their position is meaningless for sorting purposes.
+        const geom: WindowGeometry = if (!is_min)
+            getWindowGeometry(wm.conn, win) catch continue
+        else
+            .{ .x = std.math.maxInt(i16), .y = std.math.maxInt(i16), .width = 0, .height = 0 };
         const title = getWindowTitleDirect(wm.conn, win, allocator) catch "";
         try window_infos.append(allocator, .{
-            .window = win,
-            .x = geom.x,
-            .y = geom.y,
-            .title = title,
+            .window    = win,
+            .x         = geom.x,
+            .y         = geom.y,
+            .title     = title,
+            .minimized = is_min,
         });
     }
     
     if (window_infos.items.len == 0) return; // Safety check
     
-    // Sort windows by position (leftmost, then topmost, then oldest)
+    // Sort windows by position; minimized windows always appear after visible ones.
     std.mem.sort(WindowInfo, window_infos.items, {}, compareWindows);
     
     // Calculate segment width for each window
@@ -132,11 +140,14 @@ fn drawSegmentedTitles(
         const i_u32: u32 = @intCast(i);
         const segment_x = start_x + @as(u16, @intCast(i_u32 * @as(u32, segment_width)));
         const is_focused_window = wm.focused_window == info.window;
-        
-        // Simple color logic: focused uses accent, unfocused uses unfocused accent
-        const accent = if (is_focused_window) 
+
+        // Colour priority: focused > minimized > unfocused.
+        const accent = if (is_focused_window)
             config.getTitleAccent()
-            else config.getTitleUnfocusedAccent();
+        else if (info.minimized)
+            config.getTitleMinimizedAccent()
+        else
+            config.getTitleUnfocusedAccent();
         
         // Draw segment background
         dc.fillRect(segment_x, 0, segment_width, height, accent);
@@ -156,11 +167,11 @@ fn drawSegmentedTitles(
 }
 
 fn compareWindows(_: void, a: WindowInfo, b: WindowInfo) bool {
-    // Sort by x position (leftmost first)
+    // Minimized windows always appear after non-minimized ones.
+    if (a.minimized != b.minimized) return !a.minimized;
+    // Sort non-minimized by position (leftmost, then topmost, then oldest).
     if (a.x != b.x) return a.x < b.x;
-    // If same x, sort by y position (topmost first)
     if (a.y != b.y) return a.y < b.y;
-    // If same position, keep stable order (first created appears first)
     return a.window < b.window;
 }
 
