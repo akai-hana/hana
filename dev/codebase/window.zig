@@ -89,6 +89,13 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
     if (is_current) {
         focus.setFocus(wm, win, .window_spawn);
+        // Re-arm POINTER_MOTION_HINT so the next mouse movement generates a
+        // fresh MotionNotify.  Without this, the hint consumed before the spawn
+        // is never replaced, handleMotionNotify never fires, and
+        // suppress_focus_reason stays .window_spawn until the user clicks.
+        if (xcb.xcb_query_pointer_reply(
+            wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
+        )) |reply| std.c.free(reply);
     } else {
         grabButtons(wm, win, false);
     }

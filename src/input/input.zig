@@ -166,6 +166,11 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
     if (wm.suppress_focus_reason == .window_spawn) {
         wm.suppress_focus_reason = .none;
     }
+    // POINTER_MOTION_HINT delivers only one MotionNotify per gesture; re-arm
+    // by calling xcb_query_pointer so the next movement generates a new event.
+    if (xcb.xcb_query_pointer_reply(
+        wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
+    )) |reply| std.c.free(reply);
 }
 
 fn closeWindow(wm: *WM, win: u32) void {
