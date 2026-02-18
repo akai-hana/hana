@@ -111,6 +111,7 @@ pub const State = struct {
     /// Tracks the last geometry sent to the X server per window.
     /// Populated/updated by configureSafe via layouts.armGeomCache.
     /// Lets retile skip configure_window calls for unchanged windows.
+    last_retile_screen: utils.Rect,
     geom_cache:       std.AutoHashMapUnmanaged(u32, utils.Rect),
     /// Tracks the last border pixel color sent to the X server per window.
     /// Populated in addWindow (prevents duplicate send on immediate retile)
@@ -173,6 +174,7 @@ fn buildState(wm: *WM) State {
         .windows          = Tracking.init(wm.allocator),
         .dirty            = false,
         .focus_ring       = .{},
+        .last_retile_screen = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
         .geom_cache       = .{},
         .border_cache     = .{},
     };
@@ -245,16 +247,18 @@ pub fn removeWindow(window_id: u32) void {
 /// Restore windows on the current workspace to their cached tiled positions,
 /// bypassing the layout algorithm entirely.
 ///
-/// Returns true  — all windows were in cache; positions replayed, borders updated.
-/// Returns false — cache miss or dirty flag set; caller must fall back to
-///                 retileCurrentWorkspace so the layout reruns and fills the cache.
+/// Returns true  — cache is valid and positions have been replayed.
+/// Returns false — cache is stale or incomplete; caller must fall back to
+///                 retileCurrentWorkspace so the layout reruns.
 ///
-/// This is the fast path for workspace switches: windows whose tiling hasn't
-/// changed since we left just need their geometry resent (they were moved to
-/// OFFSCREEN_X_POSITION), not recalculated.
+/// The cache is considered stale when:
+///   • dirty flag is set (window added/removed/layout changed)
+///   • any window on this workspace is absent from the cache
+///   • the screen area (bar height/position) differs from when the cache
+///     was last populated — handles bar visibility toggles on other workspaces
+///     including when the current workspace was fullscreen at toggle time
 pub fn restoreWorkspaceGeom(wm: *WM) bool {
     const s = getState() orelse return false;
-    // Dirty means a window was added/removed/layout changed while we were away.
     if (s.dirty) return false;
 
     var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
@@ -262,14 +266,27 @@ pub fn restoreWorkspaceGeom(wm: *WM) bool {
     const ws_windows = ws_buf[0..ws_count];
     if (ws_windows.len == 0) return true;
 
-    // Verify the cache covers every window before sending any XCB calls.
-    // A single miss means layout may have changed — fall back to full retile.
+    // If bar height or position changed since the cache was last written, the
+    // stored rects are computed for a different screen area and must not be
+    // replayed.  This is the canonical fix for bar-toggle-while-fullscreen:
+    // no matter how bar state was changed or through which code path, the
+    // screen rect comparison catches it without requiring external hooks.
+    const current_screen = calculateScreenArea(wm);
+    if (current_screen.x      != s.last_retile_screen.x      or
+        current_screen.y      != s.last_retile_screen.y      or
+        current_screen.width  != s.last_retile_screen.width  or
+        current_screen.height != s.last_retile_screen.height)
+    {
+        return false;
+    }
+
+    // Verify every window on this workspace is in the cache before
+    // sending any XCB calls — a single miss means we need a full retile.
     for (ws_windows) |win| {
         if (!s.geom_cache.contains(win)) return false;
     }
 
-    // Replay: send only the configure_window calls needed to bring windows
-    // back on-screen.  No layout math, no unnecessary XCB traffic.
+    // Fast path: replay cached positions.  No layout math, no XCB round-trips.
     for (ws_windows) |win| {
         const rect = s.geom_cache.get(win).?;
         utils.configureWindow(wm.conn, win, rect);
@@ -316,17 +333,7 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     const s = getState() orelse return;
 
     const current_ws = workspaces.getCurrentWorkspace() orelse return;
-    if (wm.fullscreen.getForWorkspace(current_ws)) |_| {
-        // The layout can't run right now (fullscreen window covers the workspace),
-        // but something that affects geometry — typically a bar visibility toggle
-        // — triggered this retile.  The geom cache still holds rects from before
-        // that change, so every other workspace's windows would be replayed at
-        // the wrong size/position by restoreWorkspaceGeom on the next switch.
-        // Clear it so the fast path misses and falls back to a full retile with
-        // the correct bar height.
-        s.geom_cache.clearRetainingCapacity();
-        return;
-    }
+    if (wm.fullscreen.getForWorkspace(current_ws)) |_| return;
 
     // Collect windows for the current workspace into a stack-local buffer.
     var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
@@ -348,6 +355,12 @@ fn retile(wm: *WM, screen: utils.Rect) void {
         .fibonacci => fibonacci_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
     }
     layouts.disarmGeomCache();
+
+    // Record the screen area used for this retile.  restoreWorkspaceGeom
+    // compares this against the current screen area on the next workspace
+    // switch — a mismatch (bar toggled, position changed, etc.) means the
+    // cached rects are stale and a full retile is needed.
+    s.last_retile_screen = screen;
 
     updateBorders(wm, ws_windows);
 }
