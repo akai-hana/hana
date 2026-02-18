@@ -316,7 +316,17 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     const s = getState() orelse return;
 
     const current_ws = workspaces.getCurrentWorkspace() orelse return;
-    if (wm.fullscreen.getForWorkspace(current_ws)) |_| return;
+    if (wm.fullscreen.getForWorkspace(current_ws)) |_| {
+        // The layout can't run right now (fullscreen window covers the workspace),
+        // but something that affects geometry — typically a bar visibility toggle
+        // — triggered this retile.  The geom cache still holds rects from before
+        // that change, so every other workspace's windows would be replayed at
+        // the wrong size/position by restoreWorkspaceGeom on the next switch.
+        // Clear it so the fast path misses and falls back to a full retile with
+        // the correct bar height.
+        s.geom_cache.clearRetainingCapacity();
+        return;
+    }
 
     // Collect windows for the current workspace into a stack-local buffer.
     var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
