@@ -282,11 +282,23 @@ pub fn main() !void {
     };
     
     while (running.load(.seq_cst)) {
-        _ = posix.poll(&pollfds, -1) catch |err| {
+        // 50 ms timeout: when a window (e.g. Electron/Chromium) generates no
+        // pointer events visible to root, poll() would otherwise block forever.
+        // On timeout we query the pointer directly — xcb_query_pointer ignores
+        // event masks and always returns the window under the cursor.
+        const ready = posix.poll(&pollfds, 50) catch |err| {
             if (err == error.Interrupted) continue;
             debug.err("Poll error: {}", .{err});
             continue;
         };
+
+        // Timeout — no X events, signal, or timer fired.  Poll pointer position
+        // so focus-follows-mouse works for apps that suppress pointer events.
+        if (ready == 0) {
+            input.pollPointerFocus(&wm);
+            _ = xcb.xcb_flush(conn);
+            continue;
+        }
         
         // X11 events
         if (pollfds[0].revents & posix.POLL.IN != 0) {

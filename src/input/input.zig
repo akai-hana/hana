@@ -102,6 +102,7 @@ pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
 }
 
 pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
+    wm.last_event_time = event.time;
     var state = &(keybind_state orelse return);
     const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
 
@@ -117,6 +118,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
+    wm.last_event_time = event.time;
     // Determine which window was clicked:
     // - For root grabs (Super+Button): child is the clicked window
     // - For window grabs (SYNC click-to-focus): event is the clicked window, child may be 0
@@ -155,13 +157,41 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     utils.flush(wm.conn);
 }
 
-pub fn handleButtonRelease(_: *const xcb.xcb_button_release_event_t, wm: *WM) void {
+pub fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, wm: *WM) void {
+    wm.last_event_time = event.time;
     if (drag.isDragging(wm)) {
         drag.stopDrag(wm);
     }
 }
 
+/// Called on poll timeout to handle windows (like Electron) that generate no
+/// pointer events visible to root.  xcb_query_pointer bypasses event masks
+/// entirely — it always returns the window under the cursor regardless of what
+/// any client has subscribed to.
+pub fn pollPointerFocus(wm: *WM) void {
+    if (drag.isDragging(wm)) return;
+    if (wm.suppress_focus_reason == .window_spawn) return;
+
+    const reply = xcb.xcb_query_pointer_reply(
+        wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
+    ) orelse return;
+    defer std.c.free(reply);
+
+    const child = reply.*.child;
+    if (child == 0 or child == wm.root) return;
+
+    const managed = utils.findManagedWindow(wm.conn, child, wm);
+    if (managed == 0) return;
+    if (filters.isSystemWindow(wm, managed)) return;
+    if (!wm.hasWindow(managed)) return;
+    if (!workspaces.isOnCurrentWorkspace(managed)) return;
+    if (wm.focused_window == managed) return;
+
+    focus.setFocus(wm, managed, .mouse_enter);
+}
+
 pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
+    wm.last_event_time = event.time;
     if (drag.isDragging(wm)) {
         drag.updateDrag(wm, event.root_x, event.root_y);
         return;
