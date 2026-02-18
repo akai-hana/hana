@@ -173,11 +173,7 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     }
 
     // Step 2: adjust bar visibility for the new workspace.
-    if (fs_info != null) {
-        bar.setBarState(wm, .hide_fullscreen);
-    } else {
-        bar.setBarState(wm, .show_fullscreen);
-    }
+    bar.setBarState(wm, if (fs_info != null) .hide_fullscreen else .show_fullscreen);
 
     // Step 3: show windows for the new workspace.
     if (fs_info) |info| {

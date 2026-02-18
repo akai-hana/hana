@@ -205,13 +205,6 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     debug.info("Added window 0x{x} to tiling", .{window_id});
 }
 
-/// Invalidate cached geometry for a window (no-op in current implementation).
-/// Called when window geometry is changed externally (e.g., fullscreen toggle).
-pub fn invalidateWindowGeometry(_: u32) void {
-    // Currently no per-window geometry cache to invalidate.
-    // Retiling will recalculate all geometries as needed.
-}
-
 pub fn removeWindow(window_id: u32) void {
     const s = getState() orelse return;
     if (s.windows.remove(window_id)) {
@@ -291,11 +284,6 @@ fn updateBorders(wm: *WM, ws_windows: []const u32) void {
 
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     updateBorderForFocusChange(wm, old_focused, new_focused);
-    _ = xcb.xcb_flush(wm.conn);
-}
-
-pub fn updateWindowFocusFast(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
-    updateBorderForFocusChange(wm, old_focused, new_focused);
 }
 
 inline fn updateBorderForFocusChange(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
@@ -347,12 +335,9 @@ pub fn swapWithMaster(wm: *WM) void {
     const focused_pos = findWindowIndex(all, focused) orelse return;
 
     // Find first window on current workspace — that's the effective master.
-    var master_pos: usize = 0;
-    var found_master = false;
-    for (all, 0..) |win, i| {
-        if (workspaces.isOnCurrentWorkspace(win)) { master_pos = i; found_master = true; break; }
-    }
-    if (!found_master) return;
+    const master_pos = for (all, 0..) |win, i| {
+        if (workspaces.isOnCurrentWorkspace(win)) break i;
+    } else return;
 
     if (focused_pos == master_pos) {
         // Already master: swap with the next workspace window.
@@ -433,12 +418,10 @@ pub inline fn decreaseMasterWidth(wm: *WM) void { adjustMasterWidth(wm, -0.025);
 
 // Focus cycling
 
-inline fn switchFocus(wm: *WM, s: *State, from: ?u32, to: u32) void {
+inline fn switchFocus(wm: *WM, s: *State, to: u32) void {
     std.debug.assert(to != 0 and wm.hasWindow(to));
     focus.setFocus(wm, to, .tiling_operation);
-    wm.focused_window = to;
     s.focus_ring.push(to);
-    updateWindowFocus(wm, from, to);
 }
 
 fn filterWorkspaceWindows(s: *State, buf: []u32) usize {
@@ -467,7 +450,7 @@ pub fn focusPrevious(wm: *WM) void {
     while (it.next()) |win| {
         if (win == cur) continue;
         if (workspaces.isOnCurrentWorkspace(win) and s.windows.contains(win)) {
-            switchFocus(wm, s, cur, win);
+            switchFocus(wm, s, win);
             return;
         }
     }
@@ -481,9 +464,9 @@ pub fn focusPrevious(wm: *WM) void {
     const idx = findWindowIndex(ws_windows, cur) orelse return;
     const mc  = getMasterCount(s, ws_count);
     if (idx < mc and ws_count > mc) {
-        switchFocus(wm, s, cur, ws_windows[mc]);
+        switchFocus(wm, s, ws_windows[mc]);
     } else if (idx >= mc) {
-        switchFocus(wm, s, cur, ws_windows[if (idx + 1 < ws_count) idx + 1 else 0]);
+        switchFocus(wm, s, ws_windows[if (idx + 1 < ws_count) idx + 1 else 0]);
     }
 }
 
@@ -498,7 +481,7 @@ pub fn focusSecondLast(wm: *WM) void {
     while (it.next()) |win| {
         if (win == cur) { found = true; continue; }
         if (found and workspaces.isOnCurrentWorkspace(win) and s.windows.contains(win)) {
-            switchFocus(wm, s, cur, win);
+            switchFocus(wm, s, win);
             return;
         }
     }
@@ -511,7 +494,7 @@ pub fn focusSecondLast(wm: *WM) void {
 
     if (ws_count == 2) {
         const other = if (ws_wins[0] == cur) ws_wins[1] else ws_wins[0];
-        switchFocus(wm, s, cur, other);
+        switchFocus(wm, s, other);
         return;
     }
 
@@ -520,11 +503,11 @@ pub fn focusSecondLast(wm: *WM) void {
 
     if (idx < mc) {
         const next = if (mc == 1) ws_count - 1 else (if (idx + 1 < mc) idx + 1 else 0);
-        switchFocus(wm, s, cur, ws_wins[next]);
+        switchFocus(wm, s, ws_wins[next]);
     } else {
         const slave_count = ws_count - mc;
         const si          = idx - mc;
         const next_si     = if (si + 1 < slave_count) si + 1 else 0;
-        switchFocus(wm, s, cur, ws_wins[mc + next_si]);
+        switchFocus(wm, s, ws_wins[mc + next_si]);
     }
 }

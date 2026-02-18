@@ -207,8 +207,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     else
         event.event;
 
-    if (filters.isSystemWindow(wm, win)) return;
-    if (!wm.hasWindow(win)) return;
+    if (!filters.isValidManagedWindow(wm, win)) return;
     if (!workspaces.isOnCurrentWorkspace(win)) return;
     if (wm.focused_window == win) return;
 
@@ -236,8 +235,7 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) vo
     };
     if (target == 0 or target == wm.root) return;
 
-    if (filters.isSystemWindow(wm, target)) return;
-    if (!wm.hasWindow(target)) return;
+    if (!filters.isValidManagedWindow(wm, target)) return;
     if (!workspaces.isOnCurrentWorkspace(target)) return;
     if (wm.focused_window == target) return;
 
@@ -311,7 +309,6 @@ fn focusWindowUnderPointer(wm: *WM) void {
     const child = reply.*.child;
     if (filters.isValidManagedWindow(wm, child) and workspaces.isOnCurrentWorkspace(child)) {
         focus.setFocus(wm, child, .mouse_enter);
-        tiling.updateWindowFocus(wm, null, child);
         return;
     }
     focusFallback(wm);
@@ -323,7 +320,6 @@ fn focusFallback(wm: *WM) void {
     for (ws.windows.items()) |win| {
         if (filters.isValidManagedWindow(wm, win)) {
             focus.setFocus(wm, win, .window_destroyed);
-            tiling.updateWindowFocus(wm, null, win);
             return;
         }
     }

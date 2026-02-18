@@ -86,7 +86,6 @@ fn enterFullscreen(wm: *WM, win: u32, ws: u8) void {
         xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
     utils.flush(wm.conn);
-    tiling.invalidateWindowGeometry(win);
 }
 
 fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
@@ -101,7 +100,6 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
     bar.setBarState(wm, .show_fullscreen);
 
     if (tiling.isWindowTiled(win)) {
-        tiling.invalidateWindowGeometry(win);
         _ = xcb.xcb_configure_window(wm.conn, win,
             xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{saved.border_width});
         _ = xcb.xcb_change_window_attributes(wm.conn, win,
@@ -121,7 +119,6 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
             xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &values);
         _ = xcb.xcb_change_window_attributes(wm.conn, win,
             xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(wm, win)});
-        tiling.invalidateWindowGeometry(win);
 
         if (workspaces.getCurrentWorkspaceObject()) |ws_obj| {
             const x: u32 = @intCast(wm.screen.width_in_pixels  / 4);
