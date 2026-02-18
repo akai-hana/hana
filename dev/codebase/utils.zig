@@ -144,7 +144,7 @@ pub fn getAtomCached(comptime name: []const u8) error{AtomCacheNotInitialized}!u
     };
 }
 
-// Property helpers ─────────────────────────────────────────────────────────
+// Property helpers 
 
 pub fn fetchPropertyToBuffer(
     conn:      *xcb.xcb_connection_t,
@@ -168,7 +168,7 @@ pub fn fetchPropertyToBuffer(
     return buffer.items;
 }
 
-// WM_TAKE_FOCUS + InputModel caching ──────────────────────────────────────
+// WM_TAKE_FOCUS + InputModel caching 
 //
 // Both caches are keyed by window ID and populated at map time.  They are
 // invalidated on the relevant PropertyNotify atoms (WM_PROTOCOLS, WM_HINTS)
@@ -289,7 +289,7 @@ fn supportsWMTakeFocusCached(conn: *xcb.xcb_connection_t, win: u32) bool {
     return supports;
 }
 
-// WM_CLASS ─────────────────────────────────────────────────────────────────
+// WM_CLASS 
 
 pub const WMClass = struct {
     instance: []const u8,
@@ -324,7 +324,7 @@ pub fn getWMClass(conn: *xcb.xcb_connection_t, win: u32, allocator: std.mem.Allo
     return .{ .instance = instance, .class = class };
 }
 
-// Private helpers ──────────────────────────────────────────────────────────
+// Private helpers 
 
 fn queryWMTakeFocusSupport(conn: *xcb.xcb_connection_t, win: u32) bool {
     const protocols_atom  = getAtomCached("WM_PROTOCOLS")  catch return false;
@@ -361,7 +361,7 @@ pub fn sendWMTakeFocus(conn: *xcb.xcb_connection_t, win: u32, time: u32) void {
     _ = xcb.xcb_send_event(conn, 0, win, xcb.XCB_EVENT_MASK_NO_EVENT, @ptrCast(&event));
 }
 
-// WM_HINTS input checking ──────────────────────────────────────────────────
+// WM_HINTS input checking 
 
 pub const InputModel = enum {
     no_input,        // input=False, no WM_TAKE_FOCUS - window doesn't want focus
@@ -406,7 +406,7 @@ pub fn getInputModel(conn: *xcb.xcb_connection_t, win: u32) InputModel {
     }
 }
 
-// Child window resolution ──────────────────────────────────────────────────
+// Child window resolution 
 
 /// Find the top-level window that the WM manages, starting from a potentially
 /// child window. Electron apps and other toolkits often use child windows for

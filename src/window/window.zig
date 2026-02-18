@@ -74,7 +74,7 @@ fn collectWorkspaceRule(wm: *WM, cookie: xcb.xcb_get_property_cookie_t) ?u8 {
 inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (!wm.config.tiling.enabled) return;
     tiling.addWindow(wm, win);
-    if (on_current) tiling.retileCurrentWorkspace(wm, false);
+    if (on_current) tiling.retileCurrentWorkspace(wm);
 }
 
 // Map request 
