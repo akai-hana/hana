@@ -45,7 +45,7 @@ fn validateWorkspace(target: ?u8, current: u8) u8 {
 fn collectWorkspaceRule(wm: *WM, cookie: xcb.xcb_get_property_cookie_t) ?u8 {
     const reply = xcb.xcb_get_property_reply(wm.conn, cookie, null) orelse return null;
     defer std.c.free(reply);
-    if (reply.*.format != 8 or reply.*.value_len == 0) return null;
+    if (reply.*.format != 16 or reply.*.value_len == 0) return null;
 
     const data: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
     // Strip trailing null bytes that some clients include in value_len.
