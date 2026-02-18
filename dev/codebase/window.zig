@@ -113,11 +113,18 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     const mask = event.value_mask & GEOMETRY_MASK;
     if (mask == 0) return;
 
-    _ = xcb.xcb_configure_window(wm.conn, win, mask, &[_]u32{
-        @intCast(event.x), @intCast(event.y),
-        @intCast(event.width), @intCast(event.height),
-        @intCast(event.border_width),
-    });
+    // XCB reads values in bit-order: for each set bit in mask (lowest first)
+    // it consumes values[0], values[1], etc.  Providing all 5 values regardless
+    // of which bits are set is wrong — e.g. if only WIDTH|HEIGHT are requested,
+    // XCB reads values[0] for width, but we would have stored event.x there.
+    var values: [5]u32 = undefined;
+    var n: u3 = 0;
+    if (mask & xcb.XCB_CONFIG_WINDOW_X != 0)            { values[n] = @bitCast(@as(i32, event.x));            n += 1; }
+    if (mask & xcb.XCB_CONFIG_WINDOW_Y != 0)            { values[n] = @bitCast(@as(i32, event.y));            n += 1; }
+    if (mask & xcb.XCB_CONFIG_WINDOW_WIDTH != 0)        { values[n] = event.width;                            n += 1; }
+    if (mask & xcb.XCB_CONFIG_WINDOW_HEIGHT != 0)       { values[n] = event.height;                           n += 1; }
+    if (mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0) { values[n] = event.border_width;                     n += 1; }
+    _ = xcb.xcb_configure_window(wm.conn, win, mask, &values);
     utils.flush(wm.conn);
 }
 

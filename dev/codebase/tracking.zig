@@ -141,8 +141,11 @@ pub const Tracking = struct {
                 return false;
             },
             .large => |*l| {
-                if (!l.set.remove(win)) return false;
+                // Find the list index first — if the window somehow isn't in the
+                // list (shouldn't happen, but guards against inconsistency), bail
+                // before touching the set so both structures stay in sync.
                 const idx = std.mem.indexOfScalar(u32, l.list.items, win) orelse return false;
+                _ = l.set.remove(win);
                 if (ordered) _ = l.list.orderedRemove(idx) else _ = l.list.swapRemove(idx);
                 // Capture the condition before demoteToSmall() invalidates `l`.
                 if (l.list.items.len <= DEMOTION_THRESHOLD) self.demoteToSmall();
@@ -190,6 +193,9 @@ pub const Tracking = struct {
         const s = self.storage.small;
         var list: std.ArrayListUnmanaged(u32) = .empty;
         var set = std.AutoHashMap(u32, void).init(self.allocator);
+        // If either allocation fails, release whatever was already allocated.
+        errdefer list.deinit(self.allocator);
+        errdefer set.deinit();
         try list.ensureTotalCapacity(self.allocator, s.len + 8);
         try set.ensureTotalCapacity(s.len + 8);
         for (s.items[0..s.len]) |win| {

@@ -21,12 +21,20 @@ pub const EventMasks = struct {
                             xcb.XCB_EVENT_MASK_BUTTON_PRESS |
                             xcb.XCB_EVENT_MASK_ENTER_WINDOW |
                             xcb.XCB_EVENT_MASK_LEAVE_WINDOW |
-                            xcb.XCB_EVENT_MASK_POINTER_MOTION |
+                            // HINT mode: server delivers one MotionNotify per movement
+                            // burst rather than one per pixel.  We only need this to
+                            // clear window-spawn focus suppression — a single event per
+                            // gesture is sufficient.  Drags receive motion from the
+                            // button-grab event mask and are unaffected.
+                            xcb.XCB_EVENT_MASK_POINTER_MOTION_HINT |
                             xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
-    
-    /// Event mask for managed windows (focus-follows-mouse, clicks, property changes)
+
+    /// Event mask for managed windows (click-to-focus, property changes).
+    /// LEAVE_WINDOW is intentionally omitted: handleLeaveNotify only processes
+    /// events from root (it returns immediately for all other windows), so
+    /// subscribing managed windows to leave events would generate traffic that
+    /// is always discarded.
     pub const MANAGED_WINDOW = xcb.XCB_EVENT_MASK_ENTER_WINDOW |
-                               xcb.XCB_EVENT_MASK_LEAVE_WINDOW |
                                xcb.XCB_EVENT_MASK_BUTTON_PRESS |
                                xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY |
                                xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
