@@ -197,7 +197,10 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     if (event.mode == xcb.XCB_NOTIFY_MODE_GRAB or
         event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) return;
     if (wm.drag_state.active) return;
-    if (wm.suppress_focus_reason == .window_spawn) return;
+    // A crossing event with mode NORMAL means the pointer has genuinely moved.
+    // That is sufficient signal to lift window-spawn suppression — the user is
+    // no longer in the brief window immediately after a window appeared.
+    if (wm.suppress_focus_reason == .window_spawn) wm.suppress_focus_reason = .none;
 
     const win = if (event.event == wm.root and event.child != 0)
         event.child
@@ -213,15 +216,15 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
 }
 
 /// Root's LeaveNotify fires the instant the pointer enters any child window,
-/// including Electron/Chromium which generates no EnterNotify or MotionNotify
-/// events visible to root.  This gives us event-driven focus at the same
-/// latency as handleEnterNotify for all other windows.
+/// including Electron/Chromium which generates no EnterNotify events visible
+/// to root.  This gives us event-driven focus at the same latency as
+/// handleEnterNotify for all other windows.
 pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) void {
     wm.last_event_time = event.time;
     if (event.event != wm.root) return;
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL) return;
     if (wm.drag_state.active) return;
-    if (wm.suppress_focus_reason == .window_spawn) return;
+    if (wm.suppress_focus_reason == .window_spawn) wm.suppress_focus_reason = .none;
 
     // event.child is the direct child of root being entered.
     const target: u32 = if (event.child != 0) event.child else blk: {
@@ -251,12 +254,8 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) vo
 pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *WM) void {
     if (!wm.hasWindow(event.window)) return;
     const wm_protocols = utils.getAtomCached("WM_PROTOCOLS") catch return;
-    if (event.atom == wm_protocols) {
-        utils.recacheTakeFocus(wm.conn, event.window);
-        return;
-    }
-    if (event.atom == xcb.XCB_ATOM_WM_HINTS) {
-        utils.recacheHintsInput(wm.conn, event.window);
+    if (event.atom == wm_protocols or event.atom == xcb.XCB_ATOM_WM_HINTS) {
+        utils.recacheInputModel(wm.conn, event.window);
     }
 }
 
