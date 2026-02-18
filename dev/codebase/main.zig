@@ -81,43 +81,6 @@ fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
     }
 }
 
-fn setupExistingWindows(conn: *xcb.xcb_connection_t, root: u32, allocator: std.mem.Allocator) !void {
-    const reply = xcb.xcb_query_tree_reply(conn, xcb.xcb_query_tree(conn, root), null) orelse return;
-    defer std.c.free(reply);
-
-    const children = xcb.xcb_query_tree_children(reply);
-    const len: usize = @intCast(xcb.xcb_query_tree_children_length(reply));
-    if (len == 0) return;
-
-    // Design choice: Only subscribe to enter/leave events on pre-existing windows.
-    // We do NOT call addWindow, workspaces.moveWindowTo, or tiling.addWindow.
-    // This means pre-existing windows are not managed — only new windows created
-    // after WM startup are tiled. This is intentional: on WM restart, the user's
-    // existing window layout is preserved rather than forcibly retiled.
-    const event_mask = xcb.XCB_EVENT_MASK_ENTER_WINDOW | xcb.XCB_EVENT_MASK_LEAVE_WINDOW;
-    
-    // Use stack allocation for common case (≤32 windows), heap for many
-    var stack_cookies: [constants.Sizes.WINDOW_CAPACITY]xcb.xcb_get_window_attributes_cookie_t = undefined;
-    const cookies = if (len <= constants.Sizes.WINDOW_CAPACITY) 
-        stack_cookies[0..len] 
-    else 
-        try allocator.alloc(xcb.xcb_get_window_attributes_cookie_t, len);
-    defer if (len > constants.Sizes.WINDOW_CAPACITY) allocator.free(cookies);
-    
-    for (0..len) |i| {
-        cookies[i] = xcb.xcb_get_window_attributes(conn, children[i]);
-    }
-    _ = xcb.xcb_flush(conn);
-    
-    for (cookies, 0..) |cookie, i| {
-        const attrs = xcb.xcb_get_window_attributes_reply(conn, cookie, null) orelse continue;
-        defer std.c.free(attrs);
-        if (attrs.*.override_redirect != 0 or attrs.*.map_state != xcb.XCB_MAP_STATE_VIEWABLE) continue;
-        _ = xcb.xcb_change_window_attributes(conn, children[i], xcb.XCB_CW_EVENT_MASK, &[_]u32{event_mask});
-    }
-    _ = xcb.xcb_flush(conn);
-}
-
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
     
@@ -251,7 +214,9 @@ pub fn main() !void {
 
     try utils.initAtomCache(conn);
     utils.initWMTakeFocusCache(wm.allocator);
+    utils.initInputModelCache(wm.allocator);
     defer utils.deinitWMTakeFocusCache();
+    defer utils.deinitInputModelCache();
     defer drawing.deinitFontCache(allocator);
     
     const fds = try setupPollFds();
@@ -269,7 +234,6 @@ pub fn main() !void {
     clock.updateTimerState(&wm);
 
     try grabKeybindings(&wm);
-    try setupExistingWindows(conn, root, allocator);
     _ = xcb.xcb_flush(conn);
     debug.info("Started", .{});
 

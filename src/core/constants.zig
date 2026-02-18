@@ -49,6 +49,7 @@ pub const Sizes = struct {
     /// Dispatch table size (covers all X11 event types)
     pub const EVENT_DISPATCH_TABLE = 36;
     
-    /// Default capacity for window tracking and stack allocation
-    pub const WINDOW_CAPACITY = 32; //TODO: why 32?
+    /// Pre-allocation capacity for window tracking structures.
+    /// Sized for a typical session; structures grow automatically beyond this.
+    pub const WINDOW_CAPACITY = 32;
 };
