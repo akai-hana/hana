@@ -12,7 +12,6 @@ const bar        = @import("bar");
 const Tracking   = @import("tracking").Tracking;
 const debug      = @import("debug");
 const dpi        = @import("dpi");
-const layouts    = @import("layouts");
 
 const master_layout    = @import("master");
 const monocle_layout   = @import("monocle");
@@ -95,7 +94,6 @@ const FocusRing = struct {
 // State
 
 pub const State = struct {
-    allocator:        std.mem.Allocator,
     enabled:          bool,
     layout:           Layout,
     master_side:      defs.MasterSide,
@@ -108,15 +106,6 @@ pub const State = struct {
     windows:          Tracking,
     dirty:            bool,
     focus_ring:       FocusRing,
-    /// Tracks the last geometry sent to the X server per window.
-    /// Populated/updated by configureSafe via layouts.armGeomCache.
-    /// Lets retile skip configure_window calls for unchanged windows.
-    last_retile_screen: utils.Rect,
-    geom_cache:       std.AutoHashMapUnmanaged(u32, utils.Rect),
-    /// Tracks the last border pixel color sent to the X server per window.
-    /// Populated in addWindow (prevents duplicate send on immediate retile)
-    /// and kept current by updateBorders / updateBorderForFocusChange.
-    border_cache:     std.AutoHashMapUnmanaged(u32, u32),
 
     pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.gaps, .border = self.border_width };
@@ -133,8 +122,6 @@ pub const State = struct {
 
     pub fn deinit(self: *State) void {
         self.windows.deinit();
-        self.geom_cache.deinit(self.allocator);
-        self.border_cache.deinit(self.allocator);
     }
 };
 
@@ -161,7 +148,6 @@ fn computeMasterWidth(wm: *WM) f32 {
 fn buildState(wm: *WM) State {
     const screen_height = wm.screen.height_in_pixels;
     return .{
-        .allocator        = wm.allocator,
         .enabled          = wm.config.tiling.enabled,
         .layout           = std.meta.stringToEnum(Layout, wm.config.tiling.layout) orelse .master,
         .master_side      = wm.config.tiling.master_side,
@@ -174,9 +160,6 @@ fn buildState(wm: *WM) State {
         .windows          = Tracking.init(wm.allocator),
         .dirty            = false,
         .focus_ring       = .{},
-        .last_retile_screen = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
-        .geom_cache       = .{},
-        .border_cache     = .{},
     };
 }
 
@@ -196,10 +179,6 @@ pub fn reloadConfig(wm: *WM) void {
     const saved_windows    = s.windows;
     const saved_focus_ring = s.focus_ring;
 
-    // Config changes (gaps, border width, colors) invalidate both caches.
-    s.geom_cache.deinit(s.allocator);
-    s.border_cache.deinit(s.allocator);
-
     g_state = buildState(wm);
     g_state.?.windows    = saved_windows;
     g_state.?.focus_ring = saved_focus_ring;
@@ -217,19 +196,12 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     s.windows.add(window_id) catch |err| { debug.logError(err, window_id); return; };
     s.markDirty();
 
-    // Set BORDER_PIXEL only — EVENT_MASK was already applied by handleMapRequest,
-    // so sending it again here is a redundant attribute update.
     const border_color = s.borderColor(wm, window_id);
     _ = xcb.xcb_change_window_attributes(wm.conn, window_id,
-        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{border_color});
+        xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_BORDER_PIXEL,
+        &[_]u32{ WINDOW_EVENT_MASK, border_color });
     _ = xcb.xcb_configure_window(wm.conn, window_id,
         xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{s.border_width});
-
-    // Pre-populate the border cache so the retileCurrentWorkspace call that
-    // immediately follows this (in setupTiling) does not re-send the border
-    // pixel for this window — it was just set above.
-    s.border_cache.put(s.allocator, window_id, border_color) catch {};
-
     debug.info("Added window 0x{x} to tiling", .{window_id});
 }
 
@@ -238,61 +210,8 @@ pub fn removeWindow(window_id: u32) void {
     if (s.windows.remove(window_id)) {
         s.markDirty();
         s.focus_ring.remove(window_id);
-        _ = s.geom_cache.remove(window_id);
-        _ = s.border_cache.remove(window_id);
         debug.info("Removed window 0x{x} from tiling", .{window_id});
     }
-}
-
-/// Restore windows on the current workspace to their cached tiled positions,
-/// bypassing the layout algorithm entirely.
-///
-/// Returns true  — cache is valid and positions have been replayed.
-/// Returns false — cache is stale or incomplete; caller must fall back to
-///                 retileCurrentWorkspace so the layout reruns.
-///
-/// The cache is considered stale when:
-///   • dirty flag is set (window added/removed/layout changed)
-///   • any window on this workspace is absent from the cache
-///   • the screen area (bar height/position) differs from when the cache
-///     was last populated — handles bar visibility toggles on other workspaces
-///     including when the current workspace was fullscreen at toggle time
-pub fn restoreWorkspaceGeom(wm: *WM) bool {
-    const s = getState() orelse return false;
-    if (s.dirty) return false;
-
-    var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
-    const ws_count = filterWorkspaceWindows(s, &ws_buf);
-    const ws_windows = ws_buf[0..ws_count];
-    if (ws_windows.len == 0) return true;
-
-    // If bar height or position changed since the cache was last written, the
-    // stored rects are computed for a different screen area and must not be
-    // replayed.  This is the canonical fix for bar-toggle-while-fullscreen:
-    // no matter how bar state was changed or through which code path, the
-    // screen rect comparison catches it without requiring external hooks.
-    const current_screen = calculateScreenArea(wm);
-    if (current_screen.x      != s.last_retile_screen.x      or
-        current_screen.y      != s.last_retile_screen.y      or
-        current_screen.width  != s.last_retile_screen.width  or
-        current_screen.height != s.last_retile_screen.height)
-    {
-        return false;
-    }
-
-    // Verify every window on this workspace is in the cache before
-    // sending any XCB calls — a single miss means we need a full retile.
-    for (ws_windows) |win| {
-        if (!s.geom_cache.contains(win)) return false;
-    }
-
-    // Fast path: replay cached positions.  No layout math, no XCB round-trips.
-    for (ws_windows) |win| {
-        const rect = s.geom_cache.get(win).?;
-        utils.configureWindow(wm.conn, win, rect);
-    }
-    updateBorders(wm, ws_windows);
-    return true;
 }
 
 pub inline fn isWindowTiled(window_id: u32) bool {
@@ -314,69 +233,6 @@ fn calculateScreenArea(wm: *WM) utils.Rect {
 }
 
 // Retiling
-
-/// Recalculate and send geometry for every tiled window on every workspace.
-///
-/// Called after bar visibility or position changes so that all offscreen
-/// windows on inactive workspaces already have the correct size before the
-/// user switches to them — preventing the resize flicker that would otherwise
-/// occur at workspace-switch time.
-///
-/// The current workspace is skipped: bar.setBarState already called
-/// retileCurrentWorkspace for it.  Fullscreen workspaces are also skipped:
-/// their sibling windows are parked offscreen and will be retiled when the
-/// user exits fullscreen, at which point bar state is already correct.
-pub fn retileAllWorkspaces(wm: *WM) void {
-    const s = getState() orelse return;
-    if (!s.enabled) return;
-
-    const screen     = calculateScreenArea(wm);
-    const ws_count   = workspaces.getWorkspaceCount();
-    const current_ws = workspaces.getCurrentWorkspace() orelse return;
-
-    layouts.armGeomCache(&s.geom_cache, s.allocator);
-
-    var ws_idx: u8 = 0;
-    while (ws_idx < ws_count) : (ws_idx += 1) {
-        // Current workspace: already handled by the bar module's internal
-        // retileCurrentWorkspace call.  Skip to avoid a redundant second pass.
-        if (ws_idx == current_ws) continue;
-        // Fullscreen workspace: sibling windows are offscreen; they'll get the
-        // correct geometry when the user exits fullscreen and retile runs then.
-        if (wm.fullscreen.getForWorkspace(ws_idx)) |_| continue;
-
-        // Collect tiled windows belonging to this workspace.
-        var buf: [MAX_WS_WINDOWS]u32 = undefined;
-        var n: usize = 0;
-        for (s.windows.items()) |win| {
-            if (n >= buf.len) break;
-            if (workspaces.getWorkspaceForWindow(win) == ws_idx) {
-                buf[n] = win;
-                n += 1;
-            }
-        }
-        const ws_windows = buf[0..n];
-        if (ws_windows.len == 0) continue;
-
-        const w = screen.width;
-        const h = screen.height;
-        const y: u16 = @intCast(screen.y);
-
-        switch (s.layout) {
-            .master    => master_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
-            .monocle   => monocle_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
-            .grid      => grid_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
-            .fibonacci => fibonacci_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
-        }
-        updateBorders(wm, ws_windows);
-    }
-
-    layouts.disarmGeomCache();
-
-    // Update last_retile_screen so restoreWorkspaceGeom's screen-rect check
-    // passes for all workspaces after this call.
-    s.last_retile_screen = screen;
-}
 
 pub fn retileIfDirty(wm: *WM) void {
     const s = getState() orelse return;
@@ -407,24 +263,12 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     const w = screen.width;
     const h = screen.height;
     const y: u16 = @intCast(screen.y);
-
-    // Arm the geometry cache so configureSafe can skip windows whose
-    // position/size hasn't changed since the last retile.
-    layouts.armGeomCache(&s.geom_cache, s.allocator);
     switch (s.layout) {
         .master    => master_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
         .monocle   => monocle_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
         .grid      => grid_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
         .fibonacci => fibonacci_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
     }
-    layouts.disarmGeomCache();
-
-    // Record the screen area used for this retile.  restoreWorkspaceGeom
-    // compares this against the current screen area on the next workspace
-    // switch — a mismatch (bar toggled, position changed, etc.) means the
-    // cached rects are stale and a full retile is needed.
-    s.last_retile_screen = screen;
-
     updateBorders(wm, ws_windows);
 }
 
@@ -432,13 +276,7 @@ fn updateBorders(wm: *WM, ws_windows: []const u32) void {
     const s = getState() orelse return;
     for (ws_windows) |win| {
         const color = s.borderColor(wm, win);
-        // Skip if the border pixel was already sent with this exact color
-        // (e.g. pre-populated by addWindow or a previous retile/focus change).
-        if (s.border_cache.get(win)) |cached| {
-            if (cached == color) continue;
-        }
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
-        s.border_cache.put(s.allocator, win, color) catch {};
     }
 }
 
@@ -453,12 +291,10 @@ inline fn updateBorderForFocusChange(wm: *WM, old_focused: ?u32, new_focused: ?u
     if (old_focused) |win| if (s.windows.contains(win)) {
         const color = s.borderColor(wm, win);
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
-        s.border_cache.put(s.allocator, win, color) catch {};
     };
     if (new_focused) |win| if (s.windows.contains(win)) {
         const color = s.borderColor(wm, win);
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
-        s.border_cache.put(s.allocator, win, color) catch {};
     };
 }
 
