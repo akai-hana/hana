@@ -115,6 +115,7 @@ accent_color = "#ac3232"
 workspaces = "#b9c0a8"  # Custom accent for workspace indicators
 title = "#ac3232"       # Custom accent for title segment  
 title_unfocused = "#52263e"
+title_minimized = "#009691"
 
 clock = "#ac3232"       # Custom accent for clock segment
 
@@ -150,6 +151,11 @@ Mod+F = "toggle_fullscreen"
 Mod+Shift+Return = "{kill} Xorg" # quit wm
 Mod+Shift+F = "close_window" # Close focused window
 Mod+Shift+T = "reload" # Config hot-reload
+
+Mod+T           = "minimize_window"
+Mod+Shift+T     = "unminimize_lifo"
+Mod+Alt+T       = "unminimize_fifo"
+Mod+Shift+Alt+T = "unminimize_all"
 
 # wallpaper
 Mod+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-switch.sh" # start shader wallpaper
