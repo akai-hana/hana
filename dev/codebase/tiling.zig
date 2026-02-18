@@ -12,6 +12,7 @@ const bar        = @import("bar");
 const Tracking   = @import("tracking").Tracking;
 const debug      = @import("debug");
 const dpi        = @import("dpi");
+const layouts    = @import("layouts");
 
 const master_layout    = @import("master");
 const monocle_layout   = @import("monocle");
@@ -94,6 +95,7 @@ const FocusRing = struct {
 // State
 
 pub const State = struct {
+    allocator:        std.mem.Allocator,
     enabled:          bool,
     layout:           Layout,
     master_side:      defs.MasterSide,
@@ -106,6 +108,14 @@ pub const State = struct {
     windows:          Tracking,
     dirty:            bool,
     focus_ring:       FocusRing,
+    /// Tracks the last geometry sent to the X server per window.
+    /// Populated/updated by configureSafe via layouts.armGeomCache.
+    /// Lets retile skip configure_window calls for unchanged windows.
+    geom_cache:       std.AutoHashMapUnmanaged(u32, utils.Rect),
+    /// Tracks the last border pixel color sent to the X server per window.
+    /// Populated in addWindow (prevents duplicate send on immediate retile)
+    /// and kept current by updateBorders / updateBorderForFocusChange.
+    border_cache:     std.AutoHashMapUnmanaged(u32, u32),
 
     pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.gaps, .border = self.border_width };
@@ -122,6 +132,8 @@ pub const State = struct {
 
     pub fn deinit(self: *State) void {
         self.windows.deinit();
+        self.geom_cache.deinit(self.allocator);
+        self.border_cache.deinit(self.allocator);
     }
 };
 
@@ -148,6 +160,7 @@ fn computeMasterWidth(wm: *WM) f32 {
 fn buildState(wm: *WM) State {
     const screen_height = wm.screen.height_in_pixels;
     return .{
+        .allocator        = wm.allocator,
         .enabled          = wm.config.tiling.enabled,
         .layout           = std.meta.stringToEnum(Layout, wm.config.tiling.layout) orelse .master,
         .master_side      = wm.config.tiling.master_side,
@@ -160,6 +173,8 @@ fn buildState(wm: *WM) State {
         .windows          = Tracking.init(wm.allocator),
         .dirty            = false,
         .focus_ring       = .{},
+        .geom_cache       = .{},
+        .border_cache     = .{},
     };
 }
 
@@ -179,6 +194,10 @@ pub fn reloadConfig(wm: *WM) void {
     const saved_windows    = s.windows;
     const saved_focus_ring = s.focus_ring;
 
+    // Config changes (gaps, border width, colors) invalidate both caches.
+    s.geom_cache.deinit(s.allocator);
+    s.border_cache.deinit(s.allocator);
+
     g_state = buildState(wm);
     g_state.?.windows    = saved_windows;
     g_state.?.focus_ring = saved_focus_ring;
@@ -196,12 +215,19 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     s.windows.add(window_id) catch |err| { debug.logError(err, window_id); return; };
     s.markDirty();
 
+    // Set BORDER_PIXEL only — EVENT_MASK was already applied by handleMapRequest,
+    // so sending it again here is a redundant attribute update.
     const border_color = s.borderColor(wm, window_id);
     _ = xcb.xcb_change_window_attributes(wm.conn, window_id,
-        xcb.XCB_CW_EVENT_MASK | xcb.XCB_CW_BORDER_PIXEL,
-        &[_]u32{ WINDOW_EVENT_MASK, border_color });
+        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{border_color});
     _ = xcb.xcb_configure_window(wm.conn, window_id,
         xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{s.border_width});
+
+    // Pre-populate the border cache so the retileCurrentWorkspace call that
+    // immediately follows this (in setupTiling) does not re-send the border
+    // pixel for this window — it was just set above.
+    s.border_cache.put(s.allocator, window_id, border_color) catch {};
+
     debug.info("Added window 0x{x} to tiling", .{window_id});
 }
 
@@ -210,6 +236,8 @@ pub fn removeWindow(window_id: u32) void {
     if (s.windows.remove(window_id)) {
         s.markDirty();
         s.focus_ring.remove(window_id);
+        _ = s.geom_cache.remove(window_id);
+        _ = s.border_cache.remove(window_id);
         debug.info("Removed window 0x{x} from tiling", .{window_id});
     }
 }
@@ -263,12 +291,18 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     const w = screen.width;
     const h = screen.height;
     const y: u16 = @intCast(screen.y);
+
+    // Arm the geometry cache so configureSafe can skip windows whose
+    // position/size hasn't changed since the last retile.
+    layouts.armGeomCache(&s.geom_cache, s.allocator);
     switch (s.layout) {
         .master    => master_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
         .monocle   => monocle_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
         .grid      => grid_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
         .fibonacci => fibonacci_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
     }
+    layouts.disarmGeomCache();
+
     updateBorders(wm, ws_windows);
 }
 
@@ -276,7 +310,13 @@ fn updateBorders(wm: *WM, ws_windows: []const u32) void {
     const s = getState() orelse return;
     for (ws_windows) |win| {
         const color = s.borderColor(wm, win);
+        // Skip if the border pixel was already sent with this exact color
+        // (e.g. pre-populated by addWindow or a previous retile/focus change).
+        if (s.border_cache.get(win)) |cached| {
+            if (cached == color) continue;
+        }
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
+        s.border_cache.put(s.allocator, win, color) catch {};
     }
 }
 
@@ -291,10 +331,12 @@ inline fn updateBorderForFocusChange(wm: *WM, old_focused: ?u32, new_focused: ?u
     if (old_focused) |win| if (s.windows.contains(win)) {
         const color = s.borderColor(wm, win);
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
+        s.border_cache.put(s.allocator, win, color) catch {};
     };
     if (new_focused) |win| if (s.windows.contains(win)) {
         const color = s.borderColor(wm, win);
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
+        s.border_cache.put(s.allocator, win, color) catch {};
     };
 }
 
