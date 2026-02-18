@@ -12,6 +12,7 @@ const tiling     = @import("tiling");
 const bar        = @import("bar");
 const workspaces = @import("workspaces");
 const debug      = @import("debug");
+const minimize   = @import("minimize");
 
 const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
@@ -273,6 +274,7 @@ fn unmanageWindow(wm: *WM, win: u32) void {
 
     if (wm.config.tiling.enabled) tiling.removeWindow(win);
     utils.uncacheWindowFocusProps(win);
+    minimize.forceUntrack(win);
     workspaces.removeWindow(win);
     wm.removeWindow(win);
 

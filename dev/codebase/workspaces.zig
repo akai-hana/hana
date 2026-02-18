@@ -130,6 +130,20 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
     s.window_to_workspace.put(win, target_ws) catch |e| debug.warnOnErr(e, "w2ws put after move");
 
     if (from_ws == s.current) {
+        // Bug fix: if the window is fullscreen on this workspace, tear down
+        // the fullscreen state before hiding it.  Without this the bar stays
+        // hidden and sibling windows remain off-screen on the old workspace.
+        // Window tracking has already been updated above, so the retile that
+        // bar.setBarState triggers will not re-tile the moved window.
+        if (wm.fullscreen.isFullscreen(win)) {
+            if (wm.fullscreen.window_to_workspace.get(win)) |fs_ws| {
+                if (fs_ws == from_ws) {
+                    wm.fullscreen.removeForWorkspace(fs_ws);
+                    bar.setBarState(wm, .show_fullscreen);
+                }
+            }
+        }
+
         // Hide window by moving it off-screen (avoids an unmap/remap cycle).
         _ = xcb.xcb_configure_window(wm.conn, win,
             xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});

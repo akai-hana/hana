@@ -16,6 +16,16 @@ inline fn borderColor(wm: *WM, win: u32) u32 {
            else                          wm.config.tiling.border_unfocused;
 }
 
+/// Enter fullscreen for a specific window on the current workspace.
+/// Used by the minimize module to restore windows that were fullscreen when
+/// minimized.  The caller is responsible for setting wm.focused_window before
+/// calling this function.
+pub fn enterFullscreenForWindow(wm: *WM, win: u32) void {
+    const ws = workspaces.getCurrentWorkspace() orelse return;
+    enterFullscreen(wm, win, ws);
+    // enterFullscreen ends with its own flush; no extra flush needed here.
+}
+
 pub fn toggleFullscreen(wm: *WM) void {
     const win        = wm.focused_window orelse return;
     const current_ws = workspaces.getCurrentWorkspace() orelse return;
