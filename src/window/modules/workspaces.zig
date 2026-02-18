@@ -41,7 +41,7 @@ pub const State = struct {
     allocator:           std.mem.Allocator,
 };
 
-// Module singleton ─────────────────────────────────────────────────────────
+// Module singleton 
 
 var g_state: ?State = null;
 
@@ -87,7 +87,7 @@ pub fn deinit(wm: *WM) void {
     g_state = null;
 }
 
-// Window tracking ──────────────────────────────────────────────────────────
+// Window tracking 
 
 pub fn removeWindow(win: u32) void {
     const s = getState() orelse return;
@@ -141,7 +141,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) void {
     }
 }
 
-// Workspace switching ──────────────────────────────────────────────────────
+// Workspace switching 
 
 pub fn switchTo(wm: *WM, ws_id: u8) void {
     const s = getState() orelse return;
@@ -223,7 +223,7 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     bar.markDirty();
 }
 
-// Queries───
+// Queries
 
 pub inline fn getCurrentWindowsView() ?[]const u32 {
     const s = getState() orelse return null;

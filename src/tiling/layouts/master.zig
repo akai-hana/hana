@@ -1,5 +1,5 @@
 // ! Master-stack layout with overflow handling
-/// OPTIMIZED: Direct XCB calls - no batch overhead
+/// Direct XCB calls - no batch overhead
 
 const std = @import("std");
 const defs = @import("defs");

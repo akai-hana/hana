@@ -12,7 +12,7 @@ const bar = @import("bar");
 pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
     if (wm.drag_state.active) return;
     
-    // CRITICAL: Don't allow dragging the bar window
+    // Don't allow dragging the bar window
     if (bar.isBarWindow(win)) return;
 
     const geom = utils.getGeometry(wm.conn, win) orelse return;
@@ -31,7 +31,7 @@ pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
 
     focus.setFocus(wm, win, .user_command);
 
-    // FIXED: Check State.enabled, not config.enabled (runtime toggle desync fix)
+    // Check State.enabled, not config.enabled (runtime toggle desync fix)
     // Remove window from tiling if it's tiled
     const tiling_state = tiling.getState();
     const tiling_enabled = if (tiling_state) |ts| ts.enabled else false;

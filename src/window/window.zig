@@ -15,7 +15,7 @@ const debug      = @import("debug");
 
 const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
-// Button grabs ─
+// Button grabs 
 
 /// For unfocused windows we grab all buttons in sync mode so we can intercept
 /// the click, focus the window, and replay the event.  For focused windows we
@@ -31,7 +31,7 @@ pub fn grabButtons(wm: *WM, win: u32, focused: bool) void {
     }
 }
 
-// Workspace rule matching ──────────────────────────────────────────────────
+// Workspace rule matching 
 
 fn validateWorkspace(target: ?u8, current: u8) u8 {
     const ws = target orelse return current;
@@ -77,7 +77,7 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (on_current) tiling.retileCurrentWorkspace(wm, false);
 }
 
-// Map request ──────────────────────────────────────────────────────────────
+// Map request 
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win        = event.window;
@@ -155,7 +155,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     bar.markDirty();
 }
 
-// Configure request ────────────────────────────────────────────────────────
+// Configure request 
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const win = event.window;
@@ -187,7 +187,7 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     utils.flush(wm.conn);
 }
 
-// Focus events ─────────────────────────────────────────────────────────────
+// Focus events 
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
     wm.last_event_time = event.time;
@@ -241,7 +241,7 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) vo
     focus.setFocus(wm, target, .mouse_enter);
 }
 
-// Property notify ──────────────────────────────────────────────────────────
+// Property notify 
 
 /// Keep the focus-property cache coherent when relevant window properties change.
 /// WM_PROTOCOLS: Electron sets WM_TAKE_FOCUS after mapping, so a cached false
@@ -260,7 +260,7 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
     }
 }
 
-// Unmap / destroy ──────────────────────────────────────────────────────────
+// Unmap / destroy 
 
 fn unmanageWindow(wm: *WM, win: u32) void {
     if (wm.fullscreen.isFullscreen(win)) {
@@ -301,7 +301,7 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
     unmanageWindow(wm, win);
 }
 
-// Post-unmanage focus recovery ─────────────────────────────────────────────
+// Post-unmanage focus recovery 
 
 fn focusWindowUnderPointer(wm: *WM) void {
     const reply = xcb.xcb_query_pointer_reply(

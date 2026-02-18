@@ -294,7 +294,7 @@ pub fn deinit() void {
     }
 }
 
-// Public API functions ─────────────────────────────────────────────────────
+// Public API functions 
 
 pub fn toggleBarPosition(wm: *defs.WM) !void {
     if (state) |s| {
@@ -469,7 +469,7 @@ fn retileAllWorkspaces(wm: *defs.WM) void {
     // Now ungrab - all changes will appear atomically
     _ = xcb.xcb_ungrab_server(wm.conn);
     
-    // CRITICAL: Wait for X server to process all geometry updates before returning
+    // Wait for X server to process all geometry updates before returning
     // This ensures windows have correct geometry immediately
     const cookie = xcb.xcb_get_input_focus(wm.conn);
     const reply = xcb.xcb_get_input_focus_reply(wm.conn, cookie, null);

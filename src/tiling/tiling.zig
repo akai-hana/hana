@@ -91,7 +91,7 @@ const FocusRing = struct {
     };
 };
 
-// State─────
+// State
 
 pub const State = struct {
     enabled:          bool,
@@ -125,13 +125,13 @@ pub const State = struct {
     }
 };
 
-// Module singleton ─────────────────────────────────────────────────────────
+// Module singleton 
 
 var g_state: ?State = null;
 
 pub fn getState() ?*State { return if (g_state != null) &g_state.? else null; }
 
-// Config────
+// Config
 
 /// Build a complete State from the current WM configuration.
 fn buildState(wm: *WM) State {
@@ -205,7 +205,7 @@ pub fn reloadConfig(wm: *WM) void {
     if (g_state.?.enabled) retileCurrentWorkspace(wm, true);
 }
 
-// Window management ────────────────────────────────────────────────────────
+// Window management 
 
 pub fn addWindow(wm: *WM, window_id: u32) void {
     std.debug.assert(window_id != 0);
@@ -245,7 +245,7 @@ pub inline fn isWindowTiled(window_id: u32) bool {
     return s.windows.contains(window_id);
 }
 
-// Screen area ──
+// Screen area 
 
 fn calculateScreenArea(wm: *WM) utils.Rect {
     const bar_height: u16 = if (bar.isVisible()) bar.getBarHeight() else 0;
@@ -258,7 +258,7 @@ fn calculateScreenArea(wm: *WM) utils.Rect {
     };
 }
 
-// Retiling──
+// Retiling
 
 pub fn retileIfDirty(wm: *WM) void {
     const s = getState() orelse return;
@@ -307,7 +307,7 @@ fn updateBorders(wm: *WM, ws_windows: []const u32) void {
     }
 }
 
-// Focus border updates ─────────────────────────────────────────────────────
+// Focus border updates 
 
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     updateBorderForFocusChange(wm, old_focused, new_focused);
@@ -330,7 +330,7 @@ inline fn updateBorderForFocusChange(wm: *WM, old_focused: ?u32, new_focused: ?u
     };
 }
 
-// Window reordering ────────────────────────────────────────────────────────
+// Window reordering 
 
 /// Move the window at `from_idx` to `to_idx` in tiling order.
 fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
@@ -398,7 +398,7 @@ pub fn promoteToMaster(wm: *WM) void {
     retileCurrentWorkspace(wm, false);
 }
 
-// Layout and master controls ───────────────────────────────────────────────
+// Layout and master controls 
 
 pub fn toggleTiling(wm: *WM) void {
     const s = getState() orelse return;
