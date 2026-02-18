@@ -224,12 +224,7 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
         const tiling_active = if (ts) |t| t.enabled else false;
 
         if (tiling_active) {
-            // Fast path: replay cached tiled positions without running the layout
-            // algorithm.  Falls back to a full retile only if the workspace is dirty
-            // (window added/removed/layout changed while away) or the cache is cold.
-            if (!tiling.restoreWorkspaceGeom(wm)) {
-                tiling.retileCurrentWorkspace(wm);
-            }
+            tiling.retileCurrentWorkspace(wm);
         } else {
             // Floating: move all non-minimized windows to a sensible on-screen position.
             // Minimized windows stay at the offscreen X position — do not touch them.
@@ -280,4 +275,14 @@ pub inline fn isOnCurrentWorkspace(win: u32) bool {
 pub inline fn getCurrentWorkspaceObject() ?*Workspace {
     const s = getState() orelse return null;
     return &s.workspaces[s.current];
+}
+
+pub inline fn getWorkspaceCount() usize {
+    const s = getState() orelse return 0;
+    return s.workspaces.len;
+}
+
+pub inline fn getWorkspaceForWindow(win: u32) ?u8 {
+    const s = getState() orelse return null;
+    return s.window_to_workspace.get(win);
 }

@@ -315,6 +315,69 @@ fn calculateScreenArea(wm: *WM) utils.Rect {
 
 // Retiling
 
+/// Recalculate and send geometry for every tiled window on every workspace.
+///
+/// Called after bar visibility or position changes so that all offscreen
+/// windows on inactive workspaces already have the correct size before the
+/// user switches to them — preventing the resize flicker that would otherwise
+/// occur at workspace-switch time.
+///
+/// The current workspace is skipped: bar.setBarState already called
+/// retileCurrentWorkspace for it.  Fullscreen workspaces are also skipped:
+/// their sibling windows are parked offscreen and will be retiled when the
+/// user exits fullscreen, at which point bar state is already correct.
+pub fn retileAllWorkspaces(wm: *WM) void {
+    const s = getState() orelse return;
+    if (!s.enabled) return;
+
+    const screen     = calculateScreenArea(wm);
+    const ws_count   = workspaces.getWorkspaceCount();
+    const current_ws = workspaces.getCurrentWorkspace() orelse return;
+
+    layouts.armGeomCache(&s.geom_cache, s.allocator);
+
+    var ws_idx: u8 = 0;
+    while (ws_idx < ws_count) : (ws_idx += 1) {
+        // Current workspace: already handled by the bar module's internal
+        // retileCurrentWorkspace call.  Skip to avoid a redundant second pass.
+        if (ws_idx == current_ws) continue;
+        // Fullscreen workspace: sibling windows are offscreen; they'll get the
+        // correct geometry when the user exits fullscreen and retile runs then.
+        if (wm.fullscreen.getForWorkspace(ws_idx)) |_| continue;
+
+        // Collect tiled windows belonging to this workspace.
+        var buf: [MAX_WS_WINDOWS]u32 = undefined;
+        var n: usize = 0;
+        for (s.windows.items()) |win| {
+            if (n >= buf.len) break;
+            if (workspaces.getWorkspaceForWindow(win) == ws_idx) {
+                buf[n] = win;
+                n += 1;
+            }
+        }
+        const ws_windows = buf[0..n];
+        if (ws_windows.len == 0) continue;
+
+        const w = screen.width;
+        const h = screen.height;
+        const y: u16 = @intCast(screen.y);
+
+        switch (s.layout) {
+            .master    => master_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
+            .monocle   => monocle_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
+            .grid      => grid_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
+            .fibonacci => fibonacci_layout.tileWithOffset(wm.conn, s, ws_windows, w, h, y),
+        }
+        updateBorders(wm, ws_windows);
+    }
+
+    layouts.disarmGeomCache();
+
+    // Update last_retile_screen so restoreWorkspaceGeom's screen-rect check
+    // passes for all workspaces after this call.
+    s.last_retile_screen = screen;
+}
+
 pub fn retileIfDirty(wm: *WM) void {
     const s = getState() orelse return;
     if (!s.enabled or !s.dirty) return;
