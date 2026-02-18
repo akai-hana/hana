@@ -75,7 +75,7 @@ pub fn init(allocator: std.mem.Allocator) void {
 pub fn deinit() void {
     if (g_state) |*s| {
         var it = s.per_workspace.valueIterator();
-        while (it.next()) |list| list.deinit();
+        while (it.next()) |list| list.deinit(s.allocator);
         s.per_workspace.deinit();
         s.minimized_set.deinit();
         s.saved_fullscreen.deinit();
@@ -97,9 +97,9 @@ pub fn isMinimized(win: u32) bool {
 fn trackMinimized(s: *State, ws_idx: u8, win: u32) bool {
     const gop = s.per_workspace.getOrPut(ws_idx) catch return false;
     if (!gop.found_existing) {
-        gop.value_ptr.* = std.ArrayList(u32).init(s.allocator);
+        gop.value_ptr.* = .{};
     }
-    gop.value_ptr.append(win) catch return false;
+    gop.value_ptr.append(s.allocator, win) catch return false;
     s.minimized_set.put(win, {}) catch {
         _ = gop.value_ptr.pop();
         return false;
@@ -284,7 +284,7 @@ fn currentWorkspaceList() ?*std.ArrayList(u32) {
 /// Restore the most recently minimized window on the current workspace (LIFO).
 pub fn unminimizeLifo(wm: *WM) void {
     const list = currentWorkspaceList() orelse return;
-    const win  = list.pop(); // tail = most recently appended
+    const win  = list.pop() orelse return; // guarded by currentWorkspaceList len > 0 check
     restoreWindow(wm, win);
 }
 
@@ -304,9 +304,9 @@ pub fn unminimizeAll(wm: *WM) void {
 
     // Snapshot before iterating — restoreWindow modifies the list via
     // untrackMinimized, so we must not iterate it directly.
-    var snapshot = std.ArrayList(u32).init(s.allocator);
-    defer snapshot.deinit();
-    snapshot.appendSlice(list.items) catch |err| {
+    var snapshot: std.ArrayList(u32) = .{};
+    defer snapshot.deinit(s.allocator);
+    snapshot.appendSlice(s.allocator, list.items) catch |err| {
         debug.warnOnErr(err, "unminimize_all: snapshot allocation failed");
         return;
     };

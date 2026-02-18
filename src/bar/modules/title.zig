@@ -5,18 +5,17 @@ const defs = @import("defs");
 const xcb = defs.xcb;
 const drawing = @import("drawing");
 const workspaces = @import("workspaces");
-const utils = @import("utils");
-const minimize = @import("minimize");
+const utils      = @import("utils");
+const minimize   = @import("minimize");
 
 var net_wm_name: ?u32 = null;
 var utf8_string: ?u32 = null;
 
 const WindowInfo = struct {
-    window:    u32,
-    x:         i16,
-    y:         i16,
-    title:     []const u8,
-    minimized: bool,
+    window: u32,
+    x: i16,
+    y: i16,
+    title: []const u8,
 };
 
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16, width: u16,
@@ -35,19 +34,45 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
     const scaled_padding = config.scaledPadding();
     
     if (window_count == 1) {
-        // Single window - use original single-title display with caching
-        const accent = if (is_focused) config.getTitleAccent() else config.bg;
+        // Single window - use original single-title display with caching.
+        // Must account for the window being minimized: in that case focused_window
+        // is null (focus was cleared) so we look up the window directly.
+        const single_win   = current_ws.windows.items()[0];
+        const is_minimized = minimize.isMinimized(single_win);
+
+        const accent = if (is_minimized)
+            config.getTitleMinimizedAccent()
+        else if (is_focused)
+            config.getTitleAccent()
+        else
+            config.bg;
         dc.fillRect(start_x, 0, width, height, accent);
-        
-        const title = try getFocusedWindowTitle(wm, cached_title, cached_title_window, allocator);
-        if (title.len > 0) {
-            try dc.drawTextEllipsis(
-                start_x + scaled_padding, 
-                dc.baselineY(height),
-                title, 
-                width -| scaled_padding * 2,
-                if (is_focused) config.selected_fg else config.fg
-            );
+
+        // For minimized windows the focused-window cache returns "" because
+        // wm.focused_window is null.  Fetch the title directly instead.
+        if (is_minimized) {
+            const title = getWindowTitleDirect(wm.conn, single_win, allocator) catch "";
+            defer allocator.free(title);
+            if (title.len > 0) {
+                try dc.drawTextEllipsis(
+                    start_x + scaled_padding,
+                    dc.baselineY(height),
+                    title,
+                    width -| scaled_padding * 2,
+                    config.fg,
+                );
+            }
+        } else {
+            const title = try getFocusedWindowTitle(wm, cached_title, cached_title_window, allocator);
+            if (title.len > 0) {
+                try dc.drawTextEllipsis(
+                    start_x + scaled_padding,
+                    dc.baselineY(height),
+                    title,
+                    width -| scaled_padding * 2,
+                    if (is_focused) config.selected_fg else config.fg,
+                );
+            }
         }
     } else {
         // Multiple windows - use N-way segmented display
@@ -80,20 +105,13 @@ fn drawSegmentedTitles(
     
     const windows = workspace.windows.items();
     for (windows) |win| {
-        const is_min = minimize.isMinimized(win);
-        // Skip geometry query for minimized windows — they are off-screen and
-        // their position is meaningless for sorting purposes.
-        const geom: WindowGeometry = if (!is_min)
-            getWindowGeometry(wm.conn, win) catch continue
-        else
-            .{ .x = std.math.maxInt(i16), .y = std.math.maxInt(i16), .width = 0, .height = 0 };
+        const geom = getWindowGeometry(wm.conn, win) catch continue; // Skip windows we can't query
         const title = getWindowTitleDirect(wm.conn, win, allocator) catch "";
         try window_infos.append(allocator, .{
-            .window    = win,
-            .x         = geom.x,
-            .y         = geom.y,
-            .title     = title,
-            .minimized = is_min,
+            .window = win,
+            .x = geom.x,
+            .y = geom.y,
+            .title = title,
         });
     }
     
@@ -114,14 +132,11 @@ fn drawSegmentedTitles(
         const i_u32: u32 = @intCast(i);
         const segment_x = start_x + @as(u16, @intCast(i_u32 * @as(u32, segment_width)));
         const is_focused_window = wm.focused_window == info.window;
-
-        // Colour priority: focused > minimized > unfocused.
-        const accent = if (is_focused_window)
+        
+        // Simple color logic: focused uses accent, unfocused uses unfocused accent
+        const accent = if (is_focused_window) 
             config.getTitleAccent()
-        else if (info.minimized)
-            config.getTitleMinimizedAccent()
-        else
-            config.getTitleUnfocusedAccent();
+            else config.getTitleUnfocusedAccent();
         
         // Draw segment background
         dc.fillRect(segment_x, 0, segment_width, height, accent);
@@ -141,11 +156,11 @@ fn drawSegmentedTitles(
 }
 
 fn compareWindows(_: void, a: WindowInfo, b: WindowInfo) bool {
-    // Minimized windows always appear after non-minimized ones.
-    if (a.minimized != b.minimized) return !a.minimized;
-    // Sort non-minimized by position (leftmost, then topmost, then oldest).
+    // Sort by x position (leftmost first)
     if (a.x != b.x) return a.x < b.x;
+    // If same x, sort by y position (topmost first)
     if (a.y != b.y) return a.y < b.y;
+    // If same position, keep stable order (first created appears first)
     return a.window < b.window;
 }
 

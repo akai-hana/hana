@@ -274,7 +274,6 @@ fn unmanageWindow(wm: *WM, win: u32) void {
 
     if (wm.config.tiling.enabled) tiling.removeWindow(win);
     utils.uncacheWindowFocusProps(win);
-    minimize.forceUntrack(win);
     workspaces.removeWindow(win);
     wm.removeWindow(win);
 
@@ -309,18 +308,18 @@ fn focusWindowUnderPointer(wm: *WM) void {
     defer std.c.free(reply);
 
     const child = reply.*.child;
-    if (filters.isValidManagedWindow(wm, child) and workspaces.isOnCurrentWorkspace(child)) {
+    if (filters.isValidManagedWindow(wm, child) and workspaces.isOnCurrentWorkspace(child) and !minimize.isMinimized(child)) {
         focus.setFocus(wm, child, .mouse_enter);
         return;
     }
     focusFallback(wm);
 }
 
-/// Focus the first visible window in the current workspace (last-resort fallback).
+/// Focus the first visible, non-minimized window in the current workspace (last-resort fallback).
 fn focusFallback(wm: *WM) void {
     const ws = workspaces.getCurrentWorkspaceObject() orelse return;
     for (ws.windows.items()) |win| {
-        if (filters.isValidManagedWindow(wm, win)) {
+        if (filters.isValidManagedWindow(wm, win) and !minimize.isMinimized(win)) {
             focus.setFocus(wm, win, .window_destroyed);
             return;
         }
