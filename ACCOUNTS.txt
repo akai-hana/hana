@@ -1,7 +1,3 @@
-make cursor from xresources be used instead of default x11; hovering root window shows the normal xorg tiny cursor, while hovering over any other window it shows my custom cursor i configured. in dwm this isn't the case, so could it be something my wm's missing somewhere? can you please add it?
-
-when i un-fullscreen a window, i want to avoid cursor stealing focus if it lands on any window other than the one i was fullscreened into. also, when i alt+tab (swap master and slave in stack) while focused on a master window, the master window gets moved to stack and focus is kept to that window, but if i swap slave to master, the cursor steals focus if it's located on top of another window. i don't want focus to be stolen in this case either. can you please place in the required guardrails to prevent these particular focus-stealing edge cases?
-
 89shiroikuro:
 make tiling layout set be a per-workspace configuration; if in a workspace i switch to monocle, other workspaces should remain on the default set tiling layout.
 - Enable a setting in config.toml that converts workspace set to a global configuration setting, making it so switching to a different tiling layout switches it across all workspaces, just like how it currently works.

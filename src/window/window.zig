@@ -345,8 +345,12 @@ fn unmanageWindow(wm: *WM, win: u32) void {
         focusWindowUnderPointer(wm);
     }
 
+    // Redraw the bar inside the grab so the updated title and focus state are
+    // composited atomically with the window removal and layout change.  The bar
+    // is redrawn whether or not the window was focused: the workspace indicator
+    // and window count change regardless.
+    bar.redrawImmediate(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
-    bar.markDirty();
     utils.flush(wm.conn);
 }
 

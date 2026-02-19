@@ -200,9 +200,13 @@ pub fn minimizeWindow(wm: *WM) void {
         tiling.retileCurrentWorkspace(wm);
     }
 
+    // Redraw the bar inside the grab so the updated workspace/title state is
+    // composited atomically with the window hide and layout change.  Without
+    // this, picom composites one frame showing the old bar content (e.g. the
+    // minimized window's title still displayed) before the deferred redraw fires.
+    bar.redrawImmediate(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
     utils.flush(wm.conn);
-    bar.markDirty();
 }
 
 // Restore
@@ -266,9 +270,12 @@ fn restoreWindow(wm: *WM, win: u32) void {
     // the grab scope free of avoidable blocking calls.
     focus.setFocus(wm, win, .window_spawn);
 
+    // Redraw the bar inside the grab: the restored window's title and workspace
+    // indicator are correct now.  Without this, picom composites one stale-bar
+    // frame (no title, old minimized count) before the deferred redraw fires.
+    bar.redrawImmediate(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
     utils.flush(wm.conn);
-    bar.markDirty();
 }
 
 // Public unminimize API
