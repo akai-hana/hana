@@ -547,8 +547,19 @@ pub fn checkClockUpdate() void {
 
 /// Handles window expose events by redrawing the bar.
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
-    if (state) |s| if (event.window == s.window and event.count == 0)
-        draw(s, wm) catch |e| debug.warnOnErr(e, "draw in handleExpose");
+    if (state) |s| if (event.window == s.window and event.count == 0) {
+        if (wm.drag_state.active) {
+            // During a drag, the resized/moved window continuously uncovers
+            // and re-covers parts of the bar, generating a rapid stream of
+            // Expose events.  A full Cairo redraw on each one causes visible
+            // flickering with zero benefit — nothing bar-visible changes
+            // during a drag.  Schedule a single deferred redraw instead;
+            // it fires on the first event-loop iteration after the drag ends.
+            s.markDirty();
+        } else {
+            draw(s, wm) catch |e| debug.warnOnErr(e, "draw in handleExpose");
+        }
+    };
 }
 
 /// Handles property change events: updates status text or invalidates the title cache.
