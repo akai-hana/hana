@@ -182,8 +182,7 @@ fn handleConfigReload(wm: *WM) !void {
     // Reinitialize the bar — it caches dimensions, fonts, and layout from the
     // config at init time and has no incremental update path.  Deinit destroys
     // the old X11 bar window; init creates a fresh one from the new config.
-    bar.deinit();
-    initBar(wm);
+    bar.reload(wm);
     debug.info("Reload complete", .{});
 }
 

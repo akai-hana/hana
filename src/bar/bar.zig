@@ -301,6 +301,137 @@ pub fn deinit() void {
     }
 }
 
+/// Seamless hot-reload: build and fully paint the new bar window before
+/// touching the old one, then swap them atomically under a server grab.
+///
+/// The sequence is:
+///   1. Create + configure the new window (not yet mapped — stays invisible).
+///   2. Draw its initial contents into the Cairo surface off-screen.
+///   3. Grab the X server so picom sees no intermediate state.
+///   4. Map the new window (appears above the old one instantly).
+///   5. Destroy the old window.
+///   6. Flush + ungrab — compositor sees exactly one frame: new bar, no gap.
+///
+/// Falls back to a plain deinit/init if there is no existing bar or if
+/// building the new window fails.
+pub fn reload(wm: *defs.WM) void {
+    // No existing bar — plain init is fine.
+    const old = state orelse {
+        init(wm) catch |err| {
+            if (err != error.BarDisabled) debug.err("Bar init failed: {}", .{err});
+        };
+        return;
+    };
+
+    if (!wm.config.bar.enabled) {
+        deinit();
+        return;
+    }
+
+    // ── Build new window (unmapped) ──────────────────────────────────────────
+
+    const height = calculateBarHeight(wm) catch DEFAULT_BAR_HEIGHT;
+    const screen_width = wm.screen.width_in_pixels;
+    const y_pos: i16 = if (wm.config.bar.vertical_position == .bottom)
+        @intCast(@as(i32, wm.screen.height_in_pixels) - height)
+    else
+        0;
+
+    const alpha             = wm.config.bar.getAlpha16();
+    const want_transparency = alpha < 0xFFFF;
+    const visual_info       = if (want_transparency)
+        drawing.findVisualByDepth(wm.screen, 32)
+    else
+        drawing.VisualInfo{ .visual_type = null, .visual_id = wm.screen.root_visual };
+    const depth: u8         = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
+    const visual_id         = visual_info.visual_id;
+    const has_argb_visual   = want_transparency;
+
+    const colormap: u32 = if (has_argb_visual) blk: {
+        const cmap = xcb.xcb_generate_id(wm.conn);
+        _ = xcb.xcb_create_colormap(wm.conn, xcb.XCB_COLORMAP_ALLOC_NONE, cmap, wm.screen.root, visual_id);
+        break :blk cmap;
+    } else 0;
+
+    const new_window = xcb.xcb_generate_id(wm.conn);
+    const value_mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL |
+                       xcb.XCB_CW_OVERRIDE_REDIRECT | xcb.XCB_CW_EVENT_MASK |
+                       if (has_argb_visual) xcb.XCB_CW_COLORMAP else 0;
+    const value_list = [_]u32{
+        0, 0, 1,
+        xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS,
+        colormap,
+    };
+
+    _ = xcb.xcb_create_window(wm.conn, depth, new_window, wm.screen.root,
+        0, y_pos, screen_width, height, 0,
+        xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual_id,
+        @intCast(value_mask), &value_list);
+
+    setWindowProperties(wm, new_window, height) catch {
+        _ = xcb.xcb_destroy_window(wm.conn, new_window);
+        debug.err("Bar reload: setWindowProperties failed, keeping old bar", .{});
+        return;
+    };
+
+    // ── Build DrawContext + State, paint contents ─────────────────────────────
+
+    const new_dc = drawing.DrawContext.initWithVisual(
+        wm.allocator, wm.conn, new_window, screen_width, height,
+        visual_id, wm.dpi_info.dpi, has_argb_visual, wm.config.bar.transparency,
+    ) catch {
+        _ = xcb.xcb_destroy_window(wm.conn, new_window);
+        debug.err("Bar reload: DrawContext init failed, keeping old bar", .{});
+        return;
+    };
+
+    loadBarFonts(new_dc, wm) catch {
+        new_dc.deinit();
+        _ = xcb.xcb_destroy_window(wm.conn, new_window);
+        debug.err("Bar reload: font load failed, keeping old bar", .{});
+        return;
+    };
+
+    const new_state = State.init(
+        wm.allocator, wm.conn, new_window, screen_width, height,
+        new_dc, wm.config.bar, has_argb_visual,
+    ) catch {
+        new_dc.deinit();
+        _ = xcb.xcb_destroy_window(wm.conn, new_window);
+        debug.err("Bar reload: State.init failed, keeping old bar", .{});
+        return;
+    };
+
+    // Carry over runtime visibility state from the old bar.
+    new_state.visible        = old.visible;
+    new_state.global_visible = old.global_visible;
+
+    // Paint into the Cairo surface while the window is still unmapped —
+    // picom will not composite it yet, so no flicker is possible here.
+    state = new_state;
+    draw(new_state, wm) catch {};
+    new_dc.flush();
+    utils.flush(wm.conn);
+
+    // ── Atomic swap under server grab ────────────────────────────────────────
+    // With the server grabbed, picom (and every other client) is frozen.
+    // map_window + destroy_window land in the same batch, so the compositor
+    // never renders a frame where neither window exists.
+
+    _ = xcb.xcb_grab_server(wm.conn);
+    if (new_state.visible) {
+        _ = xcb.xcb_map_window(wm.conn, new_window);
+    }
+    _ = xcb.xcb_destroy_window(wm.conn, old.window);
+    _ = xcb.xcb_flush(wm.conn);
+    _ = xcb.xcb_ungrab_server(wm.conn);
+    utils.flush(wm.conn);
+
+    // Free old state after the server-side window is already gone.
+    old.dc.deinit();
+    old.deinit();
+}
+
 // Public API functions 
 
 pub fn toggleBarPosition(wm: *defs.WM) !void {
