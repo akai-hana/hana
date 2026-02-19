@@ -443,6 +443,19 @@ pub fn getCachedLabelWidth(index: usize) ?u16 {
 pub fn hasClockSegment() bool { return if (state) |s| s.has_clock_segment else false; }
 
 pub inline fn markDirty() void { if (state) |s| s.markDirty(); }
+
+/// Redraw the bar immediately and mark it clean.
+/// Used inside server grabs (e.g. workspace switch) so picom composites the
+/// correct bar content the moment it unfreezes — rather than the stale content
+/// from the previous frame that markDirty+deferred-draw would produce.
+/// Drawing inside a grab is safe: Cairo/XCB rendering commands go to the bar
+/// window's backing pixmap; picom composites the updated content on ungrab.
+pub fn redrawImmediate(wm: *defs.WM) void {
+    const s = state orelse return;
+    if (!s.visible) return;
+    draw(s, wm) catch |e| debug.warnOnErr(e, "draw in redrawImmediate");
+    s.clearDirty();
+}
 pub inline fn raiseBar() void {
     if (state) |s| _ = xcb.xcb_configure_window(s.conn, s.window,
         xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
@@ -703,10 +716,18 @@ fn retileAllWorkspacesNoGrab(wm: *defs.WM) void {
         // Push non-current-workspace windows back off-screen so they are not
         // visible while their workspace is inactive.  The grab held by the
         // caller means picom never composites the briefly-on-screen positions.
+        //
+        // Crucially, also invalidate each window's geom_cache entry.  The retile
+        // above just stored the tiled position in the cache, but we're about to
+        // move the window to OFFSCREEN_X.  If we don't invalidate, the cache
+        // holds a position that matches what the next retile will compute →
+        // configureSafe gets a hit → skips configure_window → window stays
+        // offscreen when the user switches back (if the fallback retile path runs).
         if (@as(u8, @intCast(idx)) != original_ws) {
             for (ws.windows.items()) |win| {
                 _ = xcb.xcb_configure_window(wm.conn, win,
                     xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, -4000))});
+                tiling.invalidateGeomCache(win);
             }
         }
         // No intermediate flush — caller owns the flush.
