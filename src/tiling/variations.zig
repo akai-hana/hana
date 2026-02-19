@@ -5,12 +5,6 @@
 ///! e.g. in [bar.layout.left], [bar.layout.center], or [bar.layout.right].
 ///!
 ///! Available segment name: "variations"
-///!
-///! Variation indicators:
-///!   Master  — 321 (lifo) / 123 (fifo)
-///!   Monocle — <-> (gapless) / >-< (gaps)
-///!   Grid    — [#] (rigid)   / [~] (relaxed)
-///!   Fibonacci — NUL (no variation; configurable via fibonacci_indicator in config.toml)
 
 const defs    = @import("defs");
 const drawing = @import("drawing");

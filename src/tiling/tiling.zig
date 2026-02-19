@@ -647,16 +647,16 @@ pub fn cycleLayoutVariation(wm: *WM) void {
 pub fn getVariationIndicator(s: *const State) []const u8 {
     return switch (s.layout) {
         .master => switch (s.layout_variations.master) {
-            .lifo => "321", // old stays master, new windows stack up to the right
-            .fifo => "123", // new window always takes master (leftmost) slot
+            .lifo => "[N]",
+            .fifo => "=N=",
         },
         .monocle => switch (s.layout_variations.monocle) {
-            .gapless => "<->", // no gaps — true fullscreen coverage
-            .gaps    => ">-<", // gaps on all sides, like any other layout
+            .gapless => "<->",
+            .gaps    => ">-<",
         },
         .grid => switch (s.layout_variations.grid) {
-            .rigid   => "[#]", // strict grid — empty cells preserved
-            .relaxed => "[~]", // flexible — last window expands to fill row
+            .rigid   => "[#]",
+            .relaxed => "[~]",
         },
         .fibonacci => &s.fibonacci_indicator,
     };
