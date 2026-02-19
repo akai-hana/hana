@@ -289,6 +289,12 @@ pub fn init(wm: *defs.WM) !void {
 
 pub fn deinit() void {
     if (state) |s| {
+        // Destroy the X11 window explicitly so it does not linger as a ghost
+        // window after a hot-reload.  Without this, each reload leaves an
+        // invisible but live ARGB window stacked on the previous ones; picom
+        // composites them all, and N partially-transparent copies accumulate
+        // into a progressively brighter (eventually white) bar.
+        _ = xcb.xcb_destroy_window(s.conn, s.window);
         s.dc.deinit();
         s.deinit();
         state = null;
