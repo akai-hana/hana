@@ -29,7 +29,7 @@ This document details the implementation plan for adding per-layout behavioral v
 - **Master Layout**: LIFO vs FIFO window placement order
 - **Monocle Layout**: Gapless (true fullscreen) vs With Gaps (honor gap settings)
 - **Grid Layout**: Rigid (strict grid with empty cells) vs Relaxed (fill available space)
-- **Fibonacci Layout**: No variations (displays null indicator)
+- **Fibonacci Layout**: No variations (displays null indicator "NUL"; this null indicator can also be overwritten in config.toml, setting it as something else other than "NUL" (any 3-char string)).
 
 ---
 
@@ -38,10 +38,10 @@ This document details the implementation plan for adding per-layout behavioral v
 ### Master Layout `[]=`
 
 **LIFO** (old stays master, new goes to stack):
-- `]->` - Master bracket stable, arrow shows rightward flow
+- `321` - Master bracket stable, arrow shows rightward flow
 
 **FIFO** (new → master, old goes to stack):
-- `<-[` - Arrow flows into master bracket
+- `123` - Arrow flows into master bracket
 
 ### Monocle Layout `[M]`
 
@@ -49,7 +49,7 @@ This document details the implementation plan for adding per-layout behavioral v
 - **`(M)`** - no gaps, complete coverage
 
 **With Gaps** (honor gap settings):
-- **`)M(`** - gaps, just like any other layout
+- **`-M-`** - gaps, just like any other layout
 
 ### Grid Layout `[+]`
 
@@ -62,7 +62,7 @@ This document details the implementation plan for adding per-layout behavioral v
 ### Fibonacci Layout `[@]`
 
 **No Variations Available**:
-- **`NUL`** - Three dashes = not applicable/no variation available
+- **`NUL`** - no variation available
 - When no variations are available to any given layout, this "NUL" should be represented in place.
 
 ---
@@ -74,18 +74,19 @@ This document details the implementation plan for adding per-layout behavioral v
 ```toml
 # Master layout variation
 master_variation = "lifo"
-# - "lifo": Last In First Out - new windows go to stack, old stays in master
-# - "fifo": First In First Out - new windows take master, old moves to stack
+# - "lifo": Last In First Out - new windows go to stack, old stays in master 
+# - "fifo": First In First Out - new windows take master, old moves to stack (DEFAULT)
+# fifo behavior is pending to implement onto master.zig tiling layout. right now, only lifo behavior is available by default.
 
 # Monocle layout variation  
 monocle_variation = "gapless"
-# - "gapless": True fullscreen, windows ignore gap settings
-# - "gaps": Honor gap settings even in monocle mode
+# - "gapless": "True" fullscreen, windows ignore gap settings (note that window borders still exist) (DEFAULT)
+# - "gaps": Honor gap settings like any other layout; other behavior in monocle mode remains the same
 
 # Grid layout variation
 grid_variation = "rigid"
-# - "rigid": Strict grid structure, may leave empty cells
-# - "relaxed": Last window in incomplete row expands to fill space
+# - "rigid": Strict grid structure; if 3 windows open, they will cover three quarters of the screen, while the fourth quarter (bottom right) will be uncovered, left as free area.
+# - "relaxed": Last window in incomplete row expands to fill space (DEFAULT)
 ```
 
 ---
@@ -99,6 +100,7 @@ grid_variation = "rigid"
 **Why**: Provides type-safe way to represent and store variation preferences per layout.
 
 **Implementation**:
+# details can be changed if any better implementation is thought of; this is only meant as an orientative guide
 - Create `MasterVariation`, `MonocleVariation`, `GridVariation` enums
 - Create `LayoutVariation` tagged union that maps each layout to its variation type
 - Ensures only valid variations can be set for each layout
@@ -532,21 +534,21 @@ grid_variation = "rigid"
 1. **Add Indicator Function** (`tiling.zig`)
    ```zig
    /// Get 3-character indicator for current variation
-   pub fn getVariationIndicator(s: *const State) []const u8 {
+   pub fn getVariationIndicator(s< *const State) []const u8 {
        return switch (s.layout) {
            .master => switch (s.layout_variation.master) {
-               .lifo => "[>>",  // Old stays master, new → stack
-               .fifo => "<<]",  // New → master, old → stack
+               .lifo => "123",  // Old stays master, new → stack
+               .fifo => "321",  // New → master, old → stack
            },
            .monocle => switch (s.layout_variation.monocle) {
-               .gapless => "═══",  // No gaps, solid bars
-               .gaps => "┼─┼",     // With gaps, plus and bars
+               .gapless => "<->",  // No gaps, solid bars
+               .gaps => ">-<",     // With gaps, plus and bars
            },
            .grid => switch (s.layout_variation.grid) {
                .rigid => "[#]",    // Hash = strict grid
                .relaxed => "[~]",  // Wavy = flexible
            },
-           .fibonacci => "---",  // No variation
+           .fibonacci => "NUL",  // No variation
        };
    }
    
@@ -573,7 +575,7 @@ grid_variation = "rigid"
        
        const indicators = @import("tiling").getFullLayoutIndicator(tiling_state);
        const layout_icon = indicators.layout;      // e.g., "[]=", "[M]"
-       const variation_icon = indicators.variation;  // e.g., "[>>", "═══"
+       const variation_icon = indicators.variation;  // e.g., "123", "NUL"
        
        const scaled_padding = config.scaledPadding();
        const fg = config.fg;
@@ -772,6 +774,7 @@ grid_variation = "rigid"
 - None (all modifications to existing files)
 
 ### Files to Modify
+# (orientative)
 
 1. **`src/tiling/tiling.zig`**
    - Add variation enum types
@@ -866,18 +869,6 @@ grid_variation = "rigid"
 - [ ] Apply to state on init
 - [ ] Handle invalid config values
 - [ ] Test config reload
-
-### Phase 8: Testing
-- [ ] Master LIFO edge cases
-- [ ] Master FIFO edge cases
-- [ ] Monocle gapless verification
-- [ ] Monocle gaps verification
-- [ ] Grid rigid verification
-- [ ] Grid relaxed verification
-- [ ] Variation cycling in all layouts
-- [ ] Bar indicator accuracy
-- [ ] Config persistence
-- [ ] Performance with many windows
 
 ---
 

@@ -15,6 +15,7 @@ const cache   = @import("cache");
 const workspaces             = @import("workspaces");
     const workspaces_segment = @import("tags");
     const layout_segment     = @import("layout");
+    const variations_segment = @import("variations");
     const title_segment      = @import("title");
     const clock_segment      = @import("clock");
     const status_segment     = @import("status");
@@ -566,9 +567,10 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.W
 fn calculateSegmentWidth(s: *State, segment: defs.BarSegment) u16 {
     return switch (segment) {
         .workspaces => if (workspaces.getState()) |ws| @intCast(ws.workspaces.len * s.cached_ws_width) else FALLBACK_WORKSPACES_WIDTH,
-        .layout => LAYOUT_SEGMENT_WIDTH,
-        .title => TITLE_SEGMENT_MIN_WIDTH,
-        .clock => s.cached_clock_width,
+        .layout     => LAYOUT_SEGMENT_WIDTH,
+        .variations => LAYOUT_SEGMENT_WIDTH, // same 3-char width as the layout icon
+        .title      => TITLE_SEGMENT_MIN_WIDTH,
+        .clock      => s.cached_clock_width,
     };
 }
 
@@ -637,8 +639,9 @@ fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, width:
     }
     return switch (segment) {
         .workspaces => try workspaces_segment.draw(s.dc, s.config, s.height, x),
-        .layout => try layout_segment.draw(s.dc, s.config, s.height, x),
-        .title => try title_segment.draw(s.dc, s.config, s.height, x, width orelse 100, wm, &s.cached_title, &s.cached_title_window, s.allocator),
-        .clock => try clock_segment.draw(s.dc, s.config, s.height, x),
+        .layout     => try layout_segment.draw(s.dc, s.config, s.height, x),
+        .variations => try variations_segment.draw(s.dc, s.config, s.height, x),
+        .title      => try title_segment.draw(s.dc, s.config, s.height, x, width orelse 100, wm, &s.cached_title, &s.cached_title_window, s.allocator),
+        .clock      => try clock_segment.draw(s.dc, s.config, s.height, x),
     };
 }

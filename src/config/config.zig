@@ -247,6 +247,8 @@ const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
     .{ "unminimize_lifo", .unminimize_lifo },
     .{ "unminimize_fifo", .unminimize_fifo },
     .{ "unminimize_all", .unminimize_all },
+    .{ "cycle_layout_variation", .cycle_layout_variation },
+    .{ "cycle_variation", .cycle_layout_variation },
 });
 
 fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *defs.Config) !void {
@@ -416,6 +418,42 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
 
     cfg.tiling.master_width = master_src.getScalable(if (in_master_section) "width" else "master_width") orelse
         parser.ScalableValue.percentage(50.0);
+
+    // --- Variation preferences ---
+    // Parse variation strings to enums immediately while the doc is alive.
+    // Storing enum values (not slices) means there's nothing to free and
+    // nothing can dangle after doc.deinit() is called by the caller.
+    if (section.getString("master_variation")) |v| {
+        cfg.tiling.master_variation = std.meta.stringToEnum(defs.MasterVariation, v) orelse blk: {
+            debug.warn("Unknown master_variation '{s}', using default 'lifo'", .{v});
+            break :blk .lifo;
+        };
+    }
+    if (section.getString("monocle_variation")) |v| {
+        cfg.tiling.monocle_variation = std.meta.stringToEnum(defs.MonocleVariation, v) orelse blk: {
+            debug.warn("Unknown monocle_variation '{s}', using default 'gapless'", .{v});
+            break :blk .gapless;
+        };
+    }
+    if (section.getString("grid_variation")) |v| {
+        cfg.tiling.grid_variation = std.meta.stringToEnum(defs.GridVariation, v) orelse blk: {
+            debug.warn("Unknown grid_variation '{s}', using default 'rigid'", .{v});
+            break :blk .rigid;
+        };
+    }
+
+    // fibonacci_indicator: copy up to 3 bytes from config into the fixed [3]u8 array.
+    // No allocation needed — the array lives in TilingConfig itself.
+    if (section.getString("fibonacci_indicator")) |raw| {
+        var ind: [3]u8 = "NUL".*;
+        if (raw.len >= 3) {
+            @memcpy(&ind, raw[0..3]);
+        } else {
+            @memcpy(ind[0..raw.len], raw);
+            for (ind[raw.len..]) |*b| b.* = ' ';
+        }
+        cfg.tiling.fibonacci_indicator = ind;
+    }
 }
 
 // Table-driven bar color parsing

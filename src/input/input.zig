@@ -274,6 +274,7 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             bar.markDirty();
         },
         .swap_master => tiling.swapWithMaster(wm),
+        .cycle_layout_variation => tiling.cycleLayoutVariation(wm),
         .dump_state => dumpState(wm),
         .emergency_recover => emergencyRecover(wm),
         .minimize_window      => minimize.minimizeWindow(wm),
