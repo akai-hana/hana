@@ -401,17 +401,29 @@ pub fn toggleBarPosition(wm: *defs.WM) !void {
             @as(i16, @intCast(wm.screen.height_in_pixels)) - @as(i16, @intCast(s.height))
         else 0;
 
-        const values = [_]u32{@as(u32, @bitCast(@as(i32, new_y)))};
-        _ = xcb.xcb_configure_window(s.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y, &values);
+        // setWindowProperties makes blocking round-trips (getAtom); do this
+        // before the grab so we never block inside an active server grab.
         try setWindowProperties(wm, s.window, s.height);
-        utils.flush(wm.conn);
 
-        debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
+        // Bar Y move and retile must be atomic: picom must not composite a
+        // frame where the bar is at its new position but windows are still
+        // sized for the old position.
+        _ = xcb.xcb_grab_server(wm.conn);
+        _ = xcb.xcb_configure_window(s.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y,
+            &[_]u32{@as(u32, @bitCast(@as(i32, new_y)))});
 
-        const current_ws = workspaces.getCurrentWorkspace() orelse return;
+        const current_ws = workspaces.getCurrentWorkspace() orelse {
+            _ = xcb.xcb_ungrab_server(wm.conn);
+            utils.flush(wm.conn);
+            return;
+        };
         if (wm.fullscreen.getForWorkspace(current_ws) == null) {
             tiling.retileCurrentWorkspace(wm);
         }
+        _ = xcb.xcb_ungrab_server(wm.conn);
+        utils.flush(wm.conn);
+
+        debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
     }
 }
 
@@ -463,17 +475,44 @@ pub fn setBarState(wm: *defs.WM, action: BarAction) void {
     if (s.visible == show and action != .toggle) return;
 
     s.visible = show;
-    if (show) {
-        _ = xcb.xcb_map_window(s.conn, s.window);
-        draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setBarState");
+
+    if (action == .toggle) {
+        // For a user-initiated toggle the bar visibility change and the
+        // full-workspace retile must be atomic: picom must never composite
+        // a frame where the bar has appeared/disappeared but the window
+        // positions still reflect the old bar height.
+        //
+        // Drawing happens BEFORE the grab because Cairo's dc.flush() may
+        // trigger XCB calls; doing those inside the grab adds latency and
+        // makes reasoning about grab scope harder.  The drawn content is
+        // already committed to the bar window's backing store by the time
+        // the map lands, so the compositor sees correct content immediately.
+        if (show) draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setBarState");
+
+        _ = xcb.xcb_grab_server(wm.conn);
+        if (show) _ = xcb.xcb_map_window(s.conn, s.window)
+        else      _ = xcb.xcb_unmap_window(s.conn, s.window);
+        retileAllWorkspacesNoGrab(wm);
+        _ = xcb.xcb_ungrab_server(wm.conn);
+        utils.flush(wm.conn);
     } else {
-        _ = xcb.xcb_unmap_window(s.conn, s.window);
+        // hide_fullscreen / show_fullscreen: these are always called from
+        // within the fullscreen module's own server grab, so the flush here
+        // happens while picom is already frozen — harmless.  The retile
+        // commands queued by retileCurrentWorkspace will be flushed together
+        // with the grab release in the outer caller.
+        if (show) {
+            _ = xcb.xcb_map_window(s.conn, s.window);
+            draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setBarState");
+        } else {
+            _ = xcb.xcb_unmap_window(s.conn, s.window);
+        }
+        utils.flush(wm.conn);
+        tiling.retileCurrentWorkspace(wm);
     }
-    utils.flush(wm.conn);
+
     debug.info("Bar {s} ({s})", .{ if (show) "shown" else "hidden", @tagName(action) });
     clock_segment.updateTimerState(wm);
-
-    if (action == .toggle) retileAllWorkspaces(wm) else tiling.retileCurrentWorkspace(wm);
 }
 
 // ── Update loop ───────────────────────────────────────────────────────────────
@@ -638,10 +677,11 @@ fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, width:
 
 // ── Workspace retiling ────────────────────────────────────────────────────────
 
-/// Retiles all workspaces when the bar is toggled, keeping off-screen workspaces
-/// off-screen after the geometry update. This prevents geometry staleness and
-/// visual flicker when switching workspaces after a bar show/hide.
-fn retileAllWorkspaces(wm: *defs.WM) void {
+/// Retiles all workspaces — queue-only, no grab, no flush.
+/// Caller is responsible for the grab/ungrab/flush envelope.
+/// Temporarily swaps ws_state.current per workspace so retileCurrentWorkspace
+/// filters the right window set; restores it before returning.
+fn retileAllWorkspacesNoGrab(wm: *defs.WM) void {
     const ws_state      = workspaces.getState() orelse return;
     const tiling_active = wm.config.tiling.enabled and
         if (tiling.getState()) |t| t.enabled else false;
@@ -653,9 +693,6 @@ fn retileAllWorkspaces(wm: *defs.WM) void {
 
     const original_ws = ws_state.current;
 
-    // Grab the server so all geometry changes land atomically.
-    _ = xcb.xcb_grab_server(wm.conn);
-
     for (ws_state.workspaces, 0..) |*ws, idx| {
         if (ws.windows.items().len == 0) continue;
         if (wm.fullscreen.getForWorkspace(@intCast(idx)) != null) continue;
@@ -663,24 +700,33 @@ fn retileAllWorkspaces(wm: *defs.WM) void {
         ws_state.current = @intCast(idx);
         tiling.retileCurrentWorkspace(wm);
 
+        // Push non-current-workspace windows back off-screen so they are not
+        // visible while their workspace is inactive.  The grab held by the
+        // caller means picom never composites the briefly-on-screen positions.
         if (@as(u8, @intCast(idx)) != original_ws) {
             for (ws.windows.items()) |win| {
                 _ = xcb.xcb_configure_window(wm.conn, win,
                     xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, -4000))});
             }
         }
-        _ = xcb.xcb_flush(wm.conn);
+        // No intermediate flush — caller owns the flush.
     }
 
     ws_state.current = original_ws;
+    // No grab/ungrab/flush — caller owns those.
+}
 
-    _ = xcb.xcb_flush(wm.conn);
+/// Retiles all workspaces when the bar is toggled, keeping off-screen workspaces
+/// off-screen after the geometry update. This prevents geometry staleness and
+/// visual flicker when switching workspaces after a bar show/hide.
+fn retileAllWorkspaces(wm: *defs.WM) void {
+    // Grab → retile all workspaces → ungrab → single flush.
+    // Queuing the ungrab before the flush is critical: it ensures that
+    // grab + all retile commands + ungrab all land on the X server in one
+    // write, so picom is frozen for the entire batch and composites only the
+    // fully-retiled final state.
+    _ = xcb.xcb_grab_server(wm.conn);
+    retileAllWorkspacesNoGrab(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
-
-    // Synchronise so windows have correct geometry before returning.
-    const cookie = xcb.xcb_get_input_focus(wm.conn);
-    const reply  = xcb.xcb_get_input_focus_reply(wm.conn, cookie, null);
-    if (reply != null) std.c.free(reply);
-
     utils.flush(wm.conn);
 }

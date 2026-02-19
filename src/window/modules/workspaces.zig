@@ -190,7 +190,10 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
 
     // Grab the server so the switch is atomic — no intermediate frames visible.
     _ = xcb.xcb_grab_server(wm.conn);
-    defer _ = xcb.xcb_ungrab_server(wm.conn);
+    // NOTE: no defer for ungrab — we queue it explicitly before the flush so
+    // that grab + all commands + raiseBar + ungrab all land in a single write.
+    // A deferred ungrab would run after the flush, leaving the server locked
+    // for an extra event-loop cycle and delaying when picom can composite.
 
     // Step 1: hide all windows from the old workspace.
     for (old_ws_obj.windows.items()) |win| {
@@ -294,8 +297,13 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
         wm.focused_window orelse wm.root, xcb.XCB_CURRENT_TIME);
 
-    utils.flush(wm.conn);
+    // Raise the bar and release the grab BEFORE the flush.  This batches
+    // grab + all window/focus/border commands + raiseBar + ungrab into a
+    // single write, so picom unfreezes exactly once and composites only the
+    // fully-switched final state — not some intermediate frame.
     bar.raiseBar();
+    _ = xcb.xcb_ungrab_server(wm.conn);
+    utils.flush(wm.conn);
     bar.markDirty();
 }
 
