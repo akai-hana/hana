@@ -127,9 +127,8 @@ pub const State = struct {
         return if (wm.focused_window == win) self.border_focused else self.border_unfocused;
     }
 
-    pub inline fn markDirty(self: *State)     void { self.dirty = true;  }
-    pub inline fn isDirty(self: *const State) bool { return self.dirty;  }
-    pub inline fn clearDirty(self: *State)    void { self.dirty = false; }
+    pub inline fn markDirty(self: *State)  void { self.dirty = true;  }
+    pub inline fn clearDirty(self: *State) void { self.dirty = false; }
 
     pub fn deinit(self: *State) void {
         self.windows.deinit();
@@ -243,7 +242,6 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     // pixel for this window — it was just set above.
     s.border_cache.put(s.allocator, window_id, border_color) catch {};
 
-    debug.info("Added window 0x{x} to tiling", .{window_id});
 }
 
 pub fn removeWindow(window_id: u32) void {
@@ -253,7 +251,6 @@ pub fn removeWindow(window_id: u32) void {
         s.focus_ring.remove(window_id);
         _ = s.geom_cache.remove(window_id);
         _ = s.border_cache.remove(window_id);
-        debug.info("Removed window 0x{x} from tiling", .{window_id});
     }
 }
 
@@ -458,21 +455,14 @@ fn updateBorders(wm: *WM, ws_windows: []const u32) void {
 // Focus border updates
 
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
-    updateBorderForFocusChange(wm, old_focused, new_focused);
-}
-
-inline fn updateBorderForFocusChange(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     const s = getState() orelse return;
-    if (old_focused) |win| if (s.windows.contains(win)) {
+    for ([2]?u32{ old_focused, new_focused }) |opt| {
+        const win = opt orelse continue;
+        if (!s.windows.contains(win)) continue;
         const color = s.borderColor(wm, win);
         _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
         s.border_cache.put(s.allocator, win, color) catch {};
-    };
-    if (new_focused) |win| if (s.windows.contains(win)) {
-        const color = s.borderColor(wm, win);
-        _ = xcb.xcb_change_window_attributes(wm.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
-        s.border_cache.put(s.allocator, win, color) catch {};
-    };
+    }
 }
 
 // Window reordering
@@ -527,16 +517,6 @@ pub fn swapWithMaster(wm: *WM) void {
     } else {
         moveWindowToIndex(s, focused_pos, master_pos);
     }
-    retileCurrentWorkspace(wm);
-}
-
-pub fn promoteToMaster(wm: *WM) void {
-    const s = getState() orelse return;
-    const focused = wm.focused_window orelse return;
-    if (!s.windows.contains(focused)) return;
-    const idx = findWindowIndex(s.windows.items(), focused) orelse return;
-    if (idx == 0) return;
-    moveWindowToIndex(s, idx, 0);
     retileCurrentWorkspace(wm);
 }
 
@@ -610,81 +590,6 @@ fn filterWorkspaceWindows(s: *State, buf: []u32) usize {
     return n;
 }
 
-inline fn getMasterCount(s: *const State, window_count: usize) u8 {
-    return @min(s.master_count, @as(u8, @intCast(window_count)));
-}
-
 inline fn findWindowIndex(windows: []const u32, target: u32) ?usize {
     return std.mem.indexOfScalar(u32, windows, target);
-}
-
-/// Focus the most-recently-focused other window (alt+tab).
-pub fn focusPrevious(wm: *WM) void {
-    const s   = getState() orelse return;
-    const cur = wm.focused_window orelse return;
-
-    var it = s.focus_ring.iter();
-    while (it.next()) |win| {
-        if (win == cur) continue;
-        if (workspaces.isOnCurrentWorkspace(win) and s.windows.contains(win)) {
-            switchFocus(wm, s, win);
-            return;
-        }
-    }
-
-    // Fallback: nothing useful in history — find a neighbour in current workspace.
-    var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
-    const ws_count = filterWorkspaceWindows(s, &ws_buf);
-    if (ws_count < 2) return;
-    const ws_windows = ws_buf[0..ws_count];
-
-    const idx = findWindowIndex(ws_windows, cur) orelse return;
-    const mc  = getMasterCount(s, ws_count);
-    if (idx < mc and ws_count > mc) {
-        switchFocus(wm, s, ws_windows[mc]);
-    } else if (idx >= mc) {
-        switchFocus(wm, s, ws_windows[if (idx + 1 < ws_count) idx + 1 else 0]);
-    }
-}
-
-/// Focus the second-most-recently-focused window (shift+alt+tab).
-pub fn focusSecondLast(wm: *WM) void {
-    const s   = getState() orelse return;
-    const cur = wm.focused_window orelse return;
-    if (s.windows.count() < 2) return;
-
-    var found = false;
-    var it = s.focus_ring.iter();
-    while (it.next()) |win| {
-        if (win == cur) { found = true; continue; }
-        if (found and workspaces.isOnCurrentWorkspace(win) and s.windows.contains(win)) {
-            switchFocus(wm, s, win);
-            return;
-        }
-    }
-
-    // Fallback: carousel within workspace windows.
-    var buf: [MAX_WS_WINDOWS]u32 = undefined;
-    const ws_count = filterWorkspaceWindows(s, &buf);
-    if (ws_count < 2) return;
-    const ws_wins = buf[0..ws_count];
-
-    if (ws_count == 2) {
-        const other = if (ws_wins[0] == cur) ws_wins[1] else ws_wins[0];
-        switchFocus(wm, s, other);
-        return;
-    }
-
-    const mc  = getMasterCount(s, ws_count);
-    const idx = findWindowIndex(ws_wins, cur) orelse 0;
-
-    if (idx < mc) {
-        const next = if (mc == 1) ws_count - 1 else (if (idx + 1 < mc) idx + 1 else 0);
-        switchFocus(wm, s, ws_wins[next]);
-    } else {
-        const slave_count = ws_count - mc;
-        const si          = idx - mc;
-        const next_si     = if (si + 1 < slave_count) si + 1 else 0;
-        switchFocus(wm, s, ws_wins[mc + next_si]);
-    }
 }

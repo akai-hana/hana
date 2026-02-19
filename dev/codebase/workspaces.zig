@@ -301,11 +301,6 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
 
 // Queries
 
-pub inline fn getCurrentWindowsView() ?[]const u32 {
-    const s = getState() orelse return null;
-    return s.workspaces[s.current].windows.items();
-}
-
 pub inline fn getCurrentWorkspace() ?u8 {
     const s = getState() orelse return null;
     return s.current;

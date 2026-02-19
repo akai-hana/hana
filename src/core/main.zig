@@ -84,21 +84,13 @@ fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
 
-    // Count total grabs needed so we can pre-size the cookie array.
-    var total: usize = 0;
-    for (wm.config.keybindings.items) |kb| {
-        if (kb.keycode != null) total += constants.LOCK_MODIFIERS.len;
-    }
-    if (total == 0) {
-        _ = xcb.xcb_flush(wm.conn);
-        return;
-    }
-
     const CookieEntry = struct {
         cookie:  xcb.xcb_void_cookie_t,
         keycode: u8,
     };
-    const cookies = try wm.allocator.alloc(CookieEntry, total);
+    // Upper-bound alloc: keybindings without a resolved keycode are skipped below.
+    // n tracks actual entries used; the slice may be slightly over-sized.
+    const cookies = try wm.allocator.alloc(CookieEntry, wm.config.keybindings.items.len * constants.LOCK_MODIFIERS.len);
     defer wm.allocator.free(cookies);
 
     // Fire every grab request without waiting for a reply — all requests are
@@ -136,15 +128,27 @@ fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_flush(wm.conn);
 }
 
+/// Initialize the bar, silently ignoring BarDisabled (config opt-out).
+fn initBar(wm: *WM) void {
+    bar.init(wm) catch |err| {
+        if (err != error.BarDisabled) debug.err("Bar init failed: {}", .{err});
+    };
+}
+
+/// Consume the reload flag and, if set, reload configuration.
+fn maybeReload(wm: *WM) void {
+    if (should_reload.swap(false, .seq_cst))
+        handleConfigReload(wm) catch |err| debug.err("Reload failed: {}", .{err});
+}
+
 fn handleConfigReload(wm: *WM) !void {
-    debug.info("[RELOAD] handleConfigReload entered", .{});
+    debug.info("Reload requested", .{});
 
     var new_config = config.loadConfigDefault(wm.allocator) catch |err| {
-        debug.err("[RELOAD] loadConfigDefault failed: {}", .{err});
+        debug.err("Failed to load: {}, keeping old", .{err});
         return err;
     };
     errdefer new_config.deinit(wm.allocator);
-    debug.info("[RELOAD] config loaded successfully", .{});
 
     // Validate config before applying it.
     // master_count must be nonzero or the layout has no master windows.
@@ -166,28 +170,21 @@ fn handleConfigReload(wm: *WM) !void {
 
     grabKeybindings(wm) catch |err| {
         debug.err("Keybind grab failed: {}, reverting", .{err});
-        new_config.deinit(wm.allocator);
         wm.config = old_config;
-        return err;
+        return err; // errdefer fires here — frees new_config exactly once
     };
 
-    debug.info("[RELOAD] applying new config", .{});
     old_config.deinit(wm.allocator);
     try input.rebuildKeybindMap(wm);
-    debug.info("[RELOAD] keybind map rebuilt", .{});
     tiling.reloadConfig(wm);
-    debug.info("[RELOAD] tiling reloaded", .{});
     clock.updateTimerState(wm);
 
     // Reinitialize the bar — it caches dimensions, fonts, and layout from the
     // config at init time and has no incremental update path.  Deinit destroys
     // the old X11 bar window; init creates a fresh one from the new config.
-    debug.info("[RELOAD] reinitializing bar", .{});
     bar.deinit();
-    bar.init(wm) catch |err| {
-        if (err != error.BarDisabled) debug.err("[RELOAD] bar reinit failed: {}", .{err});
-    };
-    debug.info("[RELOAD] complete", .{});
+    initBar(wm);
+    debug.info("Reload complete", .{});
 }
 
 pub fn main() !void {
@@ -259,9 +256,7 @@ pub fn main() !void {
     events.initModules(&wm);
     defer events.deinitModules(&wm);
 
-    bar.init(&wm) catch |err| {
-        if (err != error.BarDisabled) debug.err("Failed to initialize: {}", .{err});
-    };
+    initBar(&wm);
     defer bar.deinit();
 
     clock.updateTimerState(&wm);
@@ -298,12 +293,7 @@ pub fn main() !void {
             // path, and pollfds[1] only wakes up on SIGHUP — it never fires
             // for a keypress, so without this check the flag would sit set
             // forever and the reload would silently never happen.
-            if (should_reload.swap(false, .seq_cst)) {
-                debug.info("[RELOAD] flag consumed from X11 branch, calling handleConfigReload", .{});
-                handleConfigReload(&wm) catch |err| {
-                    debug.err("Reload failed: {}", .{err});
-                };
-            }
+            maybeReload(&wm);
             
             tiling.retileIfDirty(&wm);
             bar.updateIfDirty(&wm) catch |err| {
@@ -315,12 +305,7 @@ pub fn main() !void {
         // Signals
         if (pollfds[1].revents & posix.POLL.IN != 0) {
             handleSignalFd(fds.signal);
-            
-            if (should_reload.swap(false, .seq_cst)) {
-                handleConfigReload(&wm) catch |err| {
-                    debug.err("Reload failed: {}", .{err});
-                };
-            }
+            maybeReload(&wm);
         }
         
         // Timer
