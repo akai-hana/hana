@@ -90,9 +90,8 @@ fn enterFullscreen(wm: *WM, win: u32, ws: u8) void {
                     xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
                 // Evict from the geometry cache: the window is now at an offscreen
                 // position that differs from its last tiled rect.  Without this,
-                // the next retileCurrentWorkspace call would find a cache hit (the
-                // stored tiled rect matches the freshly-computed one) and skip the
-                // configure_window, leaving the window stuck offscreen.
+                // retileCurrentWorkspace would find a cache hit on the computed
+                // tiled rect and skip the configure_window, leaving windows offscreen.
                 tiling.invalidateGeomCache(other_win);
             }
         }
@@ -110,6 +109,12 @@ fn enterFullscreen(wm: *WM, win: u32, ws: u8) void {
         xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
         xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
         xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &values);
+    // Evict the fullscreen window from the geometry cache too.  The cache still
+    // holds its pre-fullscreen tiled rect.  On exit, retile computes that same
+    // rect, gets a spurious cache hit, and skips the configure_window — so the
+    // window stays at fullscreen dimensions.  Clearing the entry here forces the
+    // configure_window to actually be sent when retile runs during exitFullscreen.
+    tiling.invalidateGeomCache(win);
     _ = xcb.xcb_configure_window(wm.conn, win,
         xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
