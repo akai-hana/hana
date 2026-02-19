@@ -287,10 +287,11 @@ pub fn removeWindow(window_id: u32) void {
 }
 
 /// Evict a window from the geometry cache without removing it from tiling.
+///
 /// Call this whenever a window's position is changed outside of the normal
-/// retile path (e.g. pushed offscreen during fullscreen enter) so that the
-/// next retile does not incorrectly treat the stale cached rect as current
-/// and skip the configure_window call.
+/// retile path (e.g. pushed offscreen or expanded to fullscreen) so that the
+/// next retileCurrentWorkspace does not treat the stale cached rect as current
+/// and silently skip the configure_window call.
 pub fn invalidateGeomCache(window_id: u32) void {
     const s = getState() orelse return;
     _ = s.geom_cache.remove(window_id);
