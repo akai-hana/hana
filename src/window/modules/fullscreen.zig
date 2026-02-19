@@ -88,6 +88,12 @@ fn enterFullscreen(wm: *WM, win: u32, ws: u8) void {
             if (other_win != win) {
                 _ = xcb.xcb_configure_window(wm.conn, other_win,
                     xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+                // Evict from the geometry cache: the window is now at an offscreen
+                // position that differs from its last tiled rect.  Without this,
+                // the next retileCurrentWorkspace call would find a cache hit (the
+                // stored tiled rect matches the freshly-computed one) and skip the
+                // configure_window, leaving the window stuck offscreen.
+                tiling.invalidateGeomCache(other_win);
             }
         }
     }
