@@ -137,22 +137,24 @@ fn grabKeybindings(wm: *WM) !void {
 }
 
 fn handleConfigReload(wm: *WM) !void {
-    debug.info("Reload requested", .{});
+    debug.info("[RELOAD] handleConfigReload entered", .{});
 
     var new_config = config.loadConfigDefault(wm.allocator) catch |err| {
-        debug.err("Failed to load: {}, keeping old", .{err});
+        debug.err("[RELOAD] loadConfigDefault failed: {}", .{err});
         return err;
     };
     errdefer new_config.deinit(wm.allocator);
+    debug.info("[RELOAD] config loaded successfully", .{});
 
-    // Validate config before applying it
+    // Validate config before applying it.
+    // master_count must be nonzero or the layout has no master windows.
+    // master_width is a ScalableValue (percentage or absolute pixels) and is
+    // intentionally not validated here — computeMasterWidth in tiling.zig
+    // clamps whatever the parser produces to [MIN_MASTER_WIDTH, MAX_MASTER_WIDTH].
+    // Validating .value directly was wrong because a percentage like 50% is
+    // stored as 50.0, which would always fail a > 1.0 guard.
     if (new_config.tiling.master_count == 0) {
         debug.err("Invalid config: master_count must be > 0, keeping old", .{});
-        return error.InvalidConfig;
-    }
-    if (new_config.tiling.master_width.value <= 0
-    or new_config.tiling.master_width.value > 1.0) {
-        debug.err("Invalid config: master_width must be between 0 and 1, keeping old", .{});
         return error.InvalidConfig;
     }
 
@@ -169,12 +171,23 @@ fn handleConfigReload(wm: *WM) !void {
         return err;
     };
 
+    debug.info("[RELOAD] applying new config", .{});
     old_config.deinit(wm.allocator);
     try input.rebuildKeybindMap(wm);
+    debug.info("[RELOAD] keybind map rebuilt", .{});
     tiling.reloadConfig(wm);
+    debug.info("[RELOAD] tiling reloaded", .{});
     clock.updateTimerState(wm);
-    
-    debug.info("Reload complete", .{});
+
+    // Reinitialize the bar — it caches dimensions, fonts, and layout from the
+    // config at init time and has no incremental update path.  Deinit destroys
+    // the old X11 bar window; init creates a fresh one from the new config.
+    debug.info("[RELOAD] reinitializing bar", .{});
+    bar.deinit();
+    bar.init(wm) catch |err| {
+        if (err != error.BarDisabled) debug.err("[RELOAD] bar reinit failed: {}", .{err});
+    };
+    debug.info("[RELOAD] complete", .{});
 }
 
 pub fn main() !void {
@@ -277,6 +290,19 @@ pub fn main() !void {
             while (xcb.xcb_poll_for_event(conn)) |event| {
                 defer std.c.free(event);
                 events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
+            }
+
+            // Check reload flag here as well as in the signal branch: the
+            // .reload_config keybinding sets wm.should_reload_config (which
+            // points at the module-level `should_reload`) from the X11 event
+            // path, and pollfds[1] only wakes up on SIGHUP — it never fires
+            // for a keypress, so without this check the flag would sit set
+            // forever and the reload would silently never happen.
+            if (should_reload.swap(false, .seq_cst)) {
+                debug.info("[RELOAD] flag consumed from X11 branch, calling handleConfigReload", .{});
+                handleConfigReload(&wm) catch |err| {
+                    debug.err("Reload failed: {}", .{err});
+                };
             }
             
             tiling.retileIfDirty(&wm);
