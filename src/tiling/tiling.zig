@@ -700,7 +700,16 @@ pub inline fn decreaseMasterCount(wm: *WM) void { adjustMasterCount(wm, -1); }
 pub fn adjustMasterWidth(wm: *WM, delta: f32) void {
     const s = getState() orelse return;
     s.master_width = @max(defs.MIN_MASTER_WIDTH, @min(MAX_MASTER_WIDTH, s.master_width + delta));
-    retileCurrentWorkspace(wm);
+    // Mark dirty instead of calling retileCurrentWorkspace directly.
+    // retileIfDirty in the main event loop runs AFTER all pending events are
+    // drained, so the configure_window calls and bar.updateIfDirty are flushed
+    // together in one batch.  Calling retileCurrentWorkspace here would queue
+    // geometry changes before EnterNotify events (from the previous retile) are
+    // processed, causing the bar to redraw against an intermediate focus state
+    // and then again against the final state — producing a visible flicker.
+    // Deferring also coalesces rapid repeated key presses into a single retile.
+    _ = wm; // wm used by retileIfDirty in the main loop
+    s.markDirty();
 }
 
 pub inline fn increaseMasterWidth(wm: *WM) void { adjustMasterWidth(wm,  0.025); }
