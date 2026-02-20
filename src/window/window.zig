@@ -206,10 +206,26 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         // tiled position with no intermediate geometry flash.
         setupTiling(wm, win, true);
         _ = xcb.xcb_map_window(wm.conn, win);
+    } else {
+        // Window belongs to a different workspace — do not map it yet.
+        // executeSwitch() maps it inside a server grab when its workspace is
+        // activated, so the compositor never allocates a buffer for it early.
+        //
+        // We MUST still register it with the tiling system (addWindow), even
+        // though it won't be retiled now.  Without this:
+        //   - s.windows never contains the window, so filterWorkspaceWindows
+        //     skips it on every subsequent retileCurrentWorkspace call.
+        //   - No border width or colour is ever set on it.
+        //   - On the first visit the window appears at server-default geometry
+        //     with no border; after the first hide-to-offscreen in executeSwitch
+        //     step 1 it is stranded off-screen permanently.
+        //
+        // setupTiling with on_current=false calls addWindow (registering the
+        // window in s.windows, setting its border, marking dirty) but does NOT
+        // call retileCurrentWorkspace — the current workspace is unaffected.
+        setupTiling(wm, win, false);
+        grabButtons(wm, win, false);
     }
-    // Off-screen windows are intentionally never mapped here.
-    // executeSwitch() maps them inside the server grab when their workspace
-    // is activated, so the compositor never allocates a buffer for them.
 
     // Single flush covers: change_window_attributes + focus cookies +
     // (for is_current) all configure_window calls + map_window.
@@ -247,8 +263,6 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
                 wm.spawn_cursor_y = ptr.*.root_y;
             }
         }
-    } else {
-        grabButtons(wm, win, false);
     }
 
     bar.markDirty();

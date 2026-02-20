@@ -534,12 +534,6 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
 
     if (section.get("transparency")) |value| {
         cfg.bar.transparency = std.math.clamp(parseTransparency(value), 0.0, 1.0);
-        if (cfg.bar.transparency == 1.0) {
-            debug.info("Bar transparency: disabled (fully opaque)", .{});
-        } else {
-            debug.info("Bar transparency: {d:.2}% (alpha: 0x{x:0>4})",
-                .{ cfg.bar.transparency * 100.0, cfg.bar.getAlpha16() });
-        }
     }
 
     try parseWorkspaceIcons(allocator, section, cfg);
