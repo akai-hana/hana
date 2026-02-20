@@ -443,6 +443,8 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
         }
         cfg.tiling.fibonacci_indicator = ind;
     }
+
+    cfg.tiling.global_layout = get(bool, section, "global_layout", false, null, null);
 }
 
 // Table-driven bar color parsing.

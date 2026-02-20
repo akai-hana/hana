@@ -146,3 +146,24 @@ pub extern fn pango_font_metrics_unref(metrics: *PangoFontMetrics) void;
 // GLib/GObject
 
 pub extern fn g_object_unref(object: *anyopaque) void;
+
+// xcb-cursor ──────────────────────────────────────────────────────────────────
+//
+// Wraps libXcursor for XCB callers.  Reads Xcursor.theme and Xcursor.size
+// from Xresources so themed cursors are loaded correctly.
+// Link with: -lxcb-cursor
+
+pub const xcb_cursor_context_t = opaque {};
+
+pub extern fn xcb_cursor_context_new(
+    conn:   *xcb_connection_t,
+    screen: *anyopaque,
+    ctx:    **xcb_cursor_context_t,
+) c_int;
+
+pub extern fn xcb_cursor_load_cursor(
+    ctx:  *xcb_cursor_context_t,
+    name: [*:0]const u8,
+) u32;
+
+pub extern fn xcb_cursor_context_free(ctx: *xcb_cursor_context_t) void;

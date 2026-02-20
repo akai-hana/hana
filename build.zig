@@ -125,6 +125,7 @@ fn linkSystemLibraries(root: *std.Build.Module) void {
     root.linkSystemLibrary("pango-1.0", .{});
     root.linkSystemLibrary("glib-2.0", .{});
     root.linkSystemLibrary("gobject-2.0", .{});
+    root.linkSystemLibrary("xcb-cursor", .{});
     // Include paths are not needed: manual extern declarations are used
     // throughout, so the linker resolves symbols directly from linked libs.
 }
