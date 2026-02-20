@@ -270,10 +270,53 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
 // Configure request 
 
+/// Send a synthetic ConfigureNotify to `win` reporting its current geometry.
+/// Required by ICCCM §4.1.5 whenever a WM silently ignores a ConfigureRequest:
+/// the client must be told what geometry it actually has, or it may block
+/// waiting for an acknowledgement that never arrives.
+fn sendSyntheticConfigureNotify(wm: *WM, win: u32) void {
+    const reply = xcb.xcb_get_geometry_reply(
+        wm.conn, xcb.xcb_get_geometry(wm.conn, win), null,
+    ) orelse return;
+    defer std.c.free(reply);
+
+    const ev = xcb.xcb_configure_notify_event_t{
+        .response_type  = xcb.XCB_CONFIGURE_NOTIFY,
+        .pad0           = 0,
+        .sequence       = 0,
+        .event          = win,
+        .window         = win,
+        .above_sibling  = xcb.XCB_NONE,
+        .x              = reply.*.x,
+        .y              = reply.*.y,
+        .width          = reply.*.width,
+        .height         = reply.*.height,
+        .border_width   = reply.*.border_width,
+        .override_redirect = 0,
+        .pad1           = 0,
+    };
+    _ = xcb.xcb_send_event(
+        wm.conn, 0, win,
+        xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+        @ptrCast(&ev),
+    );
+    // No flush here — the caller (event loop) flushes after each event batch.
+}
+
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const win = event.window;
     if ((wm.config.tiling.enabled and tiling.isWindowTiled(win)) or
-        wm.fullscreen.isFullscreen(win)) return;
+        wm.fullscreen.isFullscreen(win))
+    {
+        // ICCCM §4.1.5: when a WM ignores a ConfigureRequest it must send the
+        // client a synthetic ConfigureNotify with the window's actual current
+        // geometry.  Without this, clients that block on ConfigureNotify to
+        // finish initialising (most terminals) stall indefinitely — visible as
+        // a frozen window that only wakes up when a subsequent retile happens
+        // to send a real configure_window for unrelated reasons.
+        sendSyntheticConfigureNotify(wm, win);
+        return;
+    }
 
     // Honour only the geometry bits we provide values for.  Passing the raw
     // value_mask unmodified would cause XCB to read past our value array if
