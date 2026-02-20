@@ -81,47 +81,51 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
 
 // Spawn workspace recovery 
 
-/// Collect the _NET_WM_PID reply and read HANA_SPAWN_WS from the process
-/// environment via /proc/pid/environ.  Returns the workspace index the window
-/// should be assigned to, or null if the property is absent, the process can't
-/// be read, or the variable isn't set (window wasn't spawned by an exec bind).
-fn getSpawnWorkspace(
-    conn: *xcb.xcb_connection_t,
-    c_pid: xcb.xcb_get_property_cookie_t,
-) ?u8 {
-    const reply = xcb.xcb_get_property_reply(conn, c_pid, null) orelse return null;
-    defer std.c.free(reply);
-    if (reply.*.format != 32 or reply.*.value_len == 0) return null;
+// Spawn workspace queue
+//
+// When the user presses an exec keybind, input.executeShellCommand calls
+// registerSpawn() with the active workspace before forking.  handleMapRequest
+// pops the oldest non-expired entry and uses it as the workspace assignment.
+//
+// This replaces the _NET_WM_PID + /proc/pid/environ approach, which fails for
+// daemon-mode terminals (kitty, wezterm, foot --server): those terminals
+// re-use a long-lived daemon process whose /proc/pid/environ still reflects
+// the workspace that was active when the daemon was first started, not now.
+// The queue is purely in-process — no X round-trips, no filesystem reads.
 
-    const values: [*]const u32 = @ptrCast(@alignCast(xcb.xcb_get_property_value(reply)));
-    const pid = values[0];
-    if (pid == 0) return null;
+const SPAWN_TIMEOUT_NS: u64 = 15 * std.time.ns_per_s;
+const SPAWN_QUEUE_CAP:  u8  = 16;
 
-    return readSpawnWorkspaceFromEnv(pid);
+const SpawnEntry = struct { workspace: u8, time: std.time.Instant };
+
+var spawn_buf:  [SPAWN_QUEUE_CAP]SpawnEntry = undefined;
+var spawn_head: u8 = 0;
+var spawn_len:  u8 = 0;
+
+/// Called by input.executeShellCommand immediately after a successful fork.
+/// Records the workspace the user was on when they pressed the exec keybind.
+pub fn registerSpawn(workspace: u8) void {
+    const now = std.time.Instant.now() catch return;
+    const tail = (spawn_head + spawn_len) % SPAWN_QUEUE_CAP;
+    spawn_buf[tail] = .{ .workspace = workspace, .time = now };
+    if (spawn_len < SPAWN_QUEUE_CAP) {
+        spawn_len += 1;
+    } else {
+        // Queue full — silently discard oldest entry.
+        spawn_head = (spawn_head + 1) % SPAWN_QUEUE_CAP;
+    }
 }
 
-/// Read /proc/[pid]/environ and extract the HANA_SPAWN_WS value written by
-/// executeShellCommand.  The environment is a sequence of null-terminated
-/// strings; we scan without loading the entire file into a heap allocation.
-fn readSpawnWorkspaceFromEnv(pid: u32) ?u8 {
-    var path_buf: [48]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "/proc/{d}/environ", .{pid}) catch return null;
-
-    const fd = std.posix.open(path, .{ .ACCMODE = .RDONLY }, 0) catch return null;
-    defer std.posix.close(fd);
-
-    var buf: [8192]u8 = undefined;
-    const n = std.posix.read(fd, &buf) catch return null;
-
-    const prefix = "HANA_SPAWN_WS=";
-    var i: usize = 0;
-    while (i < n) {
-        const end = std.mem.indexOfScalarPos(u8, buf[0..n], i, 0) orelse n;
-        const entry = buf[i..end];
-        if (std.mem.startsWith(u8, entry, prefix)) {
-            return std.fmt.parseInt(u8, entry[prefix.len..], 10) catch null;
-        }
-        i = end + 1;
+/// Pop the oldest non-expired entry.  Expired entries are silently discarded.
+/// Returns null when the queue is empty or all entries have timed out.
+fn popSpawnWorkspace() ?u8 {
+    const now = std.time.Instant.now() catch return null;
+    while (spawn_len > 0) {
+        const entry = spawn_buf[spawn_head];
+        spawn_head = (spawn_head + 1) % SPAWN_QUEUE_CAP;
+        spawn_len -= 1;
+        if (now.since(entry.time) <= SPAWN_TIMEOUT_NS) return entry.workspace;
+        // Expired — discard and try the next entry.
     }
     return null;
 }
@@ -155,22 +159,13 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         wm.conn, 0, win,
         xcb.XCB_ATOM_WM_NORMAL_HINTS, xcb.XCB_ATOM_ANY, 0, 18,
     );
-    // Fire _NET_WM_PID cookie so we can recover the spawn workspace from the
-    // grandchild's process environment (HANA_SPAWN_WS set by executeShellCommand).
-    // Fired here alongside the other cookies so all three land in the same write.
-    const c_pid = xcb.xcb_get_property(
-        wm.conn, 0, win,
-        utils.getAtomCached("_NET_WM_PID") catch 0,
-        xcb.XCB_ATOM_CARDINAL, 0, 1,
-    );
-
     // Determine target workspace.
     // Priority: workspace rules > exec spawn workspace > current workspace.
     //
     // Workspace rules (WM_CLASS): one round-trip; xcb_get_property_reply
     //   flushes the output buffer implicitly, so all cookies above also land.
-    // Spawn workspace (_NET_WM_PID + /proc/pid/environ): one round-trip for
-    //   the PID reply, then a local file read — no extra X round-trip.
+    // Spawn workspace (queue): zero round-trips — registerSpawn() was called
+    //   at fork time; popSpawnWorkspace() is a pure in-process ring-buffer pop.
     // Current workspace: zero round-trips (fast path for unmanaged windows).
     const validated_ws: u8 = blk: {
         // 1. Workspace rules — explicit class-based assignment, highest priority.
@@ -181,19 +176,16 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
                 xcb.XCB_ATOM_STRING, 0, 256,
             );
             if (collectWorkspaceRule(wm, c_class)) |target| {
-                // Rule matched — consume the c_pid reply so it doesn't linger
-                // in XCB's reply queue and confuse subsequent round-trips.
-                if (xcb.xcb_get_property_reply(wm.conn, c_pid, null)) |r| std.c.free(r);
                 break :blk validateWorkspace(target, current_ws);
             }
             // No rule matched; fall through and try the spawn workspace.
         }
         // 2. Exec spawn workspace — window was launched via a keybind exec action.
-        //    executeShellCommand wrote HANA_SPAWN_WS into the child environment;
-        //    we recover it here via _NET_WM_PID + /proc/pid/environ so the window
-        //    always lands on the workspace where the user pressed the bind, even
-        //    if they switched away while the application was starting.
-        if (getSpawnWorkspace(wm.conn, c_pid)) |spawn_ws|
+        //    executeShellCommand called registerSpawn() before forking, recording
+        //    the active workspace in the spawn queue.  Pop the oldest non-expired
+        //    entry so the window lands on the workspace where the bind was pressed,
+        //    even when the terminal reuses a long-lived daemon process.
+        if (popSpawnWorkspace()) |spawn_ws|
             break :blk validateWorkspace(spawn_ws, current_ws);
         // 3. Default: whichever workspace is active at map time.
         break :blk current_ws;

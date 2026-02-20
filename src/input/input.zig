@@ -243,23 +243,6 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
     const cmd_z = try wm.allocator.dupeZ(u8, cmd);
     defer wm.allocator.free(cmd_z);
 
-    // Stamp the active workspace index into the environment before forking.
-    // Both the intermediate child and the grandchild (the real app process)
-    // inherit it.  handleMapRequest reads it back via _NET_WM_PID +
-    // /proc/pid/environ and assigns the window to the correct workspace even
-    // if the user switched away before the app finished starting.
-    // We unset it in the parent immediately after fork so the WM's own
-    // environment stays clean.  The WM is single-threaded, so there is no
-    // race between the setenv and unsetenv calls.
-    var spawn_ws_set = false;
-    if (workspaces.getCurrentWorkspace()) |ws| {
-        var ws_buf = std.mem.zeroes([16]u8); // last byte stays 0 → null terminator
-        _ = std.fmt.bufPrint(ws_buf[0..15], "{d}", .{ws}) catch {};
-        _ = c.setenv("HANA_SPAWN_WS", @as([*c]const u8, @ptrCast(&ws_buf)), 1);
-        spawn_ws_set = true;
-    }
-    defer if (spawn_ws_set) { _ = c.unsetenv("HANA_SPAWN_WS"); };
-
     const pid = c.fork();
     if (pid == 0) {
         const pid2 = c.fork();
@@ -274,6 +257,11 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
         }
         std.process.exit(0);
     } else if (pid > 0) {
+        // Record the target workspace before waiting for the intermediate child.
+        // window.registerSpawn() enqueues (workspace, timestamp) so handleMapRequest
+        // can pop it at map time — works correctly even for daemon-mode terminals
+        // that reuse a long-lived process whose /proc/pid/environ is stale.
+        if (workspaces.getCurrentWorkspace()) |ws| window.registerSpawn(ws);
         var status: c_int = 0;
         if (c.waitpid(pid, &status, 0) == -1) {
             debug.err("waitpid failed", .{});
