@@ -141,7 +141,7 @@ clock = "#ac3232"       # Custom accent for clock segment
 # Bar layout
 # Anchors: left/center/right
 [bar.layout.left]
-segments = ["layout", "variations", "workspaces"]
+segments = ["workspaces", "layout", "variations"]
 
 [bar.layout.center]
 segments = ["title"]
