@@ -13,6 +13,7 @@ const bar        = @import("bar");
 const workspaces = @import("workspaces");
 const debug      = @import("debug");
 const minimize   = @import("minimize");
+const layouts    = @import("layouts");
 
 const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
@@ -146,6 +147,14 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     const c_hints = xcb.xcb_get_property(
         wm.conn, 0, win, xcb.XCB_ATOM_WM_HINTS, xcb.XCB_ATOM_WM_HINTS, 0, 9,
     );
+    // WM_NORMAL_HINTS: used to clamp tiled geometry to the window's declared
+    // minimum size.  Terminals set min_height = one character row; without this
+    // clamp they can receive invalid geometry.  Fired here with the other
+    // cookies — no extra round-trip cost.
+    const c_normal_hints = xcb.xcb_get_property(
+        wm.conn, 0, win,
+        xcb.XCB_ATOM_WM_NORMAL_HINTS, xcb.XCB_ATOM_ANY, 0, 18,
+    );
     // Fire _NET_WM_PID cookie so we can recover the spawn workspace from the
     // grandchild's process environment (HANA_SPAWN_WS set by executeShellCommand).
     // Fired here alongside the other cookies so all three land in the same write.
@@ -204,6 +213,10 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         // guarantees in-order processing within a connection, so the server
         // applies the geometry first — the window appears at its correct
         // tiled position with no intermediate geometry flash.
+        //
+        // Cache WM_NORMAL_HINTS before the first retile so configureSafe
+        // can clamp the geometry immediately.
+        collectAndCacheSizeHints(wm, win, c_normal_hints);
         setupTiling(wm, win, true);
         _ = xcb.xcb_map_window(wm.conn, win);
     } else {
@@ -223,6 +236,10 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         // setupTiling with on_current=false calls addWindow (registering the
         // window in s.windows, setting its border, marking dirty) but does NOT
         // call retileCurrentWorkspace — the current workspace is unaffected.
+        // Consume the WM_NORMAL_HINTS reply now so the reply queue stays
+        // clean.  The hints are cached and will be used when this workspace
+        // is first visited and retiled.
+        collectAndCacheSizeHints(wm, win, c_normal_hints);
         setupTiling(wm, win, false);
         grabButtons(wm, win, false);
     }
@@ -275,25 +292,56 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 /// the client must be told what geometry it actually has, or it may block
 /// waiting for an acknowledgement that never arrives.
 fn sendSyntheticConfigureNotify(wm: *WM, win: u32) void {
+    // Fast path: serve the geometry from the tiling cache — zero round-trips.
+    // Tiled windows always have a cache entry written by the last retile.
+    // Fullscreen windows are never in the geom cache, so they fall through to
+    // the live get_geometry query below (one blocking round-trip, rare).
+    if (tiling.getCachedGeom(win)) |rect| {
+        const border: u16 = if (tiling.getState()) |s| s.border_width else 0;
+        const ev = xcb.xcb_configure_notify_event_t{
+            .response_type     = xcb.XCB_CONFIGURE_NOTIFY,
+            .pad0              = 0,
+            .sequence          = 0,
+            .event             = win,
+            .window            = win,
+            .above_sibling     = xcb.XCB_NONE,
+            .x                 = rect.x,
+            .y                 = rect.y,
+            .width             = rect.width,
+            .height            = rect.height,
+            .border_width      = border,
+            .override_redirect = 0,
+            .pad1              = 0,
+        };
+        _ = xcb.xcb_send_event(
+            wm.conn, 0, win,
+            xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+            @ptrCast(&ev),
+        );
+        return;
+    }
+
+    // Slow path: fullscreen windows (or a cache miss on a newly-tiled window
+    // before the first retile).  One blocking round-trip.
     const reply = xcb.xcb_get_geometry_reply(
         wm.conn, xcb.xcb_get_geometry(wm.conn, win), null,
     ) orelse return;
     defer std.c.free(reply);
 
     const ev = xcb.xcb_configure_notify_event_t{
-        .response_type  = xcb.XCB_CONFIGURE_NOTIFY,
-        .pad0           = 0,
-        .sequence       = 0,
-        .event          = win,
-        .window         = win,
-        .above_sibling  = xcb.XCB_NONE,
-        .x              = reply.*.x,
-        .y              = reply.*.y,
-        .width          = reply.*.width,
-        .height         = reply.*.height,
-        .border_width   = reply.*.border_width,
+        .response_type     = xcb.XCB_CONFIGURE_NOTIFY,
+        .pad0              = 0,
+        .sequence          = 0,
+        .event             = win,
+        .window            = win,
+        .above_sibling     = xcb.XCB_NONE,
+        .x                 = reply.*.x,
+        .y                 = reply.*.y,
+        .width             = reply.*.width,
+        .height            = reply.*.height,
+        .border_width      = reply.*.border_width,
         .override_redirect = 0,
-        .pad1           = 0,
+        .pad1              = 0,
     };
     _ = xcb.xcb_send_event(
         wm.conn, 0, win,
@@ -453,6 +501,7 @@ fn unmanageWindow(wm: *WM, win: u32) void {
     // Update all bookkeeping state before the grab — no XCB calls here.
     if (wm.config.tiling.enabled) tiling.removeWindow(win);
     utils.uncacheWindowFocusProps(win);
+    layouts.evictSizeHints(win);
     workspaces.removeWindow(win);
     wm.removeWindow(win);
 
@@ -526,4 +575,54 @@ fn focusFallback(wm: *WM) void {
             return;
         }
     }
+}
+
+// WM_NORMAL_HINTS ─────────────────────────────────────────────────────────
+
+/// Parse a WM_NORMAL_HINTS reply and populate the layouts size-hints cache.
+/// XSizeHints wire layout (each field is one 32-bit CARD32):
+///   [0]       flags
+///   [1..4]    x, y, width, height  (deprecated USPosition/USSize — ignored)
+///   [5..6]    min_width, min_height          (PMinSize  = 0x010)
+///   [7..8]    max_width, max_height          (PMaxSize  = 0x020)
+///   [9..10]   width_inc, height_inc          (PResizeInc = 0x040)
+///   [11..14]  min/max aspect numerator/denom (PAspect  = 0x080)
+///   [15..16]  base_width, base_height        (PBaseSize = 0x100)
+///   [17]      win_gravity                    (PWinGravity = 0x200)
+///
+/// We cache min_width / min_height (and base_* as a fallback lower bound)
+/// so that configureSafe can clamp tiled rects to the window's minimums.
+fn collectAndCacheSizeHints(
+    wm:     *WM,
+    win:    u32,
+    cookie: xcb.xcb_get_property_cookie_t,
+) void {
+    const reply = xcb.xcb_get_property_reply(wm.conn, cookie, null) orelse return;
+    defer std.c.free(reply);
+    if (reply.*.format != 32 or reply.*.value_len < 5) return;
+
+    const vals: [*]const u32 = @ptrCast(@alignCast(xcb.xcb_get_property_value(reply)));
+    const len   = reply.*.value_len;
+    const flags = vals[0];
+
+    const P_MIN_SIZE:  u32 = 0x10;
+    const P_BASE_SIZE: u32 = 0x100;
+
+    var min_w: u16 = 0;
+    var min_h: u16 = 0;
+
+    if (flags & P_MIN_SIZE != 0 and len >= 7) {
+        min_w = @intCast(@min(vals[5], std.math.maxInt(u16)));
+        min_h = @intCast(@min(vals[6], std.math.maxInt(u16)));
+    }
+    // PBaseSize gives the zero-increment base; use it as an additional lower
+    // bound — some apps set base > min for character-cell sizing reasons.
+    if (flags & P_BASE_SIZE != 0 and len >= 17) {
+        const bw: u16 = @intCast(@min(vals[15], std.math.maxInt(u16)));
+        const bh: u16 = @intCast(@min(vals[16], std.math.maxInt(u16)));
+        if (bw > 0) min_w = @max(min_w, bw);
+        if (bh > 0) min_h = @max(min_h, bh);
+    }
+
+    layouts.cacheSizeHints(wm.allocator, win, .{ .min_width = min_w, .min_height = min_h });
 }

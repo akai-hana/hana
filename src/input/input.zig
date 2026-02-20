@@ -20,8 +20,8 @@ const WM         = defs.WM;
 const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("stdlib.h");
+    @cInclude("sys/wait.h");
 });
-extern "c" fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
 
 const MOUSE_BUTTON_LEFT:  u8 = 1;
 const MOUSE_BUTTON_RIGHT: u8 = 3;
@@ -77,7 +77,7 @@ inline fn makeHash(mods: u16, keysym: u32) u64 {
     return (@as(u64, mods) << 32) | keysym;
 }
 
-// Grab setup
+// Grab setup───
 
 /// Grabs Super+Button1 (move) and Super+Button3 (resize) on the root window.
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
@@ -92,7 +92,7 @@ pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
     utils.flush(conn);
 }
 
-// Event handlers 
+// Event handlers ────────────────────────────────────────────────────────────
 
 pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     wm.last_event_time = event.time;
@@ -164,42 +164,34 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
         std.c.free(reply);
 }
 
-// Window close
+// Window close─
 
+/// Ask `win` to close itself politely, or forcibly destroy it if it doesn't
+/// support WM_DELETE_WINDOW.  The WM_PROTOCOLS property was scanned at map
+/// time and cached, so this path never blocks on an X11 round-trip.
 fn closeWindow(wm: *WM, win: u32) void {
     if (win == wm.root) { debug.err("Attempted to close ROOT window!", .{}); return; }
 
-    const wm_protocols_atom = utils.getAtomCached("WM_PROTOCOLS") catch {
-        forceDestroyWindow(wm, win); return;
-    };
-    const wm_delete_atom = utils.getAtomCached("WM_DELETE_WINDOW") catch {
-        forceDestroyWindow(wm, win); return;
-    };
-
-    const prop_reply = xcb.xcb_get_property_reply(wm.conn,
-        xcb.xcb_get_property(wm.conn, 0, win, wm_protocols_atom, xcb.XCB_ATOM_ATOM, 0, 256), null);
-
-    if (prop_reply) |reply| {
-        defer std.c.free(reply);
-        const atoms: [*]const u32 = @ptrCast(@alignCast(xcb.xcb_get_property_value(reply)));
-        for (atoms[0..@intCast(reply.*.value_len)]) |atom| {
-            if (atom == wm_delete_atom) {
-                sendDeleteEvent(wm, win, wm_protocols_atom, wm_delete_atom);
-                return;
-            }
-        }
+    if (utils.supportsWMDeleteCached(wm.conn, win)) {
+        sendDeleteEvent(wm, win);
+    } else {
+        forceDestroyWindow(wm, win);
     }
-    forceDestroyWindow(wm, win);
 }
 
-fn sendDeleteEvent(wm: *WM, win: u32, protocols_atom: u32, delete_atom: u32) void {
+/// Send a WM_DELETE_WINDOW client message (ICCCM §4.1.2.7).
+/// Uses wm.last_event_time as the timestamp — ICCCM §4.1.7 requires the
+/// timestamp of the user action that triggered the close, not XCB_CURRENT_TIME.
+fn sendDeleteEvent(wm: *WM, win: u32) void {
+    const protocols_atom = utils.getAtomCached("WM_PROTOCOLS")    catch return;
+    const delete_atom    = utils.getAtomCached("WM_DELETE_WINDOW") catch return;
     var event = std.mem.zeroes(xcb.xcb_client_message_event_t);
     event.response_type  = xcb.XCB_CLIENT_MESSAGE;
     event.format         = 32;
     event.window         = win;
     event.type           = protocols_atom;
     event.data.data32[0] = delete_atom;
-    event.data.data32[1] = xcb.XCB_CURRENT_TIME;
+    event.data.data32[1] = wm.last_event_time;
     _ = xcb.xcb_send_event(wm.conn, 0, win, xcb.XCB_EVENT_MASK_NO_EVENT, @ptrCast(&event));
     utils.flush(wm.conn);
 }
@@ -209,7 +201,7 @@ fn forceDestroyWindow(wm: *WM, win: u32) void {
     utils.flush(wm.conn);
 }
 
-// Action dispatch 
+// Action dispatch ───────────────────────────────────────────────────────────
 
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
@@ -243,7 +235,7 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
     }
 }
 
-// Shell execution 
+// Shell execution ───────────────────────────────────────────────────────────
 
 /// Spawns `cmd` via a double-fork so the child is re-parented to init and
 /// the WM never needs to reap it.
@@ -283,7 +275,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
         std.process.exit(0);
     } else if (pid > 0) {
         var status: c_int = 0;
-        if (waitpid(pid, &status, 0) == -1) {
+        if (c.waitpid(pid, &status, 0) == -1) {
             debug.err("waitpid failed", .{});
             return error.WaitpidFailed;
         }
@@ -293,7 +285,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
     }
 }
 
-// Diagnostics
+// Diagnostics──
 
 fn dumpState(wm: *WM) void {
     debug.info("========== STATE DUMP ==========", .{});
