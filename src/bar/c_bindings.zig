@@ -7,7 +7,7 @@ const xcb_connection_t = defs.xcb.xcb_connection_t;
 const xcb_drawable_t   = defs.xcb.xcb_drawable_t;
 const xcb_visualtype_t = defs.xcb.xcb_visualtype_t;
 
-// Cairo───────
+// Cairo
 
 pub const cairo_surface_t = opaque {};
 pub const cairo_t         = opaque {};
@@ -88,7 +88,7 @@ pub extern fn cairo_restore(cr: *cairo_t) void;
 pub extern fn cairo_set_operator(cr: *cairo_t, op: cairo_operator_t) void;
 pub extern fn cairo_paint(cr: *cairo_t) void;
 
-// Pango───────
+// Pango
 
 pub const PangoLayout          = opaque {};
 pub const PangoContext         = opaque {};
@@ -147,7 +147,7 @@ pub extern fn pango_font_metrics_unref(metrics: *PangoFontMetrics) void;
 
 pub extern fn g_object_unref(object: *anyopaque) void;
 
-// xcb-cursor ──────────────────────────────────────────────────────────────────
+// xcb-cursor 
 //
 // Wraps libXcursor for XCB callers.  Reads Xcursor.theme and Xcursor.size
 // from Xresources so themed cursors are loaded correctly.

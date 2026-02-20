@@ -78,7 +78,7 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
     if (on_current) tiling.retileCurrentWorkspace(wm);
 }
 
-// Spawn workspace recovery ─────────────────────────────────────────────────
+// Spawn workspace recovery 
 
 /// Collect the _NET_WM_PID reply and read HANA_SPAWN_WS from the process
 /// environment via /proc/pid/environ.  Returns the workspace index the window
