@@ -51,6 +51,9 @@ pub const DrawContext = struct {
     transparency:      f32                       = 1.0,
     cached_metrics:    ?struct { ascent: i16, descent: i16 } = null,
     last_color:        ?u32                      = null,
+    /// Cached GC foreground color — skips xcb_change_gc when color is unchanged.
+    /// Mirrors last_color but for the XCB GC used by fillRect rather than Cairo.
+    last_gc_color:     ?u32                      = null,
 
     /// Creates a DrawContext on the default root visual.
     pub fn init(
@@ -209,7 +212,10 @@ pub const DrawContext = struct {
     /// Fills a rectangle using XCB (bypasses Cairo — used for solid bar backgrounds).
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
         const final_color = self.applyTransparency(color);
-        _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
+        if (self.last_gc_color != final_color) {
+            _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
+            self.last_gc_color = final_color;
+        }
         const rect = defs.xcb.xcb_rectangle_t{
             .x = @intCast(x), .y = @intCast(y), .width = width, .height = height,
         };

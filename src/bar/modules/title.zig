@@ -102,32 +102,82 @@ fn drawSegmentedTitles(
     allocator:      std.mem.Allocator,
     scaled_padding: u16,
 ) !void {
-    var window_infos = std.ArrayList(WindowInfo){};
-    defer {
-        for (window_infos.items) |info| {
-            // Only free heap-allocated titles; empty string "" is a literal.
-            if (info.title.len > 0) allocator.free(info.title);
+    const win_items = workspace.windows.items();
+    if (win_items.len == 0) return;
+
+    // Cap at 128 — more windows than this on one workspace is not realistic.
+    const MAX_WINS: usize = 128;
+    const n_wins = @min(win_items.len, MAX_WINS);
+
+    // ── Phase 1: pipeline all _NET_WM_NAME cookies in a single write pass ──
+    // For each window we fire the cookie without waiting for a reply, so the
+    // X server can process all requests concurrently.  The read pass below then
+    // collects replies in order — turning N serial round-trips into one batch.
+    var net_cookies: [MAX_WINS]xcb.xcb_get_property_cookie_t = undefined;
+    const net_atom = net_wm_name orelse 0;
+    const utf_type = utf8_string orelse xcb.XCB_ATOM_STRING;
+    if (net_atom != 0) {
+        for (win_items[0..n_wins], 0..) |win, i| {
+            net_cookies[i] = xcb.xcb_get_property(wm.conn, 0, win, net_atom, utf_type, 0, 8192);
         }
-        window_infos.deinit(allocator);
     }
 
-    for (workspace.windows.items()) |win| {
+    // ── Phase 2: collect _NET_WM_NAME replies; queue WM_NAME fallbacks ──
+    // We allocate titles as heap slices; a null entry means "needs WM_NAME fallback".
+    var titles:   [MAX_WINS]?[]const u8                 = @splat(null);
+    var fb_cookies: [MAX_WINS]xcb.xcb_get_property_cookie_t = undefined;
+    var needs_fb: [MAX_WINS]bool                        = @splat(false);
+
+    for (win_items[0..n_wins], 0..) |win, i| {
+        got: {
+            if (net_atom != 0) {
+                const r = xcb.xcb_get_property_reply(wm.conn, net_cookies[i], null) orelse break :got;
+                defer std.c.free(r);
+                const len = xcb.xcb_get_property_value_length(r);
+                if (len > 0) {
+                    const ptr: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(r));
+                    titles[i] = try allocator.dupe(u8, ptr[0..@intCast(len)]);
+                    break :got;
+                }
+            }
+            // _NET_WM_NAME was absent or empty — queue WM_NAME fallback.
+            fb_cookies[i] = xcb.xcb_get_property(
+                wm.conn, 0, win, xcb.XCB_ATOM_WM_NAME, xcb.XCB_ATOM_STRING, 0, 8192);
+            needs_fb[i] = true;
+        }
+    }
+
+    // ── Phase 3: collect WM_NAME fallback replies (subset only) ──
+    for (0..n_wins) |i| {
+        if (!needs_fb[i]) continue;
+        const r = xcb.xcb_get_property_reply(wm.conn, fb_cookies[i], null) orelse continue;
+        defer std.c.free(r);
+        const len = xcb.xcb_get_property_value_length(r);
+        if (len > 0) {
+            const ptr: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(r));
+            titles[i] = try allocator.dupe(u8, ptr[0..@intCast(len)]);
+        }
+    }
+    defer for (titles[0..n_wins]) |t| if (t) |s| allocator.free(s);
+
+    // ── Build WindowInfo list and sort ──
+    // WindowInfo.title borrows from titles[]; the defer above owns the memory.
+    var window_infos = std.ArrayList(WindowInfo){};
+    defer window_infos.deinit(allocator);
+
+    for (win_items[0..n_wins], 0..) |win, i| {
         const is_min   = minimize.isMinimized(win);
-        // Fast path: serve position from the tiling geometry cache — zero X round-trips.
-        // The cache is written by every retile, so tiled windows always have an entry.
-        // Floating (non-tiled) windows fall back to a live xcb_get_geometry query.
-        // Minimized windows get sentinel coords so they sort to the end.
         const geom: WindowGeometry = if (!is_min) blk: {
             if (tiling.getCachedGeom(win)) |rect|
                 break :blk .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
             break :blk getWindowGeometry(wm.conn, win) catch continue;
         } else .{ .x = std.math.maxInt(i16), .y = std.math.maxInt(i16), .width = 0, .height = 0 };
-        const title = getWindowTitle(wm.conn, win, allocator) catch null;
+
         try window_infos.append(allocator, .{
             .window    = win,
             .x         = geom.x,
             .y         = geom.y,
-            .title     = title orelse "",
+            .title     = titles[i] orelse "",
             .minimized = is_min,
         });
     }
@@ -136,15 +186,14 @@ fn drawSegmentedTitles(
 
     std.mem.sort(WindowInfo, window_infos.items, {}, compareWindows);
 
-    const num_windows:    u32 = @intCast(window_infos.items.len);
+    const num_windows:   u32 = @intCast(window_infos.items.len);
     const segment_width: u16 = @intCast(@divFloor(@as(u32, width), num_windows));
     if (segment_width == 0) return;
 
     for (window_infos.items, 0..) |info, i| {
-        const segment_x       = start_x + @as(u16, @intCast(@as(u32, @intCast(i)) * segment_width));
-        const is_focused_win  = wm.focused_window == info.window;
+        const segment_x      = start_x + @as(u16, @intCast(@as(u32, @intCast(i)) * segment_width));
+        const is_focused_win = wm.focused_window == info.window;
 
-        // Colour priority: focused > minimized > unfocused.
         const accent = if (is_focused_win)  config.getTitleAccent()
             else if (info.minimized)         config.getTitleMinimizedAccent()
             else                             config.getTitleUnfocusedAccent();
