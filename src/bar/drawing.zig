@@ -225,12 +225,14 @@ pub const DrawContext = struct {
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
         self.setColor(color);
         self.setPangoText(text);
-        // Use the cached ascent rather than calling pango_layout_get_baseline on
-        // every draw — the value is identical for single-line fixed-font text,
-        // and getMetrics() is free after the first call.
-        // This also keeps drawText consistent with drawTextEllipsis.
-        const asc, _ = self.getMetrics();
-        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - @as(f64, @floatFromInt(asc)));
+        // pango_layout_get_baseline returns the baseline of the first line of
+        // the specific text just set.  This is script-aware — CJK and other
+        // non-Latin scripts may position their baseline differently than the
+        // font's general ascent metric, so we must query per-layout rather than
+        // using the cached getMetrics() ascent.
+        const baseline_px = @as(f64, @floatFromInt(c.pango_layout_get_baseline(self.pango_layout)))
+            / @as(f64, @floatFromInt(c.PANGO_SCALE));
+        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - baseline_px);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
     }
 
