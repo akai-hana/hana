@@ -75,7 +75,6 @@ const AtomCache = struct {
     net_wm_name:   u32,
     utf8_string:   u32,
     wm_class:      u32,
-    net_wm_pid:    u32,
 };
 
 var atom_cache: ?AtomCache = null;
@@ -86,7 +85,6 @@ pub fn initAtomCache(conn: *xcb.xcb_connection_t) !void {
     const names = [_][]const u8{
         "WM_PROTOCOLS", "WM_DELETE_WINDOW", "WM_TAKE_FOCUS",
         "_NET_WM_NAME",  "UTF8_STRING",      "WM_CLASS",
-        "_NET_WM_PID",
     };
     var cookies: [names.len]xcb.xcb_intern_atom_cookie_t = undefined;
     for (&cookies, names) |*c, name|
@@ -106,7 +104,6 @@ pub fn initAtomCache(conn: *xcb.xcb_connection_t) !void {
         .net_wm_name   = values[3],
         .utf8_string   = values[4],
         .wm_class      = values[5],
-        .net_wm_pid    = values[6],
     };
 }
 
@@ -129,7 +126,7 @@ pub fn getAtomCached(comptime name: []const u8) error{AtomCacheNotInitialized}!u
     // An unknown name produces a build error rather than a silent runtime failure.
     const AtomName = enum {
         @"WM_PROTOCOLS", @"WM_DELETE_WINDOW", @"WM_TAKE_FOCUS",
-        @"_NET_WM_NAME", @"UTF8_STRING", @"WM_CLASS", @"_NET_WM_PID",
+        @"_NET_WM_NAME", @"UTF8_STRING", @"WM_CLASS",
     };
     const field = comptime (std.meta.stringToEnum(AtomName, name) orelse
         @compileError("atom not in cache: " ++ name));
@@ -140,7 +137,6 @@ pub fn getAtomCached(comptime name: []const u8) error{AtomCacheNotInitialized}!u
         .@"_NET_WM_NAME"     => cache.net_wm_name,
         .@"UTF8_STRING"      => cache.utf8_string,
         .@"WM_CLASS"         => cache.wm_class,
-        .@"_NET_WM_PID"      => cache.net_wm_pid,
     };
 }
 

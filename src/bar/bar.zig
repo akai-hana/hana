@@ -10,6 +10,7 @@ const tiling     = @import("tiling");
 const debug      = @import("debug");
 const cache      = @import("cache");
 const workspaces = @import("workspaces");
+const constants  = @import("constants");
 
 const workspaces_segment = @import("tags");
 const layout_segment     = @import("layout");
@@ -769,7 +770,7 @@ fn retileAllWorkspacesNoGrab(wm: *defs.WM) void {
         if (@as(u8, @intCast(idx)) != original_ws) {
             for (ws.windows.items()) |win| {
                 _ = xcb.xcb_configure_window(wm.conn, win,
-                    xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, -4000))});
+                    xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
                 tiling.invalidateGeomCache(win);
             }
         }
