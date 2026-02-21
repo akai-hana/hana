@@ -7,14 +7,18 @@ const drawing    = @import("drawing");
 const workspaces = @import("workspaces");
 const utils      = @import("utils");
 const minimize   = @import("minimize");
+const tiling     = @import("tiling");
 
 var net_wm_name: ?u32 = null;
 var utf8_string: ?u32 = null;
 
-/// Lazily resolves title-related atoms. Safe to call on every draw after first load.
-fn ensureAtoms(conn: *xcb.xcb_connection_t) void {
-    net_wm_name = net_wm_name orelse utils.getAtom(conn, "_NET_WM_NAME") catch null;
-    utf8_string = utf8_string orelse utils.getAtom(conn, "UTF8_STRING")  catch xcb.XCB_ATOM_STRING;
+/// Resolves title-related atoms from the pre-populated atom cache.
+/// Zero X round-trips — both atoms are interned at startup in utils.initAtomCache.
+/// Safe to call on every draw; the null-check makes repeated calls free.
+fn ensureAtoms() void {
+    if (net_wm_name != null) return;
+    net_wm_name = utils.getAtomCached("_NET_WM_NAME") catch null;
+    utf8_string  = utils.getAtomCached("UTF8_STRING")  catch null;
 }
 
 const WindowInfo = struct {
@@ -109,11 +113,15 @@ fn drawSegmentedTitles(
 
     for (workspace.windows.items()) |win| {
         const is_min   = minimize.isMinimized(win);
-        // Minimized windows are off-screen; use sentinel geometry to sort them last.
-        const geom: WindowGeometry = if (!is_min)
-            getWindowGeometry(wm.conn, win) catch continue
-        else
-            .{ .x = std.math.maxInt(i16), .y = std.math.maxInt(i16), .width = 0, .height = 0 };
+        // Fast path: serve position from the tiling geometry cache — zero X round-trips.
+        // The cache is written by every retile, so tiled windows always have an entry.
+        // Floating (non-tiled) windows fall back to a live xcb_get_geometry query.
+        // Minimized windows get sentinel coords so they sort to the end.
+        const geom: WindowGeometry = if (!is_min) blk: {
+            if (tiling.getCachedGeom(win)) |rect|
+                break :blk .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+            break :blk getWindowGeometry(wm.conn, win) catch continue;
+        } else .{ .x = std.math.maxInt(i16), .y = std.math.maxInt(i16), .width = 0, .height = 0 };
         const title = getWindowTitle(wm.conn, win, allocator) catch null;
         try window_infos.append(allocator, .{
             .window    = win,
@@ -185,7 +193,7 @@ fn fetchProperty(conn: *xcb.xcb_connection_t, win: u32, atom: u32, atom_type: u3
 /// Fetches `_NET_WM_NAME` (UTF-8), falling back to `WM_NAME` (Latin-1).
 /// Returns null when neither property is set.
 fn getWindowTitle(conn: *xcb.xcb_connection_t, window: u32, allocator: std.mem.Allocator) !?[]const u8 {
-    ensureAtoms(conn);
+    ensureAtoms();
     if (net_wm_name) |atom| {
         if (try fetchProperty(conn, window, atom, utf8_string.?, allocator)) |t| return t;
     }
@@ -207,10 +215,10 @@ fn getFocusedWindowTitle(
 
     if (cached_title_window.* == win and cached_title.items.len > 0) return cached_title.items;
 
-    ensureAtoms(wm.conn);
+    ensureAtoms();
 
     if (net_wm_name) |atom| {
-        const title = try utils.fetchPropertyToBuffer(wm.conn, win, atom, utf8_string.?, cached_title, allocator);
+        const title = try utils.fetchPropertyToBuffer(wm.conn, win, atom, utf8_string orelse xcb.XCB_ATOM_STRING, cached_title, allocator);
         if (title.len > 0) { cached_title_window.* = win; return title; }
     }
 
