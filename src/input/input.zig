@@ -7,13 +7,13 @@ const utils      = @import("utils");
 const focus      = @import("focus");
 const tiling     = @import("tiling");
 const workspaces = @import("workspaces");
-const filters    = @import("filters");
 const drag       = @import("drag");
 const fullscreen = @import("fullscreen");
 const bar        = @import("bar");
 const window     = @import("window");
 const debug      = @import("debug");
 const minimize   = @import("minimize");
+const lifecycle  = @import("lifecycle");
 const xcb        = defs.xcb;
 const WM         = defs.WM;
 
@@ -30,11 +30,10 @@ const MOUSE_BUTTONS = [_]u8{ MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT };
 // Keybind state
 
 const KeybindState = struct {
-    map:       std.AutoHashMap(u64, *const defs.Action),
-    allocator: std.mem.Allocator,
+    map: std.AutoHashMap(u64, *const defs.Action),
 
     fn init(allocator: std.mem.Allocator) KeybindState {
-        return .{ .map = std.AutoHashMap(u64, *const defs.Action).init(allocator), .allocator = allocator };
+        return .{ .map = std.AutoHashMap(u64, *const defs.Action).init(allocator) };
     }
 
     fn deinit(self: *KeybindState) void { self.map.deinit(); }
@@ -60,7 +59,7 @@ pub fn init(wm: *WM) void {
     keybind_state = state;
 }
 
-pub fn deinit(_: *WM) void {
+pub fn deinit() void {
     if (keybind_state) |*state| { state.deinit(); keybind_state = null; }
 }
 
@@ -77,7 +76,7 @@ inline fn makeHash(mods: u16, keysym: u32) u64 {
     return (@as(u64, mods) << 32) | keysym;
 }
 
-// Grab setup───
+// Grab setup
 
 /// Grabs Super+Button1 (move) and Super+Button3 (resize) on the root window.
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
@@ -92,7 +91,7 @@ pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
     utils.flush(conn);
 }
 
-// Event handlers ────────────────────────────────────────────────────────────
+// Event handlers 
 
 pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     wm.last_event_time = event.time;
@@ -124,9 +123,9 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
         return;
     }
 
-    const managed_window = utils.findManagedWindow(wm.conn, clicked_window, wm);
+    const managed_window = utils.findManagedWindow(wm.conn, clicked_window, workspaces.isManaged);
 
-    if (managed_window == 0 or managed_window == wm.root or !wm.hasWindow(managed_window)) {
+    if (managed_window == 0 or managed_window == wm.root or workspaces.getWorkspaceForWindow(managed_window) == null) {
         _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, xcb.XCB_CURRENT_TIME);
         utils.flush(wm.conn);
         return;
@@ -164,7 +163,7 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
         std.c.free(reply);
 }
 
-// Window close─
+// Window close
 
 /// Ask `win` to close itself politely, or forcibly destroy it if it doesn't
 /// support WM_DELETE_WINDOW.  The WM_PROTOCOLS property was scanned at map
@@ -201,7 +200,7 @@ fn forceDestroyWindow(wm: *WM, win: u32) void {
     utils.flush(wm.conn);
 }
 
-// Action dispatch ───────────────────────────────────────────────────────────
+// Action dispatch 
 
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
@@ -209,15 +208,15 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .close_window           => { if (wm.focused_window) |win| closeWindow(wm, win); },
         .reload_config          => {
             debug.info("[RELOAD] flag set by keybinding", .{});
-            wm.should_reload_config.store(true, .release);
+            lifecycle.reload();
         },
-        .toggle_layout          => { tiling.toggleLayout(wm);        bar.redrawImmediate(wm); },
-        .toggle_layout_reverse  => { tiling.toggleLayoutReverse(wm); bar.redrawImmediate(wm); },
+        .toggle_layout          => tiling.toggleLayout(wm),
+        .toggle_layout_reverse  => tiling.toggleLayoutReverse(wm),
         .toggle_bar_visibility  => bar.setBarState(wm, .toggle),
         .toggle_bar_position    => bar.toggleBarPosition(wm) catch |err|
             debug.warn("Failed to toggle bar position: {}", .{err}),
-        .increase_master        => tiling.increaseMasterWidth(wm),
-        .decrease_master        => tiling.decreaseMasterWidth(wm),
+        .increase_master        => tiling.increaseMasterWidth(),
+        .decrease_master        => tiling.decreaseMasterWidth(),
         .increase_master_count  => tiling.increaseMasterCount(wm),
         .decrease_master_count  => tiling.decreaseMasterCount(wm),
         .toggle_tiling          => tiling.toggleTiling(wm),
@@ -231,11 +230,11 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .unminimize_all         => minimize.unminimizeAll(wm),
         .exec                   => |cmd| try executeShellCommand(wm, cmd),
         .switch_workspace       => |ws| workspaces.switchTo(wm, ws),
-        .move_to_workspace      => |ws| { if (wm.focused_window) |win| workspaces.moveWindowTo(wm, win, ws); },
+        .move_to_workspace      => |ws| { if (wm.focused_window) |win| workspaces.moveWindowTo(wm, win, ws) catch |e| debug.warnOnErr(e, "move_to_workspace"); },
     }
 }
 
-// Shell execution ───────────────────────────────────────────────────────────
+// Shell execution 
 
 /// Spawns `cmd` via a double-fork so the child is re-parented to init and
 /// the WM never needs to reap it.
@@ -273,12 +272,13 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
     }
 }
 
-// Diagnostics──
+// Diagnostics
 
 fn dumpState(wm: *WM) void {
     debug.info("========== STATE DUMP ==========", .{});
     debug.info("Focused: {?x}",         .{wm.focused_window});
-    debug.info("Total windows: {}",     .{wm.windows.count()});
+    const win_count = if (workspaces.getState()) |s| s.window_to_workspace.count() else 0;
+    debug.info("Total windows: {}",     .{win_count});
     debug.info("Suppress focus: {s}",   .{@tagName(wm.suppress_focus_reason)});
 
     var fs_it = wm.fullscreen.per_workspace.iterator();

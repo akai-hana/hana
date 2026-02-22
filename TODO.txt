@@ -1,33 +1,11 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing 
 
-when i remove a tiling layout from src/tiling/layouts/, i want the program to still compile regardless. can you please solve this?
-install
-└─ install hana
-   └─ compile exe hana ReleaseFast native 1 errors
-src/tiling/tiling.zig:20:34: error: no module named 'fibonacci' available within module 'tiling'
-const fibonacci_layout = @import("fibonacci");
-                                 ^~~~~~~~~~~
-referenced by:
-    retile: src/tiling/tiling.zig:488:49
-    retileIfDirty: src/tiling/tiling.zig:455:11
-    5 reference(s) hidden; use '-freference-trace=7' to see all references
-error: 1 compilation errors
+if i have two windows open in one workspace, of two different programs, and then i kill one of those windows from a different workspace (say, by using pkill or killall), i want the geometry of that workspace to be updated at that moment. currently, the tiling doesn't update until i manually switch to that workspace, which causes a slight flicker effect. this is why i want tiling to be handled automatically the moment i kill that window, so that when i switch to that workspace, everything is already tiled properly, and i don't see any flicker. can you please achieve this? thanks.
+
+when i spawn or kill a window, i want that to happen at the same time that the retiling of all windows happen. what i mean is, wait before everything is fully done before sending the x server a signal to update its screen. this way, everything happens at the same time and the user doesn't see a flicker in-between these process. can you please do this? thanks.
 
 i want you to improve the efficiency of the bar redraws. currently, when i focus from one window to another, the entire bar gets re-drawn, including all segments of all currently opened windows. instead, i want it to behave like this: when i focus from one window to another, make it so that the previously focused window ONLY gets its background color changed from focused accent color to unfocused color, and the newly focused window the opposite, from unfocused to focused background color. only these two should be updated, from their current state to the opposite, and no other title segments of other unrelated windows should change; this is to prevent flickering across the whole bar just because i focus between windows, and also to prevent computational resources being mis-used, making the wm both smoother and more efficient in resource utilization.
-
-can you please fix the following edge case on my window manager?
-- open two windows in a workspace
-- send one window to another workspace
-- switch to that workspace
-now, the window i sent over this workspace appears tiled onto the right half of my display, even though it's the only window in the workspace. if i go to a different workspace and come back, it'll fix itself and be tiled properly.
-why is this the case? can you please identify and fix the root issue? thanks.
-
-make cursor from xresources be used instead of default x11; hovering root window shows the normal xorg tiny cursor, while hovering over any other window it shows my custom cursor i configured. in dwm this isn't the case, so could it be something my wm's missing somewhere? can you please add it?
-
-when i un-fullscreen a window, i want to avoid cursor stealing focus if it lands on any window other than the one i was fullscreened into. also, when i alt+tab (swap master and slave in stack) while focused on a master window, the master window gets moved to stack and focus is kept to that window, but if i swap slave to master, the cursor steals focus if it's located on top of another window. i don't want focus to be stolen in this case either. can you please place in the required guardrails to prevent these particular focus-stealing edge cases?
-
-is the "marking as dirty" solution we have right now on some parts of the code optimal? it's the only solution that came to mind, but i was wondering if there was a more optimal solution, either that improves responsiveness/performance or that makes the code leaner/more readable/easier to understand...
 
 LONG TERM: code a similar tool to drun, replace it instead of rofi in config.toml
 

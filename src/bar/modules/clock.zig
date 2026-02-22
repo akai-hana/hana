@@ -56,7 +56,7 @@ fn setTimerState(enable: bool) void {
 
 /// Recalculates whether the timer should run and applies the change.
 /// Call when bar visibility changes or the config is reloaded.
-pub fn updateTimerState(_: *defs.WM) void {
+pub fn updateTimerState() void {
     setTimerState(shouldClockRun());
 }
 

@@ -336,22 +336,24 @@ pub const Config = struct {
     }
 };
 
+/// Geometry snapshot used by both fullscreen and minimize — single definition
+/// instead of three near-identical private structs scattered across modules.
+pub const WindowGeometry = struct {
+    x:            i16,
+    y:            i16,
+    width:        u16,
+    height:       u16,
+    border_width: u16,
+};
+
 pub const FullscreenInfo = struct {
-    window: u32, // XCB window ID - must be u32
-    workspace: u8,
-    saved_geometry: struct {
-        x: i16, // Screen coordinates can be negative
-        y: i16,
-        width: u16, // Dimensions are always positive
-        height: u16,
-        border_width: u16,
-    },
+    window:         u32,          // XCB window ID - must be u32
+    saved_geometry: WindowGeometry,
 };
 
 pub const FullscreenState = struct {
-    per_workspace: std.AutoHashMap(u8, FullscreenInfo),
+    per_workspace:       std.AutoHashMap(u8, FullscreenInfo),
     window_to_workspace: std.AutoHashMap(u32, u8),
-    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) FullscreenState {
         var per_ws = std.AutoHashMap(u8, FullscreenInfo).init(allocator);
@@ -359,9 +361,8 @@ pub const FullscreenState = struct {
         var win_to_ws = std.AutoHashMap(u32, u8).init(allocator);
         win_to_ws.ensureTotalCapacity(4) catch {};
         return .{
-            .per_workspace = per_ws,
+            .per_workspace       = per_ws,
             .window_to_workspace = win_to_ws,
-            .allocator = allocator,
         };
     }
 
@@ -418,19 +419,16 @@ pub const FocusSuppressReason = enum {
 };
 
 pub const WM = struct {
-    allocator: std.mem.Allocator,
-    conn: *xcb.xcb_connection_t,
-    screen: *xcb.xcb_screen_t,
-    root: u32, // XCB window ID - must be u32
-    config: Config,
-    windows: std.AutoHashMap(u32, void), // u32 for XCB window IDs
+    allocator:      std.mem.Allocator,
+    conn:           *xcb.xcb_connection_t,
+    screen:         *xcb.xcb_screen_t,
+    root:           u32, // XCB window ID - must be u32
+    config:         Config,
     focused_window: ?u32 = null,
-    fullscreen: FullscreenState,
-    xkb_state: ?*xkbcommon.XkbState,
-    should_reload_config: *std.atomic.Value(bool),
-    running: *std.atomic.Value(bool),
-    dpi_info: dpi.DpiInfo,
-    drag_state: DragState = .{},
+    fullscreen:     FullscreenState,
+    xkb_state:      ?*xkbcommon.XkbState,
+    dpi_info:       dpi.DpiInfo,
+    drag_state:     DragState = .{},
     // Timestamp of the last processed X event; used for ICCCM-compliant
     // focus requests — xcb_set_input_focus and WM_TAKE_FOCUS messages must
     // carry the triggering event's timestamp, not XCB_CURRENT_TIME (0).
@@ -447,19 +445,6 @@ pub const WM = struct {
 
     pub fn deinit(self: *WM) void {
         self.fullscreen.deinit();
-        self.windows.deinit();
         self.config.deinit(self.allocator);
-    }
-
-    pub inline fn hasWindow(self: *WM, window_id: u32) bool {
-        return self.windows.contains(window_id);
-    }
-
-    pub fn addWindow(self: *WM, window_id: u32) !void {
-        try self.windows.put(window_id, {});
-    }
-
-    pub fn removeWindow(self: *WM, window_id: u32) void {
-        _ = self.windows.remove(window_id);
     }
 };
