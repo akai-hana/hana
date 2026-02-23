@@ -118,7 +118,11 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     const clicked_window = if (event.child != 0) event.child else event.event;
 
     if (clicked_window == 0 or clicked_window == wm.root) {
-        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, xcb.XCB_CURRENT_TIME);
+        // XCB_ALLOW_REPLAY_POINTER must carry the timestamp of the frozen event
+        // so the server can identify which passive-grab event to replay.
+        // XCB_CURRENT_TIME (0) does not match the stored timestamp and can cause
+        // the click to be silently discarded rather than delivered to the window.
+        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, event.time);
         utils.flush(wm.conn);
         return;
     }
@@ -126,7 +130,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     const managed_window = utils.findManagedWindow(wm.conn, clicked_window, workspaces.isManaged);
 
     if (managed_window == 0 or managed_window == wm.root or workspaces.getWorkspaceForWindow(managed_window) == null) {
-        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, xcb.XCB_CURRENT_TIME);
+        _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER, event.time);
         utils.flush(wm.conn);
         return;
     }
@@ -139,8 +143,12 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     }
 
     // Release the SYNC grab so events are not permanently frozen.
-    _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER,  xcb.XCB_CURRENT_TIME);
-    _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_KEYBOARD, xcb.XCB_CURRENT_TIME);
+    // Both calls must carry the original event timestamp — XCB_ALLOW_REPLAY_POINTER
+    // uses it to identify which frozen button-press event should be replayed to the
+    // target window.  XCB_CURRENT_TIME (0) does not match the server's stored event
+    // timestamp, which can cause the click to be silently dropped.
+    _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_REPLAY_POINTER,  event.time);
+    _ = xcb.xcb_allow_events(wm.conn, xcb.XCB_ALLOW_ASYNC_KEYBOARD, event.time);
     utils.flush(wm.conn);
 }
 
@@ -210,8 +218,8 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             debug.info("[RELOAD] flag set by keybinding", .{});
             lifecycle.reload();
         },
-        .toggle_layout          => tiling.toggleLayout(wm),
-        .toggle_layout_reverse  => tiling.toggleLayoutReverse(wm),
+        .toggle_layout          => { tiling.toggleLayout(wm);        bar.redrawImmediate(wm); },
+        .toggle_layout_reverse  => { tiling.toggleLayoutReverse(wm); bar.redrawImmediate(wm); },
         .toggle_bar_visibility  => bar.setBarState(wm, .toggle),
         .toggle_bar_position    => bar.toggleBarPosition(wm) catch |err|
             debug.warn("Failed to toggle bar position: {}", .{err}),

@@ -222,12 +222,13 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     collectAndCacheSizeHints(wm, win, c_normal_hints);
 
     if (is_current) {
-        // Queue the tiled geometry configure BEFORE the map command.  XCB
-        // guarantees in-order processing within a connection, so the server
-        // applies the geometry first — the window appears at its correct
-        // tiled position with no intermediate geometry flash.
+        // Freeze the compositor for the duration of retile + map so picom never
+        // composites a frame where the existing windows have been repositioned
+        // but the new window has not yet appeared (or vice-versa).
+        _ = xcb.xcb_grab_server(wm.conn);
         setupTiling(wm, win, true);
         _ = xcb.xcb_map_window(wm.conn, win);
+        _ = xcb.xcb_ungrab_server(wm.conn);
     } else {
         // Window belongs to a different workspace — do not map it yet.
         // executeSwitch() maps it inside a server grab when its workspace is
@@ -247,10 +248,26 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         // call retileCurrentWorkspace — the current workspace is unaffected.
         setupTiling(wm, win, false);
         grabButtons(wm, win, false);
+
+        // Pre-compute the correct tiled geometry for the inactive workspace now,
+        // so that restoreWorkspaceGeom can take its fast path when the user
+        // switches to it — no mid-switch layout run, no flash.
+        //
+        // This mirrors the inactive-workspace kill fix in unmanageWindow: addWindow
+        // set s.dirty, which would cause restoreWorkspaceGeom to fall back to a
+        // full retile at switch time.  Calling retileInactiveWorkspace inside a
+        // grab here clears dirty and populates the geom cache with the correct
+        // positions (including the new window), then pushes them back offscreen.
+        if (wm.config.tiling.enabled) {
+            _ = xcb.xcb_grab_server(wm.conn);
+            tiling.retileInactiveWorkspace(wm, validated_ws);
+            _ = xcb.xcb_ungrab_server(wm.conn);
+        }
     }
 
-    // Single flush covers: change_window_attributes + focus cookies +
-    // (for is_current) all configure_window calls + map_window.
+    // Single flush delivers the entire batch: change_window_attributes, focus
+    // cookies, and for is_current: grab + retile + map + ungrab — all in one
+    // syscall.  For the inactive path: border set + retileInactiveWorkspace.
     utils.flush(wm.conn);
 
     // Collect focus property replies.  On the no-rules path these were
@@ -260,23 +277,23 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     utils.populateFocusCacheFromCookies(wm.conn, win, c_protocols, c_hints);
 
     if (is_current) {
+        // Second grab: focus the new window and redraw the bar atomically so
+        // picom never composites a frame where the window is mapped and tiled
+        // but the bar still shows the old focused title and workspace state.
+        // The focus property cookies were collected above (round-trips done),
+        // so setFocus has everything it needs without any further blocking.
+        _ = xcb.xcb_grab_server(wm.conn);
         focus.setFocus(wm, win, .window_spawn);
+        bar.redrawImmediate(wm);
+        _ = xcb.xcb_ungrab_server(wm.conn);
+        utils.flush(wm.conn);
 
-        // The flush above has already delivered all configure_window calls to
-        // the X server, so its hit-testing reflects the post-retile layout.
-        // If the cursor is now inside a tiled window (child != 0) it means it
-        // was previously sitting in a gap that the retile just covered.  The
-        // X server will fire two crossing events — LeaveNotify on root and
-        // EnterNotify on the newly covering window — both of which would
-        // otherwise steal focus away from the just-spawned window.  Bump the
-        // suppression counter so both are absorbed rather than just the first.
-        // Record where the cursor is the moment the window spawns.
-        // handleEnterNotify / handleLeaveNotify compare incoming events against
-        // this position: events with matching coords are retile side-effects
-        // (the window layout shifted under a stationary cursor) and are silently
-        // dropped.  The first crossing event whose coords differ means the cursor
-        // genuinely moved, so suppression lifts automatically — regardless of how
-        // many spurious events the X server generates before then.
+        // The flush above has delivered all configure_window calls to the X
+        // server, so its hit-testing reflects the post-retile layout.
+        // Record where the cursor is the moment the window spawns so that
+        // handleEnterNotify / handleLeaveNotify can distinguish retile-induced
+        // crossings (cursor stationary, layout shifted under it) from genuine
+        // movement and suppress only the former.
         if (wm.suppress_focus_reason == .window_spawn) {
             const ptr_cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
             if (xcb.xcb_query_pointer_reply(wm.conn, ptr_cookie, null)) |ptr| {
@@ -285,9 +302,9 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
                 wm.spawn_cursor_y = ptr.*.root_y;
             }
         }
+    } else {
+        bar.markDirty();
     }
-
-    bar.markDirty();
 }
 
 // Configure request 

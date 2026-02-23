@@ -157,42 +157,30 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
             }
         }
 
-        // Hide the window off-screen, retile remaining windows, and update the
-        // bar in a single server grab so the compositor never composites a frame
-        // where the moved window has disappeared but the remaining windows have
-        // not yet reflowed to fill the vacated slot.
-        _ = xcb.xcb_grab_server(wm.conn);
+        // Hide window by moving it off-screen (avoids an unmap/remap cycle).
         _ = xcb.xcb_configure_window(wm.conn, win,
             xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
         if (wm.focused_window == win) focus.clearFocus(wm);
-        if (ts) |_| tiling.retileCurrentWorkspace(wm);
+        if (ts) |t| t.dirty = true;
         // Evict the window's stale geometry cache entry.
         //
         // The cache holds the rect from the window's last retile on this workspace.
-        // The retile above only covers windows still on the current workspace — win
-        // has already been moved to target_ws, so its cache entry is never refreshed
-        // and remains stale.
+        // markDirty() above triggers a retile of the current workspace via
+        // retileIfDirty() in the event loop, but that retile only covers windows
+        // still on the current workspace — win has already been moved to target_ws,
+        // so its cache entry is never refreshed and remains stale.
         //
         // Without this eviction, restoreWorkspaceGeom finds a cache hit for win
         // when the user later switches to target_ws, replays the old geometry
         // (e.g. right-half stack position from its previous workspace), and the
         // window appears mis-tiled instead of filling its new workspace correctly.
+        // A full retile then fixes it — which is exactly what switching away and
+        // back triggered, explaining why that workaround worked.
         tiling.invalidateGeomCache(win);
-        bar.redrawImmediate(wm);
-        _ = xcb.xcb_ungrab_server(wm.conn);
-        utils.flush(wm.conn);
     } else if (target_ws == s.current) {
-        // Wrap the map and retile in a single server grab so picom never
-        // composites a frame where the arriving window has been mapped at its
-        // old (offscreen or stale) position but the remaining windows have not
-        // yet reflowed to accommodate it.
-        _ = xcb.xcb_grab_server(wm.conn);
         // Map in case the window was deferred (spawned while this ws was inactive).
         _ = xcb.xcb_map_window(wm.conn, win);
-        if (ts) |_| tiling.retileCurrentWorkspace(wm);
-        bar.redrawImmediate(wm);
-        _ = xcb.xcb_ungrab_server(wm.conn);
-        utils.flush(wm.conn);
+        if (ts) |t| t.dirty = true;
     }
 }
 
@@ -346,8 +334,14 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
         _ = xcb.xcb_ungrab_button(wm.conn, xcb.XCB_BUTTON_INDEX_ANY, new_win, xcb.XCB_MOD_MASK_ANY);
     }
 
+    // ICCCM §4.1.7: xcb_set_input_focus must carry the timestamp of the
+    // user action that triggered the switch — not XCB_CURRENT_TIME (0).
+    // Globally-active windows (Electron, Chrome) validate this timestamp
+    // and silently ignore focus messages that arrive with timestamp 0.
+    // wm.last_event_time was set by handleKeyPress when the switch keybind
+    // was pressed, so it is always valid here.
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-        wm.focused_window orelse wm.root, xcb.XCB_CURRENT_TIME);
+        wm.focused_window orelse wm.root, wm.last_event_time);
 
     // Raise the bar, redraw it with the new workspace highlighted, then release
     // the grab — all before the flush so everything lands in a single write.

@@ -10,6 +10,7 @@ const tiling     = @import("tiling");
 const debug      = @import("debug");
 const workspaces = @import("workspaces");
 const constants  = @import("constants");
+const dpi        = @import("dpi");
 
 const workspaces_segment = @import("tags");
 const layout_segment     = @import("layout");
@@ -62,8 +63,7 @@ const State = struct {
         config:          defs.BarConfig,
         has_transparency: bool,
     ) !*State {
-        const s              = try allocator.create(State);
-        const scaled_padding = config.scaledPadding();
+        const s = try allocator.create(State);
         s.* = State{
             .window               = window,
             .width                = width,
@@ -80,7 +80,7 @@ const State = struct {
             .global_visible       = true,
             .has_transparency     = has_transparency,
             .allocator            = allocator,
-            .cached_clock_width   = dc.textWidth(CLOCK_FORMAT) + 2 * scaled_padding,
+            .cached_clock_width   = dc.textWidth(CLOCK_FORMAT) + 2 * config.scaledSegmentPadding(height),
             .cached_clock_x       = null,
             .cached_workspace_x   = 0,
             .has_clock_segment    = detectClockSegment(&config),
@@ -104,6 +104,7 @@ const State = struct {
     }
     fn markClockDirty(self: *State) void { self.dirty_clock = true; }
     fn clearDirty(self: *State) void { self.dirty = false; self.dirty_clock = false; }
+    fn isDirty(self: *State) bool { return self.dirty or self.dirty_clock; }
 };
 
 /// Scans the bar layout config for a clock segment.
@@ -242,16 +243,56 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
 
 // Bar height
 
-/// Calculates bar height from font metrics and configured padding, clamped to sane bounds.
+/// Loads fonts at `trial_size`, measures the actual rendered glyph height, and
+/// back-calculates the Pango size at which glyphs exactly fill `bar_height`.
+/// Returns the final `scaled_font_size` to use (trial × fit_ratio × pct), or
+/// null if measurement fails (caller keeps the existing value).
 ///
-/// Uses an off-screen Cairo image surface for font measurement — no X window or GC is
-/// created, so there are zero X round-trips on this path.  Previously this function called
-/// xcb_create_window + xcb_create_gc_checked + xcb_request_check (two blocking round-trips)
-/// just to get a drawable for Pango; the image surface gives Pango exactly what it needs
-/// without touching the X server at all.
-fn calculateBarHeight(wm: *defs.WM) !u16 {
-    if (wm.config.bar.height) |h| return h;
+/// Why we can't just set size = bar_height directly: Pango sizes are in points,
+/// not pixels. A font at "size=40" renders taller than 40px due to the pt→px
+/// conversion and internal ascender/descender ratios. We measure at a known
+/// trial size, derive the true ratio, then invert it.
+fn resolvePercentageFontSize(wm: *defs.WM, bar_height: u16) ?u16 {
+    const saved_size = wm.config.bar.scaled_font_size;
+    wm.config.bar.scaled_font_size = 1; // trial: measure at 1pt to get pixels-per-point ratio
+    defer wm.config.bar.scaled_font_size = saved_size;
 
+    const temp_dc = drawing.DrawContext.initOffscreen(wm.allocator, wm.conn, wm.dpi_info.dpi) catch |e| {
+        debug.warnOnErr(e, "DrawContext.initOffscreen in resolvePercentageFontSize");
+        return null;
+    };
+    defer temp_dc.deinit();
+
+    loadBarFonts(temp_dc, wm) catch return null;
+
+    const asc, const desc    = temp_dc.getMetrics();
+    const px_per_pt: f32     = @floatFromInt(@max(1, asc + desc));
+    const height_f: f32      = @floatFromInt(bar_height);
+
+    // At 1pt, the font renders `px_per_pt` pixels tall.
+    // The pt size that exactly fills bar_height without clipping is:
+    //   max_size_pt = bar_height / px_per_pt
+    // Apply the user's percentage on top of that.
+    const max_size_pt = height_f / px_per_pt;
+    const final_size  = max_size_pt * (wm.config.bar.font_size.value / 100.0);
+    return @max(1, @as(u16, @intFromFloat(@round(final_size))));
+}
+
+/// Calculates bar height and, when `font_size` is a percentage, resolves
+/// `scaled_font_size` so 100% = the largest glyph height that exactly fits the
+/// bar without clipping, with lower percentages scaling linearly from there.
+fn calculateBarHeight(wm: *defs.WM) !u16 {
+    if (wm.config.bar.height) |h| {
+        const height = dpi.scaleBarHeight(h, wm.screen.height_in_pixels);
+        if (wm.config.bar.font_size.is_percentage) {
+            if (resolvePercentageFontSize(wm, height)) |sz|
+                wm.config.bar.scaled_font_size = sz;
+        }
+        return height;
+    }
+
+    // Auto-height: font size already resolved by finalizeConfig (screen-height relative).
+    // Measure it and size the bar to exactly fit.
     const temp_dc = drawing.DrawContext.initOffscreen(wm.allocator, wm.conn, wm.dpi_info.dpi) catch |e| {
         debug.warnOnErr(e, "DrawContext.initOffscreen in calculateBarHeight");
         return DEFAULT_BAR_HEIGHT;
@@ -263,11 +304,9 @@ fn calculateBarHeight(wm: *defs.WM) !u16 {
         return DEFAULT_BAR_HEIGHT;
     };
 
-    const asc, const desc     = temp_dc.getMetrics();
-    const font_height: u32    = @intCast(asc + desc);
-    const scaled_padding: u32 = @intCast(wm.config.bar.scaledPadding());
-    const computed: u32       = font_height + 2 * scaled_padding;
-    return @intCast(std.math.clamp(computed, MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
+    const asc, const desc  = temp_dc.getMetrics();
+    const font_height: u32 = @intCast(asc + desc);
+    return @intCast(std.math.clamp(font_height, MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
 }
 
 // Lifecycle
@@ -376,6 +415,7 @@ pub fn reload(wm: *defs.WM) void {
     _ = xcb.xcb_grab_server(wm.conn);
     if (new_state.visible) _ = xcb.xcb_map_window(wm.conn, setup.window);
     _ = xcb.xcb_destroy_window(wm.conn, old.window);
+    _ = xcb.xcb_flush(wm.conn);
     _ = xcb.xcb_ungrab_server(wm.conn);
     utils.flush(wm.conn);
 
@@ -628,7 +668,7 @@ fn calculateSegmentWidth(s: *State, segment: defs.BarSegment) u16 {
 /// Draws right-aligned segments in reverse order.
 fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment) !void {
     var right_x          = s.width;
-    const scaled_spacing = s.config.scaledSpacing();
+    const scaled_spacing = s.config.scaledSpacing(s.height);
     for (0..segments.len) |i| {
         const idx = segments.len - 1 - i;
         right_x -= calculateSegmentWidth(s, segments[idx]);
@@ -643,7 +683,7 @@ fn draw(s: *State, wm: *defs.WM) !void {
     if (s.has_transparency) s.dc.clearTransparent();
     s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
 
-    const scaled_spacing = s.config.scaledSpacing();
+    const scaled_spacing = s.config.scaledSpacing(s.height);
     var widths = [_]u16{0} ** 2; // [0] = left total, [1] = right total
     for (s.config.layout.items) |layout| {
         const idx: usize = switch (layout.position) {

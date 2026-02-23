@@ -202,28 +202,18 @@ fn restoreWindow(wm: *WM, win: u32) void {
     const saved_fs = entry.value;
 
     if (saved_fs) |geom| {
-        // Restore pre-fullscreen geometry so enterFullscreenForWindow reads
-        // accurate on-screen coordinates from xcb_get_geometry.
-        _ = xcb.xcb_configure_window(
-            wm.conn, win,
-            xcb.XCB_CONFIG_WINDOW_X     | xcb.XCB_CONFIG_WINDOW_Y     |
-            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
-            xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH,
-            &[_]u32{
-                @bitCast(@as(i32, geom.x)),
-                @bitCast(@as(i32, geom.y)),
-                geom.width,
-                geom.height,
-                geom.border_width,
-            },
-        );
-        utils.flush(wm.conn);
-
-        // Re-enter fullscreen — covers the screen, hides the bar, and pushes
-        // sibling windows off-screen.  enterFullscreenForWindow owns its own
-        // server grab, so this path is already atomic.
+        // The window is currently at OFFSCREEN_X_POSITION.  Pass the saved
+        // geometry directly so we can skip:
+        //   (a) the xcb_get_geometry round-trip that enterFullscreen normally
+        //       uses to learn the window's pre-fullscreen size, and
+        //   (b) the configure_window + flush that previously "pre-positioned"
+        //       the window at its saved on-screen coordinates before the
+        //       fullscreen grab acquired — that flush produced an intermediate
+        //       compositor frame showing the window at its small saved size.
+        // With enterFullscreenWithSavedGeom the window goes from offscreen to
+        // fullscreen in a single atomic grab: no intermediate frame visible.
         wm.focused_window = win;
-        fullscreen.enterFullscreenForWindow(wm, win);
+        fullscreen.enterFullscreenWithSavedGeom(wm, win, geom);
         bar.markDirty();
         return;
     }
@@ -289,8 +279,7 @@ pub fn unminimizeAll(wm: *WM) void {
     const list   = &s.per_workspace[ws_idx];
     if (list.items.len == 0) return;
 
-    // Snapshot then clear before iterating: the list is our responsibility,
-    // and clearing up-front keeps state consistent even if a restore fails.
+    // Snapshot then clear the ordered list before iterating.
     var snapshot: std.ArrayListUnmanaged(u32) = .{};
     defer snapshot.deinit(s.allocator);
     snapshot.appendSlice(s.allocator, list.items) catch |err| {
@@ -299,8 +288,57 @@ pub fn unminimizeAll(wm: *WM) void {
     };
     list.clearRetainingCapacity();
 
-    for (snapshot.items) |win| restoreWindow(wm, win);
+    // If any window was fullscreen when minimized, fall back to the per-window
+    // path.  Re-entering fullscreen involves its own grab + bar hide + sibling
+    // offscreen — batching that with the other windows is complex and this case
+    // is rare enough that N separate grabs is acceptable.
+    for (snapshot.items) |win| {
+        if (s.minimized_info.get(win)) |saved_fs| {
+            if (saved_fs != null) {
+                for (snapshot.items) |w| restoreWindow(wm, w);
+                return;
+            }
+        }
+    }
+
+    // Common case: no fullscreen windows among the minimized set.
+    // Batch all additions, retile, focus, and bar redraw into a single server
+    // grab so picom composites exactly one frame where all windows have appeared
+    // at their correct tiled positions.  The per-window restoreWindow loop would
+    // produce N separate grab/retile/bar_redraw cycles — N-1 intermediate frames.
+    _ = xcb.xcb_grab_server(wm.conn);
+
+    for (snapshot.items) |win| {
+        // Remove from the info map (was not yet removed — only the ordered list
+        // was cleared above).  saved_fs is null for all entries (checked above).
+        _ = s.minimized_info.fetchRemove(win);
+        if (wm.config.tiling.enabled) {
+            tiling.addWindow(wm, win);
+        } else {
+            // Floating: place at a sensible on-screen position.
+            const x: u32 = @intCast(wm.screen.width_in_pixels  / 4);
+            const y: u32 = @intCast(wm.screen.height_in_pixels / 4);
+            _ = xcb.xcb_configure_window(wm.conn, win,
+                xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
+                &[_]u32{ x, y });
+        }
+    }
+
+    if (wm.config.tiling.enabled) tiling.retileCurrentWorkspace(wm);
+
+    // Focus the most-recently-minimized window (last entry in the snapshot —
+    // same result as N sequential restoreWindow calls each stealing focus).
+    // .window_spawn skips the isWindowMapped round-trip, keeping the grab
+    // scope free of avoidable blocking calls.
+    if (snapshot.items.len > 0) {
+        focus.setFocus(wm, snapshot.items[snapshot.items.len - 1], .window_spawn);
+    }
+
+    bar.redrawImmediate(wm);
+    _ = xcb.xcb_ungrab_server(wm.conn);
+    utils.flush(wm.conn);
 }
+
 
 // Lifecycle hooks
 

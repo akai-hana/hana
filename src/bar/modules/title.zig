@@ -50,7 +50,7 @@ pub fn draw(
         return start_x + width;
     }
 
-    const scaled_padding = config.scaledPadding();
+    const scaled_padding = config.scaledSegmentPadding(height);
 
     if (window_count == 1) {
         const single_win   = current_ws.windows.items()[0];

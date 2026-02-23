@@ -220,17 +220,37 @@ pub fn reloadConfig(wm: *WM) void {
     }
 
     if (ns.enabled) {
-        // Push the new border width to every tracked window.  retileCurrentWorkspace
-        // only updates geometry (x/y/width/height); BORDER_WIDTH is sent once in
-        // addWindow and never again, so existing windows keep their old value after
-        // a reload unless we explicitly resend it here.
-        // We do this before retileCurrentWorkspace so the geometry recalculation
-        // already accounts for the new border width.
+        // Wrap the border-width push and retile in a single server grab so picom
+        // never composites an intermediate frame where some windows have the new
+        // border width but the layout has not yet been recalculated to account for
+        // it (or vice-versa).
+        //
+        // Without the grab the sequence is:
+        //   1. xcb_configure_window(BORDER_WIDTH, new) × N  ← picom can composite here
+        //   2. retileCurrentWorkspace                        ← geometry uses new width
+        //
+        // Between step 1 and step 2 picom sees N windows with the new (typically
+        // narrower or wider) border but still at the old tiled positions — a visible
+        // flash of misaligned borders and content.
+        //
+        // Push BORDER_WIDTH before retileCurrentWorkspace so the geometry calculation
+        // inside retile already accounts for the new width — that ordering is preserved
+        // here, just wrapped in a grab.
+        _ = xcb.xcb_grab_server(wm.conn);
         for (ns.windows.items()) |win| {
             _ = xcb.xcb_configure_window(wm.conn, win,
                 xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{ns.border_width});
         }
         retileCurrentWorkspace(wm);
+        // Redraw the bar inside the grab so the compositor sees the correct bar
+        // content (updated focus title, workspace state) atomically with the new
+        // window geometry.  bar.reload() runs immediately after this function in
+        // main.zig and replaces the bar window entirely; this draw uses the still-live
+        // old bar surface and ensures no stale frame is composited in the gap between
+        // the two reloads.
+        bar.redrawImmediate(wm);
+        _ = xcb.xcb_ungrab_server(wm.conn);
+        utils.flush(wm.conn);
     }
 }
 
@@ -469,13 +489,12 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
 /// Retile a specific *inactive* workspace so its geometry cache is correct
 /// before the user switches to it.
 ///
-/// When a window on a non-current workspace is destroyed, `removeWindow` marks
-/// the tiling state dirty but never retiles (no retile is safe to do without a
-/// server grab, and the grab in `unmanageWindow` only retiles the current
-/// workspace in the `was_focused` branch).  The dirty flag causes
-/// `restoreWorkspaceGeom` to fail at switch time, forcing the layout algorithm
-/// to run mid-switch — which can produce a visible flash as the remaining window
-/// jumps from its old position to its new one.
+/// When a window on a non-current workspace is added or removed, the tiling
+/// state is marked dirty but no retile happens (the current workspace is
+/// unaffected).  The dirty flag causes `restoreWorkspaceGeom` to fall back to
+/// a full retile at switch time — running the layout algorithm mid-switch —
+/// which can produce a visible flash as windows jump from their old positions
+/// to their new ones.
 ///
 /// This function pre-computes the correct geometry for the inactive workspace:
 ///   1. Temporarily sets `ws_state.current` to `ws_idx` so `retile` filters
@@ -492,7 +511,7 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
 ///
 /// MUST be called inside a server grab: the retile transiently moves windows
 /// to their on-screen positions so the compositor must be frozen for the
-/// duration.  The grab in `unmanageWindow` satisfies this requirement.
+/// duration.
 pub fn retileInactiveWorkspace(wm: *WM, ws_idx: u8) void {
     const s = getState() orelse return;
     if (!s.enabled) return;
@@ -647,13 +666,7 @@ pub fn swapWithMaster(wm: *WM) void {
     } else {
         moveWindowToIndex(s, focused_pos, master_pos);
     }
-    // Wrap retile + bar redraw in a single server grab so picom never composites
-    // an intermediate frame where only one of the two swapped windows has moved.
-    _ = xcb.xcb_grab_server(wm.conn);
     retileCurrentWorkspace(wm);
-    bar.redrawImmediate(wm);
-    _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
 }
 
 // Layout and master controls
@@ -661,16 +674,7 @@ pub fn swapWithMaster(wm: *WM) void {
 pub fn toggleTiling(wm: *WM) void {
     const s = getState() orelse return;
     s.enabled = !s.enabled;
-    if (s.enabled) {
-        // Wrap retile + bar redraw in a single server grab so picom never
-        // composites a frame where windows have snapped to tiled positions
-        // but the bar still shows the pre-tiling state.
-        _ = xcb.xcb_grab_server(wm.conn);
-        retileCurrentWorkspace(wm);
-        bar.redrawImmediate(wm);
-        _ = xcb.xcb_ungrab_server(wm.conn);
-        utils.flush(wm.conn);
-    }
+    if (s.enabled) retileCurrentWorkspace(wm);
     debug.info("Tiling {s}", .{if (s.enabled) "enabled" else "disabled"});
 }
 
@@ -692,14 +696,7 @@ fn saveLayoutToCurrentWorkspace(layout: Layout) void {
 fn applyLayout(wm: *WM, s: *State, layout: Layout) void {
     s.layout = layout;
     if (!wm.config.tiling.global_layout) saveLayoutToCurrentWorkspace(layout);
-    // Wrap the retile and bar redraw in a single server grab so the compositor
-    // never composites a frame where windows have moved to the new layout
-    // positions but the bar still shows the old layout indicator (or vice-versa).
-    _ = xcb.xcb_grab_server(wm.conn);
     retileCurrentWorkspace(wm);
-    bar.redrawImmediate(wm);
-    _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
     debug.info("Layout: {s}", .{@tagName(layout)});
 }
 
@@ -722,14 +719,7 @@ pub fn adjustMasterCount(wm: *WM, delta: i8) void {
     // (e.g. already at the maximum and increase is requested).
     if (clamped == s.master_count) return;
     s.master_count = clamped;
-    // Wrap retile + bar redraw in a single server grab so the compositor never
-    // composites a frame where the master region has resized but the bar still
-    // shows the old master count.
-    _ = xcb.xcb_grab_server(wm.conn);
     retileCurrentWorkspace(wm);
-    bar.redrawImmediate(wm);
-    _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
 }
 
 pub inline fn increaseMasterCount(wm: *WM) void { adjustMasterCount(wm,  1); }
@@ -784,15 +774,8 @@ pub fn cycleLayoutVariation(wm: *WM) void {
             return; // Nothing to cycle — skip retile and bar update
         },
     }
-    _ = xcb.xcb_grab_server(wm.conn);
     retileCurrentWorkspace(wm);
-    // Redraw the bar immediately inside the same server grab so the variation
-    // indicator updates atomically with the layout geometry change.  The deferred
-    // markDirty+updateIfDirty path would leave the old indicator visible for one
-    // compositor frame before the bar catches up.
-    bar.redrawImmediate(wm);
-    _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
+    bar.markDirty();
 }
 
 /// Return the 3-character variation indicator for the current layout.

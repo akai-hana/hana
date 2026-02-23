@@ -209,6 +209,28 @@ pub fn enterFullscreenForWindow(wm: *WM, win: u32) void {
     enterFullscreen(wm, win, ws);
 }
 
+/// Enter fullscreen using geometry that is already known to the caller.
+///
+/// Used by the minimize module when restoring a window that was fullscreen
+/// when minimized: the pre-fullscreen geometry was saved at minimize time, so
+/// there is no need for the xcb_get_geometry round-trip that `enterFullscreen`
+/// performs via `fetchWindowGeom`.  More importantly, it avoids the
+/// configure_window + flush that the old path used to "pre-position" the window
+/// at its saved coordinates before entering fullscreen: that sequence produced
+/// an intermediate compositor frame where the window was briefly visible at its
+/// small pre-fullscreen size.
+///
+/// The window stays at OFFSCREEN_X_POSITION (where minimize left it) until the
+/// grab acquires, at which point `enterFullscreenCommit` expands it directly to
+/// cover the full screen.  The compositor never sees an in-between state.
+pub fn enterFullscreenWithSavedGeom(wm: *WM, win: u32, geom: defs.WindowGeometry) void {
+    const ws = workspaces.getCurrentWorkspace() orelse return;
+    _ = xcb.xcb_grab_server(wm.conn);
+    enterFullscreenCommit(wm, win, ws, geom);
+    _ = xcb.xcb_ungrab_server(wm.conn);
+    utils.flush(wm.conn);
+}
+
 pub fn toggleFullscreen(wm: *WM) void {
     const win        = wm.focused_window orelse return;
     const current_ws = workspaces.getCurrentWorkspace() orelse return;

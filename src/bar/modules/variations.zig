@@ -13,5 +13,5 @@ const tiling  = @import("tiling");
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16) !u16 {
     const t_state = tiling.getState() orelse return start_x;
     const indicator = tiling.getVariationIndicator(t_state);
-    return dc.drawSegment(start_x, height, indicator, config.scaledPadding(), config.bg, config.fg);
+    return dc.drawSegment(start_x, height, indicator, config.scaledSegmentPadding(height), config.bg, config.fg);
 }

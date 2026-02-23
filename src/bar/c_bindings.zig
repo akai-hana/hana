@@ -124,6 +124,12 @@ pub extern fn pango_layout_get_baseline(layout: *PangoLayout) c_int;
 
 pub extern fn pango_font_description_from_string(str: [*:0]const u8) ?*PangoFontDescription;
 pub extern fn pango_font_description_free(desc: *PangoFontDescription) void;
+pub extern fn pango_font_description_get_size(desc: *PangoFontDescription) c_int;
+pub extern fn pango_font_description_get_size_is_absolute(desc: *PangoFontDescription) c_int;
+pub extern fn pango_font_description_set_size(desc: *PangoFontDescription, size: c_int) void;
+pub extern fn pango_font_description_set_absolute_size(desc: *PangoFontDescription, size: f64) void;
+
+pub extern fn pango_layout_get_extents(layout: *PangoLayout, ink_rect: ?*PangoRectangle, logical_rect: ?*PangoRectangle) void;
 
 pub extern fn pango_context_get_metrics(
     context:  *PangoContext,

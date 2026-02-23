@@ -256,6 +256,45 @@ pub const DrawContext = struct {
         _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
     }
 
+    /// Draws `text` at a temporarily-overridden absolute font size.
+    /// `x` is the left edge; `y_top` is the desired top of the ink bounds
+    /// (not the logical bounds), so the glyph renders flush to the target row.
+    /// The font size and metrics cache are restored before returning.
+    pub fn drawTextSized(self: *DrawContext, x: u16, y_top: u16, text: []const u8, size_px: u16, color: u32) !void {
+        const desc = self.current_font_desc orelse return error.NoFont;
+
+        // Save existing size and whether it was set as absolute or scaled.
+        const saved_size     = c.pango_font_description_get_size(desc);
+        const saved_absolute = c.pango_font_description_get_size_is_absolute(desc);
+        defer {
+            if (saved_absolute != 0)
+                c.pango_font_description_set_absolute_size(desc, @floatFromInt(saved_size))
+            else
+                c.pango_font_description_set_size(desc, saved_size);
+            c.pango_layout_set_font_description(self.pango_layout, desc);
+            self.cached_metrics = null;
+        }
+
+        // Override to the requested absolute pixel size.
+        c.pango_font_description_set_absolute_size(desc, @as(f64, @floatFromInt(size_px)) * @as(f64, @floatFromInt(c.PANGO_SCALE)));
+        c.pango_layout_set_font_description(self.pango_layout, desc);
+        self.cached_metrics = null;
+
+        self.setPangoText(text);
+
+        // Use ink extents so the glyph's visual top lands exactly at y_top,
+        // regardless of any leading space Pango adds above the ascent.
+        var ink_rect: c.PangoRectangle = undefined;
+        c.pango_layout_get_extents(self.pango_layout, &ink_rect, null);
+        const ink_top_px: f64 = @as(f64, @floatFromInt(ink_rect.y)) /
+                                 @as(f64, @floatFromInt(c.PANGO_SCALE));
+
+        self.setColor(color);
+        c.cairo_move_to(self.ctx, @floatFromInt(x),
+            @as(f64, @floatFromInt(y_top)) - ink_top_px);
+        c.pango_cairo_show_layout(self.ctx, self.pango_layout);
+    }
+
     /// Draws `text` at pixel coordinates `(x, y)` where `y` is the font baseline.
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
         self.setColor(color);
