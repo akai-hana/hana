@@ -108,6 +108,22 @@ pub const State = struct {
     border_unfocused: u32,
     windows:          Tracking,
     dirty:            bool,
+    /// Per-workspace geometry validity bitmask.
+    ///
+    /// Bit N is set when workspace N's geometry has been pre-computed by
+    /// retileInactiveWorkspace (or retileCurrentWorkspace / retileAllWorkspaces)
+    /// and the geom_cache holds correct on-screen positions for all its windows.
+    /// restoreWorkspaceGeom checks this bit instead of the global dirty flag so
+    /// that a deferred retile from adjustMasterWidth (dirty=true) on the *current*
+    /// workspace does not block the fast-path restore on a *different* workspace
+    /// whose geometry was already pre-computed.
+    ///
+    /// Bits are cleared whenever anything invalidates a workspace's cached layout:
+    ///   • addWindow / removeWindow  (window set changed)
+    ///   • adjustMasterWidth         (geometry changes for all workspaces)
+    ///   • syncLayoutFromWorkspace   (layout algorithm changed)
+    /// They are set again by the retile call that immediately follows.
+    ws_geom_valid:    u32,
     /// Tracks the last geometry sent to the X server per window.
     /// Populated/updated by configureSafe via layouts.armGeomCache.
     /// Lets retile skip configure_window calls for unchanged windows.
@@ -183,6 +199,7 @@ fn buildState(wm: *WM) State {
         .border_unfocused = wm.config.tiling.border_unfocused,
         .windows          = Tracking.init(wm.allocator),
         .dirty            = false,
+        .ws_geom_valid    = 0,
         .last_retile_screen = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
         .geom_cache       = .{},
         .border_cache     = .{},
@@ -269,6 +286,7 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
         s.windows.add(window_id) catch |err| { debug.logError(err, window_id); return; };
     }
     s.dirty = true;
+    s.ws_geom_valid = 0; // window set changed; all cached layouts are stale
 
     // Set BORDER_PIXEL only — EVENT_MASK was already applied by handleMapRequest,
     // so sending it again here is a redundant attribute update.
@@ -289,6 +307,7 @@ pub fn removeWindow(window_id: u32) void {
     const s = getState() orelse return;
     if (s.windows.remove(window_id)) {
         s.dirty = true;
+        s.ws_geom_valid = 0; // window set changed; all cached layouts are stale
         _ = s.geom_cache.remove(window_id);
         _ = s.border_cache.remove(window_id);
     }
@@ -313,19 +332,28 @@ pub fn invalidateGeomCache(window_id: u32) void {
 ///                 retileCurrentWorkspace so the layout reruns.
 ///
 /// The cache is considered stale when:
-///   • dirty flag is set (window added/removed/layout changed)
+///   • this workspace's ws_geom_valid bit is not set (window added/removed/
+///     layout changed since the last retile of this workspace)
 ///   • any window on this workspace is absent from the cache
 ///   • the screen area (bar height/position) differs from when the cache
 ///     was last populated — handles bar visibility toggles on other workspaces
 ///     including when the current workspace was fullscreen at toggle time
 pub fn restoreWorkspaceGeom(wm: *WM) bool {
     const s = getState() orelse return false;
-    if (s.dirty) return false;
 
     var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
     const ws_count = filterWorkspaceWindows(s, &ws_buf);
     const ws_windows = ws_buf[0..ws_count];
     if (ws_windows.len == 0) return true;
+
+    // Check per-workspace validity bit.  Unlike the old global dirty flag,
+    // this is set/cleared per workspace so a deferred retile on the *current*
+    // workspace (adjustMasterWidth → dirty=true) does not block the fast path
+    // for a *different* workspace whose geometry was already pre-computed by
+    // retileInactiveWorkspace.
+    const current_ws = workspaces.getCurrentWorkspace() orelse return false;
+    if (current_ws >= 32) return false;
+    if ((s.ws_geom_valid >> @intCast(current_ws)) & 1 == 0) return false;
 
     // If bar height or position changed since the cache was last written, the
     // stored rects are computed for a different screen area and must not be
@@ -463,6 +491,7 @@ pub fn retileAllWorkspaces(wm: *WM) void {
 
         dispatchLayout(ws_layout, wm.conn, s, ws_windows, w, h, y);
         updateBorders(wm, ws_windows);
+        if (ws_idx < 32) s.ws_geom_valid |= @as(u32, 1) << @intCast(ws_idx);
     }
 
     layouts.disarmGeomCache();
@@ -505,9 +534,9 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
 ///      on-screen positions.
 ///   3. Restores `ws_state.current`.
 ///
-/// After this call, `restoreWorkspaceGeom` will find `dirty=false` and a
-/// fully-populated cache at switch time, take the fast path, and emit only a
-/// single set of configure_window calls — no layout algorithm run, no flash.
+/// After this call, `restoreWorkspaceGeom` will find the ws_geom_valid bit set
+/// and a fully-populated cache at switch time, take the fast path, and emit only
+/// a single set of configure_window calls — no layout algorithm run, no flash.
 ///
 /// MUST be called inside a server grab: the retile transiently moves windows
 /// to their on-screen positions so the compositor must be frozen for the
@@ -530,7 +559,16 @@ pub fn retileInactiveWorkspace(wm: *WM, ws_idx: u8) void {
     const saved_current = ws_state.current;
     ws_state.current = ws_idx;
     retile(wm, calculateScreenArea(wm));
-    s.dirty = false;
+    // Do NOT clear s.dirty here.  s.dirty drives retileIfDirty for the
+    // *current* workspace (e.g. a deferred adjustMasterWidth that set
+    // dirty=true must still be applied at end-of-batch).  Clearing it here
+    // would discard that pending retile.
+    //
+    // Instead, mark this specific workspace's geometry as valid via the
+    // ws_geom_valid bitmask.  restoreWorkspaceGeom checks the per-workspace
+    // bit, not the global dirty flag, so the fast path still works even when
+    // dirty=true for an unrelated workspace.
+    if (ws_idx < 32) s.ws_geom_valid |= @as(u32, 1) << @intCast(ws_idx);
     ws_state.current = saved_current;
 
     // The retile above queued configure_window calls that move workspace ws_idx
@@ -539,9 +577,10 @@ pub fn retileInactiveWorkspace(wm: *WM, ws_idx: u8) void {
     //
     // Critically, we do NOT call invalidateGeomCache here.  The geom cache now
     // holds the correct on-screen tiled rects for all remaining windows.  At
-    // switch time, restoreWorkspaceGeom will find dirty=false, a complete cache,
-    // and a matching screen rect — it will take the fast path and replay these
-    // positions in a single batch, with no layout algorithm run and no flash.
+    // switch time, restoreWorkspaceGeom will find the ws_geom_valid bit set, a
+    // complete cache, and a matching screen rect — it will take the fast path
+    // and replay these positions in a single batch, with no layout algorithm run
+    // and no flash.
     for (ws_state.workspaces[ws_idx].windows.items()) |win| {
         _ = xcb.xcb_configure_window(wm.conn, win,
             xcb.XCB_CONFIG_WINDOW_X,
@@ -578,6 +617,10 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     s.last_retile_screen = screen;
 
     updateBorders(wm, ws_windows);
+
+    // Mark this workspace's geometry as valid in the per-workspace bitmask
+    // so restoreWorkspaceGeom can take the fast path on the next switch.
+    if (current_ws < 32) s.ws_geom_valid |= @as(u32, 1) << @intCast(current_ws);
 }
 
 fn updateBorders(wm: *WM, ws_windows: []const u32) void {
@@ -686,6 +729,7 @@ pub fn syncLayoutFromWorkspace(layout: Layout) void {
     if (s.layout == layout) return;
     s.layout = layout;
     s.dirty = true; // invalidate geom cache so the correct layout reruns
+    s.ws_geom_valid = 0; // layout change affects all workspaces
 }
 
 /// Save the current layout to the active workspace (per-workspace mode only).
@@ -737,6 +781,7 @@ pub fn adjustMasterWidth(delta: f32) void {
     // and then again against the final state — producing a visible flicker.
     // Deferring also coalesces rapid repeated key presses into a single retile.
     s.dirty = true;
+    s.ws_geom_valid = 0; // master width change affects all workspaces
 }
 
 pub inline fn increaseMasterWidth() void { adjustMasterWidth( 0.025); }

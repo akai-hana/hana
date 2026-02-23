@@ -243,18 +243,25 @@ fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
 
 // Bar height
 
-/// Loads fonts at `trial_size`, measures the actual rendered glyph height, and
-/// back-calculates the Pango size at which glyphs exactly fill `bar_height`.
-/// Returns the final `scaled_font_size` to use (trial × fit_ratio × pct), or
-/// null if measurement fails (caller keeps the existing value).
+/// Loads fonts at a trial point size, measures the actual rendered glyph height,
+/// and back-calculates the Pango point size at which glyphs exactly fill `bar_height`.
+/// Returns the final `scaled_font_size` to use (max_fit_pt × pct), or null if
+/// measurement fails (caller keeps the existing value).
 ///
 /// Why we can't just set size = bar_height directly: Pango sizes are in points,
 /// not pixels. A font at "size=40" renders taller than 40px due to the pt→px
-/// conversion and internal ascender/descender ratios. We measure at a known
-/// trial size, derive the true ratio, then invert it.
+/// conversion and internal ascender/descender ratios. We measure at a known trial
+/// size, derive the true px/pt ratio, then invert it to find the fitting pt size.
 fn resolvePercentageFontSize(wm: *defs.WM, bar_height: u16) ?u16 {
+    // Measure at 100pt, not 1pt. getMetrics() converts Pango units to pixels via
+    // integer division (pango_units / PANGO_SCALE). At 1pt the ascent+descent
+    // truncates to 1–2px, making the px/pt ratio too coarse and the back-calculated
+    // font size consistently smaller than intended. At 100pt the result is ~130–160px
+    // so the integer error is < 1% and the ratio is accurate enough for any bar height.
+    const TRIAL_PT: u16 = 100;
+
     const saved_size = wm.config.bar.scaled_font_size;
-    wm.config.bar.scaled_font_size = 1; // trial: measure at 1pt to get pixels-per-point ratio
+    wm.config.bar.scaled_font_size = TRIAL_PT;
     defer wm.config.bar.scaled_font_size = saved_size;
 
     const temp_dc = drawing.DrawContext.initOffscreen(wm.allocator, wm.conn, wm.dpi_info.dpi) catch |e| {
@@ -265,11 +272,11 @@ fn resolvePercentageFontSize(wm: *defs.WM, bar_height: u16) ?u16 {
 
     loadBarFonts(temp_dc, wm) catch return null;
 
-    const asc, const desc    = temp_dc.getMetrics();
-    const px_per_pt: f32     = @floatFromInt(@max(1, asc + desc));
-    const height_f: f32      = @floatFromInt(bar_height);
+    const asc, const desc = temp_dc.getMetrics();
+    const font_px: f32    = @floatFromInt(@max(1, asc + desc));
+    const px_per_pt: f32  = font_px / @as(f32, @floatFromInt(TRIAL_PT));
+    const height_f: f32   = @floatFromInt(bar_height);
 
-    // At 1pt, the font renders `px_per_pt` pixels tall.
     // The pt size that exactly fills bar_height without clipping is:
     //   max_size_pt = bar_height / px_per_pt
     // Apply the user's percentage on top of that.

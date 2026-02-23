@@ -29,6 +29,11 @@ const WindowInfo = struct {
     minimized: bool,
 };
 
+/// Fixed left indent added to all title text draw calls, independent of the
+/// percentage-based scaledSegmentPadding. Ensures the text never touches the
+/// left border even at font_size = 100% (where scaledSegmentPadding == 0).
+const TITLE_LEAD_PX: u16 = 4;
+
 /// Draws the title segment at `start_x`, returning `start_x + width`.
 pub fn draw(
     dc:                   *drawing.DrawContext,
@@ -70,14 +75,14 @@ pub fn draw(
             const title = getWindowTitle(wm.conn, single_win, allocator) catch null;
             defer if (title) |t| allocator.free(t);
             if (title) |t| {
-                try dc.drawTextEllipsis(start_x + scaled_padding, dc.baselineY(height),
-                    t, width -| scaled_padding * 2, config.fg);
+                try dc.drawTextEllipsis(start_x + scaled_padding + TITLE_LEAD_PX, dc.baselineY(height),
+                    t, width -| scaled_padding * 2 -| TITLE_LEAD_PX, config.fg);
             }
         } else {
             const title = try getFocusedWindowTitle(wm, cached_title, cached_title_window, allocator);
             if (title.len > 0) {
-                try dc.drawTextEllipsis(start_x + scaled_padding, dc.baselineY(height),
-                    title, width -| scaled_padding * 2,
+                try dc.drawTextEllipsis(start_x + scaled_padding + TITLE_LEAD_PX, dc.baselineY(height),
+                    title, width -| scaled_padding * 2 -| TITLE_LEAD_PX,
                     if (is_focused) config.selected_fg else config.fg);
             }
         }
@@ -199,10 +204,10 @@ fn drawSegmentedTitles(
 
         if (info.title.len > 0 and segment_width > scaled_padding * 2) {
             try dc.drawTextEllipsis(
-                segment_x + scaled_padding,
+                segment_x + scaled_padding + TITLE_LEAD_PX,
                 dc.baselineY(height),
                 info.title,
-                segment_width -| scaled_padding * 2,
+                segment_width -| scaled_padding * 2 -| TITLE_LEAD_PX,
                 if (is_focused_win) config.selected_fg else config.fg,
             );
         }

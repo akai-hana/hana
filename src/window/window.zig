@@ -111,21 +111,29 @@ inline fn setupTiling(wm: *WM, win: u32, on_current: bool) void {
 // the workspace that was active when the daemon was first started, not now.
 // The queue is purely in-process — no X round-trips, no filesystem reads.
 
-const SPAWN_TIMEOUT_NS: u64 = 15 * std.time.ns_per_s;
-const SPAWN_QUEUE_CAP:  u8  = 16;
+const SPAWN_QUEUE_CAP: u8 = 16;
 
-const SpawnEntry = struct { workspace: u8, time: std.time.Instant };
+const SpawnEntry = struct {
+    workspace: u8,
+    /// PID written into _NET_WM_PID by the grandchild process.  Used for
+    /// direct matching so the window is assigned to the right workspace even
+    /// when the program takes arbitrarily long to start.  Set to 0 for
+    /// daemon-mode terminals (kitty --single-instance, wezterm server, foot
+    /// --server): their client process exits before the window maps, so no PID
+    /// match is possible; those entries fall back to the FIFO path instead.
+    pid: u32,
+};
 
 var spawn_buf:  [SPAWN_QUEUE_CAP]SpawnEntry = undefined;
 var spawn_head: u8 = 0;
 var spawn_len:  u8 = 0;
 
-/// Called by input.executeShellCommand immediately after a successful fork.
-/// Records the workspace the user was on when they pressed the exec keybind.
-pub fn registerSpawn(workspace: u8) void {
-    const now = std.time.Instant.now() catch return;
+/// Called by input.executeShellCommand after a confirmed successful exec.
+/// `pid` is the grandchild PID forwarded via pipe; it is 0 for daemon-mode
+/// terminals whose client process exited before we could verify exec success.
+pub fn registerSpawn(workspace: u8, pid: u32) void {
     const tail = (spawn_head + spawn_len) % SPAWN_QUEUE_CAP;
-    spawn_buf[tail] = .{ .workspace = workspace, .time = now };
+    spawn_buf[tail] = .{ .workspace = workspace, .pid = pid };
     if (spawn_len < SPAWN_QUEUE_CAP) {
         spawn_len += 1;
     } else {
@@ -134,18 +142,41 @@ pub fn registerSpawn(workspace: u8) void {
     }
 }
 
-/// Pop the oldest non-expired entry.  Expired entries are silently discarded.
-/// Returns null when the queue is empty or all entries have timed out.
-fn popSpawnWorkspace() ?u8 {
-    const now = std.time.Instant.now() catch return null;
-    while (spawn_len > 0) {
-        const entry = spawn_buf[spawn_head];
-        spawn_head = (spawn_head + 1) % SPAWN_QUEUE_CAP;
+/// Search for an entry whose PID matches `win_pid` (from _NET_WM_PID).
+/// On a hit the entry is removed and its workspace returned.  On a miss
+/// returns null — the caller should fall back to popSpawnFifo().
+fn popSpawnByPid(win_pid: u32) ?u8 {
+    if (win_pid == 0) return null;
+    var i: u8 = 0;
+    while (i < spawn_len) : (i += 1) {
+        const idx = (spawn_head + i) % SPAWN_QUEUE_CAP;
+        if (spawn_buf[idx].pid != win_pid) continue;
+        const ws = spawn_buf[idx].workspace;
+        // Collapse the slot by shifting the tail of the logical queue down.
+        var j: u8 = i;
+        while (j + 1 < spawn_len) : (j += 1) {
+            const cur  = (spawn_head + j)     % SPAWN_QUEUE_CAP;
+            const next = (spawn_head + j + 1) % SPAWN_QUEUE_CAP;
+            spawn_buf[cur] = spawn_buf[next];
+        }
         spawn_len -= 1;
-        if (now.since(entry.time) <= SPAWN_TIMEOUT_NS) return entry.workspace;
-        // Expired — discard and try the next entry.
+        return ws;
     }
     return null;
+}
+
+/// Pop the oldest entry unconditionally (FIFO, no expiry).
+/// Used as a fallback for daemon-mode terminals whose grandchild exits before
+/// the window maps, making PID matching impossible.  Entries only accumulate
+/// here from confirmed successful execs, so there are no stale entries to
+/// time out — the exec-pipe mechanism in executeShellCommand guarantees that
+/// failed launches are discarded before registerSpawn is ever called.
+fn popSpawnFifo() ?u8 {
+    if (spawn_len == 0) return null;
+    const ws = spawn_buf[spawn_head].workspace;
+    spawn_head = (spawn_head + 1) % SPAWN_QUEUE_CAP;
+    spawn_len -= 1;
+    return ws;
 }
 
 // Map request 
@@ -177,13 +208,30 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         wm.conn, 0, win,
         xcb.XCB_ATOM_WM_NORMAL_HINTS, xcb.XCB_ATOM_ANY, 0, 18,
     );
+    // _NET_WM_PID: only queried when there are pending spawn entries, so the
+    // extra round-trip is paid only when we have a reason to use the result.
+    // The cookie is pipelined with the others above — no extra flush needed.
+    const has_pending_spawns = spawn_len > 0;
+    const c_net_wm_pid = if (has_pending_spawns) xcb.xcb_get_property(
+        wm.conn, 0, win,
+        utils.getAtomCached("_NET_WM_PID") catch 0,
+        xcb.XCB_ATOM_CARDINAL, 0, 1,
+    ) else undefined;
+
     // Determine target workspace.
     // Priority: workspace rules > exec spawn workspace > current workspace.
     //
     // Workspace rules (WM_CLASS): one round-trip; xcb_get_property_reply
     //   flushes the output buffer implicitly, so all cookies above also land.
-    // Spawn workspace (queue): zero round-trips — registerSpawn() was called
-    //   at fork time; popSpawnWorkspace() is a pure in-process ring-buffer pop.
+    // Spawn workspace: two-phase lookup —
+    //   Phase 1 (PID match): compare _NET_WM_PID against stored grandchild
+    //     PIDs.  Works for any program regardless of startup time — no expiry.
+    //   Phase 2 (FIFO fallback): for daemon-mode terminals (kitty, wezterm,
+    //     foot --server) whose client process exits before the window maps,
+    //     making PID matching impossible.  Entries are guaranteed stale-free
+    //     because executeShellCommand only calls registerSpawn() after the
+    //     exec-pipe confirms the grandchild exec'd successfully; exec failures
+    //     are discarded there and never enter the queue.
     // Current workspace: zero round-trips (fast path for unmanaged windows).
     const validated_ws: u8 = blk: {
         // 1. Workspace rules — explicit class-based assignment, highest priority.
@@ -194,17 +242,28 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
                 xcb.XCB_ATOM_STRING, 0, 256,
             );
             if (collectWorkspaceRule(wm, c_class)) |target| {
+                // Discard the PID cookie so XCB does not see an uncollected reply.
+                if (has_pending_spawns) xcb.xcb_discard_reply(wm.conn, c_net_wm_pid.sequence);
                 break :blk validateWorkspace(target, current_ws);
             }
             // No rule matched; fall through and try the spawn workspace.
         }
-        // 2. Exec spawn workspace — window was launched via a keybind exec action.
-        //    executeShellCommand called registerSpawn() before forking, recording
-        //    the active workspace in the spawn queue.  Pop the oldest non-expired
-        //    entry so the window lands on the workspace where the bind was pressed,
-        //    even when the terminal reuses a long-lived daemon process.
-        if (popSpawnWorkspace()) |spawn_ws|
-            break :blk validateWorkspace(spawn_ws, current_ws);
+        // 2. Exec spawn workspace.
+        if (has_pending_spawns) {
+            // Phase 1: direct PID match.
+            const pid_reply = xcb.xcb_get_property_reply(wm.conn, c_net_wm_pid, null);
+            if (pid_reply) |r| {
+                defer std.c.free(r);
+                if (r.*.format == 32 and r.*.value_len >= 1) {
+                    const win_pid = @as([*]const u32, @ptrCast(@alignCast(xcb.xcb_get_property_value(r))))[0];
+                    if (popSpawnByPid(win_pid)) |spawn_ws|
+                        break :blk validateWorkspace(spawn_ws, current_ws);
+                }
+            }
+            // Phase 2: FIFO fallback for daemon-mode terminals.
+            if (popSpawnFifo()) |spawn_ws|
+                break :blk validateWorkspace(spawn_ws, current_ws);
+        }
         // 3. Default: whichever workspace is active at map time.
         break :blk current_ws;
     };

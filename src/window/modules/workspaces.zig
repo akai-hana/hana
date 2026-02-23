@@ -266,14 +266,22 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
             }
 
             // Fast path: replay cached tiled positions without running the layout
-            // algorithm.  Falls back to a full retile only if the workspace is dirty
-            // (window added/removed/layout changed while away), the cache is cold,
-            // or the screen area changed (bar toggled, etc.).
+            // algorithm.  Falls back to a full retile only if this workspace's
+            // ws_geom_valid bit is not set (window added/removed/layout changed
+            // while away), the cache is cold, or the screen area changed.
             // restoreWorkspaceGeom calls utils.configureWindow directly, bypassing
             // the geom cache — this is intentional: the windows were moved to
             // OFFSCREEN_X_POSITION in step 1, so the cache has their correct tiled
             // rects but the server does not.
             if (!tiling.restoreWorkspaceGeom(wm)) {
+                // Evict the new workspace's geom cache entries before retriling.
+                // retileInactiveWorkspace may have pre-populated them with correct
+                // on-screen positions.  If we skip straight to retileCurrentWorkspace
+                // without evicting, configureSafe finds cache[win] == computed_geom
+                // (both are the correct on-screen rect), treats it as "no change",
+                // and skips the configure_window call — leaving windows stranded at
+                // OFFSCREEN_X_POSITION instead of moving them back on-screen.
+                for (new_ws_obj.windows.items()) |win| tiling.invalidateGeomCache(win);
                 tiling.retileCurrentWorkspace(wm);
             }
         } else {

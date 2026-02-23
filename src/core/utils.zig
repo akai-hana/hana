@@ -91,6 +91,7 @@ const AtomCache = struct {
     @"_NET_WM_ACTION_CLOSE":     u32,
     @"_NET_WM_ACTION_ABOVE":     u32,
     @"_NET_WM_ACTION_STICK":     u32,
+    @"_NET_WM_PID":              u32,
 };
 
 var atom_cache: ?AtomCache = null;
@@ -106,6 +107,7 @@ pub fn initAtomCache(conn: *xcb.xcb_connection_t) !void {
         "_NET_WM_STATE",        "_NET_WM_STATE_ABOVE",      "_NET_WM_STATE_STICKY",
         "_NET_WM_ALLOWED_ACTIONS",
         "_NET_WM_ACTION_CLOSE", "_NET_WM_ACTION_ABOVE",     "_NET_WM_ACTION_STICK",
+        "_NET_WM_PID",
     };
     var cookies: [names.len]xcb.xcb_intern_atom_cookie_t = undefined;
     for (&cookies, names) |*c, name|
@@ -135,6 +137,7 @@ pub fn initAtomCache(conn: *xcb.xcb_connection_t) !void {
         .@"_NET_WM_ACTION_CLOSE"     = values[13],
         .@"_NET_WM_ACTION_ABOVE"     = values[14],
         .@"_NET_WM_ACTION_STICK"     = values[15],
+        .@"_NET_WM_PID"              = values[16],
     };
 }
 

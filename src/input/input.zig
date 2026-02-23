@@ -21,6 +21,7 @@ const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("stdlib.h");
     @cInclude("sys/wait.h");
+    @cInclude("fcntl.h");
 });
 
 const MOUSE_BUTTON_LEFT:  u8 = 1;
@@ -246,33 +247,115 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
 
 /// Spawns `cmd` via a double-fork so the child is re-parented to init and
 /// the WM never needs to reap it.
+///
+/// Two pipes are used to give the WM reliable information about what happened:
+///
+/// exec_pipe  — the write end has FD_CLOEXEC set.  If execvp succeeds the
+///              kernel closes it automatically; the WM's blocking read gets
+///              EOF.  If execvp fails the grandchild writes a sentinel byte
+///              before exiting, and the WM's read returns that byte.  This
+///              means registerSpawn() is only called when we know the program
+///              actually started — failed execs never enter the spawn queue and
+///              can never be incorrectly consumed by an unrelated window later.
+///
+/// pid_pipe   — the intermediate child writes the grandchild's PID before it
+///              exits.  The WM stores this alongside the workspace so that
+///              handleMapRequest can match the arriving window by _NET_WM_PID
+///              rather than by queue position.  This makes workspace assignment
+///              independent of how long the program takes to show its window.
 fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
     const cmd_z = try wm.allocator.dupeZ(u8, cmd);
     defer wm.allocator.free(cmd_z);
 
+    // exec_pipe: grandchild write end is CLOEXEC — closes on successful exec,
+    // written to on failure.  pid_pipe: intermediate child writes grandchild PID.
+    var exec_pipe: [2]c_int = undefined;
+    var pid_pipe:  [2]c_int = undefined;
+    if (c.pipe(&exec_pipe) != 0 or c.pipe(&pid_pipe) != 0) {
+        debug.err("pipe() failed for command: {s}", .{cmd});
+        return error.PipeFailed;
+    }
+    // FD_CLOEXEC on exec_pipe write end: exec success silently closes it.
+    _ = c.fcntl(exec_pipe[1], c.F_SETFD, c.FD_CLOEXEC);
+
     const pid = c.fork();
     if (pid == 0) {
+        // ── Intermediate child ──────────────────────────────────────────────
+        // Close the WM-side (read) ends and the pid_pipe write end we don't
+        // own yet; we'll write to pid_pipe after forking the grandchild.
+        _ = c.close(exec_pipe[0]);
+        _ = c.close(pid_pipe[0]);
+
         const pid2 = c.fork();
         if (pid2 == 0) {
+            // ── Grandchild ──────────────────────────────────────────────────
+            // pid_pipe is no longer needed in this process.
+            _ = c.close(pid_pipe[1]);
             _ = c.setsid();
             const result = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z.ptr, null }));
-            if (result == -1) debug.err("execvp failed for command: {s}", .{cmd});
+            if (result == -1) {
+                // exec failed: write a sentinel byte so the WM knows not to
+                // register a spawn entry.  exec_pipe[1] is not CLOEXEC-closed
+                // on failure, so this write reaches the WM.
+                const sentinel: u8 = 1;
+                _ = c.write(exec_pipe[1], &sentinel, 1);
+                debug.err("execvp failed for command: {s}", .{cmd});
+            }
             std.process.exit(1);
         } else if (pid2 < 0) {
             debug.err("Second fork failed for command: {s}", .{cmd});
             std.process.exit(1);
         }
+        // Forward grandchild PID to WM, then close our write ends and exit.
+        // Closing exec_pipe[1] here is essential: without it the WM would be
+        // waiting for *this* process to release the write end too, preventing
+        // it from ever seeing EOF on a successful exec.
+        _ = c.write(pid_pipe[1], &pid2, @sizeOf(c_int));
+        _ = c.close(pid_pipe[1]);
+        _ = c.close(exec_pipe[1]);
         std.process.exit(0);
     } else if (pid > 0) {
-        // Record the target workspace before waiting for the intermediate child.
-        // window.registerSpawn() enqueues (workspace, timestamp) so handleMapRequest
-        // can pop it at map time — works correctly even for daemon-mode terminals
-        // that reuse a long-lived process whose /proc/pid/environ is stale.
-        if (workspaces.getCurrentWorkspace()) |ws| window.registerSpawn(ws);
+        // ── WM ──────────────────────────────────────────────────────────────
+        // Close write ends we don't own; holding them open would prevent the
+        // blocking reads below from ever returning.
+        _ = c.close(exec_pipe[1]);
+        _ = c.close(pid_pipe[1]);
+
         var status: c_int = 0;
         if (c.waitpid(pid, &status, 0) == -1) {
+            _ = c.close(exec_pipe[0]);
+            _ = c.close(pid_pipe[0]);
             debug.err("waitpid failed", .{});
             return error.WaitpidFailed;
+        }
+
+        // Read the grandchild PID.  The intermediate child writes it before
+        // exiting, so by the time waitpid returns it is already in the buffer.
+        var grandchild_pid: c_int = -1;
+        _ = c.read(pid_pipe[0], &grandchild_pid, @sizeOf(c_int));
+        _ = c.close(pid_pipe[0]);
+
+        // Blocking read on exec_pipe: returns immediately because by the time
+        // waitpid returns the grandchild has either exec'd (CLOEXEC closed the
+        // write end → EOF, n==0) or written a sentinel byte and exited (n==1).
+        // The intermediate child also closed its copy of exec_pipe[1] before
+        // exiting, so the WM's read end sees exactly one writer: the grandchild.
+        var sentinel: u8 = 0;
+        const n = c.read(exec_pipe[0], &sentinel, 1);
+        _ = c.close(exec_pipe[0]);
+
+        if (n > 0) {
+            // exec failed — do not register a spawn entry; nothing will map.
+            return;
+        }
+
+        // exec succeeded: register the spawn so handleMapRequest can assign
+        // the right workspace.  grandchild_pid may be -1 if the intermediate
+        // child's write to pid_pipe failed for some reason; passing 0 in that
+        // case degrades gracefully to the FIFO fallback in handleMapRequest.
+        if (workspaces.getCurrentWorkspace()) |ws| {
+            const pid_u32: u32 = if (grandchild_pid > 0) @intCast(grandchild_pid) else 0;
+            window.registerSpawn(ws, pid_u32);
         }
     } else {
         debug.err("First fork failed for command: {s}", .{cmd});
