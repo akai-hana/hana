@@ -1,37 +1,34 @@
 //! Window dragging and resizing
+
 const defs = @import("defs");
-const xcb = defs.xcb;
-const WM = defs.WM;
+const xcb  = defs.xcb;
+const WM   = defs.WM;
 const utils = @import("utils");
 const focus = @import("focus");
 const tiling = @import("tiling");
 const bar = @import("bar");
+
 pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
     if (wm.drag_state.active) return;
     if (bar.isBarWindow(win)) return;
-    // Fast path: serve geometry from the tiling cache — zero X round-trips.
-    // Falls back to a live xcb_get_geometry query only for floating windows.
+    // Prefer the tiling cache; fall back to a live round-trip for floating windows.
     const geom = tiling.getCachedGeom(win) orelse
         utils.getGeometry(wm.conn, win) orelse return;
     wm.drag_state = .{
-        .active = true,
-        .window = win,
-        .mode = if (button == 1) .move else .resize,
-        .start_x = x,
-        .start_y = y,
-        .start_win_x = geom.x,
-        .start_win_y = geom.y,
-        .start_win_width = geom.width,
+        .active          = true,
+        .window          = win,
+        .mode            = if (button == 1) .move else .resize,
+        .start_x         = x,
+        .start_y         = y,
+        .start_win_x     = geom.x,
+        .start_win_y     = geom.y,
+        .start_win_width  = geom.width,
         .start_win_height = geom.height,
     };
     focus.setFocus(wm, win, .user_command);
-    // Remove the window from tiling so the drag moves it freely.
-    // isWindowTiled checks State.enabled internally, so no separate state lookup needed.
+    // Remove from tiling so the drag moves the window freely.
+    // Wrap removal + retile in a grab to prevent a one-frame gap in the layout.
     if (tiling.isWindowTiled(win)) {
-        // Wrap the removal and retile of the remaining windows in a single server
-        // grab.  Without the grab, the compositor can composite a frame where the
-        // dragged window has left its tiled slot but the other windows have not yet
-        // reflowed to fill the gap — producing a visible hole for one frame.
         _ = xcb.xcb_grab_server(wm.conn);
         tiling.removeWindow(win);
         tiling.retileCurrentWorkspace(wm);
@@ -39,6 +36,7 @@ pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
         utils.flush(wm.conn);
     }
 }
+
 pub fn updateDrag(wm: *WM, x: i16, y: i16) void {
     if (!wm.drag_state.active) return;
     const drag = &wm.drag_state;
@@ -46,24 +44,26 @@ pub fn updateDrag(wm: *WM, x: i16, y: i16) void {
     const dy = y - drag.start_y;
     const rect = switch (drag.mode) {
         .move => utils.Rect{
-            .x = drag.start_win_x + dx,
-            .y = drag.start_win_y + dy,
-            .width = drag.start_win_width,
+            .x      = drag.start_win_x + dx,
+            .y      = drag.start_win_y + dy,
+            .width  = drag.start_win_width,
             .height = drag.start_win_height,
         },
         .resize => utils.Rect{
-            .x = drag.start_win_x,
-            .y = drag.start_win_y,
-            .width = @intCast(@max(@as(i32, defs.MIN_WINDOW_DIM), @as(i32, drag.start_win_width) + dx)),
+            .x      = drag.start_win_x,
+            .y      = drag.start_win_y,
+            .width  = @intCast(@max(@as(i32, defs.MIN_WINDOW_DIM), @as(i32, drag.start_win_width)  + dx)),
             .height = @intCast(@max(@as(i32, defs.MIN_WINDOW_DIM), @as(i32, drag.start_win_height) + dy)),
         },
     };
     utils.configureWindow(wm.conn, drag.window, rect);
     utils.flush(wm.conn);
 }
+
 pub inline fn stopDrag(wm: *WM) void {
     wm.drag_state.active = false;
 }
+
 pub inline fn isDragging(wm: *WM) bool {
     return wm.drag_state.active;
 }

@@ -1,2 +1,4 @@
-89.
-please continue.
+fm:
+tracking.zig:
+count() is a duplicate of items().len — if anyone needs the count they can call .items().len. But it's a thin abstraction over a switch, so it may be genuinely useful. Wait, let me check if count() is used anywhere meaningful... it's a public function, and without seeing all callers I'll keep it. Actually, looking more carefully - count() duplicates items().len exactly.
+It's dead weight if callers use items() directly, but I should be conservative without seeing all the call sites.

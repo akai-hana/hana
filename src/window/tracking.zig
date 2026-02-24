@@ -1,12 +1,10 @@
-/// Efficient window tracking with small-array optimisation.
-///
-/// Storage strategy:
-/// - Small (≤16 windows): fixed inline array — cache-friendly, zero allocations.
-/// - Large  (>16 windows): ArrayList + HashSet for O(1) contains/remove.
-///
-/// A tagged union enforces that exactly one mode is active at all times.
-/// The old two-optional design allowed the impossible state (both null / both
-/// non-null) and caused items() to return a slice into a stack-allocated copy.
+// Efficient window tracking with small-array optimisation.
+//
+// Storage strategy:
+//   Small (<=16 windows): fixed inline array, cache-friendly, zero allocations.
+//   Large (>16 windows):  ArrayList + HashSet for O(1) contains/remove.
+//
+// A tagged union enforces that exactly one mode is active at all times.
 
 const std = @import("std");
 
@@ -14,7 +12,7 @@ const SMALL_THRESHOLD    = 16;
 const DEMOTION_THRESHOLD = SMALL_THRESHOLD / 2;
 
 const SmallStore = struct {
-    items: [SMALL_THRESHOLD]u32 = [_]u32{0} ** SMALL_THRESHOLD,
+    items: [SMALL_THRESHOLD]u32 = undefined,
     len:   u8 = 0,
 };
 
@@ -40,7 +38,7 @@ pub const Tracking = struct {
         }
     }
 
-    /// O(n) for small (cache-friendly), O(1) for large.
+    // O(n) for small (cache-friendly), O(1) for large.
     pub inline fn contains(self: *const Tracking, win: u32) bool {
         return switch (self.storage) {
             .small => |s| std.mem.indexOfScalar(u32, s.items[0..s.len], win) != null,
@@ -58,8 +56,9 @@ pub const Tracking = struct {
                     s.len += 1;
                 } else {
                     try self.promoteToLarge();
-                    try self.storage.large.list.append(self.allocator, win);
-                    try self.storage.large.set.put(win, {});
+                    // promoteToLarge reserves s.len+8 slots, so there is always room.
+                    self.storage.large.list.appendAssumeCapacity(win);
+                    self.storage.large.set.putAssumeCapacity(win, {});
                 }
             },
             .large => |*l| {
@@ -81,8 +80,9 @@ pub const Tracking = struct {
                     s.len += 1;
                 } else {
                     try self.promoteToLarge();
-                    try self.storage.large.list.insert(self.allocator, 0, win);
-                    try self.storage.large.set.put(win, {});
+                    // promoteToLarge reserves s.len+8 slots, so there is always room.
+                    self.storage.large.list.insertAssumeCapacity(0, win);
+                    self.storage.large.set.putAssumeCapacity(win, {});
                 }
             },
             .large => |*l| {
@@ -92,10 +92,8 @@ pub const Tracking = struct {
         }
     }
 
-    /// Reorder the window list in a single pass using a caller-provided buffer.
-    /// `new_order` must be a permutation of the current windows.
-    /// For the small path this is a direct memcpy; for the large path it also
-    /// rebuilds the hash set to stay consistent.
+    // Reorder in a single pass using a caller-provided permutation.
+    // For large storage, also rebuilds the hash set to stay consistent.
     pub fn reorder(self: *Tracking, new_order: []const u32) void {
         switch (self.storage) {
             .small => |*s| {
@@ -104,10 +102,8 @@ pub const Tracking = struct {
                 s.len = len;
             },
             .large => |*l| {
-                // new_order is a permutation of the existing windows, so its
-                // length never exceeds the current capacity of either structure.
-                // clearRetainingCapacity keeps the allocated storage, making
-                // the assumeCapacity variants below unconditionally safe.
+                // new_order is a permutation, so it never exceeds existing capacity.
+                // clearRetainingCapacity keeps storage, making assumeCapacity safe below.
                 l.list.clearRetainingCapacity();
                 l.set.clearRetainingCapacity();
                 for (new_order) |win| {
@@ -118,7 +114,7 @@ pub const Tracking = struct {
         }
     }
 
-    /// Ordered removal (preserves window order).
+    // Ordered removal (preserves window order).
     pub fn remove(self: *Tracking, win: u32) bool {
         switch (self.storage) {
             .small => |*s| {
@@ -132,20 +128,19 @@ pub const Tracking = struct {
                 return false;
             },
             .large => |*l| {
-                // Find the list index first — if the window somehow isn't in the
-                // list (shouldn't happen, but guards against inconsistency), bail
-                // before touching the set so both structures stay in sync.
+                // Find list index first; bail before touching the set if missing
+                // so both structures stay in sync.
                 const idx = std.mem.indexOfScalar(u32, l.list.items, win) orelse return false;
                 _ = l.set.remove(win);
                 _ = l.list.orderedRemove(idx);
-                // Capture the condition before demoteToSmall() invalidates `l`.
+                // Capture len before demoteToSmall() invalidates `l`.
                 if (l.list.items.len <= DEMOTION_THRESHOLD) self.demoteToSmall();
                 return true;
             },
         }
     }
 
-    /// Returns a slice into Tracking's own storage — valid for the lifetime of self.
+    // Returns a slice into Tracking's own storage, valid for the lifetime of self.
     pub inline fn items(self: *const Tracking) []const u32 {
         return switch (self.storage) {
             .small => |s| s.items[0..s.len],
@@ -153,6 +148,7 @@ pub const Tracking = struct {
         };
     }
 
+    // Avoids copying the SmallStore just to read its len field.
     pub inline fn count(self: *const Tracking) usize {
         return switch (self.storage) {
             .small => |s| s.len,
@@ -164,7 +160,6 @@ pub const Tracking = struct {
         const s = self.storage.small;
         var list: std.ArrayListUnmanaged(u32) = .empty;
         var set = std.AutoHashMap(u32, void).init(self.allocator);
-        // If either allocation fails, release whatever was already allocated.
         errdefer list.deinit(self.allocator);
         errdefer set.deinit();
         try list.ensureTotalCapacity(self.allocator, s.len + 8);
