@@ -101,14 +101,14 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
         try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
     defer if (xdg_config_home == null) allocator.free(config_home);
 
-    const xdg_path = try std.fs.path.join(allocator, &.{ config_home, "hana", "config.toml" });
+    const xdg_path = try std.Io.Dir.path.join(allocator, &.{ config_home, "hana", "config.toml" });
     defer allocator.free(xdg_path);
 
     if (loadConfig(allocator, xdg_path)) |cfg| return cfg else |_| {}
 
     const cwd   = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
-    const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
+    const local = try std.Io.Dir.path.join(allocator, &.{ cwd, "config.toml" });
     defer allocator.free(local);
 
     if (loadConfig(allocator, local)) |cfg| return cfg else |_| {}
@@ -119,33 +119,30 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
 
 /// Reads, parses, and returns the config at `path`.
 pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
-    const path_z = try allocator.dupeZ(u8, path);
-    defer allocator.free(path_z);
-
-    const fd = std.posix.open(path_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| {
+    // Config loading is synchronous and runs before the event loop, so
+    // std.options.debug_io (the global blocking Io instance) is appropriate here.
+    const io = std.options.debug_io;
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
         if (err == error.FileNotFound) debug.info("Not found: {s}", .{path});
         return err;
     };
-    defer std.posix.close(fd);
+    defer file.close(io);
 
-    var content: std.ArrayListUnmanaged(u8) = .empty;
-    defer content.deinit(allocator);
-    try content.ensureTotalCapacity(allocator, 4096);
+    // Allocate max+1 bytes so readPositionalAll can detect oversized files without
+    // a streaming loop: if it fills the whole buffer the file exceeded the limit.
+    const max = 1024 * 1024;
+    const buf = try allocator.alloc(u8, max + 1);
+    defer allocator.free(buf);
+    const n = try file.readPositionalAll(io, buf, 0);
+    if (n > max) return error.FileTooLarge;
+    const content = buf[0..n];
 
-    var buf: [4096]u8 = undefined;
-    while (true) {
-        const n = try std.posix.read(fd, &buf);
-        if (n == 0) break;
-        try content.appendSlice(allocator, buf[0..n]);
-        if (content.items.len > 1024 * 1024) return error.FileTooLarge;
-    }
-
-    if (content.items.len == 0) {
+    if (content.len == 0) {
         debug.info("Empty config file: {s}, using fallback", .{path});
         return try loadFallbackConfig(allocator);
     }
 
-    var doc = try parser.parse(allocator, content.items);
+    var doc = try parser.parse(allocator, content);
     defer doc.deinit();
 
     var cfg = getDefaultConfig(allocator);

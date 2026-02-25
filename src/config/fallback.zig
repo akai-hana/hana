@@ -85,7 +85,7 @@ pub fn detectFont(allocator: std.mem.Allocator) ![]const u8 {
 
 /// Checks whether command exists in a common bin directory or $PATH.
 fn isCommandAvailable(command: []const u8) bool {
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
 
     const common_paths = [_][]const u8{ "/usr/bin", "/usr/local/bin", "/bin" };
     inline for (common_paths) |path| {
@@ -105,12 +105,14 @@ fn isCommandAvailable(command: []const u8) bool {
     return false;
 }
 
-// Iter 2: replaced open+close with posix.access — avoids opening a file descriptor
-// only to check existence. access(F_OK) is the idiomatic POSIX existence test.
+// std.Io.Dir.openFileAbsolute takes []const u8 directly — no null terminator needed.
+// std.options.debug_io is appropriate: this is a blocking existence check that
+// runs at startup before any event loop or Io context is available.
 inline fn checkPath(buf: []u8, dir: []const u8, command: []const u8) bool {
-    const full_path = std.fmt.bufPrintZ(buf, "{s}/{s}", .{ dir, command }) catch return false;
-    const fd = std.posix.open(full_path, .{ .ACCMODE = .RDONLY }, 0) catch return false;
-    std.posix.close(fd);
+    const full_path = std.fmt.bufPrint(buf, "{s}/{s}", .{ dir, command }) catch return false;
+    const io = std.options.debug_io;
+    const file = std.Io.Dir.openFileAbsolute(io, full_path, .{}) catch return false;
+    file.close(io);
     return true;
 }
 

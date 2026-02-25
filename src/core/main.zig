@@ -1,7 +1,6 @@
 //! Main event loop.
 
 const std     = @import("std");
-const posix   = std.posix;
 const builtin = @import("builtin");
 
 const debug     = @import("debug");
@@ -24,37 +23,42 @@ const lifecycle  = @import("lifecycle");
 const xcb = defs.xcb;
 const WM  = defs.WM;
 
-const FDs = struct { signal: posix.fd_t, timer: posix.fd_t };
+// Signal and timer fds are Linux kernel objects with no std.fs counterpart,
+// but std.fs.File gives us RAII close() and a Reader for the read calls in
+// the event loop. std.posix.poll / SIG.* / POLL.* are still used directly
+// since std.io has no multi-fd multiplexing abstraction yet.
+const FDs = struct { signal: std.fs.File, timer: std.fs.File };
 
 /// Creates a signalfd (for SIGHUP / SIGTERM / SIGINT) and a timerfd for the clock module.
 fn setupPollFds() !FDs {
     var sigset: std.os.linux.sigset_t = std.mem.zeroes(std.os.linux.sigset_t);
-    std.os.linux.sigaddset(&sigset, posix.SIG.HUP);
-    std.os.linux.sigaddset(&sigset, posix.SIG.TERM);
-    std.os.linux.sigaddset(&sigset, posix.SIG.INT);
-    _ = std.os.linux.sigprocmask(posix.SIG.BLOCK, &sigset, null);
+    std.os.linux.sigaddset(&sigset, std.posix.SIG.HUP);
+    std.os.linux.sigaddset(&sigset, std.posix.SIG.TERM);
+    std.os.linux.sigaddset(&sigset, std.posix.SIG.INT);
+    _ = std.os.linux.sigprocmask(std.posix.SIG.BLOCK, &sigset, null);
 
     const sfd = std.os.linux.signalfd(-1, &sigset, std.os.linux.SFD.NONBLOCK | std.os.linux.SFD.CLOEXEC);
     if (sfd < 0) return error.SignalFdFailed;
-    errdefer posix.close(@intCast(sfd));
+    const signal_file = std.fs.File{ .handle = @intCast(sfd) };
+    errdefer signal_file.close();
 
     const tfd = std.os.linux.timerfd_create(.MONOTONIC, .{ .NONBLOCK = true, .CLOEXEC = true });
     if (tfd < 0) return error.TimerFdFailed;
 
     clock.setTimerFd(@intCast(tfd));
-    return .{ .signal = @intCast(sfd), .timer = @intCast(tfd) };
+    return .{ .signal = signal_file, .timer = std.fs.File{ .handle = @intCast(tfd) } };
 }
 
-fn handleSignalFd(signal_fd: posix.fd_t) void {
+fn handleSignalFd(signal_file: std.fs.File) void {
     while (true) {
         var siginfo: std.os.linux.signalfd_siginfo = undefined;
-        const n = posix.read(signal_fd, std.mem.asBytes(&siginfo)) catch break;
+        const n = signal_file.read(std.mem.asBytes(&siginfo)) catch break;
         if (n != @sizeOf(std.os.linux.signalfd_siginfo)) break;
 
         switch (siginfo.signo) {
-            @intFromEnum(posix.SIG.HUP)  => lifecycle.reload(),
-            @intFromEnum(posix.SIG.TERM),
-            @intFromEnum(posix.SIG.INT)  => lifecycle.quit(),
+            @intFromEnum(std.posix.SIG.HUP)  => lifecycle.reload(),
+            @intFromEnum(std.posix.SIG.TERM),
+            @intFromEnum(std.posix.SIG.INT)  => lifecycle.quit(),
             else => {},
         }
     }
@@ -233,8 +237,8 @@ pub fn main() !void {
     defer layouts.deinitSizeHintsCache(allocator);
 
     const fds = try setupPollFds();
-    defer posix.close(fds.signal);
-    defer posix.close(fds.timer);
+    defer fds.signal.close();
+    defer fds.timer.close();
 
     try events.initModules(&wm);
     defer events.deinitModules();
@@ -250,28 +254,28 @@ pub fn main() !void {
     debug.info("Started", .{});
 
     const x_fd = xcb.xcb_get_file_descriptor(conn);
-    var pollfds = [_]posix.pollfd{
-        .{ .fd = x_fd,       .events = posix.POLL.IN, .revents = 0 },
-        .{ .fd = fds.signal, .events = posix.POLL.IN, .revents = 0 },
-        .{ .fd = fds.timer,  .events = posix.POLL.IN, .revents = 0 },
+    var pollfds = [_]std.posix.pollfd{
+        .{ .fd = x_fd,              .events = std.posix.POLL.IN, .revents = 0 },
+        .{ .fd = fds.signal.handle, .events = std.posix.POLL.IN, .revents = 0 },
+        .{ .fd = fds.timer.handle,  .events = std.posix.POLL.IN, .revents = 0 },
     };
 
     while (lifecycle.running.load(.acquire)) {
-        _ = posix.poll(&pollfds, -1) catch |err| {
+        _ = std.posix.poll(&pollfds, -1) catch |err| {
             if (err == error.Interrupted) continue;
             debug.err("Poll error: {}", .{err});
             continue;
         };
 
         // Detect a dead X11 connection before dispatching events.
-        if ((pollfds[0].revents & (posix.POLL.ERR | posix.POLL.HUP)) != 0 or
+        if ((pollfds[0].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0 or
             xcb.xcb_connection_has_error(conn) != 0) {
             debug.err("X11 connection error, shutting down", .{});
             break;
         }
 
         // X11 events
-        if (pollfds[0].revents & posix.POLL.IN != 0) {
+        if (pollfds[0].revents & std.posix.POLL.IN != 0) {
             while (xcb.xcb_poll_for_event(conn)) |event| {
                 defer std.c.free(event);
                 events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
@@ -285,15 +289,15 @@ pub fn main() !void {
         }
 
         // Signals
-        if (pollfds[1].revents & posix.POLL.IN != 0) {
+        if (pollfds[1].revents & std.posix.POLL.IN != 0) {
             handleSignalFd(fds.signal);
             maybeReload(&wm);
         }
 
         // Timer (clock tick)
-        if (pollfds[2].revents & posix.POLL.IN != 0) {
+        if (pollfds[2].revents & std.posix.POLL.IN != 0) {
             var expiration: u64 = 0;
-            _ = posix.read(fds.timer, std.mem.asBytes(&expiration)) catch {};
+            _ = fds.timer.read(std.mem.asBytes(&expiration)) catch {};
             bar.checkClockUpdate();
         }
     }
