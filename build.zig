@@ -57,13 +57,49 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // bar_flags: tells bar.zig which segment module files are present on disk.
+    // When has_any_segment is false, BarFull is never analyzed by Zig's lazy
+    // evaluator, so drawing.zig is never compiled and cairo/pango are not linked.
+    const has_any_segment = all_modules.contains("tags")       or
+                            all_modules.contains("layout")     or
+                            all_modules.contains("variations") or
+                            all_modules.contains("title")      or
+                            all_modules.contains("clock")      or
+                            all_modules.contains("status");
+
+    const bar_flags_src = std.fmt.allocPrint(allocator,
+        \\pub const has_tags       = {};
+        \\pub const has_layout     = {};
+        \\pub const has_variations = {};
+        \\pub const has_title      = {};
+        \\pub const has_clock      = {};
+        \\pub const has_status     = {};
+        \\pub const has_any_segment = {};
+        \\
+    , .{
+        all_modules.contains("tags"),
+        all_modules.contains("layout"),
+        all_modules.contains("variations"),
+        all_modules.contains("title"),
+        all_modules.contains("clock"),
+        all_modules.contains("status"),
+        has_any_segment,
+    }) catch @panic("OOM");
+
+    const bar_flags_module = b.createModule(.{
+        .root_source_file = b.addWriteFiles().add("bar_flags.zig", bar_flags_src),
+        .target   = target,
+        .optimize = optimize,
+    });
+
     root_module.addImport("build_options", build_options_module);
     root_module.addImport("layout_flags",  layout_flags_module);
+    root_module.addImport("bar_flags",     bar_flags_module);
 
     // Wire each module based on what it actually @imports.
-    wireModules(b, root_module, &all_modules, build_options_module, layout_flags_module, optimize, allocator);
+    wireModules(b, root_module, &all_modules, build_options_module, layout_flags_module, bar_flags_module, optimize, allocator);
 
-    linkSystemLibraries(root_module);
+    linkSystemLibraries(root_module, has_any_segment);
 
     b.installArtifact(exe);
 
@@ -84,6 +120,7 @@ fn wireModules(
     all_modules:          *std.StringHashMap(ModuleEntry),
     build_options_module: *std.Build.Module,
     layout_flags_module:  *std.Build.Module,
+    bar_flags_module:     *std.Build.Module,
     optimize:             std.builtin.OptimizeMode,
     allocator:            std.mem.Allocator,
 ) void {
@@ -98,6 +135,7 @@ fn wireModules(
 
         mod.addImport("build_options", build_options_module);
         mod.addImport("layout_flags",  layout_flags_module);
+        mod.addImport("bar_flags",     bar_flags_module);
 
         // Read the source file and wire only the @imports that are known modules.
         const imports = findModuleImports(b, allocator, entry.value_ptr.source_path, all_modules);
@@ -139,17 +177,23 @@ fn findModuleImports(
     return results.toOwnedSlice(allocator) catch &.{};
 }
 
-fn linkSystemLibraries(root: *std.Build.Module) void {
+fn linkSystemLibraries(root: *std.Build.Module, has_bar: bool) void {
     root.linkSystemLibrary("xcb", .{});
     root.linkSystemLibrary("xkbcommon", .{});
     root.linkSystemLibrary("xkbcommon-x11", .{});
     root.linkSystemLibrary("X11", .{});
-    root.linkSystemLibrary("cairo", .{});
-    root.linkSystemLibrary("pangocairo-1.0", .{});
-    root.linkSystemLibrary("pango-1.0", .{});
-    root.linkSystemLibrary("glib-2.0", .{});
-    root.linkSystemLibrary("gobject-2.0", .{});
     root.linkSystemLibrary("xcb-cursor", .{});
+
+    // Cairo, Pango, GLib, and GObject are only needed when at least one bar
+    // segment module is present. With zero segments, BarFull is never analyzed,
+    // drawing.zig is never compiled, and these symbols are never referenced.
+    if (has_bar) {
+        root.linkSystemLibrary("cairo", .{});
+        root.linkSystemLibrary("pangocairo-1.0", .{});
+        root.linkSystemLibrary("pango-1.0", .{});
+        root.linkSystemLibrary("glib-2.0", .{});
+        root.linkSystemLibrary("gobject-2.0", .{});
+    }
 }
 
 fn discoverModules(
