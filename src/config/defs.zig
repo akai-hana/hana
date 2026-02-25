@@ -564,6 +564,24 @@ pub const FocusSuppressReason = enum {
     tiling_operation, // Currently tiling - don't let cursor steal focus
 };
 
+/// Per-workspace minimization state, owned by WM.
+/// Defined here so minimize.zig functions can receive *WM without circular imports.
+pub const MinimizeState = struct {
+    // One insertion-ordered list per workspace (indexed by workspace id).
+    // LIFO restore = pop from tail; FIFO restore = remove from head.
+    per_workspace:  []std.ArrayListUnmanaged(u32),
+    // Maps minimized window -> saved fullscreen geometry (null if not fullscreen
+    // when minimized). Doubles as the O(1) membership set.
+    minimized_info: std.AutoHashMap(u32, ?WindowGeometry),
+    allocator:      std.mem.Allocator,
+
+    pub fn deinit(self: *MinimizeState) void {
+        for (self.per_workspace) |*list| list.deinit(self.allocator);
+        self.allocator.free(self.per_workspace);
+        self.minimized_info.deinit();
+    }
+};
+
 pub const WM = struct {
     allocator:      std.mem.Allocator,
     conn:           *xcb.xcb_connection_t,
@@ -575,6 +593,7 @@ pub const WM = struct {
     xkb_state:      ?*xkbcommon.XkbState,
     dpi_info:       dpi.DpiInfo,
     drag_state:     DragState = .{},
+    minimize:       ?MinimizeState = null,
     // Timestamp of the last processed X event; used for ICCCM-compliant
     // focus requests — xcb_set_input_focus and WM_TAKE_FOCUS messages must
     // carry the triggering event's timestamp, not XCB_CURRENT_TIME (0).
@@ -590,6 +609,7 @@ pub const WM = struct {
     spawn_cursor_y: i16 = 0,
 
     pub fn deinit(self: *WM) void {
+        if (self.minimize) |*m| m.deinit();
         self.fullscreen.deinit();
         self.config.deinit(self.allocator);
     }

@@ -1,5 +1,4 @@
-//! Master-stack layout with overflow handling
-//! Direct XCB calls — no batch overhead
+//! Master-stack layout with overflow handling.
 
 const defs    = @import("defs");
 const utils   = @import("utils");
@@ -13,16 +12,15 @@ inline fn calcAvailable(total_h: u16, count: u16, margins: utils.Margins) u16 {
     return if (total_h > overhead) total_h - overhead else count * defs.MIN_WINDOW_DIM;
 }
 
-/// Height of window `i` out of `count`, distributing `available` pixels via
-/// cumulative integer division. No window differs from any sibling by more than
-/// 1px, and the column fills exactly — in a single pass, no remainder field needed.
+// Height of window i out of count, distributing available pixels via cumulative
+// integer division. No window differs from any sibling by more than 1px.
 inline fn windowHeight(i: u16, count: u16, available: u16) u16 {
     const h = ((i + 1) * available / count) -| (i * available / count);
     return @max(defs.MIN_WINDOW_DIM, h);
 }
 
-/// Y position of window `i`, derived from the same cumulative formula so that
-/// preceding windows' heights (which may vary by 1px) are automatically accounted for.
+// Y position of window i, derived from the cumulative formula so that
+// preceding windows' heights (which may vary by 1px) are accounted for.
 inline fn windowY(i: u16, count: u16, available: u16, y_offset: u16, margins: utils.Margins) u16 {
     const y_start = i * available / count;
     return y_offset + margins.gap + y_start + i * (margins.gap + 2 * margins.border);

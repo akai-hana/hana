@@ -107,11 +107,9 @@ fn suppressionFor(reason: Reason) defs.FocusSuppressReason {
 // Returns true only if the window is mapped and viewable.
 // A failed reply (e.g. window was destroyed) is treated as unmapped.
 fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
-    const cookie = xcb.xcb_get_window_attributes(conn, win);
-    const reply = xcb.xcb_get_window_attributes_reply(conn, cookie, null);
-    if (reply) |r| {
-        defer std.c.free(r);
-        return r.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE;
-    }
-    return false;
+    const reply = xcb.xcb_get_window_attributes_reply(
+        conn, xcb.xcb_get_window_attributes(conn, win), null,
+    ) orelse return false;
+    defer std.c.free(reply);
+    return reply.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE;
 }

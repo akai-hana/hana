@@ -78,16 +78,13 @@ fn enterFullscreenCommit(wm: *WM, win: u32, ws: u8, geom: defs.WindowGeometry) v
     bar.setBarState(wm, .hide_fullscreen);
 
     // Expand to cover the full screen with no border, then raise above floats.
-    _ = xcb.xcb_configure_window(wm.conn, win,
-        xcb.XCB_CONFIG_WINDOW_X     | xcb.XCB_CONFIG_WINDOW_Y     |
-        xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
-        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH,
-        &[_]u32{
-            0, 0,
-            @intCast(wm.screen.width_in_pixels),
-            @intCast(wm.screen.height_in_pixels),
-            0,
-        });
+    utils.configureWindowGeom(wm.conn, win, .{
+        .x            = 0,
+        .y            = 0,
+        .width        = @intCast(wm.screen.width_in_pixels),
+        .height       = @intCast(wm.screen.height_in_pixels),
+        .border_width = 0,
+    });
     _ = xcb.xcb_configure_window(wm.conn, win,
         xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
@@ -124,17 +121,7 @@ fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
             xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(wm, win)});
     } else {
         // Floating: restore saved geometry and border explicitly.
-        _ = xcb.xcb_configure_window(wm.conn, win,
-            xcb.XCB_CONFIG_WINDOW_X     | xcb.XCB_CONFIG_WINDOW_Y     |
-            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
-            xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH,
-            &[_]u32{
-                @bitCast(@as(i32, saved.x)),
-                @bitCast(@as(i32, saved.y)),
-                saved.width,
-                saved.height,
-                saved.border_width,
-            });
+        utils.configureWindowGeom(wm.conn, win, saved);
         _ = xcb.xcb_change_window_attributes(wm.conn, win,
             xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(wm, win)});
 
@@ -144,7 +131,7 @@ fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
             const y: u32 = @intCast(wm.screen.height_in_pixels / 4);
             for (ws_obj.windows.items()) |other_win| {
                 if (other_win == win) continue;
-                if (minimize.isMinimized(other_win)) continue;
+                if (minimize.isMinimized(wm, other_win)) continue;
                 _ = xcb.xcb_configure_window(wm.conn, other_win,
                     xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
                     &[_]u32{ x, y });

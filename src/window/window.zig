@@ -1,17 +1,4 @@
 // Window lifecycle — map/unmap/destroy, configure, enter/button events.
-//
-// Sections:
-//   1. Window predicates       — isValidManagedWindow, isOnCurrentWorkspace
-//   2. Button grab management  — grabButtons
-//   3. Workspace rule matching — workspaceRuleForClass, resolveWorkspace
-//   4. Tiling registration     — registerWithTiling
-//   5. Spawn queue             — SpawnQueue
-//   6. Workspace assignment    — resolveTargetWorkspace
-//   7. Map / unmap / destroy   — handleMapRequest, handleUnmapNotify, handleDestroyNotify
-//   8. Configure request       — handleConfigureRequest, sendConfigureNotify
-//   9. Focus / crossing events — handleEnterNotify, handleLeaveNotify
-//  10. Property notify         — handlePropertyNotify
-//  11. Size-hint parsing       — collectAndCacheSizeHints
 
 const std        = @import("std");
 const defs       = @import("defs");
@@ -34,9 +21,7 @@ const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 const XSIZE_HINTS_P_MIN_SIZE:  u32 = 0x010;
 const XSIZE_HINTS_P_BASE_SIZE: u32 = 0x100;
 
-// ============================================================================
-// 1. Window predicates
-// ============================================================================
+// Window predicates
 
 /// Returns true when `win` is non-zero, not the root window, not the bar, and
 /// is tracked by the window manager. This is the core validity check for any
@@ -55,9 +40,7 @@ pub inline fn isOnCurrentWorkspace(wm: *WM, win: u32) bool {
            workspaces.isOnCurrentWorkspace(win);
 }
 
-// ============================================================================
-// 2. Button grab management
-// ============================================================================
+// Button grab management
 
 /// For unfocused windows we grab all buttons in sync mode so we can intercept
 /// the click, focus the window, and replay the event.  For focused windows we
@@ -73,9 +56,7 @@ pub fn grabButtons(wm: *WM, win: u32, focused: bool) void {
     }
 }
 
-// ============================================================================
-// 3. Workspace rule matching
-// ============================================================================
+// Workspace rule matching
 
 inline fn resolveWorkspace(target: u8, fallback: u8) u8 {
     const s = workspaces.getState() orelse return fallback;
@@ -113,9 +94,7 @@ fn workspaceRuleForClass(wm: *WM, cookie: xcb.xcb_get_property_cookie_t) ?u8 {
     return null;
 }
 
-// ============================================================================
-// 4. Tiling registration
-// ============================================================================
+// Tiling registration
 
 /// Register `win` with the tiling system and, when `and_retile` is true,
 /// immediately retile the current workspace.  No-op when tiling is disabled.
@@ -125,8 +104,7 @@ inline fn registerWithTiling(wm: *WM, win: u32, and_retile: bool) void {
     if (and_retile) tiling.retileCurrentWorkspace(wm);
 }
 
-// ============================================================================
-// 5. Spawn queue
+// Spawn queue
 //
 // Workspace assignment uses a two-phase PID lookup:
 //   Phase 1 — PID match: compare _NET_WM_PID against stored grandchild PIDs.
@@ -139,7 +117,6 @@ inline fn registerWithTiling(wm: *WM, win: u32, and_retile: bool) void {
 //     entry — they were not launched from a WM keybind.
 //
 // The queue is purely in-process — no X round-trips, no filesystem reads.
-// ============================================================================
 
 const SPAWN_QUEUE_CAP: u8 = 16;
 
@@ -220,9 +197,7 @@ pub fn registerSpawn(workspace: u8, pid: u32) void {
     spawn_queue.push(workspace, pid);
 }
 
-// ============================================================================
-// 6. Workspace assignment
-// ============================================================================
+// Workspace assignment
 
 /// Determine which workspace `win` should appear on.
 /// Priority: workspace class rules > exec-spawn workspace > current workspace.
@@ -278,9 +253,7 @@ fn resolveTargetWorkspace(
     return current_ws;
 }
 
-// ============================================================================
-// 7. Map request
-// ============================================================================
+// Map request
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win        = event.window;
@@ -410,8 +383,8 @@ fn unmanageWindow(wm: *WM, win: u32) void {
     if (wm.config.tiling.enabled) tiling.removeWindow(win);
     utils.uncacheWindowFocusProps(win);
     layouts.evictSizeHints(win);
+    minimize.forceUntrack(wm, win);
     workspaces.removeWindow(win);
-
     // Wrap all visual changes in a single server grab so picom never composites
     // an intermediate state where the destroyed window's slot is empty but the
     // remaining windows have not yet been repositioned, or where the bar has
@@ -490,16 +463,14 @@ fn focusWindowUnderPointer(wm: *WM) void {
     defer std.c.free(reply);
 
     const child = reply.*.child;
-    if (isOnCurrentWorkspace(wm, child) and !minimize.isMinimized(child)) {
+    if (isOnCurrentWorkspace(wm, child) and !minimize.isMinimized(wm, child)) {
         focus.setFocus(wm, child, .mouse_enter);
         return;
     }
     minimize.focusBestAvailable(wm);
 }
 
-// ============================================================================
-// 8. Configure request
-// ============================================================================
+// Configure request
 
 // Geometry-only bits from xcb_config_window_t.  Sibling (0x020) and
 // StackMode (0x040) are intentionally excluded: passing them would cause XCB
@@ -587,9 +558,7 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     utils.flush(wm.conn);
 }
 
-// ============================================================================
-// 9. Focus / crossing events
-// ============================================================================
+// Focus / crossing events
 
 /// Returns true and suppresses the crossing event if it is a retile
 /// side-effect rather than genuine cursor movement.  When a window spawns we
@@ -621,7 +590,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
     const win = if (event.event == wm.root and event.child != 0) event.child else event.event;
 
     if (!isOnCurrentWorkspace(wm, win)) return;
-    if (minimize.isMinimized(win)) return;
+    if (minimize.isMinimized(wm, win)) return;
     if (wm.focused_window == win) return;
 
     focus.setFocus(wm, win, .mouse_enter);
@@ -650,15 +619,13 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) vo
 
     // isOnCurrentWorkspace covers target==0 and target==wm.root implicitly.
     if (!isOnCurrentWorkspace(wm, target)) return;
-    if (minimize.isMinimized(target)) return;
+    if (minimize.isMinimized(wm, target)) return;
     if (wm.focused_window == target) return;
 
     focus.setFocus(wm, target, .mouse_enter);
 }
 
-// ============================================================================
-// 10. Property notify
-// ============================================================================
+// Property notify
 
 /// Keep the focus-property cache coherent when relevant window properties change.
 /// WM_PROTOCOLS: Electron sets WM_TAKE_FOCUS after mapping, so a cached false
@@ -673,9 +640,12 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
     }
 }
 
-// ============================================================================
-// 11. Size-hint parsing
-// ============================================================================
+// Size-hint parsing
+
+/// Clamp a u32 field value to u16 range. Used when parsing XSizeHints.
+inline fn clampU16(v: u32) u16 {
+    return @intCast(@min(v, std.math.maxInt(u16)));
+}
 
 /// Parse a WM_NORMAL_HINTS reply and populate the layouts size-hints cache.
 /// XSizeHints wire layout (each field is one 32-bit CARD32):
@@ -707,14 +677,14 @@ fn collectAndCacheSizeHints(
     var min_height: u16 = 0;
 
     if (flags & XSIZE_HINTS_P_MIN_SIZE != 0 and field_count >= 7) {
-        min_width  = @intCast(@min(fields[5], std.math.maxInt(u16)));
-        min_height = @intCast(@min(fields[6], std.math.maxInt(u16)));
+        min_width  = clampU16(fields[5]);
+        min_height = clampU16(fields[6]);
     }
     // PBaseSize gives the zero-increment base; use it as an additional lower
     // bound — some apps set base > min for character-cell sizing reasons.
     if (flags & XSIZE_HINTS_P_BASE_SIZE != 0 and field_count >= 17) {
-        const base_width:  u16 = @intCast(@min(fields[15], std.math.maxInt(u16)));
-        const base_height: u16 = @intCast(@min(fields[16], std.math.maxInt(u16)));
+        const base_width  = clampU16(fields[15]);
+        const base_height = clampU16(fields[16]);
         if (base_width  > 0) min_width  = @max(min_width,  base_width);
         if (base_height > 0) min_height = @max(min_height, base_height);
     }

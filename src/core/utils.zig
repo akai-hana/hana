@@ -57,6 +57,25 @@ pub fn configureWindow(conn: *xcb.xcb_connection_t, win: u32, rect: Rect) void {
     );
 }
 
+/// Five-field variant of configureWindow that also sets border_width.
+/// Used by fullscreen enter/exit and workspace switching where the border
+/// must be set atomically with the geometry to avoid a one-frame flash.
+pub fn configureWindowGeom(conn: *xcb.xcb_connection_t, win: u32, geom: defs.WindowGeometry) void {
+    _ = xcb.xcb_configure_window(
+        conn, win,
+        xcb.XCB_CONFIG_WINDOW_X     | xcb.XCB_CONFIG_WINDOW_Y     |
+        xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
+        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH,
+        &[_]u32{
+            @bitCast(@as(i32, geom.x)),
+            @bitCast(@as(i32, geom.y)),
+            geom.width,
+            geom.height,
+            geom.border_width,
+        },
+    );
+}
+
 pub fn getGeometry(conn: *xcb.xcb_connection_t, win: u32) ?Rect {
     const reply = xcb.xcb_get_geometry_reply(conn, xcb.xcb_get_geometry(conn, win), null) orelse return null;
     defer std.c.free(reply);

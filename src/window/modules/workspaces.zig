@@ -29,7 +29,7 @@ pub const Workspace = struct {
     // in per-workspace mode.
     layout:  tiling.Layout,
 
-    pub fn init(allocator: std.mem.Allocator, id: u8, name: []const u8, default_layout: tiling.Layout) !Workspace {
+    pub fn init(allocator: std.mem.Allocator, id: u8, name: []const u8, default_layout: tiling.Layout) Workspace {
         return .{ .id = id, .windows = Tracking.init(allocator), .name = name, .layout = default_layout };
     }
 
@@ -66,12 +66,7 @@ pub fn init(wm: *WM) void {
     for (wss, 0..) |*ws, i| {
         const id: u8 = @intCast(i);
         const name   = if (i < WORKSPACE_NAMES.len) WORKSPACE_NAMES[i] else "?";
-        ws.* = Workspace.init(wm.allocator, id, name, default_layout) catch {
-            debug.err("Failed to init workspace {}", .{i});
-            for (wss[0..i]) |*w| w.deinit();
-            wm.allocator.free(wss);
-            return;
-        };
+        ws.* = Workspace.init(wm.allocator, id, name, default_layout);
     }
 
     var w2ws = std.AutoHashMap(u32, u8).init(wm.allocator);
@@ -126,13 +121,13 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
     _ = s.workspaces[from_ws].remove(win);
     s.workspaces[target_ws].add(win) catch |err| {
         debug.err("Failed to add window to workspace {}: {}", .{ target_ws, err });
-        s.workspaces[from_ws].add(win) catch |e| debug.warnOnErr(e, "workspace rollback");
+        s.workspaces[from_ws].add(win) catch |e| debug.warnOnErr(e, "workspace rollback after move failure");
         if (ts) |t| _ = t.windows.remove(win);
         return;
     };
     s.window_to_workspace.put(win, target_ws) catch |e| debug.warnOnErr(e, "w2ws put after move");
 
-    if (minimize.isMinimized(win)) minimize.moveToWorkspace(win, from_ws, target_ws);
+    if (minimize.isMinimized(wm, win)) minimize.moveToWorkspace(wm, win, from_ws, target_ws);
 
     if (from_ws == s.current) {
         // If the window is fullscreen on the current workspace, tear down the
@@ -172,113 +167,104 @@ pub fn switchTo(wm: *WM, ws_id: u8) void {
 // Returns the first non-minimized window in `windows`, or null if all are
 // minimized. Takes a plain slice so it is decoupled from Workspace and easier
 // to test in isolation.
-pub fn firstNonMinimized(windows: []const u32) ?u32 {
+pub fn firstNonMinimized(wm: *const WM, windows: []const u32) ?u32 {
     for (windows) |win| {
-        if (!minimize.isMinimized(win)) return win;
+        if (!minimize.isMinimized(wm, win)) return win;
     }
     return null;
 }
 
-fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
-    const s          = getState().?;
-    const old_ws_obj = &s.workspaces[old_ws];
-    const new_ws_obj = &s.workspaces[new_ws];
-    const fs_info    = wm.fullscreen.getForWorkspace(new_ws);
-
-    wm.suppress_focus_reason = .none;
-
-    // Grab the server so the switch is atomic: no intermediate frames visible.
-    // NOTE: no defer for ungrab; we queue it explicitly before the flush so that
-    // grab + all changes + raiseBar + ungrab land in a single write.
-    _ = xcb.xcb_grab_server(wm.conn);
-
-    // Step 1: hide all windows from the old workspace.
-    // Evict each window's geometry cache entry so the next retile on this
-    // workspace unconditionally re-sends their positions. Without eviction the
-    // next retile finds cache hits and skips configure_window, leaving windows
-    // stranded offscreen when the user switches back.
-    for (old_ws_obj.windows.items()) |win| {
+// Step 1: move all old-workspace windows offscreen and evict their geom cache.
+// Without eviction, the next retile finds cache hits and skips configure_window,
+// leaving windows stranded offscreen when the user switches back.
+fn hideWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
+    for (ws.windows.items()) |win| {
         _ = xcb.xcb_configure_window(wm.conn, win,
-            xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+            xcb.XCB_CONFIG_WINDOW_X,
+            &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
         tiling.invalidateGeomCache(win);
     }
+}
 
-    // Step 2: adjust bar visibility for the new workspace.
-    bar.setBarState(wm, if (fs_info != null) .hide_fullscreen else .show_fullscreen);
+// Step 3a: show the new workspace's fullscreen window at full extent.
+fn showFullscreenWindow(wm: *WM, info: defs.FullscreenInfo) void {
+    utils.configureWindowGeom(wm.conn, info.window, .{
+        .x            = 0,
+        .y            = 0,
+        .width        = @intCast(wm.screen.width_in_pixels),
+        .height       = @intCast(wm.screen.height_in_pixels),
+        .border_width = 0,
+    });
+    _ = xcb.xcb_configure_window(wm.conn, info.window,
+        xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+}
 
-    // Step 3: show windows for the new workspace.
-    if (fs_info) |info| {
-        _ = xcb.xcb_configure_window(wm.conn, info.window,
-            xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
-            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
-            xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH,
-            &[_]u32{ 0, 0,
-                @intCast(wm.screen.width_in_pixels),
-                @intCast(wm.screen.height_in_pixels), 0 });
-        _ = xcb.xcb_configure_window(wm.conn, info.window,
-            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+// Step 3b: restore tiled or floating geometry for the new workspace.
+fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
+    // Map any deferred windows (spawned while this workspace was inactive).
+    // xcb_map_window is a no-op for already-mapped windows.
+    for (ws.windows.items()) |win| _ = xcb.xcb_map_window(wm.conn, win);
+
+    const tiling_active = if (tiling.getState()) |t| t.enabled else false;
+
+    if (tiling_active) {
+        // Per-workspace layout: restore the layout this workspace was last
+        // using so the right algorithm runs and the bar shows the correct icon.
+        if (!wm.config.tiling.global_layout) {
+            tiling.syncLayoutFromWorkspace(ws.layout);
+        }
+
+        // Fast path: replay cached tiled positions without running the layout
+        // algorithm. Falls back to a full retile only if the cache is cold,
+        // the workspace's valid bit is unset, or the screen area changed.
+        // restoreWorkspaceGeom calls utils.configureWindow directly, bypassing
+        // the geom cache: windows were moved to OFFSCREEN_X_POSITION in step 1
+        // so the cache holds correct rects but the server does not.
+        if (!tiling.restoreWorkspaceGeom(wm)) {
+            // Evict new workspace cache entries before retriling.
+            // retileInactiveWorkspace may have pre-populated them with correct
+            // on-screen positions. Without eviction, configureSafe finds
+            // cache[win] == computed_geom and skips configure_window, leaving
+            // windows stranded at OFFSCREEN_X_POSITION.
+            for (ws.windows.items()) |win| tiling.invalidateGeomCache(win);
+            tiling.retileCurrentWorkspace(wm);
+        }
     } else {
-        // Map any deferred windows (spawned while this workspace was inactive).
-        // xcb_map_window is a no-op for already-mapped windows.
-        for (new_ws_obj.windows.items()) |win| _ = xcb.xcb_map_window(wm.conn, win);
-
-        const tiling_active = if (tiling.getState()) |t| t.enabled else false;
-
-        if (tiling_active) {
-            // Per-workspace layout: restore the layout this workspace was last
-            // using so the right algorithm runs and the bar shows the correct icon.
-            if (!wm.config.tiling.global_layout) {
-                tiling.syncLayoutFromWorkspace(new_ws_obj.layout);
-            }
-
-            // Fast path: replay cached tiled positions without running the layout
-            // algorithm. Falls back to a full retile only if the cache is cold,
-            // the workspace's valid bit is unset, or the screen area changed.
-            // restoreWorkspaceGeom calls utils.configureWindow directly, bypassing
-            // the geom cache: windows were moved to OFFSCREEN_X_POSITION in step 1
-            // so the cache holds correct rects but the server does not.
-            if (!tiling.restoreWorkspaceGeom(wm)) {
-                // Evict new workspace cache entries before retriling.
-                // retileInactiveWorkspace may have pre-populated them with correct
-                // on-screen positions. Without eviction, configureSafe finds
-                // cache[win] == computed_geom and skips configure_window, leaving
-                // windows stranded at OFFSCREEN_X_POSITION.
-                for (new_ws_obj.windows.items()) |win| tiling.invalidateGeomCache(win);
-                tiling.retileCurrentWorkspace(wm);
-            }
-        } else {
-            // Floating: move all non-minimized windows to a sensible position.
-            const x: u32 = @intCast(wm.screen.width_in_pixels  / 4);
-            const y: u32 = @intCast(wm.screen.height_in_pixels / 4);
-            for (new_ws_obj.windows.items()) |win| {
-                if (minimize.isMinimized(win)) continue;
-                _ = xcb.xcb_configure_window(wm.conn, win,
-                    xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{ x, y });
-            }
+        // Floating: move all non-minimized windows to a sensible position.
+        const x: u32 = @intCast(wm.screen.width_in_pixels  / 4);
+        const y: u32 = @intCast(wm.screen.height_in_pixels / 4);
+        for (ws.windows.items()) |win| {
+            if (minimize.isMinimized(wm, win)) continue;
+            _ = xcb.xcb_configure_window(wm.conn, win,
+                xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
+                &[_]u32{ x, y });
         }
     }
+}
 
-    // Step 4: determine focus target.
-    //
-    // Query the pointer inside the grab, after all configure_window calls have
-    // been queued. XCB sends pending requests before blocking on the reply, so
-    // the server sees the fully repositioned layout when evaluating which window
-    // is under the pointer. This avoids the master-flash: we never eagerly focus
-    // the master and then correct it after the grab releases.
+// Step 4: resolve the post-switch focus target and apply it.
+// Query the pointer inside the grab, after all configure_window calls have
+// been queued. XCB sends pending requests before blocking on the reply, so
+// the server sees the fully repositioned layout when evaluating which window
+// is under the pointer. This avoids the master-flash: we never eagerly focus
+// the master and then correct it after the grab releases.
+fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace) void {
+    const s = getState().?;
+
     const focus_target: ?u32 = blk: {
         const ptr = xcb.xcb_query_pointer_reply(
             wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
-        ) orelse break :blk firstNonMinimized(new_ws_obj.windows.items());
+        ) orelse break :blk firstNonMinimized(wm, new_ws_obj.windows.items());
         defer std.c.free(ptr);
 
         const child = ptr.*.child;
         if (child != 0 and child != wm.root and
             s.window_to_workspace.get(child) == new_ws and
-            !minimize.isMinimized(child))
+            !minimize.isMinimized(wm, child))
         {
             break :blk child;
         }
-        break :blk firstNonMinimized(new_ws_obj.windows.items());
+        break :blk firstNonMinimized(wm, new_ws_obj.windows.items());
     };
 
     const old_focused = wm.focused_window;
@@ -298,6 +284,33 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     // silently ignore focus messages with timestamp 0.
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
         wm.focused_window orelse wm.root, wm.last_event_time);
+}
+
+fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
+    const s          = getState().?;
+    const new_ws_obj = &s.workspaces[new_ws];
+    const fs_info    = wm.fullscreen.getForWorkspace(new_ws);
+
+    wm.suppress_focus_reason = .none;
+
+    // Grab the server so the switch is atomic: no intermediate frames visible.
+    // NOTE: no defer for ungrab; we queue it explicitly before the flush so that
+    // grab + all changes + raiseBar + ungrab land in a single write.
+    _ = xcb.xcb_grab_server(wm.conn);
+
+    hideWorkspaceWindows(wm, &s.workspaces[old_ws]);
+
+    // Step 2: adjust bar visibility for the new workspace.
+    bar.setBarState(wm, if (fs_info != null) .hide_fullscreen else .show_fullscreen);
+
+    // Step 3: show windows for the new workspace.
+    if (fs_info) |info| {
+        showFullscreenWindow(wm, info);
+    } else {
+        restoreWorkspaceWindows(wm, new_ws_obj);
+    }
+
+    applyPostSwitchFocus(wm, new_ws, new_ws_obj);
 
     // Redraw the bar inside the grab so picom composites the updated workspace
     // highlight atomically; deferring via markDirty shows one stale frame first.

@@ -1,12 +1,17 @@
 //! Window dragging and resizing
 
-const defs = @import("defs");
-const xcb  = defs.xcb;
-const WM   = defs.WM;
-const utils = @import("utils");
-const focus = @import("focus");
+const defs   = @import("defs");
+const xcb    = defs.xcb;
+const WM     = defs.WM;
+const utils  = @import("utils");
+const focus  = @import("focus");
 const tiling = @import("tiling");
-const bar = @import("bar");
+const bar    = @import("bar");
+
+/// Apply an i16 delta to a u16 dimension, floored at MIN_WINDOW_DIM.
+inline fn clampDim(base: u16, delta: i16) u16 {
+    return @intCast(@max(@as(i32, defs.MIN_WINDOW_DIM), @as(i32, base) + delta));
+}
 
 pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
     if (wm.drag_state.active) return;
@@ -15,13 +20,13 @@ pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
     const geom = tiling.getCachedGeom(win) orelse
         utils.getGeometry(wm.conn, win) orelse return;
     wm.drag_state = .{
-        .active          = true,
-        .window          = win,
-        .mode            = if (button == 1) .move else .resize,
-        .start_x         = x,
-        .start_y         = y,
-        .start_win_x     = geom.x,
-        .start_win_y     = geom.y,
+        .active           = true,
+        .window           = win,
+        .mode             = if (button == 1) .move else .resize,
+        .start_x          = x,
+        .start_y          = y,
+        .start_win_x      = geom.x,
+        .start_win_y      = geom.y,
         .start_win_width  = geom.width,
         .start_win_height = geom.height,
     };
@@ -52,8 +57,8 @@ pub fn updateDrag(wm: *WM, x: i16, y: i16) void {
         .resize => utils.Rect{
             .x      = drag.start_win_x,
             .y      = drag.start_win_y,
-            .width  = @intCast(@max(@as(i32, defs.MIN_WINDOW_DIM), @as(i32, drag.start_win_width)  + dx)),
-            .height = @intCast(@max(@as(i32, defs.MIN_WINDOW_DIM), @as(i32, drag.start_win_height) + dy)),
+            .width  = clampDim(drag.start_win_width,  dx),
+            .height = clampDim(drag.start_win_height, dy),
         },
     };
     utils.configureWindow(wm.conn, drag.window, rect);

@@ -1,5 +1,4 @@
-//! Monocle layout - All windows fullscreen, stacked
-//! Direct XCB calls — no batch overhead
+//! Monocle layout: all windows fullscreen, stacked; only top window visible.
 
 const defs    = @import("defs");
 const utils   = @import("utils");
@@ -16,10 +15,9 @@ pub fn tileWithOffset(conn: *xcb.xcb_connection_t, state: *State, windows: []con
     const gap    = margin.gap;
     const border = margin.border;
 
-    // All windows in monocle share the same geometry, but only the top window
-    // is ever visible — the rest are entirely hidden behind it.  Configure and
-    // raise only that one window; the others are configured lazily the moment
-    // they are brought to the top, so the cost here is always O(1).
+    // All windows share the same geometry but only the top one is visible.
+    // Configure and raise only that one; the others are configured lazily
+    // when brought to the top, keeping cost O(1).
     const top_win = windows[windows.len - 1];
 
     const rect: utils.Rect = switch (state.layout_variations.monocle) {

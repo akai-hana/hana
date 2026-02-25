@@ -59,7 +59,7 @@ pub fn draw(
 
     if (window_count == 1) {
         const single_win   = current_ws.windows.items()[0];
-        const is_minimized = minimize.isMinimized(single_win);
+        const is_minimized = minimize.isMinimized(wm, single_win);
         const is_focused   = wm.focused_window != null;
 
         const accent = if (is_minimized)
@@ -169,7 +169,7 @@ fn drawSegmentedTitles(
     defer window_infos.deinit(allocator);
 
     for (win_items[0..n_wins], 0..) |win, i| {
-        const is_min   = minimize.isMinimized(win);
+        const is_min   = minimize.isMinimized(wm, win);
         const geom: utils.Rect = if (!is_min) blk: {
             if (tiling.getCachedGeom(win)) |rect| break :blk rect;
             break :blk utils.getGeometry(wm.conn, win) orelse continue;
