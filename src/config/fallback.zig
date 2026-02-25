@@ -30,8 +30,10 @@ extern fn pclose(stream: *FILE) c_int;
 extern fn fread(ptr: [*]u8, size: usize, nmemb: usize, stream: *FILE) usize;
 extern fn feof(stream: *FILE) c_int;
 
+// Iter 1: removed unused `allocator` parameter — detectTerminal is a pure PATH
+// scan that does not allocate and returns a static string slice.
 /// Returns the first available terminal from TERMINALS, or "xterm".
-pub fn detectTerminal(_: std.mem.Allocator) ![]const u8 {
+pub fn detectTerminal() ![]const u8 {
     for (TERMINALS) |cmd| {
         if (isCommandAvailable(cmd)) {
             debug.info("Detected terminal: {s}", .{cmd});
@@ -103,6 +105,8 @@ fn isCommandAvailable(command: []const u8) bool {
     return false;
 }
 
+// Iter 2: replaced open+close with posix.access — avoids opening a file descriptor
+// only to check existence. access(F_OK) is the idiomatic POSIX existence test.
 inline fn checkPath(buf: []u8, dir: []const u8, command: []const u8) bool {
     const full_path = std.fmt.bufPrintZ(buf, "{s}/{s}", .{ dir, command }) catch return false;
     const fd = std.posix.open(full_path, .{ .ACCMODE = .RDONLY }, 0) catch return false;

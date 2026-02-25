@@ -164,7 +164,8 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
     var cfg = getDefaultConfig(allocator);
     try parseConfigSections(allocator, &doc, &cfg);
 
-    const terminal = try fallback.detectTerminal(allocator);
+    // Iter 3: detectTerminal no longer needs an allocator (pure PATH scan).
+    const terminal = try fallback.detectTerminal();
     for (cfg.keybindings.items) |*kb| {
         if (kb.action == .exec and std.mem.eql(u8, kb.action.exec, "auto_terminal")) {
             allocator.free(kb.action.exec);
@@ -417,40 +418,51 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
     cfg.tiling.global_layout = get(bool, section, "global_layout", false, null, null);
 }
 
+// Iter 2: extracted shared variation-parse and indicator-parse helpers to
+// replace four near-identical copy-paste blocks in parseTilingVariations.
+
+/// Parses a `variation = "..."` key from `section` as type T.
+/// Leaves `field` unchanged and warns if the value is not a valid T tag.
+fn tryParseVariation(
+    comptime T:   type,
+    section:      *const parser.Section,
+    layout_name:  []const u8,
+    field:        *T,
+) void {
+    const v = section.getString("variation") orelse return;
+    field.* = std.meta.stringToEnum(T, v) orelse {
+        debug.warn("Unknown {s} variation '{s}', using default", .{ layout_name, v });
+        return;
+    };
+}
+
+/// Parses an `indicator = "..."` key from `section` into a ?[3]u8 field.
+fn tryParseIndicator(section: *const parser.Section, field: *?[3]u8) void {
+    if (section.getString("indicator")) |raw| field.* = parseIndicator(raw);
+}
+
 /// Parses per-layout variation and indicator settings from [tiling.layouts.*] sections.
 fn parseTilingVariations(doc: *const parser.Document, cfg: *defs.Config) void {
     if (doc.getSection("tiling.layouts.master-stack")) |ms| {
-        if (ms.getString("variation")) |v|
-            cfg.tiling.master_variation = std.meta.stringToEnum(defs.MasterVariation, v) orelse blk: {
-                debug.warn("Unknown master-stack variation '{s}', using default 'lifo'", .{v});
-                break :blk .lifo;
-            };
-        if (ms.getString("indicator")) |raw| cfg.tiling.master_indicator = parseIndicator(raw);
+        tryParseVariation(defs.MasterVariation,   ms, "master-stack", &cfg.tiling.master_variation);
+        tryParseIndicator(ms, &cfg.tiling.master_indicator);
     }
 
     if (doc.getSection("tiling.layouts.monocle")) |ms| {
-        if (ms.getString("variation")) |v|
-            cfg.tiling.monocle_variation = std.meta.stringToEnum(defs.MonocleVariation, v) orelse blk: {
-                debug.warn("Unknown monocle variation '{s}', using default 'gapless'", .{v});
-                break :blk .gapless;
-            };
-        if (ms.getString("indicator")) |raw| cfg.tiling.monocle_indicator = parseIndicator(raw);
+        tryParseVariation(defs.MonocleVariation,  ms, "monocle",      &cfg.tiling.monocle_variation);
+        tryParseIndicator(ms, &cfg.tiling.monocle_indicator);
     }
 
     if (doc.getSection("tiling.layouts.grid")) |ms| {
-        if (ms.getString("variation")) |v|
-            cfg.tiling.grid_variation = std.meta.stringToEnum(defs.GridVariation, v) orelse blk: {
-                debug.warn("Unknown grid variation '{s}', using default 'rigid'", .{v});
-                break :blk .rigid;
-            };
-        if (ms.getString("indicator")) |raw| cfg.tiling.grid_indicator = parseIndicator(raw);
+        tryParseVariation(defs.GridVariation,     ms, "grid",         &cfg.tiling.grid_variation);
+        tryParseIndicator(ms, &cfg.tiling.grid_indicator);
     }
 
     if (doc.getSection("tiling.layouts.fibonacci")) |ms| {
-        if (ms.getString("indicator")) |raw| cfg.tiling.fibonacci_indicator = parseIndicator(raw);
         if (ms.getString("variation")) |v|
             if (!std.mem.eql(u8, v, "default"))
                 debug.warn("fibonacci does not support variation '{s}' (ignored)", .{v});
+        if (ms.getString("indicator")) |raw| cfg.tiling.fibonacci_indicator = parseIndicator(raw);
     }
 }
 
@@ -624,18 +636,20 @@ fn parseLayoutsArray(
     }
 }
 
-// Table-driven bar color parsing.
-const BarColorField = struct { name: []const u8, field_name: []const u8, default: u32 };
+// Iter 1: removed `field_name` from BarColorField — it was always equal to `name`,
+// so storing both was pure duplication. The inline for now uses `field.name` for both
+// the TOML key lookup and the struct field pointer.
+const BarColorField = struct { name: []const u8, default: u32 };
 
 const BAR_COLOR_FIELDS = [_]BarColorField{
-    .{ .name = "bg",           .field_name = "bg",           .default = 0x222222 },
-    .{ .name = "fg",           .field_name = "fg",           .default = 0xBBBBBB },
-    .{ .name = "selected_bg",  .field_name = "selected_bg",  .default = 0x005577 },
-    .{ .name = "selected_fg",  .field_name = "selected_fg",  .default = 0xEEEEEE },
-    .{ .name = "occupied_fg",  .field_name = "occupied_fg",  .default = 0xEEEEEE },
-    .{ .name = "urgent_bg",    .field_name = "urgent_bg",    .default = 0xFF0000 },
-    .{ .name = "urgent_fg",    .field_name = "urgent_fg",    .default = 0xFFFFFF },
-    .{ .name = "accent_color", .field_name = "accent_color", .default = 0x61AFEF },
+    .{ .name = "bg",           .default = 0x222222 },
+    .{ .name = "fg",           .default = 0xBBBBBB },
+    .{ .name = "selected_bg",  .default = 0x005577 },
+    .{ .name = "selected_fg",  .default = 0xEEEEEE },
+    .{ .name = "occupied_fg",  .default = 0xEEEEEE },
+    .{ .name = "urgent_bg",    .default = 0xFF0000 },
+    .{ .name = "urgent_fg",    .default = 0xFFFFFF },
+    .{ .name = "accent_color", .default = 0x61AFEF },
 };
 
 /// Parses bar transparency from integers (0–100), decimals (0.0–1.0),
@@ -694,8 +708,9 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     cfg.bar.font_size     = section.getScalable("font_size") orelse parser.ScalableValue.percentage(10.0);
     cfg.bar.spacing       = section.getScalable("segment_spacing") orelse parser.ScalableValue.absolute(12.0);
 
+    // Iter 1: `field_name` removed from BarColorField; use `field.name` for both key and field.
     inline for (BAR_COLOR_FIELDS) |field|
-        @field(cfg.bar, field.field_name) = getColor(section, field.name, field.default);
+        @field(cfg.bar, field.name) = getColor(section, field.name, field.default);
 
     cfg.bar.workspaces_accent       = getColor(section, "workspaces_accent",       cfg.bar.accent_color);
     cfg.bar.title_accent_color      = getColor(section, "title_accent_color",      cfg.bar.accent_color);
@@ -751,13 +766,14 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *def
     try parseWorkspaceIcons(allocator, section, cfg);
     try parseBarLayout(allocator, doc, cfg);
 
-    // [bar.colors] overrides the per-module accent values set above.
+    // Iter 3: use BarConfig accessor methods as defaults instead of repeating
+    // the `orelse cfg.bar.accent_color` fallback that the accessors already encode.
     if (doc.getSection("bar.colors")) |colors| {
-        cfg.bar.workspaces_accent      = getColor(colors, "workspaces",       cfg.bar.workspaces_accent      orelse cfg.bar.accent_color);
-        cfg.bar.title_accent_color     = getColor(colors, "title",            cfg.bar.title_accent_color     orelse cfg.bar.accent_color);
-        cfg.bar.title_unfocused_accent = getColor(colors, "title_unfocused",  cfg.bar.title_unfocused_accent orelse cfg.bar.bg);
-        cfg.bar.title_minimized_accent = getColor(colors, "title_minimized",  cfg.bar.title_minimized_accent orelse cfg.bar.bg);
-        cfg.bar.clock_accent           = getColor(colors, "clock",            cfg.bar.clock_accent           orelse cfg.bar.accent_color);
+        cfg.bar.workspaces_accent      = getColor(colors, "workspaces",      cfg.bar.getWorkspaceAccent());
+        cfg.bar.title_accent_color     = getColor(colors, "title",           cfg.bar.getTitleAccent());
+        cfg.bar.title_unfocused_accent = getColor(colors, "title_unfocused", cfg.bar.getTitleUnfocusedAccent());
+        cfg.bar.title_minimized_accent = getColor(colors, "title_minimized", cfg.bar.getTitleMinimizedAccent());
+        cfg.bar.clock_accent           = getColor(colors, "clock",           cfg.bar.getClockAccent());
     }
 }
 

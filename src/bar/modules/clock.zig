@@ -9,19 +9,16 @@ const debug   = @import("debug");
 
 const c = @cImport(@cInclude("time.h"));
 
-const TIME_FORMAT = "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}";
-
 pub const SAMPLE_STRING: []const u8 = "0000-00-00 00:00:00";
 
-// Iter 3: encapsulate timer state in a named struct for clarity.
 const TimerState = struct {
     fd:      i32  = 0,
     enabled: bool = false,
 };
 
-var timer: TimerState = .{};
-var last_formatted_time: [20]u8 = undefined;
-var last_formatted_sec:  i64    = -1;
+var timer:               TimerState = .{};
+var last_formatted_time: [20]u8     = undefined;
+var last_formatted_sec:  i64        = -1;
 
 /// Registers the timerfd file descriptor. Must be called once during initialisation.
 pub fn setTimerFd(fd: i32) void {
@@ -42,7 +39,7 @@ fn setTimerState(enable: bool) void {
         };
         break :blk .{
             .it_interval = .{ .sec = 1, .nsec = 0 },
-            .it_value = .{ .sec = 0, .nsec = @intCast(std.time.ns_per_s - @as(u64, @intCast(ts.nsec))) },
+            .it_value    = .{ .sec = 0, .nsec = @intCast(std.time.ns_per_s - @as(u64, @intCast(ts.nsec))) },
         };
     } else .{
         .it_interval = .{ .sec = 0, .nsec = 0 },
@@ -71,32 +68,35 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
     return dc.drawSegment(start_x, height, time_str, config.scaledSegmentPadding(height), config.bg, config.fg);
 }
 
+// Iter 2: merged formatTime + formatUtc into a single function.
+// localtime() is tried first; if it returns null we fall back to inline UTC arithmetic.
+// This avoids a redundant function call boundary and the separate formatUtc function.
 fn formatTime(buf: []u8, ts: std.posix.timespec) ![]const u8 {
     var raw_sec: c.time_t = @intCast(ts.sec);
-    const local_ts = c.localtime(&raw_sec) orelse return formatUtc(buf, ts.sec);
+    if (c.localtime(&raw_sec)) |local_ts| {
+        return try std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
+            @as(u32, @intCast(local_ts.*.tm_year + 1900)),
+            @as(u32, @intCast(local_ts.*.tm_mon  + 1)),
+            @as(u32, @intCast(local_ts.*.tm_mday)),
+            @as(u32, @intCast(local_ts.*.tm_hour)),
+            @as(u32, @intCast(local_ts.*.tm_min)),
+            @as(u32, @intCast(local_ts.*.tm_sec)),
+        });
+    }
 
-    return try std.fmt.bufPrint(buf, TIME_FORMAT, .{
-        @as(u32, @intCast(local_ts.*.tm_year + 1900)),
-        @as(u32, @intCast(local_ts.*.tm_mon  + 1)),
-        @as(u32, @intCast(local_ts.*.tm_mday)),
-        @as(u32, @intCast(local_ts.*.tm_hour)),
-        @as(u32, @intCast(local_ts.*.tm_min)),
-        @as(u32, @intCast(local_ts.*.tm_sec)),
-    });
-}
-
-fn formatUtc(buf: []u8, epoch_sec: i64) ![]const u8 {
-    const epoch_day  = @divFloor(epoch_sec, std.time.s_per_day);
-    const day_sec    = @mod(epoch_sec, std.time.s_per_day);
-    const civil_day  = std.time.epoch.EpochDay{ .day = @intCast(epoch_day) };
-    const year_day   = civil_day.calculateYearDay();
-    const month_day  = year_day.calculateMonthDay();
+    // UTC fallback — localtime() returned null (timezone data unavailable).
+    const epoch_sec = ts.sec;
+    const epoch_day = @divFloor(epoch_sec, std.time.s_per_day);
+    const day_sec   = @mod(epoch_sec, std.time.s_per_day);
+    const civil_day = std.time.epoch.EpochDay{ .day = @intCast(epoch_day) };
+    const year_day  = civil_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
 
     const hour: u32 = @intCast(@divFloor(day_sec, std.time.s_per_hour));
     const min:  u32 = @intCast(@divFloor(@mod(day_sec, std.time.s_per_hour), std.time.s_per_min));
     const sec:  u32 = @intCast(@mod(day_sec, std.time.s_per_min));
 
-    return try std.fmt.bufPrint(buf, TIME_FORMAT, .{
+    return try std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
         year_day.year, month_day.month.numeric(), month_day.day_index + 1, hour, min, sec,
     });
 }

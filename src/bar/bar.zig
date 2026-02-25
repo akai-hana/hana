@@ -122,7 +122,6 @@ const BarFull = struct {
     const LAYOUT_SEGMENT_WIDTH:      u16 = 60;
     const TITLE_SEGMENT_MIN_WIDTH:   u16 = 100;
 
-    // Iter 3: draw functions moved to State methods.
     const State = struct {
         window:               u32,
         width:                u16,
@@ -194,8 +193,6 @@ const BarFull = struct {
         }
         fn markClockDirty(self: *State) void { self.dirty_clock = true; }
         fn clearDirty(self: *State) void { self.dirty = false; self.dirty_clock = false; }
-
-        // Iter 3: drawing as State methods — State owns its render behaviour.
 
         fn calculateSegmentWidth(self: *State, segment: defs.BarSegment) u16 {
             return switch (segment) {
@@ -493,8 +490,6 @@ const BarFull = struct {
         const y_pos  = barYPos(wm, height);
         const setup  = createBarWindow(wm, height, y_pos);
 
-        // Iter 2: single reloadImpl function collapses the 4 independent
-        // "destroy + log + return" error paths into one errdefer + one call site.
         reloadImpl(wm, old, setup, height) catch |err| {
             _ = xcb.xcb_destroy_window(wm.conn, setup.window);
             debug.err("Bar reload failed ({s}), keeping old bar", .{@errorName(err)});
@@ -586,10 +581,13 @@ const BarFull = struct {
         const s = state orelse return;
 
         if (action == .toggle) s.global_visible = !s.global_visible;
-        const is_fullscreen = switch (action) {
-            .hide_fullscreen => false,
-            else => wm.fullscreen.getForWorkspace(workspaces.getCurrentWorkspace() orelse 0) != null,
-        };
+
+        // Iter 2: compute is_fullscreen without a nested switch — the hide_fullscreen
+        // action unconditionally clears fullscreen state, so skip the map lookup.
+        const current_ws    = workspaces.getCurrentWorkspace() orelse 0;
+        const is_fullscreen = action != .hide_fullscreen and
+            wm.fullscreen.getForWorkspace(current_ws) != null;
+
         const show = !is_fullscreen and s.global_visible and action != .hide_fullscreen;
         if (s.visible == show and action != .toggle) return;
 
@@ -689,8 +687,10 @@ const BarFull = struct {
         };
     }
 
+    /// Retiles all workspaces without holding the server grab.
+    /// When tiling is inactive, only the current workspace is retiled.
     fn retileAllWorkspacesNoGrab(wm: *defs.WM) void {
-        const ws_state      = workspaces.getState() orelse return;
+        const ws_state = workspaces.getState() orelse return;
         const tiling_active = wm.config.tiling.enabled and
             if (tiling.getState()) |t| t.enabled else false;
 
@@ -708,6 +708,7 @@ const BarFull = struct {
             ws_state.current = @intCast(idx);
             tiling.retileCurrentWorkspace(wm);
 
+            // Move off-screen windows that are not on the active workspace.
             if (@as(u8, @intCast(idx)) != original_ws) {
                 for (ws.windows.items()) |win| {
                     _ = xcb.xcb_configure_window(wm.conn, win,

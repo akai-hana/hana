@@ -50,8 +50,6 @@ fn indicatorPos(
     const cw: f32 = @floatFromInt(cell_w);
     const bh: f32 = @floatFromInt(bar_height);
 
-    // Iter 2: compute (corner_x, corner_y) in a single pass.
-    // Named struct avoids Zig's "each anonymous struct arm gets its own type" error.
     const Corner = struct { x: f32, y: f32 };
     const corner: Corner = switch (location) {
         .left       => .{ .x = 0.0, .y = 0.5 },

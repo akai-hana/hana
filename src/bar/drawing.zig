@@ -27,12 +27,10 @@ pub fn findVisualByDepth(screen: *defs.xcb.xcb_screen_t, depth: u8) VisualInfo {
     return .{ .visual_type = null, .visual_id = screen.root_visual };
 }
 
-// Iter 3: font_conversion_cache is module-level mutable state shared across all
-// DrawContext instances. This is intentional — bar.zig creates multiple short-lived
-// offscreen DCs for measurement and one long-lived rendering DC, and cache hits
-// across them avoid redundant allocations. Acceptable for a single-threaded WM.
-// A future refactor could pass a *FontNameCache through DrawContext if multiple
-// isolated bars are ever needed.
+// font_conversion_cache is module-level mutable state shared across all DrawContext
+// instances. Bar creates multiple short-lived offscreen DCs for measurement and one
+// long-lived rendering DC; cache hits across them avoid redundant allocations.
+// Single-threaded WM only — no synchronization needed.
 var font_conversion_cache: ?std.StringHashMap([]const u8) = null;
 
 const FALLBACK_FONT = "monospace:size=10";
@@ -88,9 +86,7 @@ pub const DrawContext = struct {
         const ctx = c.cairo_create(surface) orelse return error.CairoCreateFailed;
         errdefer c.cairo_destroy(ctx);
 
-        // Iter 2: shared helper eliminates duplicated Pango layout setup.
         const layout = try createPangoLayout(ctx, dpi);
-        // layout is a GObject; must be unref'd if we return early before dc owns it.
         errdefer c.g_object_unref(layout);
 
         dc.* = .{
@@ -215,10 +211,15 @@ pub const DrawContext = struct {
         return @intCast(@divTrunc(pango_units, c.PANGO_SCALE));
     }
 
-    /// Iter 1: extracted from drawText and drawTextEllipsis to avoid duplication.
     inline fn pangoBaseline(self: *DrawContext) f64 {
         return @as(f64, @floatFromInt(c.pango_layout_get_baseline(self.pango_layout)))
             / @as(f64, @floatFromInt(c.PANGO_SCALE));
+    }
+
+    // Iter 2: extracted from drawText and drawTextEllipsis to avoid duplicating
+    // the identical cairo_move_to call in both functions.
+    inline fn moveToTextBaseline(self: *DrawContext, x: u16, y: u16) void {
+        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - self.pangoBaseline());
     }
 
     pub fn clearTransparent(self: *DrawContext) void {
@@ -277,7 +278,7 @@ pub const DrawContext = struct {
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
         self.setColor(color);
         self.setPangoText(text);
-        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - self.pangoBaseline());
+        self.moveToTextBaseline(x, y);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
     }
 
@@ -293,7 +294,7 @@ pub const DrawContext = struct {
         c.pango_layout_set_width(self.pango_layout, @intCast(@as(i32, max_width) * c.PANGO_SCALE));
         c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.END);
         self.setColor(color);
-        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - self.pangoBaseline());
+        self.moveToTextBaseline(x, y);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
         c.pango_layout_set_width(self.pango_layout, -1);
         c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.NONE);
@@ -305,6 +306,7 @@ pub const DrawContext = struct {
         c.pango_layout_get_pixel_size(self.pango_layout, &width, null);
         return @intCast(width);
     }
+
     pub fn getMetrics(self: *DrawContext) struct { i16, i16 } {
         if (self.cached_metrics) |m| return .{ m.ascent, m.descent };
         const metrics = c.pango_context_get_metrics(
@@ -349,7 +351,7 @@ pub const DrawContext = struct {
 
 // Private helpers
 
-/// Iter 2: extracted from initWithVisual and initOffscreen to eliminate duplicated
+/// Extracted from initWithVisual and initOffscreen to eliminate duplicated
 /// Pango layout creation + DPI setup across both init paths.
 fn createPangoLayout(ctx: *c.cairo_t, dpi: f32) !*c.PangoLayout {
     const layout = c.pango_cairo_create_layout(ctx) orelse return error.PangoLayoutCreateFailed;

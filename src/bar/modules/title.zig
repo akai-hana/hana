@@ -9,11 +9,11 @@ const utils      = @import("utils");
 const minimize   = @import("minimize");
 const tiling     = @import("tiling");
 
-// Iter 3: collect atom state into a single struct with a single lazy-init call.
-// Removes two separate nullable module-level vars and the duplicated ensureAtoms() call.
+// Collect atom state in a single struct with a single lazy-init call.
+// Removes two separate nullable module-level vars and duplicated ensureAtoms() calls.
 const Atoms = struct {
-    net_wm_name: u32 = 0,
-    utf8_string:  u32 = 0,
+    net_wm_name: u32  = 0,
+    utf8_string:  u32  = 0,
     initialized: bool = false,
 
     fn ensure(self: *Atoms) void {
@@ -21,6 +21,11 @@ const Atoms = struct {
         self.initialized = true;
         self.net_wm_name = utils.getAtomCached("_NET_WM_NAME") catch 0;
         self.utf8_string  = utils.getAtomCached("UTF8_STRING")  catch 0;
+    }
+
+    /// Returns the appropriate atom type for _NET_WM_NAME queries.
+    inline fn utf8Type(self: *const Atoms) u32 {
+        return if (self.utf8_string != 0) self.utf8_string else xcb.XCB_ATOM_STRING;
     }
 
     /// Invalidates cached atoms (call on bar reload when atom cache is rebuilt).
@@ -116,8 +121,8 @@ fn drawSegmentedTitles(
 
     atoms.ensure();
     const net_atom = atoms.net_wm_name;
-    // Iter 2: compute utf_type once rather than inline in two phases.
-    const utf_type = if (atoms.utf8_string != 0) atoms.utf8_string else xcb.XCB_ATOM_STRING;
+    // Iter 2: compute utf_type once via the Atoms helper instead of repeating the ternary inline.
+    const utf_type = atoms.utf8Type();
 
     // Phase 1: fire all _NET_WM_NAME cookies without waiting.
     var net_cookies: [MAX_WINS]xcb.xcb_get_property_cookie_t = undefined;
@@ -235,8 +240,7 @@ fn fetchProperty(conn: *xcb.xcb_connection_t, win: u32, atom: u32, atom_type: u3
 fn getWindowTitle(conn: *xcb.xcb_connection_t, window: u32, allocator: std.mem.Allocator) !?[]const u8 {
     atoms.ensure();
     if (atoms.net_wm_name != 0) {
-        const utf_type = if (atoms.utf8_string != 0) atoms.utf8_string else xcb.XCB_ATOM_STRING;
-        if (try fetchProperty(conn, window, atoms.net_wm_name, utf_type, allocator)) |t| return t;
+        if (try fetchProperty(conn, window, atoms.net_wm_name, atoms.utf8Type(), allocator)) |t| return t;
     }
     return try fetchProperty(conn, window, xcb.XCB_ATOM_WM_NAME, xcb.XCB_ATOM_STRING, allocator);
 }
@@ -255,7 +259,7 @@ fn getFocusedWindowTitle(
     if (cached_title_window.* == win and cached_title.items.len > 0) return cached_title.items;
 
     atoms.ensure();
-    const utf_type = if (atoms.utf8_string != 0) atoms.utf8_string else xcb.XCB_ATOM_STRING;
+    const utf_type = atoms.utf8Type();
 
     if (atoms.net_wm_name != 0) {
         const title = try utils.fetchPropertyToBuffer(wm.conn, win, atoms.net_wm_name, utf_type, cached_title, allocator);

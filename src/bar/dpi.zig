@@ -14,7 +14,6 @@ const FONT_BASELINE_HEIGHT: f32 = 1080.0;
 
 const BASELINE_DIAGONAL: f32 = @sqrt(BASELINE_WIDTH * BASELINE_WIDTH + BASELINE_HEIGHT * BASELINE_HEIGHT);
 
-// Iter 3: give the cache a named type so the intent and fields are explicit.
 const DpiCache = struct {
     result:           ?DpiInfo = null,
     screen_signature: u64      = 0,
