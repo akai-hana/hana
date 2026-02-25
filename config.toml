@@ -116,7 +116,7 @@ fonts = [
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
 ## TODO: Future enhancement: percentage values where 100% = auto-calculated size, 150% = 1.5x auto size.
-height = 4%
+height = 3.75%
 
 segment_spacing = 5%
 
