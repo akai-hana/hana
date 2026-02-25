@@ -11,31 +11,29 @@ const c = @cImport(@cInclude("time.h"));
 
 const TIME_FORMAT = "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}";
 
-/// A concrete string matching the longest possible output of TIME_FORMAT.
-/// Used by bar.zig to pre-compute the clock segment width without duplicating
-/// the format knowledge.
 pub const SAMPLE_STRING: []const u8 = "0000-00-00 00:00:00";
 
+// Iter 3: encapsulate timer state in a named struct for clarity.
+const TimerState = struct {
+    fd:      i32  = 0,
+    enabled: bool = false,
+};
+
+var timer: TimerState = .{};
 var last_formatted_time: [20]u8 = undefined;
 var last_formatted_sec:  i64    = -1;
 
-var global_timer_fd: i32  = 0;
-var timer_enabled:   bool = false;
-
 /// Registers the timerfd file descriptor. Must be called once during initialisation.
 pub fn setTimerFd(fd: i32) void {
-    global_timer_fd = fd;
-    timer_enabled   = false;
+    timer = .{ .fd = fd, .enabled = false };
 }
 
-/// Returns true when the clock timer should be running.
 fn shouldClockRun() bool {
     return bar.isVisible() and bar.hasClockSegment();
 }
 
-/// Enables or disables the timerfd, aligning the first tick to the next second boundary.
 fn setTimerState(enable: bool) void {
-    if (enable == timer_enabled) return;
+    if (enable == timer.enabled) return;
 
     const spec: std.os.linux.itimerspec = if (enable) blk: {
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch {
@@ -51,19 +49,16 @@ fn setTimerState(enable: bool) void {
         .it_value    = .{ .sec = 0, .nsec = 0 },
     };
 
-    if (std.os.linux.timerfd_settime(@intCast(global_timer_fd), .{}, &spec, null) >= 0) {
-        timer_enabled = enable;
+    if (std.os.linux.timerfd_settime(@intCast(timer.fd), .{}, &spec, null) >= 0) {
+        timer.enabled = enable;
         debug.info("Clock timer {s}", .{if (enable) "enabled" else "disabled"});
     }
 }
 
-/// Recalculates whether the timer should run and applies the change.
-/// Call when bar visibility changes or the config is reloaded.
 pub fn updateTimerState() void {
     setTimerState(shouldClockRun());
 }
 
-/// Draws the clock segment at `start_x`, returning the next X position.
 pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16) !u16 {
     const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
     const time_str = if (ts.sec == last_formatted_sec)
@@ -76,7 +71,6 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
     return dc.drawSegment(start_x, height, time_str, config.scaledSegmentPadding(height), config.bg, config.fg);
 }
 
-/// Formats a timespec into `buf` as local time. Falls back to UTC on `localtime` failure.
 fn formatTime(buf: []u8, ts: std.posix.timespec) ![]const u8 {
     var raw_sec: c.time_t = @intCast(ts.sec);
     const local_ts = c.localtime(&raw_sec) orelse return formatUtc(buf, ts.sec);
@@ -91,7 +85,6 @@ fn formatTime(buf: []u8, ts: std.posix.timespec) ![]const u8 {
     });
 }
 
-/// Formats `epoch_sec` as UTC when local time is unavailable.
 fn formatUtc(buf: []u8, epoch_sec: i64) ![]const u8 {
     const epoch_day  = @divFloor(epoch_sec, std.time.s_per_day);
     const day_sec    = @mod(epoch_sec, std.time.s_per_day);

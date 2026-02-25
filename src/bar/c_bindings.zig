@@ -44,6 +44,7 @@ pub extern fn cairo_create(surface: *cairo_surface_t) ?*cairo_t;
 pub extern fn cairo_destroy(cr: *cairo_t) void;
 
 /// Compositing operators controlling how source and destination pixels combine.
+/// Only CLEAR and OVER are currently used; the full set is kept for completeness.
 pub const cairo_operator_t = enum(c_int) {
     CLEAR       = 0,
     SOURCE      = 1,
@@ -115,7 +116,8 @@ pub extern fn pango_cairo_context_set_resolution(context: *PangoContext, dpi: f6
 pub extern fn pango_layout_set_text(layout: *PangoLayout, text: [*]const u8, length: c_int) void;
 pub extern fn pango_layout_set_font_description(layout: *PangoLayout, desc: ?*PangoFontDescription) void;
 pub extern fn pango_layout_get_context(layout: *PangoLayout) *PangoContext;
-pub extern fn pango_layout_get_pixel_size(layout: *PangoLayout, width: *c_int, height: *c_int) void;
+/// `width` and `height` may be null if the caller only needs one dimension.
+pub extern fn pango_layout_get_pixel_size(layout: *PangoLayout, width: ?*c_int, height: ?*c_int) void;
 pub extern fn pango_layout_set_width(layout: *PangoLayout, width: c_int) void;
 pub extern fn pango_layout_set_ellipsize(layout: *PangoLayout, ellipsize: PangoEllipsizeMode) void;
 pub extern fn pango_layout_get_baseline(layout: *PangoLayout) c_int;

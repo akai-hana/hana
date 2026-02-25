@@ -13,15 +13,9 @@ const debug = @import("debug");
 
 const bar_flags = @import("bar_flags");
 
-// Public type exposed to callers regardless of whether segments are compiled in.
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 
-// Comptime selection of full vs stub implementation.
-// BarFull is never analyzed when has_any_segment is false — so drawing.zig
-// and all cairo/pango symbols are never referenced.
 const Impl = if (bar_flags.has_any_segment) BarFull else BarStub;
-
-// Public API — thin delegation so callers never need to know which Impl is active.
 
 pub fn init(wm: *defs.WM) !void                                     { return Impl.init(wm); }
 pub fn deinit() void                                                  { Impl.deinit(); }
@@ -52,7 +46,7 @@ pub fn handleButtonPress(ev: *const xcb.xcb_button_press_event_t, wm: *defs.WM) 
     Impl.handleButtonPress(ev, wm);
 }
 
-// Stub — zero-segment build. init signals BarDisabled; everything else is a no-op.
+// Stub — zero-segment build.
 const BarStub = struct {
     pub fn init(_: *defs.WM) error{BarDisabled}!void { return error.BarDisabled; }
     pub fn deinit() void {}
@@ -79,22 +73,13 @@ const BarStub = struct {
 };
 
 // Full implementation — only analyzed when has_any_segment is true.
-//
-// All bar-specific imports (drawing, cairo, pango) live inside this struct so
-// they are never evaluated when the stub is selected. Per-segment imports each
-// use their own flag with an inline stub fallback, so deleting any individual
-// segment file just silently renders that segment as nothing.
 const BarFull = struct {
-    // Bar-specific imports — cairo/pango pulled in transitively via drawing.
     const drawing    = @import("drawing");
     const tiling     = @import("tiling");
     const utils      = @import("utils");
     const workspaces = @import("workspaces");
     const constants  = @import("constants");
     const dpi_mod    = @import("dpi");
-
-    // Per-segment conditional imports with inline stubs.
-    // A missing file sets its flag to false; the stub draws nothing (returns start_x).
 
     const workspaces_segment = if (bar_flags.has_tags) @import("tags") else struct {
         pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16) !u16 { return x; }
@@ -130,8 +115,6 @@ const BarFull = struct {
         pub fn update(_: *defs.WM, _: *std.ArrayList(u8), _: std.mem.Allocator) !void {}
     };
 
-    // Constants
-
     const MIN_BAR_HEIGHT:            u32 = 20;
     const MAX_BAR_HEIGHT:            u32 = 200;
     const DEFAULT_BAR_HEIGHT:        u16 = 24;
@@ -139,8 +122,7 @@ const BarFull = struct {
     const LAYOUT_SEGMENT_WIDTH:      u16 = 60;
     const TITLE_SEGMENT_MIN_WIDTH:   u16 = 100;
 
-    // State
-
+    // Iter 3: draw functions moved to State methods.
     const State = struct {
         window:               u32,
         width:                u16,
@@ -153,7 +135,6 @@ const BarFull = struct {
         cached_title_window:  ?u32,
         dirty:                bool,
         dirty_clock:          bool,
-        // visible: current mapped state; global_visible: desired state when not fullscreen.
         visible:              bool,
         global_visible:       bool,
         has_transparency:     bool,
@@ -213,10 +194,91 @@ const BarFull = struct {
         }
         fn markClockDirty(self: *State) void { self.dirty_clock = true; }
         fn clearDirty(self: *State) void { self.dirty = false; self.dirty_clock = false; }
+
+        // Iter 3: drawing as State methods — State owns its render behaviour.
+
+        fn calculateSegmentWidth(self: *State, segment: defs.BarSegment) u16 {
+            return switch (segment) {
+                .workspaces => if (workspaces.getState()) |ws|
+                    @intCast(ws.workspaces.len * workspaces_segment.getCachedWorkspaceWidth())
+                else
+                    FALLBACK_WORKSPACES_WIDTH,
+                .layout     => LAYOUT_SEGMENT_WIDTH,
+                .variations => LAYOUT_SEGMENT_WIDTH,
+                .title      => TITLE_SEGMENT_MIN_WIDTH,
+                .clock      => self.cached_clock_width,
+            };
+        }
+
+        fn drawSegment(self: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, width: ?u16) !u16 {
+            if (segment == .workspaces) self.cached_workspace_x = x;
+            return switch (segment) {
+                .workspaces => try workspaces_segment.draw(self.dc, self.config, self.height, x),
+                .layout     => try layout_segment.draw(self.dc, self.config, self.height, x),
+                .variations => try variations_segment.draw(self.dc, self.config, self.height, x),
+                .title      => try title_segment.draw(self.dc, self.config, self.height, x,
+                    width orelse 100, wm, &self.cached_title, &self.cached_title_window, self.allocator),
+                .clock      => try clock_segment.draw(self.dc, self.config, self.height, x),
+            };
+        }
+
+        fn drawRightSegments(self: *State, wm: *defs.WM, segments: []const defs.BarSegment) !void {
+            var right_x          = self.width;
+            const scaled_spacing = self.config.scaledSpacing(self.height);
+            for (0..segments.len) |i| {
+                const idx = segments.len - 1 - i;
+                right_x -= self.calculateSegmentWidth(segments[idx]);
+                if (segments[idx] == .clock) self.cached_clock_x = right_x;
+                _ = try self.drawSegment(wm, segments[idx], right_x, null);
+                if (i < segments.len - 1) right_x -= scaled_spacing;
+            }
+        }
+
+        fn drawAll(self: *State, wm: *defs.WM) !void {
+            if (self.has_transparency) self.dc.clearTransparent();
+            self.dc.fillRect(0, 0, self.width, self.height, self.config.bg);
+
+            const scaled_spacing = self.config.scaledSpacing(self.height);
+
+            // Measure right-side total so the center layout can avoid overflowing into it.
+            var right_total: u16 = 0;
+            for (self.config.layout.items) |layout| {
+                if (layout.position != .right) continue;
+                for (layout.segments.items) |seg| right_total += self.calculateSegmentWidth(seg) + scaled_spacing;
+                if (layout.segments.items.len > 0) right_total -= scaled_spacing;
+            }
+
+            var x: u16 = 0;
+            for (self.config.layout.items) |layout| {
+                switch (layout.position) {
+                    .left => for (layout.segments.items) |seg| {
+                        x  = try self.drawSegment(wm, seg, x, null);
+                        x += scaled_spacing;
+                    },
+                    .center => {
+                        const remaining = @max(100, self.width -| x -| right_total -| scaled_spacing);
+                        for (layout.segments.items) |seg| {
+                            const w = if (seg == .title) remaining else self.calculateSegmentWidth(seg);
+                            x = try self.drawSegment(wm, seg, x, w);
+                            if (seg != .title) x += scaled_spacing;
+                        }
+                    },
+                    .right => try self.drawRightSegments(wm, layout.segments.items),
+                }
+            }
+            self.dc.flush();
+        }
+
+        fn drawClockOnly(self: *State, wm: *defs.WM) !void {
+            if (self.cached_clock_x) |clock_x| {
+                _ = try clock_segment.draw(self.dc, self.config, self.height, clock_x);
+                self.dc.flush();
+                return;
+            }
+            try self.drawAll(wm);
+        }
     };
 
-    /// Scans the bar layout config for a clock segment.
-    /// Short-circuits to false at comptime when the clock module is absent.
     fn detectClockSegment(config: *const defs.BarConfig) bool {
         if (comptime !bar_flags.has_clock) return false;
         for (config.layout.items) |layout| {
@@ -229,8 +291,6 @@ const BarFull = struct {
 
     /// Single-threaded — only accessed from the main event loop.
     var state: ?*State = null;
-
-    // Window creation helpers
 
     fn barYPos(wm: *defs.WM, height: u16) i16 {
         return if (wm.config.bar.vertical_position == .bottom)
@@ -275,8 +335,6 @@ const BarFull = struct {
         return .{ .window = window, .visual_id = visual_id, .has_argb = want_transparency };
     }
 
-    // Font helpers
-
     fn sizeFont(alloc: std.mem.Allocator, font: []const u8, size: u16) !?[]const u8 {
         if (size == 0) return null;
         return try std.fmt.allocPrint(alloc, "{s}:size={}", .{ font, size });
@@ -288,9 +346,12 @@ const BarFull = struct {
         const scaled_size = cfg.scaledFontSize();
 
         if (cfg.fonts.items.len > 0) {
+            // Build a sized copy of the font list; free any strings we allocated.
             var sized = std.ArrayList([]const u8){};
             defer {
-                for (sized.items, 0..) |s, i| if (s.ptr != cfg.fonts.items[i].ptr) alloc.free(s);
+                for (cfg.fonts.items, sized.items) |orig, sized_str| {
+                    if (sized_str.ptr != orig.ptr) alloc.free(sized_str);
+                }
                 sized.deinit(alloc);
             }
             for (cfg.fonts.items) |f| try sized.append(alloc, (try sizeFont(alloc, f, scaled_size)) orelse f);
@@ -301,8 +362,6 @@ const BarFull = struct {
         defer if (font_str.ptr != cfg.font.ptr) alloc.free(font_str);
         try dc.loadFont(font_str);
     }
-
-    // X11 property helpers
 
     inline fn setPropAtom(conn: *xcb.xcb_connection_t, win: u32, prop: u32, type_: u32, data: anytype) void {
         _ = xcb.xcb_change_property(conn, xcb.XCB_PROP_MODE_REPLACE, win, prop, type_, 32, data.len, data);
@@ -334,10 +393,6 @@ const BarFull = struct {
             });
     }
 
-    // Bar height
-
-    /// Loads fonts at a trial point size, measures glyph height, and back-calculates
-    /// the Pango point size that exactly fills `bar_height`. Returns null on failure.
     fn resolvePercentageFontSize(wm: *defs.WM, bar_height: u16) ?u16 {
         const TRIAL_PT: u16 = 100;
 
@@ -389,8 +444,6 @@ const BarFull = struct {
         return @intCast(std.math.clamp(font_height, MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
     }
 
-    // Lifecycle
-
     pub fn init(wm: *defs.WM) !void {
         if (!wm.config.bar.enabled) return error.BarDisabled;
 
@@ -419,7 +472,6 @@ const BarFull = struct {
 
     pub fn deinit() void {
         if (state) |s| {
-            // Explicitly destroy the X11 window to prevent ghost windows on hot-reload.
             _ = xcb.xcb_destroy_window(s.conn, s.window);
             s.dc.deinit();
             s.deinit();
@@ -441,41 +493,34 @@ const BarFull = struct {
         const y_pos  = barYPos(wm, height);
         const setup  = createBarWindow(wm, height, y_pos);
 
-        setWindowProperties(wm, setup.window, height) catch {
+        // Iter 2: single reloadImpl function collapses the 4 independent
+        // "destroy + log + return" error paths into one errdefer + one call site.
+        reloadImpl(wm, old, setup, height) catch |err| {
             _ = xcb.xcb_destroy_window(wm.conn, setup.window);
-            debug.err("Bar reload: setWindowProperties failed, keeping old bar", .{});
-            return;
+            debug.err("Bar reload failed ({s}), keeping old bar", .{@errorName(err)});
         };
+    }
 
-        const new_dc = drawing.DrawContext.initWithVisual(
+    /// Performs the actual bar-swap inside reload. On any error the new window
+    /// is not yet visible so the caller simply destroys it and returns.
+    fn reloadImpl(wm: *defs.WM, old: *State, setup: BarWindowSetup, height: u16) !void {
+        try setWindowProperties(wm, setup.window, height);
+
+        const new_dc = try drawing.DrawContext.initWithVisual(
             wm.allocator, wm.conn, setup.window, wm.screen.width_in_pixels, height,
             setup.visual_id, wm.dpi_info.dpi, setup.has_argb, wm.config.bar.transparency,
-        ) catch {
-            _ = xcb.xcb_destroy_window(wm.conn, setup.window);
-            debug.err("Bar reload: DrawContext init failed, keeping old bar", .{});
-            return;
-        };
+        );
+        errdefer new_dc.deinit();
+        try loadBarFonts(new_dc, wm);
 
-        loadBarFonts(new_dc, wm) catch {
-            new_dc.deinit();
-            _ = xcb.xcb_destroy_window(wm.conn, setup.window);
-            debug.err("Bar reload: font load failed, keeping old bar", .{});
-            return;
-        };
-
-        const new_state = State.init(wm.allocator, wm.conn, setup.window, wm.screen.width_in_pixels,
-            height, new_dc, wm.config.bar, setup.has_argb) catch {
-            new_dc.deinit();
-            _ = xcb.xcb_destroy_window(wm.conn, setup.window);
-            debug.err("Bar reload: State.init failed, keeping old bar", .{});
-            return;
-        };
+        const new_state = try State.init(wm.allocator, wm.conn, setup.window,
+            wm.screen.width_in_pixels, height, new_dc, wm.config.bar, setup.has_argb);
 
         new_state.visible        = old.visible;
         new_state.global_visible = old.global_visible;
 
         state = new_state;
-        draw(new_state, wm) catch {};
+        new_state.drawAll(wm) catch {};
         new_dc.flush();
         utils.flush(wm.conn);
 
@@ -490,8 +535,6 @@ const BarFull = struct {
         old.deinit();
     }
 
-    // Public API
-
     pub fn toggleBarPosition(wm: *defs.WM) !void {
         if (state) |s| {
             wm.config.bar.vertical_position = switch (wm.config.bar.vertical_position) {
@@ -499,7 +542,6 @@ const BarFull = struct {
                 .bottom => .top,
             };
             const new_y = barYPos(wm, s.height);
-            // setWindowProperties makes blocking round-trips; do this before the grab.
             try setWindowProperties(wm, s.window, s.height);
             _ = xcb.xcb_grab_server(wm.conn);
             _ = xcb.xcb_configure_window(s.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y,
@@ -527,7 +569,7 @@ const BarFull = struct {
     pub fn redrawImmediate(wm: *defs.WM) void {
         const s = state orelse return;
         if (!s.visible) return;
-        draw(s, wm) catch |e| debug.warnOnErr(e, "draw in redrawImmediate");
+        s.drawAll(wm) catch |e| debug.warnOnErr(e, "drawAll in redrawImmediate");
         s.clearDirty();
     }
 
@@ -554,13 +596,10 @@ const BarFull = struct {
         s.visible = show;
 
         if (action == .toggle) {
-            // Draw before grab — Cairo calls inside a grab add latency.
-            if (show) draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setBarState");
+            if (show) s.drawAll(wm) catch |e| debug.warnOnErr(e, "drawAll in setBarState");
             _ = xcb.xcb_grab_server(wm.conn);
             if (show) _ = xcb.xcb_map_window(s.conn, s.window)
             else      _ = xcb.xcb_unmap_window(s.conn, s.window);
-            // Briefly expose global_visible through isVisible() for the retile so
-            // calculateScreenArea uses the intended future bar height on non-current workspaces.
             const saved = s.visible;
             if (is_fullscreen) s.visible = s.global_visible;
             retileAllWorkspacesNoGrab(wm);
@@ -570,7 +609,7 @@ const BarFull = struct {
         } else {
             if (show) {
                 _ = xcb.xcb_map_window(s.conn, s.window);
-                draw(s, wm) catch |e| debug.warnOnErr(e, "draw in setBarState");
+                s.drawAll(wm) catch |e| debug.warnOnErr(e, "drawAll in setBarState");
             } else {
                 _ = xcb.xcb_unmap_window(s.conn, s.window);
             }
@@ -582,15 +621,13 @@ const BarFull = struct {
         clock_segment.updateTimerState();
     }
 
-    // Update loop
-
     pub fn updateIfDirty(wm: *defs.WM) !void {
         const s = state orelse return;
         if (s.dirty) {
-            try draw(s, wm);
+            try s.drawAll(wm);
             s.clearDirty();
         } else if (s.dirty_clock) {
-            try drawClockOnly(s, wm);
+            try s.drawClockOnly(wm);
             s.clearDirty();
         }
     }
@@ -602,10 +639,9 @@ const BarFull = struct {
     pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
         if (state) |s| if (event.window == s.window and event.count == 0) {
             if (wm.drag_state.active) {
-                // Defer during drag — Expose events stream continuously with no bar change.
                 s.markDirty();
             } else {
-                draw(s, wm) catch |e| debug.warnOnErr(e, "draw in handleExpose");
+                s.drawAll(wm) catch |e| debug.warnOnErr(e, "drawAll in handleExpose");
             }
         };
     }
@@ -641,102 +677,17 @@ const BarFull = struct {
 
     pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.WM) void {
         if (state) |s| if (event.event == s.window) {
-            const ws_state          = workspaces.getState() orelse return;
+            const ws_state = workspaces.getState() orelse return;
+            const ws_w     = workspaces_segment.getCachedWorkspaceWidth();
+            if (ws_w == 0) return; // not yet drawn; avoid divide-by-zero
             const click_x           = @max(0, event.event_x - s.cached_workspace_x);
-            const clicked_ws: usize = @intCast(@divFloor(click_x, workspaces_segment.getCachedWorkspaceWidth()));
+            const clicked_ws: usize = @intCast(@divFloor(click_x, ws_w));
             if (clicked_ws < ws_state.workspaces.len) {
                 workspaces.switchTo(wm, clicked_ws);
                 s.markDirty();
             }
         };
     }
-
-    // Drawing
-
-    fn calculateSegmentWidth(s: *State, segment: defs.BarSegment) u16 {
-        return switch (segment) {
-            .workspaces => if (workspaces.getState()) |ws|
-                @intCast(ws.workspaces.len * workspaces_segment.getCachedWorkspaceWidth())
-            else
-                FALLBACK_WORKSPACES_WIDTH,
-            .layout     => LAYOUT_SEGMENT_WIDTH,
-            .variations => LAYOUT_SEGMENT_WIDTH,
-            .title      => TITLE_SEGMENT_MIN_WIDTH,
-            .clock      => s.cached_clock_width,
-        };
-    }
-
-    fn drawRightSegments(s: *State, wm: *defs.WM, segments: []const defs.BarSegment) !void {
-        var right_x          = s.width;
-        const scaled_spacing = s.config.scaledSpacing(s.height);
-        for (0..segments.len) |i| {
-            const idx = segments.len - 1 - i;
-            right_x -= calculateSegmentWidth(s, segments[idx]);
-            if (segments[idx] == .clock) s.cached_clock_x = right_x;
-            _ = try drawSegment(s, wm, segments[idx], right_x, null);
-            if (i < segments.len - 1) right_x -= scaled_spacing;
-        }
-    }
-
-    fn draw(s: *State, wm: *defs.WM) !void {
-        if (s.has_transparency) s.dc.clearTransparent();
-        s.dc.fillRect(0, 0, s.width, s.height, s.config.bg);
-
-        const scaled_spacing = s.config.scaledSpacing(s.height);
-        var widths = [_]u16{0} ** 2; // [0] = left total, [1] = right total
-        for (s.config.layout.items) |layout| {
-            const idx: usize = switch (layout.position) {
-                .left   => 0,
-                .right  => 1,
-                .center => continue,
-            };
-            for (layout.segments.items) |seg| widths[idx] += calculateSegmentWidth(s, seg) + scaled_spacing;
-            if (layout.segments.items.len > 0) widths[idx] -= scaled_spacing;
-        }
-
-        var x: u16 = 0;
-        for (s.config.layout.items) |layout| {
-            switch (layout.position) {
-                .left => for (layout.segments.items) |seg| {
-                    x  = try drawSegment(s, wm, seg, x, null);
-                    x += scaled_spacing;
-                },
-                .center => {
-                    const remaining = @max(100, s.width -| x -| widths[1] -| scaled_spacing);
-                    for (layout.segments.items) |seg| {
-                        const w = if (seg == .title) remaining else calculateSegmentWidth(s, seg);
-                        x = try drawSegment(s, wm, seg, x, w);
-                        if (seg != .title) x += scaled_spacing;
-                    }
-                },
-                .right => try drawRightSegments(s, wm, layout.segments.items),
-            }
-        }
-        s.dc.flush();
-    }
-
-    fn drawClockOnly(s: *State, wm: *defs.WM) !void {
-        if (s.cached_clock_x) |clock_x| {
-            _ = try clock_segment.draw(s.dc, s.config, s.height, clock_x);
-            s.dc.flush();
-            return;
-        }
-        try draw(s, wm);
-    }
-
-    fn drawSegment(s: *State, wm: *defs.WM, segment: defs.BarSegment, x: u16, width: ?u16) !u16 {
-        if (segment == .workspaces) s.cached_workspace_x = x;
-        return switch (segment) {
-            .workspaces => try workspaces_segment.draw(s.dc, s.config, s.height, x),
-            .layout     => try layout_segment.draw(s.dc, s.config, s.height, x),
-            .variations => try variations_segment.draw(s.dc, s.config, s.height, x),
-            .title      => try title_segment.draw(s.dc, s.config, s.height, x,
-                width orelse 100, wm, &s.cached_title, &s.cached_title_window, s.allocator),
-            .clock      => try clock_segment.draw(s.dc, s.config, s.height, x),
-        };
-    }
-
-    // Workspace retiling
 
     fn retileAllWorkspacesNoGrab(wm: *defs.WM) void {
         const ws_state      = workspaces.getState() orelse return;
@@ -757,8 +708,6 @@ const BarFull = struct {
             ws_state.current = @intCast(idx);
             tiling.retileCurrentWorkspace(wm);
 
-            // Push non-current windows off-screen and invalidate geom cache so a
-            // subsequent switch doesn't get a stale cache hit and leave them off-screen.
             if (@as(u8, @intCast(idx)) != original_ws) {
                 for (ws.windows.items()) |win| {
                     _ = xcb.xcb_configure_window(wm.conn, win,

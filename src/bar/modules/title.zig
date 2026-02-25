@@ -9,16 +9,25 @@ const utils      = @import("utils");
 const minimize   = @import("minimize");
 const tiling     = @import("tiling");
 
-var net_wm_name: ?u32 = null;
-var utf8_string: ?u32 = null;
+// Iter 3: collect atom state into a single struct with a single lazy-init call.
+// Removes two separate nullable module-level vars and the duplicated ensureAtoms() call.
+const Atoms = struct {
+    net_wm_name: u32 = 0,
+    utf8_string:  u32 = 0,
+    initialized: bool = false,
 
-/// Resolves title-related atoms from the pre-populated atom cache.
-/// Safe to call on every draw; the null-check makes repeated calls free.
-fn ensureAtoms() void {
-    if (net_wm_name != null) return;
-    net_wm_name = utils.getAtomCached("_NET_WM_NAME") catch null;
-    utf8_string  = utils.getAtomCached("UTF8_STRING")  catch null;
-}
+    fn ensure(self: *Atoms) void {
+        if (self.initialized) return;
+        self.initialized = true;
+        self.net_wm_name = utils.getAtomCached("_NET_WM_NAME") catch 0;
+        self.utf8_string  = utils.getAtomCached("UTF8_STRING")  catch 0;
+    }
+
+    /// Invalidates cached atoms (call on bar reload when atom cache is rebuilt).
+    fn invalidate(self: *Atoms) void { self.initialized = false; }
+};
+
+var atoms: Atoms = .{};
 
 const WindowInfo = struct {
     window:    u32,
@@ -28,11 +37,9 @@ const WindowInfo = struct {
     minimized: bool,
 };
 
-/// Fixed left indent added to all title text draw calls, independent of scaledSegmentPadding.
-/// Ensures the text never touches the left border even at font_size = 100%.
+/// Fixed left indent independent of scaledSegmentPadding.
 const TITLE_LEAD_PX: u16 = 4;
 
-/// Draws the title segment at `start_x`, returning `start_x + width`.
 pub fn draw(
     dc:                   *drawing.DrawContext,
     config:               defs.BarConfig,
@@ -90,7 +97,6 @@ pub fn draw(
     return start_x + width;
 }
 
-/// Draws each window as an equal-width horizontal segment, sorted by on-screen position.
 fn drawSegmentedTitles(
     dc:             *drawing.DrawContext,
     config:         defs.BarConfig,
@@ -105,17 +111,16 @@ fn drawSegmentedTitles(
     const win_items = workspace.windows.items();
     if (win_items.len == 0) return;
 
-    // Cap at 128 — more windows than this on one workspace is not realistic.
     const MAX_WINS: usize = 128;
     const n_wins = @min(win_items.len, MAX_WINS);
 
-    // Phase 1: pipeline all _NET_WM_NAME cookies in a single write pass.
-    // Fire all cookies without waiting for replies so the X server can process
-    // them concurrently. The read pass below collects replies in order, turning
-    // N serial round-trips into one batch.
+    atoms.ensure();
+    const net_atom = atoms.net_wm_name;
+    // Iter 2: compute utf_type once rather than inline in two phases.
+    const utf_type = if (atoms.utf8_string != 0) atoms.utf8_string else xcb.XCB_ATOM_STRING;
+
+    // Phase 1: fire all _NET_WM_NAME cookies without waiting.
     var net_cookies: [MAX_WINS]xcb.xcb_get_property_cookie_t = undefined;
-    const net_atom = net_wm_name orelse 0;
-    const utf_type = utf8_string orelse xcb.XCB_ATOM_STRING;
     if (net_atom != 0) {
         for (win_items[0..n_wins], 0..) |win, i| {
             net_cookies[i] = xcb.xcb_get_property(wm.conn, 0, win, net_atom, utf_type, 0, 8192);
@@ -123,10 +128,9 @@ fn drawSegmentedTitles(
     }
 
     // Phase 2: collect _NET_WM_NAME replies; queue WM_NAME fallbacks.
-    // titles[i] borrows from allocator; null means "needs WM_NAME fallback".
-    var titles:     [MAX_WINS]?[]const u8                    = @splat(null);
-    var fb_cookies: [MAX_WINS]xcb.xcb_get_property_cookie_t  = undefined;
-    var needs_fb:   [MAX_WINS]bool                           = @splat(false);
+    var titles:     [MAX_WINS]?[]const u8                   = @splat(null);
+    var fb_cookies: [MAX_WINS]xcb.xcb_get_property_cookie_t = undefined;
+    var needs_fb:   [MAX_WINS]bool                          = @splat(false);
 
     for (win_items[0..n_wins], 0..) |win, i| {
         got: {
@@ -146,7 +150,7 @@ fn drawSegmentedTitles(
         }
     }
 
-    // Phase 3: collect WM_NAME fallback replies (subset only).
+    // Phase 3: collect WM_NAME fallback replies.
     for (0..n_wins) |i| {
         if (!needs_fb[i]) continue;
         const r = xcb.xcb_get_property_reply(wm.conn, fb_cookies[i], null) orelse continue;
@@ -159,8 +163,7 @@ fn drawSegmentedTitles(
     }
     defer for (titles[0..n_wins]) |t| if (t) |s| allocator.free(s);
 
-    // Build WindowInfo list on the stack — eliminates a heap allocation per multi-window draw.
-    // MAX_WINS = 128 and WindowInfo is ~32 bytes, totaling ~4 KB — well within stack budget.
+    // Build WindowInfo list on the stack (~4 KB for MAX_WINS=128).
     var infos_buf: [MAX_WINS]WindowInfo = undefined;
     var n_infos: usize = 0;
 
@@ -212,7 +215,6 @@ fn drawSegmentedTitles(
     }
 }
 
-/// Comparator: non-minimized before minimized; then left-to-right, top-to-bottom.
 fn compareWindows(_: void, a: WindowInfo, b: WindowInfo) bool {
     if (a.minimized != b.minimized) return !a.minimized;
     if (a.x != b.x) return a.x < b.x;
@@ -220,7 +222,6 @@ fn compareWindows(_: void, a: WindowInfo, b: WindowInfo) bool {
     return a.window < b.window;
 }
 
-/// Fetches a string property from `win`, allocating the result. Returns null when absent.
 fn fetchProperty(conn: *xcb.xcb_connection_t, win: u32, atom: u32, atom_type: u32, allocator: std.mem.Allocator) !?[]const u8 {
     const cookie = xcb.xcb_get_property(conn, 0, win, atom, atom_type, 0, 8192);
     const reply  = xcb.xcb_get_property_reply(conn, cookie, null) orelse return null;
@@ -231,18 +232,15 @@ fn fetchProperty(conn: *xcb.xcb_connection_t, win: u32, atom: u32, atom_type: u3
     return try allocator.dupe(u8, value[0..@intCast(len)]);
 }
 
-/// Fetches `_NET_WM_NAME` (UTF-8), falling back to `WM_NAME` (Latin-1).
-/// Returns null when neither property is set.
 fn getWindowTitle(conn: *xcb.xcb_connection_t, window: u32, allocator: std.mem.Allocator) !?[]const u8 {
-    ensureAtoms();
-    if (net_wm_name) |atom| {
-        if (try fetchProperty(conn, window, atom, utf8_string.?, allocator)) |t| return t;
+    atoms.ensure();
+    if (atoms.net_wm_name != 0) {
+        const utf_type = if (atoms.utf8_string != 0) atoms.utf8_string else xcb.XCB_ATOM_STRING;
+        if (try fetchProperty(conn, window, atoms.net_wm_name, utf_type, allocator)) |t| return t;
     }
     return try fetchProperty(conn, window, xcb.XCB_ATOM_WM_NAME, xcb.XCB_ATOM_STRING, allocator);
 }
 
-/// Returns the title of the focused window, using a cached ArrayList buffer to avoid
-/// redundant X round-trips. Returns "" when no window is focused.
 fn getFocusedWindowTitle(
     wm:                  *defs.WM,
     cached_title:        *std.ArrayList(u8),
@@ -256,10 +254,11 @@ fn getFocusedWindowTitle(
 
     if (cached_title_window.* == win and cached_title.items.len > 0) return cached_title.items;
 
-    ensureAtoms();
+    atoms.ensure();
+    const utf_type = if (atoms.utf8_string != 0) atoms.utf8_string else xcb.XCB_ATOM_STRING;
 
-    if (net_wm_name) |atom| {
-        const title = try utils.fetchPropertyToBuffer(wm.conn, win, atom, utf8_string orelse xcb.XCB_ATOM_STRING, cached_title, allocator);
+    if (atoms.net_wm_name != 0) {
+        const title = try utils.fetchPropertyToBuffer(wm.conn, win, atoms.net_wm_name, utf_type, cached_title, allocator);
         if (title.len > 0) { cached_title_window.* = win; return title; }
     }
 
