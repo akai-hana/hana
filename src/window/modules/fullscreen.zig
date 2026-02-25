@@ -12,35 +12,31 @@ const constants  = @import("constants");
 const debug      = @import("debug");
 const minimize   = @import("minimize");
 
-inline fn borderColor(wm: *WM, win: u32) u32 {
-    return if (wm.focused_window == win) wm.config.tiling.border_focused
-           else                          wm.config.tiling.border_unfocused;
-}
-
 // Fetch the current geometry of `win`. Falls back to a centered quarter-screen
 // default if the reply fails or the window is currently offscreen.
 fn fetchWindowGeom(wm: *WM, win: u32) defs.WindowGeometry {
-    const def_x: i16 = @divTrunc(@as(i16, @intCast(wm.screen.width_in_pixels)),  4);
-    const def_y: i16 = @divTrunc(@as(i16, @intCast(wm.screen.height_in_pixels)), 4);
-    const def_w: u16 = @divTrunc(wm.screen.width_in_pixels,  2);
-    const def_h: u16 = @divTrunc(wm.screen.height_in_pixels, 2);
+    const default: defs.WindowGeometry = .{
+        .x            = @divTrunc(@as(i16, @intCast(wm.screen.width_in_pixels)),  4),
+        .y            = @divTrunc(@as(i16, @intCast(wm.screen.height_in_pixels)), 4),
+        .width        = @divTrunc(wm.screen.width_in_pixels,  2),
+        .height       = @divTrunc(wm.screen.height_in_pixels, 2),
+        .border_width = 0,
+    };
 
     const reply = xcb.xcb_get_geometry_reply(
         wm.conn, xcb.xcb_get_geometry(wm.conn, win), null,
-    ) orelse return .{ .x = def_x, .y = def_y, .width = def_w, .height = def_h, .border_width = 0 };
+    ) orelse return default;
     defer std.c.free(reply);
 
-    const is_offscreen =
-        reply.*.x < constants.OFFSCREEN_THRESHOLD_MIN or
+    if (reply.*.x < constants.OFFSCREEN_THRESHOLD_MIN or
         reply.*.x > constants.OFFSCREEN_THRESHOLD_MAX or
         reply.*.y < constants.OFFSCREEN_THRESHOLD_MIN or
-        reply.*.y > constants.OFFSCREEN_THRESHOLD_MAX;
-
+        reply.*.y > constants.OFFSCREEN_THRESHOLD_MAX) return default;
     return .{
-        .x            = if (is_offscreen) def_x else reply.*.x,
-        .y            = if (is_offscreen) def_y else reply.*.y,
-        .width        = if (is_offscreen) def_w else reply.*.width,
-        .height       = if (is_offscreen) def_h else reply.*.height,
+        .x            = reply.*.x,
+        .y            = reply.*.y,
+        .width        = reply.*.width,
+        .height       = reply.*.height,
         .border_width = reply.*.border_width,
     };
 }
@@ -113,31 +109,35 @@ fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
 
     if (tiling.isWindowTiled(win)) {
         // retile above already sent the correct geometry for `win`.
-        // Restore border width and colour separately: the Rect that retile
-        // sends does not include BORDER_WIDTH, so it remains 0 until here.
+        // Restore border width separately: the Rect that retile sends does not
+        // include BORDER_WIDTH, so it remains 0 until here.
         _ = xcb.xcb_configure_window(wm.conn, win,
             xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{saved.border_width});
-        _ = xcb.xcb_change_window_attributes(wm.conn, win,
-            xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(wm, win)});
     } else {
-        // Floating: restore saved geometry and border explicitly.
+        // Floating: restore saved geometry and border width explicitly.
         utils.configureWindowGeom(wm.conn, win, saved);
-        _ = xcb.xcb_change_window_attributes(wm.conn, win,
-            xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(wm, win)});
 
         // Bring non-minimized siblings back to a visible position.
         if (workspaces.getCurrentWorkspaceObject()) |ws_obj| {
-            const x: u32 = @intCast(wm.screen.width_in_pixels  / 4);
-            const y: u32 = @intCast(wm.screen.height_in_pixels / 4);
+            const pos = utils.floatDefaultPos(wm);
             for (ws_obj.windows.items()) |other_win| {
                 if (other_win == win) continue;
                 if (minimize.isMinimized(wm, other_win)) continue;
                 _ = xcb.xcb_configure_window(wm.conn, other_win,
                     xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
-                    &[_]u32{ x, y });
+                    &[_]u32{ pos.x, pos.y });
             }
         }
     }
+
+    // Restore border colour for both tiled and floating paths.
+    // Tiled: retile sends geometry but not colour.
+    // Floating: configureWindowGeom does not touch border attributes.
+    _ = xcb.xcb_change_window_attributes(wm.conn, win,
+        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{
+            if (wm.focused_window == win) wm.config.tiling.border_focused
+            else wm.config.tiling.border_unfocused,
+        });
 }
 
 // Shared grab-owning wrapper for all enter paths.
@@ -158,8 +158,10 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
 
 // Public API
 
-// Enter fullscreen for a specific window on the current workspace.
-// Used by the minimize module when restoring a window that was fullscreen.
+// Enter fullscreen for `win` on the current workspace, fetching its current
+// geometry via a blocking round-trip.  Use enterFullscreenWithSavedGeom when
+// the geometry is already known (e.g. restoring a minimized fullscreen window)
+// to avoid the extra round-trip and the intermediate compositor frame.
 // Caller is responsible for setting wm.focused_window before calling.
 pub fn enterFullscreenForWindow(wm: *WM, win: u32) void {
     const ws = workspaces.getCurrentWorkspace() orelse return;

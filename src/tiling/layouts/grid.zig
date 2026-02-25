@@ -9,7 +9,6 @@ const State  = tiling.State;
 const xcb    = defs.xcb;
 
 inline fn calcGridDims(n: usize) struct { cols: u16, rows: u16 } {
-    if (n == 0) return .{ .cols = 1, .rows = 1 };
     const cols = @as(u16, @intFromFloat(@ceil(@sqrt(@as(f32, @floatFromInt(n))))));
     const rows = @as(u16, @intCast((n + cols - 1) / cols));
     return .{ .cols = cols, .rows = rows };
@@ -43,10 +42,9 @@ pub fn tileWithOffset(conn: *xcb.xcb_connection_t, state: *State, windows: []con
         const effective_win_w: u16 = switch (state.layout_variations.grid) {
             .rigid => win_w,
             .relaxed => blk: {
-                const is_last = idx == n - 1;
-                if (is_last and n % dims.cols != 0) {
+                if (idx == n - 1 and n % dims.cols != 0) {
                     // Expand from this cell's left edge to the right margin.
-                    const x_start    = m.gap + col * cell_spacing_w;
+                    const x_start    = m.gap +| col *| cell_spacing_w;
                     const available  = screen_w -| x_start -| m.gap -| border_margin;
                     break :blk if (available > 0) @max(available, defs.MIN_WINDOW_DIM) else defs.MIN_WINDOW_DIM;
                 }
@@ -55,8 +53,8 @@ pub fn tileWithOffset(conn: *xcb.xcb_connection_t, state: *State, windows: []con
         };
 
         const rect = utils.Rect{
-            .x      = @intCast(m.gap + col * cell_spacing_w),
-            .y      = @intCast(y_offset + m.gap + row * cell_spacing_h),
+            .x      = @intCast(m.gap +| col *| cell_spacing_w),
+            .y      = @intCast(y_offset +| m.gap +| row *| cell_spacing_h),
             .width  = effective_win_w,
             .height = win_h,
         };

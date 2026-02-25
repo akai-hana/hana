@@ -58,7 +58,7 @@ pub fn grabButtons(wm: *WM, win: u32, focused: bool) void {
 
 // Workspace rule matching
 
-inline fn resolveWorkspace(target: u8, fallback: u8) u8 {
+fn resolveWorkspace(target: u8, fallback: u8) u8 {
     const s = workspaces.getState() orelse return fallback;
     return if (target < s.workspaces.len) target else fallback;
 }
@@ -73,9 +73,8 @@ fn workspaceRuleForClass(wm: *WM, cookie: xcb.xcb_get_property_cookie_t) ?u8 {
 
     const raw: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
     // Strip trailing null bytes that some clients include in value_len.
-    var len: usize = @intCast(reply.*.value_len);
-    while (len > 0 and raw[len - 1] == 0) len -= 1;
-    const data = raw[0..len];
+    const raw_all = raw[0..@as(usize, @intCast(reply.*.value_len))];
+    const data    = std.mem.trimEnd(u8, raw_all, &[_]u8{0});
 
     const sep = std.mem.indexOfScalar(u8, data, 0) orelse return null;
     const class_start = sep + 1;
@@ -98,103 +97,10 @@ fn workspaceRuleForClass(wm: *WM, cookie: xcb.xcb_get_property_cookie_t) ?u8 {
 
 /// Register `win` with the tiling system and, when `and_retile` is true,
 /// immediately retile the current workspace.  No-op when tiling is disabled.
-inline fn registerWithTiling(wm: *WM, win: u32, and_retile: bool) void {
+fn registerWithTiling(wm: *WM, win: u32, and_retile: bool) void {
     if (!wm.config.tiling.enabled) return;
     tiling.addWindow(wm, win);
     if (and_retile) tiling.retileCurrentWorkspace(wm);
-}
-
-// Spawn queue
-//
-// Workspace assignment uses a two-phase PID lookup:
-//   Phase 1 — PID match: compare _NET_WM_PID against stored grandchild PIDs.
-//     Works regardless of how long the program takes to start, with no expiry.
-//   Phase 2 — Daemon fallback: only for windows with no PID (win_pid == 0).
-//     Daemon-mode terminals (kitty --single-instance, wezterm server, foot
-//     --server) exit their client before the window maps, registering with
-//     pid=0; matched by finding the oldest pid=0 entry.
-//     Windows with a non-zero PID that failed Phase 1 are not given a daemon
-//     entry — they were not launched from a WM keybind.
-//
-// The queue is purely in-process — no X round-trips, no filesystem reads.
-
-const SPAWN_QUEUE_CAP: u8 = 16;
-
-const SpawnEntry = struct {
-    workspace: u8,
-    /// PID written into _NET_WM_PID by the grandchild process.  Set to 0 for
-    /// daemon-mode terminals whose client process exits before the window maps.
-    pid: u32,
-};
-
-/// A fixed-capacity circular FIFO that tracks pending spawn-workspace assignments.
-const SpawnQueue = struct {
-    buf:  [SPAWN_QUEUE_CAP]SpawnEntry = undefined,
-    head: u8 = 0,
-    len:  u8 = 0,
-
-    /// Called by input.executeShellCommand after a confirmed successful exec.
-    /// `pid` is the grandchild PID forwarded via pipe; it is 0 for daemon-mode
-    /// terminals whose client process exited before we could verify exec success.
-    pub fn push(self: *SpawnQueue, workspace: u8, pid: u32) void {
-        if (self.len == SPAWN_QUEUE_CAP) {
-            // Queue full — drop the oldest entry to make room.
-            self.head = (self.head + 1) % SPAWN_QUEUE_CAP;
-            self.len -= 1;
-        }
-        const tail = (self.head + self.len) % SPAWN_QUEUE_CAP;
-        self.buf[tail] = .{ .workspace = workspace, .pid = pid };
-        self.len += 1;
-    }
-
-    /// Search for an entry whose PID matches `win_pid` (from _NET_WM_PID).
-    /// On a hit the entry is removed and its workspace returned.  On a miss
-    /// returns null — the caller should fall back to popOldestDaemon() if and
-    /// only if win_pid is 0.
-    pub fn popByPid(self: *SpawnQueue, win_pid: u32) ?u8 {
-        if (win_pid == 0) return null;
-        var i: u8 = 0;
-        while (i < self.len) : (i += 1) {
-            const idx = (self.head + i) % SPAWN_QUEUE_CAP;
-            if (self.buf[idx].pid != win_pid) continue;
-            const ws = self.buf[idx].workspace;
-            self.removeAt(i);
-            return ws;
-        }
-        return null;
-    }
-
-    /// Search for the oldest daemon spawn entry (pid=0) and remove it.
-    /// Returns its workspace, or null if no daemon spawn is pending.
-    pub fn popOldestDaemon(self: *SpawnQueue) ?u8 {
-        var i: u8 = 0;
-        while (i < self.len) : (i += 1) {
-            const idx = (self.head + i) % SPAWN_QUEUE_CAP;
-            if (self.buf[idx].pid != 0) continue;
-            const ws = self.buf[idx].workspace;
-            self.removeAt(i);
-            return ws;
-        }
-        return null;
-    }
-
-    /// Collapse the logical slot at position `i` by shifting the tail down.
-    fn removeAt(self: *SpawnQueue, i: u8) void {
-        var j: u8 = i;
-        while (j + 1 < self.len) : (j += 1) {
-            const cur  = (self.head + j)     % SPAWN_QUEUE_CAP;
-            const next = (self.head + j + 1) % SPAWN_QUEUE_CAP;
-            self.buf[cur] = self.buf[next];
-        }
-        self.len -= 1;
-    }
-};
-
-var spawn_queue: SpawnQueue = .{};
-
-/// Public entry point called by input.executeShellCommand.
-pub fn registerSpawn(workspace: u8, pid: u32) void {
-    spawn_queue.push(workspace, pid);
 }
 
 // Workspace assignment
@@ -202,10 +108,10 @@ pub fn registerSpawn(workspace: u8, pid: u32) void {
 /// Determine which workspace `win` should appear on.
 /// Priority: workspace class rules > exec-spawn workspace > current workspace.
 fn resolveTargetWorkspace(
-    wm:                *WM,
-    win:               u32,
-    current_ws:        u8,
-    c_net_wm_pid:      xcb.xcb_get_property_cookie_t,
+    wm:                 *WM,
+    win:                u32,
+    current_ws:         u8,
+    c_net_wm_pid:       xcb.xcb_get_property_cookie_t,
     has_pending_spawns: bool,
 ) u8 {
     // Phase 1 — Workspace class rules (highest priority).
@@ -237,14 +143,14 @@ fn resolveTargetWorkspace(
         };
 
         // Phase 2a: direct PID match — works for any program that sets _NET_WM_PID.
-        if (spawn_queue.popByPid(win_pid)) |spawn_ws|
+        if (wm.spawn_queue.popByPid(win_pid)) |spawn_ws|
             return resolveWorkspace(spawn_ws, current_ws);
 
         // Phase 2b: daemon fallback — only when the window has no PID.
         // Windows with a non-zero PID that didn't match the queue were not
         // launched from a WM keybind; leave them on the current workspace.
         if (win_pid == 0) {
-            if (spawn_queue.popOldestDaemon()) |spawn_ws|
+            if (wm.spawn_queue.popOldestDaemon()) |spawn_ws|
                 return resolveWorkspace(spawn_ws, current_ws);
         }
     }
@@ -254,6 +160,25 @@ fn resolveTargetWorkspace(
 }
 
 // Map request
+
+/// Called by input.executeShellCommand after a confirmed successful exec.
+/// `pid` is the grandchild PID forwarded via pipe; 0 for daemon-mode terminals.
+pub fn registerSpawn(wm: *WM, workspace: u8, pid: u32) void {
+    wm.spawn_queue.push(workspace, pid);
+}
+
+/// Capture the pointer position right after a window spawn so subsequent
+/// crossing events at the same coordinates can be identified as retile
+/// side-effects rather than genuine user movement.
+fn snapshotSpawnCursor(wm: *WM) void {
+    if (wm.suppress_focus_reason != .window_spawn) return;
+    const ptr = xcb.xcb_query_pointer_reply(
+        wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
+    ) orelse return;
+    defer std.c.free(ptr);
+    wm.spawn_cursor_x = ptr.*.root_x;
+    wm.spawn_cursor_y = ptr.*.root_y;
+}
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void {
     const win        = event.window;
@@ -282,7 +207,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     );
     // _NET_WM_PID: only queried when there are pending spawn entries, so the
     // extra round-trip is paid only when we have a reason to use the result.
-    const has_pending_spawns = spawn_queue.len > 0;
+    const has_pending_spawns = wm.spawn_queue.len > 0;
     const c_net_wm_pid = if (has_pending_spawns) xcb.xcb_get_property(
         wm.conn, 0, win,
         utils.getAtomCached("_NET_WM_PID") catch 0,
@@ -331,28 +256,15 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     // (for on_current_workspace) all configure_window calls + map_window.
     utils.flush(wm.conn);
 
-    // Collect focus property replies.  On the no-rules path these were
-    // fired before any blocking and the flush just pushed them to the
-    // server; replies are typically already in the socket read buffer.
-    // On the rules path the WM_CLASS blocking step also flushed them.
+    // Collect focus property replies fired at the start of handleMapRequest.
     utils.populateFocusCacheFromCookies(wm.conn, win, c_protocols, c_hints);
 
     if (on_current_workspace) {
         focus.setFocus(wm, win, .window_spawn);
 
-        // Record the cursor position at the moment the window spawns.
-        // handleEnterNotify and handleLeaveNotify compare incoming crossing
-        // events against this position: a matching position means the layout
-        // shifted under a stationary cursor (a retile side-effect), not genuine
-        // movement.  The first event at a different position lifts suppression.
-        if (wm.suppress_focus_reason == .window_spawn) {
-            const ptr_cookie = xcb.xcb_query_pointer(wm.conn, wm.root);
-            if (xcb.xcb_query_pointer_reply(wm.conn, ptr_cookie, null)) |ptr| {
-                defer std.c.free(ptr);
-                wm.spawn_cursor_x = ptr.*.root_x;
-                wm.spawn_cursor_y = ptr.*.root_y;
-            }
-        }
+        // Snapshot cursor so crossing events at the same position are
+        // suppressed (layout shifted under a stationary cursor, not user move).
+        snapshotSpawnCursor(wm);
     }
 
     bar.markDirty();
@@ -385,6 +297,7 @@ fn unmanageWindow(wm: *WM, win: u32) void {
     layouts.evictSizeHints(win);
     minimize.forceUntrack(wm, win);
     workspaces.removeWindow(win);
+
     // Wrap all visual changes in a single server grab so picom never composites
     // an intermediate state where the destroyed window's slot is empty but the
     // remaining windows have not yet been repositioned, or where the bar has
@@ -393,44 +306,32 @@ fn unmanageWindow(wm: *WM, win: u32) void {
 
     if (was_fullscreen) {
         // setBarState(.show_fullscreen) restores bar visibility and retiles.
-        // Its internal flush is harmless — picom is frozen during our grab.
         bar.setBarState(wm, .show_fullscreen);
     }
 
     if (was_focused) {
         // retileIfDirty is a no-op when was_fullscreen (setBarState already
-        // retiled and cleared the dirty flag).  For non-fullscreen focused
-        // windows, removeWindow set dirty and this call retiles the workspace.
+        // retiled and cleared the dirty flag).
         if (wm.config.tiling.enabled) tiling.retileIfDirty(wm);
         focus.clearFocus(wm);
-        // focusWindowUnderPointer does a round-trip (xcb_query_pointer).
-        // Round-trips from our own connection are safe inside a server grab —
-        // the server responds normally; only other connections are frozen.
+        // Round-trips from our own connection are safe inside a server grab.
         focusWindowUnderPointer(wm);
     } else if (!was_fullscreen and wm.config.tiling.enabled) {
         // The window was not focused, so the was_focused branch did not retile.
-        // Determine whether it was on the current workspace or a different one
-        // and retile accordingly so the layout is correct immediately.
         if (window_workspace) |ws| {
             if (current_ws == ws) {
-                // Killed on the current workspace but not the focused window
-                // (e.g. 3 windows open and a non-focused one is pkilled).
-                // Retile inside the grab for atomicity.
+                // Killed on the current workspace but not the focused window.
                 tiling.retileIfDirty(wm);
             } else {
-                // Killed on an inactive workspace.  Pre-compute the correct
-                // geometry now so that restoreWorkspaceGeom succeeds at switch
-                // time without running the layout algorithm mid-switch —
-                // preventing the flash the deferred retile causes.
+                // Killed on an inactive workspace — pre-compute correct geometry
+                // so restoreWorkspaceGeom succeeds at switch time without a flash.
                 tiling.retileInactiveWorkspace(wm, ws);
             }
         }
     }
 
     // Redraw the bar inside the grab so the updated title and focus state are
-    // composited atomically with the window removal and layout change.  The bar
-    // is redrawn whether or not the window was focused: the workspace indicator
-    // and window count change regardless.
+    // composited atomically with the window removal and layout change.
     bar.redrawImmediate(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
     utils.flush(wm.conn);
@@ -481,9 +382,7 @@ const GEOMETRY_MASK: u16 =
     xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH;
 
 /// Send a synthetic ConfigureNotify to `win` reporting its current geometry.
-/// Required by ICCCM §4.1.5 whenever a WM silently ignores a ConfigureRequest:
-/// the client must be told what geometry it actually has, or it may block
-/// waiting for an acknowledgement that never arrives.
+/// Required by ICCCM §4.1.5 whenever a WM silently ignores a ConfigureRequest.
 fn sendConfigureNotify(wm: *WM, win: u32, x: i16, y: i16, width: u16, height: u16, border: u16) void {
     const ev = xcb.xcb_configure_notify_event_t{
         .response_type     = xcb.XCB_CONFIGURE_NOTIFY,

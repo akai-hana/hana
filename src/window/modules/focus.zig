@@ -22,8 +22,9 @@ pub const Reason = enum {
 };
 
 pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
-    if (win == 0 or win == wm.root or bar.isBarWindow(win)) return;
+    if (win == 0 or win == wm.root) return;
     if (wm.focused_window == win) return;
+    if (bar.isBarWindow(win)) return;
 
     // EnterNotify/LeaveNotify are only delivered for mapped windows, so skip
     // the round-trip on hover. For window_spawn the map was queued on this

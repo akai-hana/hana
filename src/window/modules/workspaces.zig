@@ -125,7 +125,17 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
         if (ts) |t| _ = t.windows.remove(win);
         return;
     };
-    s.window_to_workspace.put(win, target_ws) catch |e| debug.warnOnErr(e, "w2ws put after move");
+    s.window_to_workspace.put(win, target_ws) catch |e| {
+        // INVARIANT BREAK: workspaces[target_ws] now contains `win` but
+        // window_to_workspace still maps win -> from_ws (or retains whatever
+        // value it had before). Rolling back the Tracking move here would
+        // require a second fallible add; given that OOM at this point usually
+        // means the session is dying, we log and accept the stale entry.
+        // Callers that rely on getWorkspaceForWindow should treat a mismatch
+        // between the map and the workspace's window list as a degenerate-but-
+        // non-crashing state.
+        debug.warnOnErr(e, "w2ws put after move: window_to_workspace is stale");
+    };
 
     if (minimize.isMinimized(wm, win)) minimize.moveToWorkspace(wm, win, from_ws, target_ws);
 
@@ -133,7 +143,6 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
         // If the window is fullscreen on the current workspace, tear down the
         // fullscreen state before hiding it: without this, the bar stays hidden
         // and siblings remain offscreen on the old workspace.
-        // window_to_workspace.get is one lookup that covers the isFullscreen check.
         if (wm.fullscreen.window_to_workspace.get(win)) |fs_ws| {
             if (fs_ws == from_ws) {
                 wm.fullscreen.removeForWorkspace(fs_ws);
@@ -167,7 +176,7 @@ pub fn switchTo(wm: *WM, ws_id: u8) void {
 // Returns the first non-minimized window in `windows`, or null if all are
 // minimized. Takes a plain slice so it is decoupled from Workspace and easier
 // to test in isolation.
-pub fn firstNonMinimized(wm: *const WM, windows: []const u32) ?u32 {
+pub inline fn firstNonMinimized(wm: *const WM, windows: []const u32) ?u32 {
     for (windows) |win| {
         if (!minimize.isMinimized(wm, win)) return win;
     }
@@ -230,14 +239,13 @@ fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
             tiling.retileCurrentWorkspace(wm);
         }
     } else {
-        // Floating: move all non-minimized windows to a sensible position.
-        const x: u32 = @intCast(wm.screen.width_in_pixels  / 4);
-        const y: u32 = @intCast(wm.screen.height_in_pixels / 4);
+        // Floating: move all non-minimized windows to the default position.
+        const pos = utils.floatDefaultPos(wm);
         for (ws.windows.items()) |win| {
             if (minimize.isMinimized(wm, win)) continue;
             _ = xcb.xcb_configure_window(wm.conn, win,
                 xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
-                &[_]u32{ x, y });
+                &[_]u32{ pos.x, pos.y });
         }
     }
 }
@@ -248,6 +256,10 @@ fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
 // the server sees the fully repositioned layout when evaluating which window
 // is under the pointer. This avoids the master-flash: we never eagerly focus
 // the master and then correct it after the grab releases.
+//
+// NOTE: wm.focused_window is written directly (not via focus.setFocus) because
+// we are inside a server grab and focus.setFocus may issue a blocking
+// xcb_get_window_attributes round-trip for the mapped check.
 fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace) void {
     const s = getState().?;
 

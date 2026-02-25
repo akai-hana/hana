@@ -6,7 +6,6 @@ const xcb        = defs.xcb;
 const WM         = defs.WM;
 const utils      = @import("utils");
 const constants  = @import("constants");
-const focus      = @import("focus");
 const workspaces = @import("workspaces");
 const bar        = @import("bar");
 const Tracking   = @import("tracking").Tracking;
@@ -118,10 +117,13 @@ pub const State = struct {
     /// Cleared by: addWindow, removeWindow, adjustMasterWidth, syncLayoutFromWorkspace.
     /// Set by the retile call that immediately follows each of those.
     ws_geom_valid:    u32,
+    /// Screen area (x, y, width, height) used in the most recent retile call.
+    /// restoreWorkspaceGeom rejects the cache if this differs from the current
+    /// screen area (e.g. after a bar height or position change).
+    last_retile_screen: utils.Rect,
     /// Last geometry sent to the X server per window.
     /// Populated by configureSafe via layouts.armGeomCache.
     /// Lets retile skip configure_window calls for unchanged windows.
-    last_retile_screen: utils.Rect,
     geom_cache:       std.AutoHashMapUnmanaged(u32, utils.Rect),
     /// Last border pixel color sent to the X server per window.
     /// Populated in addWindow and kept current by updateBorders/updateWindowFocus.
@@ -218,7 +220,7 @@ pub fn reloadConfig(wm: *WM) void {
     s.border_cache.deinit(s.allocator);
 
     g_state = buildState(wm);
-    const ns = getState().?; // g_state is non-null immediately after buildState
+    const ns = &g_state.?; // g_state is non-null immediately after buildState
     ns.windows = saved_windows;
 
     // On config reload, reset all workspace layouts to the new default so
@@ -242,10 +244,7 @@ pub fn reloadConfig(wm: *WM) void {
         }
         retileCurrentWorkspace(wm);
         // Redraw the bar inside the grab so the compositor sees the correct bar
-        // content atomically with the new window geometry. bar.reload() runs
-        // immediately after this function and replaces the bar window entirely;
-        // this draw uses the still-live old bar surface so no stale frame is
-        // composited in the gap between the two reloads.
+        // content atomically with the new window geometry.
         bar.redrawImmediate(wm);
         _ = xcb.xcb_ungrab_server(wm.conn);
         utils.flush(wm.conn);
@@ -280,7 +279,6 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     // Pre-populate the border cache so the retileCurrentWorkspace call that
     // immediately follows (in setupTiling) does not re-send the border pixel.
     s.border_cache.put(s.allocator, window_id, border_color) catch {};
-
 }
 
 pub fn removeWindow(window_id: u32) void {
@@ -326,16 +324,10 @@ pub fn restoreWorkspaceGeom(wm: *WM) bool {
     if (current_ws >= 32) return false;
     if ((s.ws_geom_valid >> @intCast(current_ws)) & 1 == 0) return false;
 
-    // If bar height or position changed since the cache was last written, the
-    // stored rects are for a different screen area and must not be replayed.
+    // If the screen area changed since the cache was last written (e.g. bar
+    // height or position changed), the stored rects are stale.
     const current_screen = calculateScreenArea(wm);
-    if (current_screen.x      != s.last_retile_screen.x      or
-        current_screen.y      != s.last_retile_screen.y      or
-        current_screen.width  != s.last_retile_screen.width  or
-        current_screen.height != s.last_retile_screen.height)
-    {
-        return false;
-    }
+    if (!layouts.rectsEqual(current_screen, s.last_retile_screen)) return false;
 
     // Verify every window is cached and collect rects in one pass; a single
     // miss aborts before any XCB calls are sent. Using a local rect buffer
@@ -349,7 +341,7 @@ pub fn restoreWorkspaceGeom(wm: *WM) bool {
     for (ws_windows, 0..) |win, i| {
         utils.configureWindow(wm.conn, win, rects[i]);
     }
-    updateBorders(wm, ws_windows);
+    updateBorders(s, wm, ws_windows);
     return true;
 }
 
@@ -385,7 +377,7 @@ fn calculateScreenArea(wm: *WM) utils.Rect {
         .x      = 0,
         .y      = if (bar_at_bottom) 0 else @intCast(bar_height),
         .width  = wm.screen.width_in_pixels,
-        .height = wm.screen.height_in_pixels - bar_height,
+        .height = wm.screen.height_in_pixels -| bar_height,
     };
 }
 
@@ -404,8 +396,7 @@ pub fn retileAllWorkspaces(wm: *WM) void {
     const ws_count   = workspaces.getWorkspaceCount();
     const current_ws = workspaces.getCurrentWorkspace() orelse return;
 
-    // Resolve per-workspace layout state once before the loop; the pointer
-    // is identical on every iteration.
+    // Resolve per-workspace layout state once before the loop.
     const ws_state_opt = if (!wm.config.tiling.global_layout) workspaces.getState() else null;
 
     layouts.armGeomCache(&s.geom_cache, s.allocator);
@@ -445,8 +436,8 @@ pub fn retileAllWorkspaces(wm: *WM) void {
             s.layout;
 
         dispatchLayout(ws_layout, wm.conn, s, ws_windows, w, h, y);
-        updateBorders(wm, ws_windows);
-        s.ws_geom_valid |= @as(u32, 1) << @intCast(ws_idx);
+        updateBorders(s, wm, ws_windows);
+        markWsGeomValid(s, ws_idx);
     }
 
     layouts.disarmGeomCache();
@@ -459,8 +450,7 @@ pub fn retileAllWorkspaces(wm: *WM) void {
 pub fn retileIfDirty(wm: *WM) void {
     const s = getState() orelse return;
     if (!s.enabled or !s.dirty) return;
-    retile(wm, calculateScreenArea(wm));
-    s.dirty = false;
+    retileCurrentWorkspace(wm);
 }
 
 pub fn retileCurrentWorkspace(wm: *WM) void {
@@ -505,9 +495,8 @@ pub fn retileInactiveWorkspace(wm: *WM, ws_idx: u8) void {
     // workspace (e.g. a deferred adjustMasterWidth must still apply at
     // end-of-batch). Mark this workspace valid via ws_geom_valid instead;
     // restoreWorkspaceGeom checks the per-workspace bit, not the global flag.
-    if (ws_idx < 32) s.ws_geom_valid |= @as(u32, 1) << @intCast(ws_idx);
+    markWsGeomValid(s, ws_idx);
     ws_state.current = saved_current;
-
     // The retile above moved windows to their on-screen positions. Push them
     // back offscreen while their workspace is inactive. Do NOT invalidate the
     // geom cache: restoreWorkspaceGeom will find the ws_geom_valid bit set,
@@ -531,8 +520,8 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     const ws_windows = ws_buf[0..ws_count];
     if (ws_windows.len == 0) return;
 
-    const w = screen.width;
-    const h = screen.height;
+    const w: u16 = screen.width;
+    const h: u16 = screen.height;
     const y: u16 = @intCast(screen.y);
 
     // Arm the cache so configureSafe can skip unchanged windows.
@@ -543,12 +532,14 @@ fn retile(wm: *WM, screen: utils.Rect) void {
     // Record screen area; restoreWorkspaceGeom compares on next workspace switch.
     s.last_retile_screen = screen;
 
-    updateBorders(wm, ws_windows);
+    updateBorders(s, wm, ws_windows);
 
     // Mark this workspace's geometry as valid in the per-workspace bitmask
     // so restoreWorkspaceGeom can take the fast path on the next switch.
-    if (current_ws < 32) s.ws_geom_valid |= @as(u32, 1) << @intCast(current_ws);
+    markWsGeomValid(s, current_ws);
 }
+
+// Border management
 
 // Send border pixel only if color changed since last send.
 fn sendBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u32) void {
@@ -559,12 +550,9 @@ fn sendBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u32)
     s.border_cache.put(s.allocator, win, color) catch {};
 }
 
-fn updateBorders(wm: *WM, ws_windows: []const u32) void {
-    const s = getState() orelse return;
+fn updateBorders(s: *State, wm: *WM, ws_windows: []const u32) void {
     for (ws_windows) |win| sendBorderColor(s, wm.conn, win, s.borderColor(wm, win));
 }
-
-// Focus border updates
 
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     const s = getState() orelse return;
@@ -581,7 +569,6 @@ pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
 fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
     if (from_idx == to_idx) return;
     const current = s.windows.items();
-    if (current.len == 0) return;
 
     var temp: [256]u32 = undefined;
     if (current.len > temp.len) {
@@ -609,23 +596,27 @@ pub fn swapWithMaster(wm: *WM) void {
     const all = s.windows.items();
     if (all.len < 2) return;
 
-    const focused_pos = std.mem.indexOfScalar(u32, all, focused) orelse return;
+    // Single pass: find focused position and first-workspace-window position together.
+    var focused_pos: ?usize = null;
+    var master_pos:  ?usize = null;
+    for (all, 0..) |win, i| {
+        if (win == focused) focused_pos = i;
+        if (master_pos == null and workspaces.isOnCurrentWorkspace(win)) master_pos = i;
+        if (focused_pos != null and master_pos != null) break;
+    }
+    const fp = focused_pos orelse return;
+    const mp = master_pos  orelse return;
 
-    // Find first window on current workspace — that's the effective master.
-    const master_pos = for (all, 0..) |win, i| {
-        if (workspaces.isOnCurrentWorkspace(win)) break i;
-    } else return;
-
-    if (focused_pos == master_pos) {
+    if (fp == mp) {
         // Already master: swap with the next workspace window.
-        for (all[master_pos + 1..], master_pos + 1..) |win, i| {
+        for (all[mp + 1..], mp + 1..) |win, i| {
             if (workspaces.isOnCurrentWorkspace(win)) {
-                moveWindowToIndex(s, i, master_pos);
+                moveWindowToIndex(s, i, mp);
                 break;
             }
         }
     } else {
-        moveWindowToIndex(s, focused_pos, master_pos);
+        moveWindowToIndex(s, fp, mp);
     }
     retileCurrentWorkspace(wm);
 }
@@ -755,6 +746,11 @@ pub fn getVariationIndicator(s: *const State) []const u8 {
         },
         .fibonacci => &s.fibonacci_indicator,
     };
+}
+
+// Set the per-workspace geometry-valid bit. ws_idx must be < 32.
+inline fn markWsGeomValid(s: *State, ws_idx: anytype) void {
+    if (ws_idx < 32) s.ws_geom_valid |= @as(u32, 1) << @intCast(ws_idx);
 }
 
 fn filterWorkspaceWindows(s: *State, buf: []u32) usize {

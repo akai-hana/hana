@@ -29,7 +29,7 @@ pub fn tileWithOffset(conn: *xcb.xcb_connection_t, state: *State, windows: []con
         },
         .gaps => .{
             .x      = @intCast(gap),
-            .y      = @intCast(y_offset + gap),
+            .y      = @intCast(y_offset +| gap),
             .width  = if (screen_w > gap * 2 + border * 2) screen_w - gap * 2 - border * 2 else defs.MIN_WINDOW_DIM,
             .height = if (screen_h > gap * 2 + border * 2) screen_h - gap * 2 - border * 2 else defs.MIN_WINDOW_DIM,
         },

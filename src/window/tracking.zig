@@ -44,7 +44,7 @@ pub fn TrackingType(comptime small_cap: u8) type {
             }
         }
 
-        // O(n) for small (cache-friendly), O(1) for large.
+        // O(n) for small (cache-friendly scan), O(1) for large.
         pub inline fn contains(self: *const Self, win: u32) bool {
             return switch (self.storage) {
                 .small => |s| std.mem.indexOfScalar(u32, s.items[0..s.len], win) != null,
@@ -97,7 +97,7 @@ pub fn TrackingType(comptime small_cap: u8) type {
             }
         }
 
-        // Reorder in a single pass using a caller-provided permutation.
+        // Reorder in a single pass using a caller-provided permutation of current items.
         // For large storage, also rebuilds the hash set to stay consistent.
         pub fn reorder(self: *Self, new_order: []const u32) void {
             switch (self.storage) {
@@ -107,7 +107,8 @@ pub fn TrackingType(comptime small_cap: u8) type {
                     s.len = len;
                 },
                 .large => |*l| {
-                    // new_order is a permutation, so it never exceeds existing capacity.
+                    // new_order must be a permutation: same length, fits existing capacity.
+                    std.debug.assert(new_order.len <= l.list.capacity);
                     // clearRetainingCapacity keeps storage, making assumeCapacity safe below.
                     l.list.clearRetainingCapacity();
                     l.set.clearRetainingCapacity();
@@ -152,12 +153,16 @@ pub fn TrackingType(comptime small_cap: u8) type {
             };
         }
 
-        // Avoids copying the SmallStore just to read its len field.
+        // Zero-copy count: avoids materialising a full slice just to read length.
         pub inline fn count(self: *const Self) usize {
             return switch (self.storage) {
                 .small => |s| s.len,
                 .large => |l| l.list.items.len,
             };
+        }
+
+        pub inline fn isEmpty(self: *const Self) bool {
+            return self.count() == 0;
         }
 
         fn promoteToLarge(self: *Self) !void {
