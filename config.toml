@@ -115,12 +115,12 @@ fonts = [
 # Bar height
 ## Auto-adapts to font size by default. Uncomment to set a fixed height instead:
 ## TODO: Future enhancement: percentage values where 100% = auto-calculated size, 150% = 1.5x auto size.
-height = 3.6%
+height = 3.5%
 
 segment_spacing = 5%
 
 # Font size as percentage of bar height (e.g., 16% = font takes up 16% of the bar's vertical space)
-font_size = 70%
+font_size = 75%
 indicator_size = 25%
 
 # Workspace labels/icons (1-N)
