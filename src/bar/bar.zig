@@ -54,7 +54,7 @@ const BarStub = struct {
     pub fn init(_: *defs.WM) error{BarDisabled}!void { return error.BarDisabled; }
     pub fn deinit() void {}
     pub fn reload(_: *defs.WM) void {}
-    pub fn toggleBarPosition(_: *defs.WM) !void {}
+    pub fn toggleBarPosition(_: *defs.WM) void {}
     pub fn getBarWindow() u32                         { return 0; }
     pub fn isBarWindow(_: u32) bool                  { return false; }
     pub fn getBarHeight() u16                         { return 0; }
@@ -133,42 +133,51 @@ const BarFull = struct {
     const LAYOUT_SEGMENT_WIDTH:      u16 = 60;
     const TITLE_SEGMENT_MIN_WIDTH:   u16 = 100;
 
-    // Snapshot 
+    // ── Snapshot ─────────────────────────────────────────────────────────────
 
-    /// Immutable point-in-time capture transferred to the bar thread via BarChannel.
+    /// Point-in-time bar state. Lives in BarChannel.slots[]; never heap-allocated.
+    /// Variable-length fields use ArrayListUnmanaged so buffers grow only when
+    /// workspace/window counts increase — reused across frames at stable capacity.
     const BarSnapshot = struct {
-        conn:              *xcb.xcb_connection_t,
-        focused_window:    ?u32,
-        current_ws_wins:   []u32,  // owned
-        minimized:         []u32,  // owned
-        ws_has_windows:    []bool, // owned; one per workspace
-        ws_current:        u8,
-        ws_count:          u32,
-        status_text:       []u8,   // owned
-        title_invalidated: bool,
-        allocator:         std.mem.Allocator,
+        focused_window:    ?u32                          = null,
+        current_ws_wins:   std.ArrayListUnmanaged(u32)   = .empty,
+        minimized:         std.ArrayListUnmanaged(u32)   = .empty,
+        ws_has_windows:    std.ArrayListUnmanaged(bool)  = .empty,
+        ws_current:        u8                            = 0,
+        ws_count:          u32                           = 0,
+        status_text:       std.ArrayListUnmanaged(u8)    = .empty,
+        title_invalidated: bool                          = false,
 
-        fn deinit(snap: *BarSnapshot) void {
-            snap.allocator.free(snap.current_ws_wins);
-            snap.allocator.free(snap.minimized);
-            snap.allocator.free(snap.ws_has_windows);
-            snap.allocator.free(snap.status_text);
-            snap.allocator.destroy(snap);
+        fn deinit(snap: *BarSnapshot, allocator: std.mem.Allocator) void {
+            snap.current_ws_wins.deinit(allocator);
+            snap.minimized.deinit(allocator);
+            snap.ws_has_windows.deinit(allocator);
+            snap.status_text.deinit(allocator);
         }
     };
 
-    // Channel 
+    // ── Channel ───────────────────────────────────────────────────────────────
 
+    /// Lock-based channel between main thread (producer) and bar thread (consumer).
+    ///
+    /// Double-buffer protocol — zero heap allocation per frame:
+    ///   - main  writes into slots[write_idx], then flips write_idx under mutex
+    ///   - bar   reads  from slots[1 - write_idx] (the just-filled slot)
+    /// Since write_idx is only mutated by the main thread, reading it outside
+    /// the lock before writing is safe; the mutex acquire before the flip
+    /// establishes the required memory fence for the bar thread.
     const BarChannel = struct {
-        mutex:        std.Thread.Mutex     = .{},
-        work_cond:    std.Thread.Condition = .{},
-        done_cond:    std.Thread.Condition = .{},
-        pending:      ?*BarSnapshot        = null,
-        clock_dirty:  bool                 = false,
-        quit:         bool                 = false,
-        draw_gen:     u64                  = 0,
-        focus_dirty:  bool                 = false,
-        focus_new_win: ?u32               = null,
+        mutex:         std.Thread.Mutex     = .{},
+        work_cond:     std.Thread.Condition = .{},
+        done_cond:     std.Thread.Condition = .{},
+        slots:         [2]BarSnapshot       = .{ .{}, .{} },
+        write_idx:     u1                   = 0,
+        snap_ready:    bool                 = false,
+        clock_dirty:   bool                 = false,
+        quit:          bool                 = false,
+        draw_gen:      u64                  = 0,
+        focus_dirty:   bool                 = false,
+        focus_new_win: ?u32                 = null,
     };
 
     var g_channel: BarChannel   = .{};
@@ -188,7 +197,6 @@ const BarFull = struct {
         cached_title:         std.ArrayList(u8),
         cached_title_window:  ?u32,
         dirty:                bool,
-        dirty_clock:          bool,
         title_invalidated:    bool,
         visible:              bool,
         global_visible:       bool,
@@ -203,6 +211,8 @@ const BarFull = struct {
         cached_ws_wins:       []u32,
         cached_min_wins:      []u32,
         title_layout_valid:   bool,
+        cached_right_total:        u16,
+        cached_right_total_ws_count: u32, // invalidation key for cached_right_total
         last_monitored_window:    ?u32,
         last_monitored_base_mask: u32,
         net_wm_name_atom:         xcb.xcb_atom_t,
@@ -231,7 +241,6 @@ const BarFull = struct {
                 .cached_title         = std.ArrayList(u8).empty,
                 .cached_title_window  = null,
                 .dirty                = false,
-                .dirty_clock          = false,
                 .title_invalidated    = false,
                 .visible              = true,
                 .global_visible       = true,
@@ -246,6 +255,8 @@ const BarFull = struct {
                 .cached_ws_wins       = &.{},
                 .cached_min_wins      = &.{},
                 .title_layout_valid   = false,
+                .cached_right_total        = 0,
+                .cached_right_total_ws_count = std.math.maxInt(u32),
                 .last_monitored_window    = null,
                 .last_monitored_base_mask = 0,
                 .net_wm_name_atom         = utils.getAtomCached("_NET_WM_NAME") catch 0,
@@ -269,7 +280,7 @@ const BarFull = struct {
         }
 
         fn markDirty(self: *State) void { self.dirty = true; self.cached_clock_x = null; }
-        fn clearDirty(self: *State) void { self.dirty = false; self.dirty_clock = false; }
+        fn clearDirty(self: *State) void { self.dirty = false; }
 
         // Segment drawing (bar thread only) 
 
@@ -291,13 +302,13 @@ const BarFull = struct {
             return switch (segment) {
                 .workspaces => try workspaces_segment.draw(
                     self.dc, self.config, self.height, x,
-                    snap.ws_current, snap.ws_has_windows),
+                    snap.ws_current, snap.ws_has_windows.items),
                 .layout     => try layout_segment.draw(self.dc, self.config, self.height, x),
                 .variations => try variations_segment.draw(self.dc, self.config, self.height, x),
                 .title      => try title_segment.draw(
                     self.dc, self.config, self.height, x, width orelse 100,
-                    snap.conn, snap.focused_window,
-                    snap.current_ws_wins, snap.minimized,
+                    self.conn, snap.focused_window,
+                    snap.current_ws_wins.items, snap.minimized.items,
                     &self.cached_title, &self.cached_title_window,
                     snap.title_invalidated, self.allocator),
                 .clock      => try clock_segment.draw(self.dc, self.config, self.height, x),
@@ -323,13 +334,20 @@ const BarFull = struct {
 
             const scaled_spacing = self.config.scaledSpacing(self.height);
 
-            // Pre-compute total right-segment width so center segments know the available space.
-            var right_total: u16 = 0;
-            for (self.config.layout.items) |layout| {
-                if (layout.position != .right) continue;
-                for (layout.segments.items) |seg| right_total += self.calculateSegmentWidth(snap, seg) + scaled_spacing;
-                if (layout.segments.items.len > 0) right_total -= scaled_spacing;
+            // Recompute right_total only when workspace count changes; the layout
+            // config is constant between reloads, and ws_count is the only runtime
+            // variable that affects right-side segment widths.
+            if (snap.ws_count != self.cached_right_total_ws_count) {
+                var right_total: u16 = 0;
+                for (self.config.layout.items) |layout| {
+                    if (layout.position != .right) continue;
+                    for (layout.segments.items) |seg| right_total += self.calculateSegmentWidth(snap, seg) + scaled_spacing;
+                    if (layout.segments.items.len > 0) right_total -= scaled_spacing;
+                }
+                self.cached_right_total          = right_total;
+                self.cached_right_total_ws_count = snap.ws_count;
             }
+            const right_total = self.cached_right_total;
 
             var title_seg_x: u16 = 0;
             var title_seg_w: u16 = 0;
@@ -379,15 +397,18 @@ const BarFull = struct {
         }
 
         fn updateTitleCache(self: *State, snap: *const BarSnapshot, x: u16, w: u16) void {
-            const new_wins = self.allocator.dupe(u32, snap.current_ws_wins) catch return;
-            const new_mins = self.allocator.dupe(u32, snap.minimized) catch {
-                self.allocator.free(new_wins);
-                return;
-            };
-            self.allocator.free(self.cached_ws_wins);
-            self.allocator.free(self.cached_min_wins);
-            self.cached_ws_wins     = new_wins;
-            self.cached_min_wins    = new_mins;
+            if (!std.mem.eql(u32, self.cached_ws_wins, snap.current_ws_wins.items)) {
+                if (self.allocator.dupe(u32, snap.current_ws_wins.items)) |new_wins| {
+                    self.allocator.free(self.cached_ws_wins);
+                    self.cached_ws_wins = new_wins;
+                } else |_| {}
+            }
+            if (!std.mem.eql(u32, self.cached_min_wins, snap.minimized.items)) {
+                if (self.allocator.dupe(u32, snap.minimized.items)) |new_mins| {
+                    self.allocator.free(self.cached_min_wins);
+                    self.cached_min_wins = new_mins;
+                } else |_| {}
+            }
             self.cached_title_x     = x;
             self.cached_title_w     = w;
             self.title_layout_valid = true;
@@ -399,26 +420,27 @@ const BarFull = struct {
     fn barThreadFn(s: *State) void {
         while (true) {
             g_channel.mutex.lock();
-            while (!g_channel.quit and g_channel.pending == null and
+            while (!g_channel.quit and !g_channel.snap_ready and
                    !g_channel.clock_dirty and !g_channel.focus_dirty)
             {
                 g_channel.work_cond.wait(&g_channel.mutex);
             }
             if (g_channel.quit) { g_channel.mutex.unlock(); return; }
 
-            const snap          = g_channel.pending;
-            const do_clock      = g_channel.clock_dirty and snap == null;
-            const do_focus      = g_channel.focus_dirty and snap == null;
+            const snap_ready    = g_channel.snap_ready;
+            // read_idx is 1 - write_idx: the slot the main thread just filled.
+            const read_idx: u1  = 1 - g_channel.write_idx;
+            const do_clock      = g_channel.clock_dirty and !snap_ready;
+            const do_focus      = g_channel.focus_dirty and !snap_ready;
             const focus_new_win = g_channel.focus_new_win;
-            g_channel.pending      = null;
-            g_channel.clock_dirty  = false;
-            g_channel.focus_dirty  = false;
+            g_channel.snap_ready    = false;
+            g_channel.clock_dirty   = false;
+            g_channel.focus_dirty   = false;
             g_channel.focus_new_win = null;
             g_channel.mutex.unlock();
 
-            if (snap) |sn| {
-                s.drawAll(sn) catch |e| debug.warnOnErr(e, "bar thread drawAll");
-                sn.deinit();
+            if (snap_ready) {
+                s.drawAll(&g_channel.slots[read_idx]) catch |e| debug.warnOnErr(e, "bar thread drawAll");
                 g_channel.mutex.lock();
                 g_channel.draw_gen += 1;
                 g_channel.done_cond.broadcast();
@@ -441,9 +463,9 @@ const BarFull = struct {
     fn stopBarThread() void {
         g_channel.mutex.lock();
         g_channel.quit        = true;
+        g_channel.snap_ready  = false;
         g_channel.focus_dirty = false;
-        if (g_channel.pending) |old| old.deinit();
-        g_channel.pending = null;
+        g_channel.clock_dirty = false;
         g_channel.work_cond.signal();
         g_channel.mutex.unlock();
 
@@ -451,78 +473,69 @@ const BarFull = struct {
         g_channel.quit = false;
     }
 
-    // Snapshot capture (main thread) 
+    // ── Snapshot capture (main thread) ───────────────────────────────────────
 
-    fn captureSnapshot(wm: *defs.WM, s: *State) !*BarSnapshot {
+    /// Populates a pre-allocated BarSnapshot slot in-place.
+    /// All variable-length fields use ArrayListUnmanaged that grow only when
+    /// their content exceeds the previously allocated capacity.
+    fn captureIntoSlot(wm: *defs.WM, s: *State, snap: *BarSnapshot) !void {
         const allocator = s.allocator;
-        const snap = try allocator.create(BarSnapshot);
-        errdefer allocator.destroy(snap);
 
-        const status = try allocator.dupe(u8, s.status_text.items);
-        errdefer allocator.free(status);
+        // Status text.
+        snap.status_text.clearRetainingCapacity();
+        try snap.status_text.appendSlice(allocator, s.status_text.items);
 
-        var min_list: std.ArrayList(u32) = .empty;
-        defer min_list.deinit(allocator);
+        // Minimized window IDs — count is known upfront, so no intermediate list needed.
+        const min_count: usize = if (wm.minimize) |*ms| ms.minimized_info.count() else 0;
+        snap.minimized.clearRetainingCapacity();
+        try snap.minimized.ensureTotalCapacity(allocator, min_count);
         if (wm.minimize) |*ms| {
             var it = ms.minimized_info.keyIterator();
-            while (it.next()) |key| try min_list.append(allocator, key.*);
+            while (it.next()) |key| snap.minimized.appendAssumeCapacity(key.*);
         }
-        const minimized = try min_list.toOwnedSlice(allocator);
-        errdefer allocator.free(minimized);
 
-        const ws_state   = workspaces.getState();
-        const ws_count: u32 = if (ws_state) |ws| @intCast(ws.workspaces.len) else 0;
-        const ws_current: u8 = if (ws_state) |ws| ws.current else 0;
+        // Workspace state.
+        const ws_state  = workspaces.getState();
+        snap.ws_count   = if (ws_state) |ws| @intCast(ws.workspaces.len) else 0;
+        snap.ws_current = if (ws_state) |ws| ws.current else 0;
 
-        const ws_has_windows = try allocator.alloc(bool, ws_count);
-        errdefer allocator.free(ws_has_windows);
+        try snap.ws_has_windows.resize(allocator, snap.ws_count);
         if (ws_state) |ws| {
             for (ws.workspaces, 0..) |*workspace, i|
-                ws_has_windows[i] = workspace.windows.count() > 0;
+                snap.ws_has_windows.items[i] = workspace.windows.count() > 0;
         }
 
-        const current_ws_wins = blk: {
-            if (ws_state) |ws| {
-                if (ws.current < ws.workspaces.len)
-                    break :blk try allocator.dupe(u32, ws.workspaces[ws.current].windows.items());
-            }
-            break :blk try allocator.alloc(u32, 0);
-        };
-        errdefer allocator.free(current_ws_wins);
+        // Current workspace window list.
+        snap.current_ws_wins.clearRetainingCapacity();
+        if (ws_state) |ws| {
+            if (ws.current < ws.workspaces.len)
+                try snap.current_ws_wins.appendSlice(allocator, ws.workspaces[ws.current].windows.items());
+        }
 
-        snap.* = .{
-            .conn              = wm.conn,
-            .focused_window    = wm.focused_window,
-            .current_ws_wins   = current_ws_wins,
-            .minimized         = minimized,
-            .ws_has_windows    = ws_has_windows,
-            .ws_current        = ws_current,
-            .ws_count          = ws_count,
-            .status_text       = status,
-            .title_invalidated = s.title_invalidated,
-            .allocator         = allocator,
-        };
-        s.title_invalidated = false;
-        return snap;
+        snap.focused_window    = wm.focused_window;
+        snap.title_invalidated = s.title_invalidated;
+        s.title_invalidated    = false;
     }
 
     /// Posts a snapshot to the bar thread. `wait = true` blocks until the draw
     /// completes — use this inside xcb_grab_server regions.
+    ///
+    /// write_idx is only mutated by the main thread, so reading it without the
+    /// lock is safe here. The mutex acquire before the flip acts as the fence.
     fn submitDraw(wm: *defs.WM, wait: bool) void {
         const s = state orelse return;
         if (!s.visible) return;
 
-        const snap = captureSnapshot(wm, s) catch |e| {
-            debug.warnOnErr(e, "bar captureSnapshot");
+        const idx = g_channel.write_idx;
+        captureIntoSlot(wm, s, &g_channel.slots[idx]) catch |e| {
+            debug.warnOnErr(e, "bar captureIntoSlot");
             return;
         };
 
         g_channel.mutex.lock();
         defer g_channel.mutex.unlock();
-
-        if (g_channel.pending) |old| old.deinit();
-        g_channel.pending = snap;
-
+        g_channel.write_idx ^= 1;
+        g_channel.snap_ready = true;
         const gen_before = g_channel.draw_gen;
         g_channel.work_cond.signal();
 
@@ -539,9 +552,42 @@ const BarFull = struct {
         g_channel.mutex.unlock();
     }
 
-    // Module singleton 
+    // ── Module singleton ─────────────────────────────────────────────────────
 
     var state: ?*State = null;
+
+    // ── Pre-interned atoms ───────────────────────────────────────────────────
+
+    /// All atoms needed by setWindowProperties, interned once at bar init.
+    /// Avoids a hash-map lookup on every call (init, reload, toggleBarPosition).
+    const CachedAtoms = struct {
+        strut_partial:    xcb.xcb_atom_t = 0,
+        window_type:      xcb.xcb_atom_t = 0,
+        window_type_dock: xcb.xcb_atom_t = 0,
+        wm_state:         xcb.xcb_atom_t = 0,
+        state_above:      xcb.xcb_atom_t = 0,
+        state_sticky:     xcb.xcb_atom_t = 0,
+        allowed_actions:  xcb.xcb_atom_t = 0,
+        action_close:     xcb.xcb_atom_t = 0,
+        action_above:     xcb.xcb_atom_t = 0,
+        action_stick:     xcb.xcb_atom_t = 0,
+    };
+    var g_atoms: CachedAtoms = .{};
+
+    fn initAtoms() void {
+        g_atoms = .{
+            .strut_partial    = utils.getAtomCached("_NET_WM_STRUT_PARTIAL")    catch 0,
+            .window_type      = utils.getAtomCached("_NET_WM_WINDOW_TYPE")      catch 0,
+            .window_type_dock = utils.getAtomCached("_NET_WM_WINDOW_TYPE_DOCK") catch 0,
+            .wm_state         = utils.getAtomCached("_NET_WM_STATE")            catch 0,
+            .state_above      = utils.getAtomCached("_NET_WM_STATE_ABOVE")      catch 0,
+            .state_sticky     = utils.getAtomCached("_NET_WM_STATE_STICKY")     catch 0,
+            .allowed_actions  = utils.getAtomCached("_NET_WM_ALLOWED_ACTIONS")  catch 0,
+            .action_close     = utils.getAtomCached("_NET_WM_ACTION_CLOSE")     catch 0,
+            .action_above     = utils.getAtomCached("_NET_WM_ACTION_ABOVE")     catch 0,
+            .action_stick     = utils.getAtomCached("_NET_WM_ACTION_STICK")     catch 0,
+        };
+    }
 
     fn detectClockSegment(config: *const defs.BarConfig) bool {
         if (comptime !bar_flags.has_clock) return false;
@@ -618,30 +664,16 @@ const BarFull = struct {
             32, @intCast(values.len), values.ptr);
     }
 
-    fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) !void {
+    fn setWindowProperties(wm: *defs.WM, window: u32, height: u16) void {
         const strut: [12]u32 = if (wm.config.bar.vertical_position == .top)
             .{ 0, 0, 0, height, 0, 0, 0, 0, 0, 0, 0, wm.screen.width_in_pixels }
         else
             .{ 0, 0, height, 0, 0, 0, 0, 0, 0, wm.screen.width_in_pixels, 0, 0 };
 
-        setPropAtom(wm.conn, window,
-            try utils.getAtomCached("_NET_WM_STRUT_PARTIAL"), xcb.XCB_ATOM_CARDINAL, &strut);
-        setPropAtom(wm.conn, window,
-            try utils.getAtomCached("_NET_WM_WINDOW_TYPE"), xcb.XCB_ATOM_ATOM,
-            &[_]u32{try utils.getAtomCached("_NET_WM_WINDOW_TYPE_DOCK")});
-        setPropAtom(wm.conn, window,
-            try utils.getAtomCached("_NET_WM_STATE"), xcb.XCB_ATOM_ATOM,
-            &[_]u32{
-                try utils.getAtomCached("_NET_WM_STATE_ABOVE"),
-                try utils.getAtomCached("_NET_WM_STATE_STICKY"),
-            });
-        setPropAtom(wm.conn, window,
-            try utils.getAtomCached("_NET_WM_ALLOWED_ACTIONS"), xcb.XCB_ATOM_ATOM,
-            &[_]u32{
-                try utils.getAtomCached("_NET_WM_ACTION_CLOSE"),
-                try utils.getAtomCached("_NET_WM_ACTION_ABOVE"),
-                try utils.getAtomCached("_NET_WM_ACTION_STICK"),
-            });
+        if (g_atoms.strut_partial    != 0) setPropAtom(wm.conn, window, g_atoms.strut_partial,    xcb.XCB_ATOM_CARDINAL, &strut);
+        if (g_atoms.window_type      != 0) setPropAtom(wm.conn, window, g_atoms.window_type,      xcb.XCB_ATOM_ATOM, &[_]u32{g_atoms.window_type_dock});
+        if (g_atoms.wm_state         != 0) setPropAtom(wm.conn, window, g_atoms.wm_state,         xcb.XCB_ATOM_ATOM, &[_]u32{g_atoms.state_above, g_atoms.state_sticky});
+        if (g_atoms.allowed_actions  != 0) setPropAtom(wm.conn, window, g_atoms.allowed_actions,  xcb.XCB_ATOM_ATOM, &[_]u32{g_atoms.action_close, g_atoms.action_above, g_atoms.action_stick});
     }
 
     fn resolvePercentageFontSize(wm: *defs.WM, bar_height: u16) ?u16 {
@@ -697,12 +729,15 @@ const BarFull = struct {
     pub fn init(wm: *defs.WM) !void {
         if (!wm.config.bar.enabled) return error.BarDisabled;
 
+        initAtoms();
+        drawing.initFontCache(wm.allocator);
+
         const height = try calculateBarHeight(wm);
         const y_pos  = barYPos(wm, height);
         const setup  = createBarWindow(wm, height, y_pos);
         errdefer destroyBarWindow(wm.conn, setup);
 
-        try setWindowProperties(wm, setup.window, height);
+        setWindowProperties(wm, setup.window, height);
 
         const dc = try drawing.DrawContext.initWithVisual(
             wm.allocator, wm.conn, setup.window, wm.screen.width_in_pixels, height,
@@ -725,6 +760,8 @@ const BarFull = struct {
     pub fn deinit() void {
         stopBarThread();
         if (state) |s| {
+            // Free the buffers grown inside the double-buffer channel slots.
+            for (&g_channel.slots) |*slot| slot.deinit(s.allocator);
             _ = xcb.xcb_destroy_window(s.conn, s.window);
             s.dc.deinit();
             drawing.deinitFontCache(s.allocator);
@@ -753,7 +790,7 @@ const BarFull = struct {
     }
 
     fn reloadImpl(wm: *defs.WM, old: *State, setup: BarWindowSetup, height: u16) !void {
-        try setWindowProperties(wm, setup.window, height);
+        setWindowProperties(wm, setup.window, height);
 
         const new_dc = try drawing.DrawContext.initWithVisual(
             wm.allocator, wm.conn, setup.window, wm.screen.width_in_pixels, height,
@@ -784,14 +821,14 @@ const BarFull = struct {
         startBarThread(new_state);
     }
 
-    pub fn toggleBarPosition(wm: *defs.WM) !void {
+    pub fn toggleBarPosition(wm: *defs.WM) void {
         const s = state orelse return;
         wm.config.bar.vertical_position = switch (wm.config.bar.vertical_position) {
             .top    => .bottom,
             .bottom => .top,
         };
         const new_y = barYPos(wm, s.height);
-        try setWindowProperties(wm, s.window, s.height);
+        setWindowProperties(wm, s.window, s.height);
         _ = xcb.xcb_grab_server(wm.conn);
         _ = xcb.xcb_configure_window(s.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y,
             &[_]u32{@as(u32, @bitCast(@as(i32, new_y)))});
@@ -884,9 +921,6 @@ const BarFull = struct {
         if (s.dirty) {
             submitDraw(wm, false);
             s.clearDirty();
-        } else if (s.dirty_clock) {
-            signalClockDirty();
-            s.dirty_clock = false;
         }
     }
 
