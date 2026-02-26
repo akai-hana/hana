@@ -100,15 +100,19 @@ fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
 
     const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };
-    // Upper-bound alloc; n tracks actual entries used.
-    const cookies = try wm.allocator.alloc(CookieEntry, wm.config.keybindings.items.len * constants.LOCK_MODIFIERS.len);
-    defer wm.allocator.free(cookies);
+    // Stack-allocated scratch buffer — no heap allocation or defer free needed.
+    // Capacity is a compile-time constant; see Sizes.MAX_KEYBIND_COOKIES.
+    var cookies: [constants.Sizes.MAX_KEYBIND_COOKIES]CookieEntry = undefined;
+    var n: usize = 0;
 
     // Fire all grab requests before waiting for any reply (one write pass, then one read pass).
-    var n: usize = 0;
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
         for (constants.LOCK_MODIFIERS) |lock| {
+            if (n >= cookies.len) {
+                debug.warn("Too many keybindings — increase Sizes.MAX_KEYBIND_COOKIES (currently {})", .{constants.Sizes.MAX_KEYBIND_COOKIES});
+                break;
+            }
             cookies[n] = .{
                 .cookie = xcb.xcb_grab_key_checked(
                     wm.conn, 0, wm.root, @intCast(kb.modifiers | lock), keycode,
@@ -145,7 +149,7 @@ fn handleConfigReload(wm: *WM) !void {
         debug.err("Failed to load: {}, keeping old", .{err});
         return err;
     };
-    errdefer new_config.deinit(wm.allocator);
+    errdefer new_config.deinit();
 
     // master_count must be non-zero; master_width is clamped by the tiling module.
     if (new_config.tiling.master_count == 0) {
@@ -165,7 +169,7 @@ fn handleConfigReload(wm: *WM) !void {
         return err; // errdefer fires here — frees new_config exactly once
     };
 
-    old_config.deinit(wm.allocator);
+    old_config.deinit();
     try input.rebuildKeybindMap(wm);
     tiling.reloadConfig(wm);
     clock.updateTimerState();

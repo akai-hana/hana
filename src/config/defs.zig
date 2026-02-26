@@ -405,21 +405,24 @@ pub const Config = struct {
         };
     }
 
-    pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
-        for (self.keybindings.items) |*kb| kb.action.deinit(allocator);
-        self.keybindings.deinit(allocator);
+    /// Uses self.allocator — the same allocator passed to Config.init and all
+    /// subsequent config allocations — so callers do not need to pass it again.
+    pub fn deinit(self: *Config) void {
+        const a = self.allocator;
+        for (self.keybindings.items) |*kb| kb.action.deinit(a);
+        self.keybindings.deinit(a);
 
-        for (self.workspaces.rules.items) |*rule| rule.deinit(allocator);
-        self.workspaces.rules.deinit(allocator);
+        for (self.workspaces.rules.items) |*rule| rule.deinit(a);
+        self.workspaces.rules.deinit(a);
 
-        self.bar.deinit(allocator);
-        self.tiling.deinit(allocator);
+        self.bar.deinit(a);
+        self.tiling.deinit(a);
 
-        if (self.allocated_font)                |f| allocator.free(f);
-        if (self.allocated_layout)              |l| allocator.free(l);
-        if (self.allocated_clock_format)        |f| allocator.free(f);
-        if (self.allocated_indicator_focused)   |s| allocator.free(s);
-        if (self.allocated_indicator_unfocused) |s| allocator.free(s);
+        if (self.allocated_font)                |f| a.free(f);
+        if (self.allocated_layout)              |l| a.free(l);
+        if (self.allocated_clock_format)        |f| a.free(f);
+        if (self.allocated_indicator_focused)   |s| a.free(s);
+        if (self.allocated_indicator_unfocused) |s| a.free(s);
     }
 };
 
@@ -602,6 +605,6 @@ pub const WM = struct {
     pub fn deinit(self: *WM) void {
         if (self.minimize) |*m| m.deinit();
         self.fullscreen.deinit();
-        self.config.deinit(self.allocator);
+        self.config.deinit();
     }
 };
