@@ -1,10 +1,10 @@
 //! Configuration interpreter — loads, parses, and validates TOML config files.
 
-const std    = @import("std");
-const defs   = @import("defs");
-const debug  = @import("debug");
-const parser = @import("parser");
-const xkb    = @import("xkbcommon");
+const std       = @import("std");
+const defs      = @import("defs");
+const debug     = @import("debug");
+const parser    = @import("parser");
+const xkbcommon = @import("xkbcommon");
 
 const parseColor = parser.parseColor;
 
@@ -317,8 +317,8 @@ fn keyNameToKeysym(name: []const u8) !u32 {
     var buf: [64]u8 = undefined;
     @memcpy(buf[0..name.len], name);
     buf[name.len] = 0;
-    const keysym = xkb.xkb_keysym_from_name(@ptrCast(&buf), xkb.XKB_KEYSYM_CASE_INSENSITIVE);
-    return if (keysym == xkb.XKB_KEY_NoSymbol) error.UnknownKeyName else keysym;
+    const keysym = xkbcommon.xkb_keysym_from_name(@ptrCast(&buf), xkbcommon.XKB_KEYSYM_CASE_INSENSITIVE);
+    return if (keysym == xkbcommon.XKB_KEY_NoSymbol) error.UnknownKeyName else keysym;
 }
 
 /// Extracts a workspace index from commands like `"workspace_3"` or `"move_to_workspace_2"`.
@@ -345,7 +345,7 @@ pub fn finalizeConfig(cfg: *defs.Config, screen: *defs.xcb.xcb_screen_t) void {
 }
 
 /// Resolves keysyms to keycodes and warns about duplicate bindings.
-pub fn resolveKeybindings(keybindings: anytype, xkb_state: *xkb.XkbState, allocator: std.mem.Allocator) void {
+pub fn resolveKeybindings(keybindings: anytype, xkb_state: *xkbcommon.XkbState, allocator: std.mem.Allocator) void {
     for (keybindings) |*kb| kb.keycode = xkb_state.keysymToKeycode(kb.keysym);
 
     var seen = std.AutoHashMap(u64, usize).init(allocator);

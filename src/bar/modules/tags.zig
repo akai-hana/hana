@@ -3,11 +3,14 @@
 //! Owns the workspace segment cache: label pixel-widths and workspace cell width.
 //! Call `invalidate()` whenever the font, config, or DPI changes (i.e. on bar
 //! reload) so the next draw remeasures everything with the fresh DrawContext.
+//!
+//! draw() now receives pre-computed workspace state from a BarSnapshot rather
+//! than reading the workspaces singleton directly, avoiding a data race with
+//! the main thread.
 
-const std        = @import("std");
-const defs       = @import("defs");
-const drawing    = @import("drawing");
-const workspaces = @import("workspaces");
+const std     = @import("std");
+const defs    = @import("defs");
+const drawing = @import("drawing");
 
 /// Comptime-generated label strings "1".."20". Never heap-allocated.
 const static_numbers = blk: {
@@ -72,15 +75,27 @@ fn indicatorPos(
     return .{ .x = cell_x + ix, .y = iy };
 }
 
-pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start_x: u16) !u16 {
-    const ws_state = workspaces.getState() orelse return start_x;
+/// Draw workspace tags.
+///
+/// `ws_current`     — index of the currently active workspace.
+/// `ws_has_windows` — one bool per workspace; true when that workspace has
+///                    at least one window (used to draw the indicator glyph).
+pub fn draw(
+    dc:             *drawing.DrawContext,
+    config:         defs.BarConfig,
+    height:         u16,
+    start_x:        u16,
+    ws_current:     u8,
+    ws_has_windows: []const bool,
+) !u16 {
+    if (ws_has_windows.len == 0) return start_x;
     ensureCache(dc, config, height);
     const ind_size = config.scaledIndicatorSize(height);
     const loc      = config.indicator_location;
     var x = start_x;
 
-    for (ws_state.workspaces, 0..) |*ws, i| {
-        const is_current = i == ws_state.current;
+    for (ws_has_windows, 0..) |has_windows, i| {
+        const is_current = i == ws_current;
         const bg         = if (is_current) config.selected_bg else config.bg;
         const fg         = if (is_current) config.selected_fg else config.fg;
 
@@ -91,7 +106,7 @@ pub fn draw(dc: *drawing.DrawContext, config: defs.BarConfig, height: u16, start
         const text_x  = x + (ws_width - label_w) / 2;
         try dc.drawText(text_x, dc.baselineY(height), label, fg);
 
-        if (ws.windows.count() > 0) {
+        if (has_windows) {
             const glyph = if (is_current) config.indicator_focused else config.indicator_unfocused;
             const color = config.indicator_color orelse fg;
             const pos   = indicatorPos(x, ws_width, height, ind_size, ind_size, loc, config.indicator_padding);

@@ -1,4 +1,8 @@
-//! Main event loop.
+//! Main event loop — io_uring edition.
+//!
+//! Uses POLL_ADD for the XCB and signal file descriptors plus an optional
+//! TIMEOUT for the clock segment.  Each operation is resubmitted after it
+//! fires (no MULTI flag, so kernel 5.4+ suffices).
 
 const std     = @import("std");
 const builtin = @import("builtin");
@@ -20,33 +24,38 @@ const constants  = @import("constants");
 const c_bindings = @import("c_bindings");
 const lifecycle  = @import("lifecycle");
 
-const xcb = defs.xcb;
-const WM  = defs.WM;
+const xcb     = defs.xcb;
+const WM      = defs.WM;
+const IoUring = std.os.linux.IoUring;
 
-// signalfd is a Linux kernel object with no std.fs counterpart, but std.Io.File
-// gives us RAII close() and readStreaming() for the read calls in the event loop.
-const FDs = struct { signal: std.Io.File };
+// User-data tags for io_uring CQEs.
+const TAG_XCB    : u64 = 1;
+const TAG_SIGNAL : u64 = 2;
+const TAG_CLOCK  : u64 = 3;
 
-/// Creates a signalfd (for SIGHUP / SIGTERM / SIGINT) and a timerfd for the clock module.
-fn setupPollFds() !FDs {
+// Stable storage for the clock timeout timespec — must outlive the io_uring
+// operation (i.e. remain valid from submission until the CQE arrives).
+var clock_ts: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = 0 };
+
+/// Creates a signalfd (for SIGHUP / SIGTERM / SIGINT).
+fn setupSignalFd() !std.posix.fd_t {
     var sigset: std.os.linux.sigset_t = std.mem.zeroes(std.os.linux.sigset_t);
     std.os.linux.sigaddset(&sigset, std.posix.SIG.HUP);
     std.os.linux.sigaddset(&sigset, std.posix.SIG.TERM);
     std.os.linux.sigaddset(&sigset, std.posix.SIG.INT);
     _ = std.os.linux.sigprocmask(std.posix.SIG.BLOCK, &sigset, null);
-
-    const sfd = std.os.linux.signalfd(-1, &sigset, std.os.linux.SFD.NONBLOCK | std.os.linux.SFD.CLOEXEC);
+    const sfd = std.os.linux.signalfd(-1, &sigset,
+        std.os.linux.SFD.NONBLOCK | std.os.linux.SFD.CLOEXEC);
     if (sfd < 0) return error.SignalFdFailed;
-
-    return .{ .signal = .{ .handle = @intCast(sfd) } };
+    return @intCast(sfd);
 }
 
-fn handleSignalFd(signal_file: std.Io.File, io: std.Io) void {
+/// Drains the non-blocking signal fd and dispatches each signal.
+fn handleSignalFd(fd: std.posix.fd_t) void {
     while (true) {
         var siginfo: std.os.linux.signalfd_siginfo = undefined;
-        const n = signal_file.readStreaming(io, &.{std.mem.asBytes(&siginfo)}) catch break;
+        const n = std.posix.read(fd, std.mem.asBytes(&siginfo)) catch break;
         if (n != @sizeOf(std.os.linux.signalfd_siginfo)) break;
-
         switch (siginfo.signo) {
             @intFromEnum(std.posix.SIG.HUP)  => lifecycle.reload(),
             @intFromEnum(std.posix.SIG.TERM),
@@ -57,8 +66,6 @@ fn handleSignalFd(signal_file: std.Io.File, io: std.Io) void {
 }
 
 fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
-    // Try xcb-cursor first: reads Xcursor.theme + Xcursor.size from Xresources
-    // and loads the fully-themed cursor, matching what client windows display.
     var ctx: *c_bindings.xcb_cursor_context_t = undefined;
     if (c_bindings.xcb_cursor_context_new(conn, screen, &ctx) >= 0) {
         defer c_bindings.xcb_cursor_context_free(ctx);
@@ -72,9 +79,6 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void 
     } else {
         debug.warn("xcb-cursor: context init failed, falling back to bitmap cursor", .{});
     }
-
-    // Fallback: plain bitmap cursor from the built-in X11 cursor font.
-    // Correct shape but ignores the user's Xcursor theme.
     const font   = xcb.xcb_generate_id(conn);
     const cursor = xcb.xcb_generate_id(conn);
     _ = xcb.xcb_open_font(conn, font, 6, "cursor");
@@ -86,7 +90,6 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void 
     _ = xcb.xcb_close_font(conn, font);
 }
 
-/// Registers as the window manager on `root`. Returns `error.AnotherWMRunning` if taken.
 fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
     if (xcb.xcb_request_check(conn, xcb.xcb_change_window_attributes_checked(
         conn, root, xcb.XCB_CW_EVENT_MASK, &[_]u32{constants.EventMasks.ROOT_WINDOW}))) |err| {
@@ -98,14 +101,9 @@ fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
 
 fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
-
     const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };
-    // Stack-allocated scratch buffer — no heap allocation or defer free needed.
-    // Capacity is a compile-time constant; see Sizes.MAX_KEYBIND_COOKIES.
     var cookies: [constants.Sizes.MAX_KEYBIND_COOKIES]CookieEntry = undefined;
     var n: usize = 0;
-
-    // Fire all grab requests before waiting for any reply (one write pass, then one read pass).
     for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
         for (constants.LOCK_MODIFIERS) |lock| {
@@ -123,7 +121,6 @@ fn grabKeybindings(wm: *WM) !void {
             n += 1;
         }
     }
-
     var failed: usize = 0;
     for (cookies[0..n]) |entry| {
         if (xcb.xcb_request_check(wm.conn, entry.cookie)) |err| {
@@ -136,7 +133,6 @@ fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_flush(wm.conn);
 }
 
-/// Consumes the reload flag and, if set, reloads the configuration.
 fn maybeReload(wm: *WM) void {
     if (lifecycle.consumeReload())
         handleConfigReload(wm) catch |err| debug.err("Reload failed: {}", .{err});
@@ -144,39 +140,85 @@ fn maybeReload(wm: *WM) void {
 
 fn handleConfigReload(wm: *WM) !void {
     debug.info("Reload requested", .{});
-
     var new_config = config.loadConfigDefault(wm.allocator) catch |err| {
         debug.err("Failed to load: {}, keeping old", .{err});
         return err;
     };
     errdefer new_config.deinit();
-
-    // master_count must be non-zero; master_width is clamped by the tiling module.
     if (new_config.tiling.master_count == 0) {
         debug.err("Invalid config: master_count must be > 0, keeping old", .{});
         return error.InvalidConfig;
     }
-
     config.resolveKeybindings(new_config.keybindings.items, @ptrCast(@alignCast(wm.xkb_state)), wm.allocator);
     config.finalizeConfig(&new_config, wm.screen);
-
     var old_config = wm.config;
     wm.config = new_config;
-
     grabKeybindings(wm) catch |err| {
         debug.err("Keybind grab failed: {}, reverting", .{err});
         wm.config = old_config;
-        return err; // errdefer fires here — frees new_config exactly once
+        return err;
     };
-
     old_config.deinit();
     try input.rebuildKeybindMap(wm);
     tiling.reloadConfig(wm);
     clock.updateTimerState();
-    // The bar caches dimensions, fonts, and layout at init time; reload recreates it.
     bar.reload(wm);
     debug.info("Reload complete", .{});
 }
+
+// io_uring helpers 
+
+fn getSqe(iou: *IoUring) *std.os.linux.io_uring_sqe {
+    while (true) return iou.get_sqe() catch {
+        _ = iou.submit_and_wait(0) catch {};
+        continue;
+    };
+}
+
+fn submitPollAdd(iou: *IoUring, fd: std.posix.fd_t, tag: u64) void {
+    getSqe(iou).* = .{
+        .opcode       = .POLL_ADD,
+        .flags        = 0,
+        .ioprio       = 0,
+        .fd           = fd,
+        .off          = 0,
+        .addr         = 0,
+        .len          = 0,
+        .rw_flags     = std.posix.POLL.IN,
+        .user_data    = tag,
+        .buf_index    = 0,
+        .personality  = 0,
+        .splice_fd_in = 0,
+        .addr3        = 0,
+        .resv         = 0,
+    };
+}
+
+fn submitClockTimeout(iou: *IoUring, ms: i32) void {
+    const ns: i64 = @as(i64, ms) * std.time.ns_per_ms;
+    clock_ts = .{
+        .sec  = @intCast(@divFloor(ns, std.time.ns_per_s)),
+        .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
+    };
+    getSqe(iou).* = .{
+        .opcode       = .TIMEOUT,
+        .flags        = 0,
+        .ioprio       = 0,
+        .fd           = 0,
+        .off          = 0,
+        .addr         = @intFromPtr(&clock_ts),
+        .len          = 1,
+        .rw_flags     = 0,
+        .user_data    = TAG_CLOCK,
+        .buf_index    = 0,
+        .personality  = 0,
+        .splice_fd_in = 0,
+        .addr3        = 0,
+        .resv         = 0,
+    };
+}
+
+// Entry point 
 
 pub fn main() !void {
     const conn = xcb.xcb_connect(null, null) orelse {
@@ -232,9 +274,8 @@ pub fn main() !void {
     defer drawing.deinitFontCache(allocator);
     defer layouts.deinitSizeHintsCache(allocator);
 
-    const io = std.Options.debug_io;
-    const fds = try setupPollFds();
-    defer fds.signal.close(io);
+    const signal_fd = try setupSignalFd();
+    defer std.posix.close(signal_fd);
 
     try events.initModules(&wm);
     defer events.deinitModules();
@@ -249,50 +290,92 @@ pub fn main() !void {
     _ = xcb.xcb_flush(conn);
     debug.info("Started", .{});
 
-    const x_fd = xcb.xcb_get_file_descriptor(conn);
-    var pollfds = [_]std.posix.pollfd{
-        .{ .fd = x_fd,              .events = std.posix.POLL.IN, .revents = 0 },
-        .{ .fd = fds.signal.handle, .events = std.posix.POLL.IN, .revents = 0 },
+    const x_fd: std.posix.fd_t = xcb.xcb_get_file_descriptor(conn);
+
+    var iou = try IoUring.init(8, 0);
+    defer iou.deinit();
+
+    // Submit initial polls.
+    submitPollAdd(&iou, x_fd, TAG_XCB);
+    submitPollAdd(&iou, signal_fd, TAG_SIGNAL);
+    var clock_pending = blk: {
+        const ms = clock.pollTimeoutMs();
+        if (ms >= 0) { submitClockTimeout(&iou, ms); break :blk true; }
+        break :blk false;
     };
 
+    var cqes: [16]std.os.linux.io_uring_cqe = undefined;
+
     while (lifecycle.running.load(.acquire)) {
-        const n = std.posix.poll(&pollfds, clock.pollTimeoutMs()) catch |err| {
-            if (err == error.Interrupted) continue;
-            debug.err("Poll error: {}", .{err});
-            continue;
+        _ = iou.submit_and_wait(1) catch |err| {
+            if (err == error.SignalInterrupt) continue;
+            debug.err("io_uring error: {s}", .{@errorName(err)});
+            break;
         };
 
-        // Timeout — no fds were ready, meaning the clock boundary was reached.
-        if (n == 0) {
-            bar.checkClockUpdate();
-            continue;
+        const n = iou.copy_cqes(&cqes, 0) catch |err| blk: {
+            if (err == error.SignalInterrupt) break :blk @as(u32, 0);
+            debug.err("copy_cqes error: {s}", .{@errorName(err)});
+            break :blk @as(u32, 0);
+        };
+
+        var saw_xcb    = false;
+        var saw_signal = false;
+        var saw_clock  = false;
+        var x_dead     = false;
+
+        for (cqes[0..n]) |cqe| {
+            switch (cqe.user_data) {
+                TAG_XCB => {
+                    if (cqe.res < 0) {
+                        x_dead = true;
+                    } else {
+                        const revents: u32 = @bitCast(cqe.res);
+                        if (revents & (std.posix.POLL.ERR | std.posix.POLL.HUP) != 0)
+                            x_dead = true
+                        else
+                            saw_xcb = true;
+                    }
+                },
+                TAG_SIGNAL => { saw_signal = true; },
+                TAG_CLOCK  => { clock_pending = false; saw_clock = true; },
+                else => {},
+            }
         }
 
-        // Detect a dead X11 connection before dispatching events.
-        if ((pollfds[0].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0 or
-            xcb.xcb_connection_has_error(conn) != 0) {
+        if (x_dead or xcb.xcb_connection_has_error(conn) != 0) {
             debug.err("X11 connection error, shutting down", .{});
             break;
         }
 
-        // X11 events
-        if (pollfds[0].revents & std.posix.POLL.IN != 0) {
+        if (saw_xcb) {
             while (xcb.xcb_poll_for_event(conn)) |event| {
                 defer std.c.free(event);
                 events.dispatch(@as(*u8, @ptrCast(event)).*, event, &wm);
             }
-            // The .reload_config keybinding sets should_reload from the X11 path;
-            // pollfds[1] only wakes on SIGHUP, so we must also check here.
             maybeReload(&wm);
             tiling.retileIfDirty(&wm);
             bar.updateIfDirty(&wm) catch |err| debug.err("Failed to update bar: {}", .{err});
             _ = xcb.xcb_flush(conn);
+            submitPollAdd(&iou, x_fd, TAG_XCB);
+            // If the clock was inactive (e.g. bar had no clock before reload),
+            // check again after reload may have added one.
+            if (!clock_pending) {
+                const ms = clock.pollTimeoutMs();
+                if (ms >= 0) { submitClockTimeout(&iou, ms); clock_pending = true; }
+            }
         }
 
-        // Signals
-        if (pollfds[1].revents & std.posix.POLL.IN != 0) {
-            handleSignalFd(fds.signal, io);
+        if (saw_signal) {
+            handleSignalFd(signal_fd);
             maybeReload(&wm);
+            submitPollAdd(&iou, signal_fd, TAG_SIGNAL);
+        }
+
+        if (saw_clock) {
+            bar.checkClockUpdate();
+            const ms = clock.pollTimeoutMs();
+            if (ms >= 0) { submitClockTimeout(&iou, ms); clock_pending = true; }
         }
     }
 

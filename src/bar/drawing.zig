@@ -38,6 +38,9 @@ const FALLBACK_FONT = "monospace:size=10";
 pub const DrawContext = struct {
     allocator: std.mem.Allocator,
     conn:      *defs.xcb.xcb_connection_t,
+    /// The real X window — only used as the copy destination in present().
+    window:    u32,
+    /// Off-screen pixmap — all drawing targets this.
     drawable:  u32,
     width:     u16,
     height:    u16,
@@ -45,6 +48,8 @@ pub const DrawContext = struct {
     surface:      *c.cairo_surface_t,
     ctx:          *c.cairo_t,
     gc:           u32,
+    /// Separate GC used exclusively for the xcb_copy_area in present().
+    copy_gc:      u32,
     pango_layout: *c.PangoLayout,
 
     current_font_desc: ?*c.PangoFontDescription = null,
@@ -55,11 +60,13 @@ pub const DrawContext = struct {
     /// Cached GC foreground color — skips xcb_change_gc when color is unchanged.
     last_gc_color:     ?u32                      = null,
 
-    /// Creates a DrawContext with an explicit visual (required for ARGB/32-bit windows).
+    /// Creates a DrawContext backed by an off-screen pixmap.
+    /// All drawing targets the pixmap; call flush() to blit it to the window
+    /// atomically via xcb_copy_area, eliminating visible partial-frame compositing.
     pub fn initWithVisual(
         allocator:    std.mem.Allocator,
         conn:         *defs.xcb.xcb_connection_t,
-        drawable:     u32,
+        window:       u32,
         width:        u16,
         height:       u16,
         visual_id:    ?u32,
@@ -78,9 +85,18 @@ pub const DrawContext = struct {
         else
             getDefaultVisualType(screen);
 
+        const depth: u8 = if (is_argb) 32 else defs.xcb.XCB_COPY_FROM_PARENT;
+
+        // Off-screen pixmap — Cairo renders here; flushed to window in one blit.
+        const pixmap = defs.xcb.xcb_generate_id(conn);
+        _ = defs.xcb.xcb_create_pixmap(conn, depth, pixmap, window, width, height);
+
         const surface = c.cairo_xcb_surface_create(
-            conn, drawable, visual_type, @intCast(width), @intCast(height),
-        ) orelse return error.CairoSurfaceCreateFailed;
+            conn, pixmap, visual_type, @intCast(width), @intCast(height),
+        ) orelse {
+            _ = defs.xcb.xcb_free_pixmap(conn, pixmap);
+            return error.CairoSurfaceCreateFailed;
+        };
         errdefer c.cairo_surface_destroy(surface);
 
         const ctx = c.cairo_create(surface) orelse return error.CairoCreateFailed;
@@ -92,20 +108,31 @@ pub const DrawContext = struct {
         dc.* = .{
             .allocator    = allocator,
             .conn         = conn,
-            .drawable     = drawable,
+            .window       = window,
+            .drawable     = pixmap,
             .width        = width,
             .height       = height,
             .surface      = surface,
             .ctx          = ctx,
             .pango_layout = layout,
             .gc           = 0,
+            .copy_gc      = 0,
             .is_argb      = is_argb,
             .transparency = transparency,
         };
 
+        // Drawing GC — targets the pixmap for fillRect calls.
         dc.gc = defs.xcb.xcb_generate_id(conn);
-        const gc_cookie = defs.xcb.xcb_create_gc_checked(conn, dc.gc, drawable, 0, null);
+        const gc_cookie = defs.xcb.xcb_create_gc_checked(conn, dc.gc, pixmap, 0, null);
         if (defs.xcb.xcb_request_check(conn, gc_cookie)) |err| {
+            std.c.free(err);
+            return error.GCCreationFailed;
+        }
+
+        // Copy GC — targets the window, used only in flush().
+        dc.copy_gc = defs.xcb.xcb_generate_id(conn);
+        const copy_gc_cookie = defs.xcb.xcb_create_gc_checked(conn, dc.copy_gc, window, 0, null);
+        if (defs.xcb.xcb_request_check(conn, copy_gc_cookie)) |err| {
             std.c.free(err);
             return error.GCCreationFailed;
         }
@@ -135,6 +162,7 @@ pub const DrawContext = struct {
         dc.* = .{
             .allocator    = allocator,
             .conn         = conn,
+            .window       = 0,
             .drawable     = 0,
             .width        = 1,
             .height       = 1,
@@ -142,6 +170,7 @@ pub const DrawContext = struct {
             .ctx          = ctx,
             .pango_layout = layout,
             .gc           = 0, // sentinel: deinit skips xcb_free_gc
+            .copy_gc      = 0,
         };
 
         return dc;
@@ -149,10 +178,13 @@ pub const DrawContext = struct {
 
     pub fn deinit(self: *DrawContext) void {
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
-        if (self.gc != 0) _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
+        if (self.gc != 0)      _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
+        if (self.copy_gc != 0) _ = defs.xcb.xcb_free_gc(self.conn, self.copy_gc);
         c.g_object_unref(self.pango_layout);
         c.cairo_destroy(self.ctx);
+        // Cairo surface wraps the pixmap — destroy surface first, then pixmap.
         c.cairo_surface_destroy(self.surface);
+        if (self.drawable != 0) _ = defs.xcb.xcb_free_pixmap(self.conn, self.drawable);
         self.allocator.destroy(self);
     }
 
@@ -321,8 +353,21 @@ pub const DrawContext = struct {
         return result;
     }
 
+    /// Flushes the off-screen pixmap to the window in a single xcb_copy_area call.
+    /// The compositor only ever sees fully-rendered frames — no partial-draw flicker.
     pub fn flush(self: *DrawContext) void {
         c.cairo_surface_flush(self.surface);
+        if (self.copy_gc == 0) return; // offscreen measurement DC — nothing to blit
+        _ = defs.xcb.xcb_copy_area(
+            self.conn,
+            self.drawable, // src: pixmap
+            self.window,   // dst: window
+            self.copy_gc,
+            0, 0,          // src x, y
+            0, 0,          // dst x, y
+            self.width,
+            self.height,
+        );
     }
 
     pub fn baselineY(self: *DrawContext, bar_height: u16) u16 {
