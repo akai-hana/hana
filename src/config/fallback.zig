@@ -110,7 +110,7 @@ fn isCommandAvailable(command: []const u8) bool {
 // runs at startup before any event loop or Io context is available.
 inline fn checkPath(buf: []u8, dir: []const u8, command: []const u8) bool {
     const full_path = std.fmt.bufPrint(buf, "{s}/{s}", .{ dir, command }) catch return false;
-    const io = std.options.debug_io;
+    const io = std.Options.debug_io;
     const file = std.Io.Dir.openFileAbsolute(io, full_path, .{}) catch return false;
     file.close(io);
     return true;

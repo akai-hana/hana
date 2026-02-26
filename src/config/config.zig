@@ -121,7 +121,7 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !defs.Config {
 pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
     // Config loading is synchronous and runs before the event loop, so
     // std.options.debug_io (the global blocking Io instance) is appropriate here.
-    const io = std.options.debug_io;
+    const io = std.Options.debug_io;
     const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
         if (err == error.FileNotFound) debug.info("Not found: {s}", .{path});
         return err;

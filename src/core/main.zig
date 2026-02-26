@@ -23,11 +23,9 @@ const lifecycle  = @import("lifecycle");
 const xcb = defs.xcb;
 const WM  = defs.WM;
 
-// Signal and timer fds are Linux kernel objects with no std.fs counterpart,
-// but std.fs.File gives us RAII close() and a Reader for the read calls in
-// the event loop. std.posix.poll / SIG.* / POLL.* are still used directly
-// since std.io has no multi-fd multiplexing abstraction yet.
-const FDs = struct { signal: std.fs.File, timer: std.fs.File };
+// signalfd is a Linux kernel object with no std.fs counterpart, but std.Io.File
+// gives us RAII close() and readStreaming() for the read calls in the event loop.
+const FDs = struct { signal: std.Io.File };
 
 /// Creates a signalfd (for SIGHUP / SIGTERM / SIGINT) and a timerfd for the clock module.
 fn setupPollFds() !FDs {
@@ -39,20 +37,14 @@ fn setupPollFds() !FDs {
 
     const sfd = std.os.linux.signalfd(-1, &sigset, std.os.linux.SFD.NONBLOCK | std.os.linux.SFD.CLOEXEC);
     if (sfd < 0) return error.SignalFdFailed;
-    const signal_file = std.fs.File{ .handle = @intCast(sfd) };
-    errdefer signal_file.close();
 
-    const tfd = std.os.linux.timerfd_create(.MONOTONIC, .{ .NONBLOCK = true, .CLOEXEC = true });
-    if (tfd < 0) return error.TimerFdFailed;
-
-    clock.setTimerFd(@intCast(tfd));
-    return .{ .signal = signal_file, .timer = std.fs.File{ .handle = @intCast(tfd) } };
+    return .{ .signal = .{ .handle = @intCast(sfd) } };
 }
 
-fn handleSignalFd(signal_file: std.fs.File) void {
+fn handleSignalFd(signal_file: std.Io.File, io: std.Io) void {
     while (true) {
         var siginfo: std.os.linux.signalfd_siginfo = undefined;
-        const n = signal_file.read(std.mem.asBytes(&siginfo)) catch break;
+        const n = signal_file.readStreaming(io, &.{std.mem.asBytes(&siginfo)}) catch break;
         if (n != @sizeOf(std.os.linux.signalfd_siginfo)) break;
 
         switch (siginfo.signo) {
@@ -236,9 +228,9 @@ pub fn main() !void {
     defer drawing.deinitFontCache(allocator);
     defer layouts.deinitSizeHintsCache(allocator);
 
+    const io = std.Options.debug_io;
     const fds = try setupPollFds();
-    defer fds.signal.close();
-    defer fds.timer.close();
+    defer fds.signal.close(io);
 
     try events.initModules(&wm);
     defer events.deinitModules();
@@ -257,15 +249,20 @@ pub fn main() !void {
     var pollfds = [_]std.posix.pollfd{
         .{ .fd = x_fd,              .events = std.posix.POLL.IN, .revents = 0 },
         .{ .fd = fds.signal.handle, .events = std.posix.POLL.IN, .revents = 0 },
-        .{ .fd = fds.timer.handle,  .events = std.posix.POLL.IN, .revents = 0 },
     };
 
     while (lifecycle.running.load(.acquire)) {
-        _ = std.posix.poll(&pollfds, -1) catch |err| {
+        const n = std.posix.poll(&pollfds, clock.pollTimeoutMs()) catch |err| {
             if (err == error.Interrupted) continue;
             debug.err("Poll error: {}", .{err});
             continue;
         };
+
+        // Timeout — no fds were ready, meaning the clock boundary was reached.
+        if (n == 0) {
+            bar.checkClockUpdate();
+            continue;
+        }
 
         // Detect a dead X11 connection before dispatching events.
         if ((pollfds[0].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0 or
@@ -290,15 +287,8 @@ pub fn main() !void {
 
         // Signals
         if (pollfds[1].revents & std.posix.POLL.IN != 0) {
-            handleSignalFd(fds.signal);
+            handleSignalFd(fds.signal, io);
             maybeReload(&wm);
-        }
-
-        // Timer (clock tick)
-        if (pollfds[2].revents & std.posix.POLL.IN != 0) {
-            var expiration: u64 = 0;
-            _ = fds.timer.read(std.mem.asBytes(&expiration)) catch {};
-            bar.checkClockUpdate();
         }
     }
 
