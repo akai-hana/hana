@@ -82,8 +82,6 @@ const XK_End       : xcb.xcb_keysym_t = 0xff57;
 
 /// Maximum number of bytes in the input buffer (UTF-8 aware but capped here).
 const MAX_INPUT: usize  = 512;
-/// Text shown before the input field.
-const PROMPT:    []const u8 = "run: ";
 /// Minimum visible cursor width in pixels (for an empty field).
 const MIN_CURSOR_PX: u16 = 8;
 /// Vertical inset for the cursor block, in pixels.
@@ -314,19 +312,19 @@ fn drawActive(
 ) !u16 {
     const end_x  = start_x + width;
     const pad    = config.scaledSegmentPadding(height);
-    const accent = config.getTitleAccent();
+    const accent = config.getDrunPromptColor();
+    const bg     = config.getDrunBg();
+    const fg     = config.getDrunFg();
+    const prompt = config.drun_prompt;
 
     // Full background
-    dc.fillRect(start_x, 0, width, height, config.bg);
-
-    // Left accent stripe — mirrors the focused-title style
-    dc.fillRect(start_x, 0, pad / 2, height, accent);
+    dc.fillRect(start_x, 0, width, height, bg);
 
     const text_start_x = start_x + pad;
     const max_text_px  = end_x -| pad -| text_start_x; // usable pixel width
 
     // ── Measure sub-strings ───────────────────────────────────────────────────
-    const prompt_w = dc.textWidth(PROMPT);
+    const prompt_w = dc.textWidth(prompt);
 
     const pre_text  = g.buf[0..g.cursor];
     const cur_text  = if (g.cursor < g.len) g.buf[g.cursor .. g.cursor + 1] else " ";
@@ -340,36 +338,24 @@ fn drawActive(
     const content_w = prompt_w + pre_w + cur_w + post_w;
 
     // ── Horizontal scroll offset (keeps cursor visible) ───────────────────────
-    //
-    // We compute `scroll_x`: how many pixels to shift the content left so the
-    // cursor block is always fully visible.
-    //
-    //   visible region: [scroll_x, scroll_x + max_text_px)
-    //   cursor region:  [prompt_w + pre_w, prompt_w + pre_w + cur_w)
-    //
     var scroll_x: u16 = 0;
     if (content_w > max_text_px) {
         const cursor_left  = prompt_w + pre_w;
         const cursor_right = cursor_left + cur_w;
 
         if (cursor_right > max_text_px) {
-            // Scroll so cursor's right edge aligns with the viewport's right edge,
-            // leaving a small right margin equal to one cursor width.
             scroll_x = cursor_right -| max_text_px +| cur_w;
         }
     }
 
-    // ── Draw (with Cairo clip rectangle to prevent overflow) ──────────────────
+    // ── Draw ──────────────────────────────────────────────────────────────────
     var px: i32 = @as(i32, text_start_x) - @as(i32, scroll_x);
     const baseline = dc.baselineY(height);
-
-    // Helper: advance `px` by `w`, drawing `text` only when within the viewport.
-    //   Returns new px value.
 
     // Prompt
     if (px + @as(i32, prompt_w) > @as(i32, text_start_x) and px < @as(i32, end_x -| pad)) {
         const draw_x: u16 = @intCast(@max(px, @as(i32, text_start_x)));
-        try dc.drawText(draw_x, baseline, PROMPT, accent);
+        try dc.drawText(draw_x, baseline, prompt, accent);
     }
     px += @intCast(prompt_w);
 
@@ -377,12 +363,12 @@ fn drawActive(
     if (pre_text.len > 0) {
         if (px + @as(i32, pre_w) > @as(i32, text_start_x) and px < @as(i32, end_x -| pad)) {
             const draw_x: u16 = @intCast(@max(px, @as(i32, text_start_x)));
-            try dc.drawText(draw_x, baseline, pre_text, config.fg);
+            try dc.drawText(draw_x, baseline, pre_text, fg);
         }
         px += @intCast(pre_w);
     }
 
-    // Cursor block — only draw when in the viewport
+    // Cursor block
     if (px + @as(i32, cur_w) > @as(i32, text_start_x) and px < @as(i32, end_x -| pad)) {
         const draw_x: u16 = @intCast(@max(px, @as(i32, text_start_x)));
         const visible_w: u16 = @intCast(@min(
@@ -391,9 +377,8 @@ fn drawActive(
         ));
         if (visible_w > 0) {
             dc.fillRect(draw_x, CURSOR_V_PAD, visible_w, height -| CURSOR_V_PAD * 2, accent);
-            // Draw the character under the cursor in inverted colour
             if (g.cursor < g.len)
-                try dc.drawText(draw_x, baseline, cur_text, config.bg);
+                try dc.drawText(draw_x, baseline, cur_text, bg);
         }
     }
     px += @intCast(cur_w);
@@ -403,7 +388,7 @@ fn drawActive(
         const draw_x: u16 = @intCast(@max(px, @as(i32, text_start_x)));
         const remaining: u16 = end_x -| pad -| draw_x;
         if (remaining > 0)
-            try dc.drawTextEllipsis(draw_x, baseline, post_text, remaining, config.fg);
+            try dc.drawTextEllipsis(draw_x, baseline, post_text, remaining, fg);
     }
 
     return end_x;

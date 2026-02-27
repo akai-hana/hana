@@ -292,6 +292,12 @@ pub const BarConfig = struct {
 
     clock_format: []const u8 = "%Y-%m-%d %H:%M:%S",
 
+    // drun segment colors and prompt (all optional — fall back to bar-wide defaults)
+    drun_bg:           ?u32       = null, // background; falls back to bg
+    drun_fg:           ?u32       = null, // typed text color; falls back to fg
+    drun_prompt_color: ?u32       = null, // prompt text color; falls back to getTitleAccent()
+    drun_prompt:       []const u8 = "run: ", // displayed before the input field
+
     layout: std.ArrayList(BarLayout),
 
     scale_factor: f32 = 1.0,
@@ -320,6 +326,15 @@ pub const BarConfig = struct {
     }
     pub inline fn getClockAccent(self: *const BarConfig) u32 {
         return self.clock_accent orelse self.accent_color;
+    }
+    pub inline fn getDrunBg(self: *const BarConfig) u32 {
+        return self.drun_bg orelse self.bg;
+    }
+    pub inline fn getDrunFg(self: *const BarConfig) u32 {
+        return self.drun_fg orelse self.fg;
+    }
+    pub inline fn getDrunPromptColor(self: *const BarConfig) u32 {
+        return self.drun_prompt_color orelse self.getTitleAccent();
     }
     pub inline fn scaledFontSize(self: *const BarConfig) u16 { return self.scaled_font_size; }
 
@@ -380,6 +395,7 @@ pub const Config = struct {
     allocated_clock_format:        ?[]const u8 = null,
     allocated_indicator_focused:   ?[]const u8 = null,
     allocated_indicator_unfocused: ?[]const u8 = null,
+    allocated_drun_prompt:         ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) Config {
         return .{
@@ -409,6 +425,7 @@ pub const Config = struct {
         inline for (.{
             "allocated_font", "allocated_layout", "allocated_clock_format",
             "allocated_indicator_focused", "allocated_indicator_unfocused",
+            "allocated_drun_prompt",
         }) |field| if (@field(self, field)) |s| a.free(s);
     }
 };
