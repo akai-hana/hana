@@ -242,22 +242,40 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 
     collectAndCacheSizeHints(wm, win, c_normal_hints);
 
+    // Collect focus-cache property replies *before* any visual commands.
+    //
+    // Previously this call came after utils.flush(), which meant the server
+    // (and compositor) received map + unfocused-border in one batch, then had
+    // to wait for two xcb_get_property_reply round-trips before seeing
+    // set_input_focus + focused-border in a second batch.  With a compositor
+    // running that produced a visible intermediate frame where the spawned
+    // window appeared briefly unfocused/unfocused-colored before snapping to
+    // its final state — the "sluggish spawn" feel.
+    //
+    // Moving the call here is safe: the cookies were fired at the top of this
+    // function before any flush, so the X server has already queued the
+    // property replies by the time we read them.  getInputModelCached in
+    // setFocus finds the cache warm and does no live query.
+    //
+    // Result: registerWithTiling + xcb_map_window + setFocus (set_input_focus
+    // + focused border) are all queued on the XCB write buffer before the
+    // single flush below.  They land at the server — and the compositor — as
+    // one atomic batch, matching dwm's Xlib-buffer behaviour.
+    utils.populateFocusCacheFromCookies(wm.conn, win, c_protocols, c_hints);
+
     if (on_current_workspace) {
         registerWithTiling(wm, win, true);
         _ = xcb.xcb_map_window(wm.conn, win);
+        focus.setFocus(wm, win, .window_spawn);
+        snapshotSpawnCursor(wm);
     } else {
         registerWithTiling(wm, win, false);
         grabButtons(wm, win, false);
     }
 
+    // Single flush — all visual state (geometry, map, border, focus) arrives
+    // at the server in one batch.  No intermediate compositor frame possible.
     utils.flush(wm.conn);
-
-    utils.populateFocusCacheFromCookies(wm.conn, win, c_protocols, c_hints);
-
-    if (on_current_workspace) {
-        focus.setFocus(wm, win, .window_spawn);
-        snapshotSpawnCursor(wm);
-    }
 
     bar.markDirty();
 }
