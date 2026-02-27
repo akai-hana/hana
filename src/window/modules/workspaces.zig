@@ -1,4 +1,4 @@
-// Workspace management
+//! Workspace management — creation, window assignment, and workspace switching.
 
 const std      = @import("std");
 const defs     = @import("defs");
@@ -127,8 +127,18 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
     _ = s.workspaces[from_ws].remove(win);
     s.workspaces[target_ws].add(win) catch |err| {
         debug.err("Failed to add window to workspace {}: {}", .{ target_ws, err });
-        s.workspaces[from_ws].add(win) catch |e| debug.warnOnErr(e, "workspace rollback after move failure");
-        if (ts) |t| _ = t.windows.remove(win);
+        // Attempt to roll back by re-adding to the source workspace.
+        // Only evict the window from tiling if the rollback itself also fails —
+        // if the rollback succeeds the window is coherently back in from_ws and
+        // tiling must be left intact.
+        s.workspaces[from_ws].add(win) catch |e| {
+            debug.warnOnErr(e, "workspace rollback after move failure");
+            // Both workspaces rejected the window; tiling and window_to_workspace
+            // must also be cleaned up so isManaged returns false and no further
+            // operations attempt to reference this orphaned window.
+            if (ts) |t| _ = t.windows.remove(win);
+            _ = s.window_to_workspace.remove(win);
+        };
         return;
     };
     // Capacity was pre-reserved above — this cannot fail.
@@ -238,6 +248,11 @@ fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
         }
     } else {
         // Floating: move all non-minimized windows to the default position.
+        // NOTE: all windows land at the same coordinate because per-window
+        // pre-hide geometry is not saved.  In practice this means two or more
+        // floating windows will stack on top of each other after a workspace
+        // switch.  Saving each window's last known x/y on hide (similar to
+        // MinimizedEntry.saved_fs) would fix this.
         const pos = utils.floatDefaultPos(wm);
         for (ws.windows.items()) |win| {
             if (minimize.isMinimized(wm, win)) continue;
@@ -251,12 +266,18 @@ fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
 // Step 4: resolve the post-switch focus target and apply it.
 //
 // Why this does not call focus.setFocus:
-//   focus.setFocus calls isWindowMapped, which is a blocking xcb_get_window_attributes
-//   round-trip.  This function runs inside xcb_grab_server (called by executeSwitch),
-//   and a blocking round-trip inside a server grab deadlocks.  We therefore inline
-//   the relevant side-effects here, omitting only the mapped-check (all windows on
-//   the new workspace were mapped by restoreWorkspaceWindows moments earlier) and
-//   the stack raise (workspace_switch never raises).
+//   focus.setFocus calls isWindowMapped, which issues a blocking
+//   xcb_get_window_attributes round-trip.  That check is unnecessary here
+//   because all windows on the new workspace were mapped by
+//   restoreWorkspaceWindows moments earlier.  We therefore inline the
+//   relevant side-effects, omitting only the mapped-check and the stack raise
+//   (workspace_switch never raises).
+//
+// Note on xcb_grab_server: XGrabServer only prevents *other* X clients from
+// communicating with the server.  The grabbing client (this WM) can still
+// make blocking round-trips inside the grab without any issue — the
+// restriction is client-to-client, not self-imposed.  getInputModelCached's
+// slow path (two blocking requests on a cache miss) is therefore safe here.
 fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace) void {
     const s = getState().?;
 

@@ -147,8 +147,16 @@ fn handleConfigReload(wm: *WM) !void {
         wm.config = old_config;
         return err;
     };
+    // rebuildKeybindMap must succeed before we release the old config.
+    // If it fails we can still roll back by restoring old_config; once
+    // old_config.deinit() is called that rollback window is permanently closed.
+    input.rebuildKeybindMap(wm) catch |err| {
+        debug.err("rebuildKeybindMap failed: {}, reverting\n", .{err});
+        wm.config = old_config;
+        // new_config is still live (errdefer will deinit it on return)
+        return err;
+    };
     old_config.deinit();
-    try input.rebuildKeybindMap(wm);
     tiling.reloadConfig(wm);
     bar.updateTimerState();
     bar.reload(wm);
@@ -158,8 +166,15 @@ fn handleConfigReload(wm: *WM) !void {
 // io_uring helpers 
 
 fn getSqe(iou: *IoUring) *std.os.linux.io_uring_sqe {
+    // The ring is initialised with depth 8 and we submit at most 3 ops at once
+    // (XCB poll + signal poll + optional clock timeout), so get_sqe should
+    // almost never fail.  submit_and_wait(0) flushes pending SQEs without
+    // blocking to free ring slots; if it errors we log and retry rather than
+    // silently looping forever.
     while (true) return iou.get_sqe() catch {
-        _ = iou.submit_and_wait(0) catch {};
+        _ = iou.submit_and_wait(0) catch |err| {
+            debug.err("io_uring submit_and_wait failed in getSqe: {s}", .{@errorName(err)});
+        };
         continue;
     };
 }

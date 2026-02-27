@@ -1,11 +1,11 @@
-// Efficient window tracking with small-array optimisation.
-//
-// Storage strategy:
-//   Small (<=small_cap windows): fixed inline array, cache-friendly, zero allocations.
-//   Large (>small_cap windows):  ArrayList + HashSet for O(1) contains/remove.
-//
-// A tagged union enforces that exactly one mode is active at all times.
-// Use the `Tracking` alias for the default 16-window capacity.
+//! Efficient window tracking with small-array optimisation.
+//!
+//! Storage strategy:
+//!   Small (<=small_cap windows): fixed inline array, cache-friendly, zero allocations.
+//!   Large (>small_cap windows):  ArrayList + HashSet for O(1) contains/remove.
+//!
+//! A tagged union enforces that exactly one mode is active at all times.
+//! Use the `Tracking` alias for the default 16-window capacity.
 
 const std = @import("std");
 
@@ -103,12 +103,22 @@ pub fn TrackingType(comptime small_cap: u8) type {
         pub fn reorder(self: *Self, new_order: []const u32) void {
             switch (self.storage) {
                 .small => |*s| {
+                    // Debug: verify the caller is passing a true permutation.
+                    std.debug.assert(new_order.len == s.len);
                     const len: u8 = @intCast(@min(new_order.len, small_cap));
                     @memcpy(s.items[0..len], new_order[0..len]);
                     s.len = len;
                 },
                 .large => |*l| {
+                    // Debug: verify length and that new_order is a permutation
+                    // of the current items.  A mismatch here means the caller
+                    // passed a stale or incorrect window list; catching it early
+                    // prevents silent list/set divergence.
+                    std.debug.assert(new_order.len == l.list.items.len);
                     std.debug.assert(new_order.len <= l.list.capacity);
+                    if (std.debug.runtime_safety) {
+                        for (new_order) |win| std.debug.assert(l.set.contains(win));
+                    }
                     l.list.clearRetainingCapacity();
                     l.set.clearRetainingCapacity();
                     for (new_order) |win| {

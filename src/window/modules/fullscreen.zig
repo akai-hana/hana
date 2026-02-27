@@ -1,4 +1,4 @@
-// Fullscreen management
+//! Fullscreen management — enter, exit, and toggle fullscreen for the focused window.
 
 const std        = @import("std");
 const defs       = @import("defs");
@@ -42,8 +42,10 @@ fn fetchWindowGeom(wm: *WM, win: u32) defs.WindowGeometry {
 
     // Slow path: floating or un-cached window — one blocking round-trip.
     const default: defs.WindowGeometry = .{
-        .x            = @divTrunc(@as(i16, @intCast(wm.screen.width_in_pixels)),  4),
-        .y            = @divTrunc(@as(i16, @intCast(wm.screen.height_in_pixels)), 4),
+        // Divide via i32 to avoid overflow: i16 saturates at 32767px, which is
+        // within the range of a large multi-monitor or HiDPI virtual desktop.
+        .x            = @intCast(@divTrunc(@as(i32, wm.screen.width_in_pixels),  4)),
+        .y            = @intCast(@divTrunc(@as(i32, wm.screen.height_in_pixels), 4)),
         .width        = @divTrunc(wm.screen.width_in_pixels,  2),
         .height       = @divTrunc(wm.screen.height_in_pixels, 2),
         .border_width = 0,
@@ -55,9 +57,7 @@ fn fetchWindowGeom(wm: *WM, win: u32) defs.WindowGeometry {
     defer std.c.free(reply);
 
     if (reply.*.x < constants.OFFSCREEN_THRESHOLD_MIN or
-        reply.*.x > constants.OFFSCREEN_THRESHOLD_MAX or
-        reply.*.y < constants.OFFSCREEN_THRESHOLD_MIN or
-        reply.*.y > constants.OFFSCREEN_THRESHOLD_MAX) return default;
+        reply.*.y < constants.OFFSCREEN_THRESHOLD_MIN) return default;
     return .{
         .x            = reply.*.x,
         .y            = reply.*.y,
@@ -130,6 +130,13 @@ fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
             for (ws_obj.windows.items()) |other_win| {
                 if (other_win == win) continue;
                 if (minimize.isMinimized(wm, other_win)) continue;
+                // NOTE: all floating siblings are moved to the same default
+                // position here because we do not save per-window floating
+                // geometry before fullscreen entry.  If two or more floating
+                // windows were visible before fullscreen they will stack on
+                // top of each other on exit.  Saving each window's pre-entry
+                // x/y (similar to MinimizedEntry.saved_fs) would eliminate
+                // this, at the cost of more bookkeeping in enterFullscreenCommit.
                 _ = xcb.xcb_configure_window(wm.conn, other_win,
                     xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
                     &[_]u32{ pos.x, pos.y });

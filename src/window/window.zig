@@ -1,4 +1,5 @@
-// Window lifecycle — map/unmap/destroy, configure, enter/button events.
+//! Window lifecycle — map/unmap/destroy, configure, enter/button events,
+//! and per-window property caching.
 
 const std        = @import("std");
 const defs       = @import("defs");
@@ -126,11 +127,13 @@ fn registerWithTiling(wm: *WM, win: u32, and_retile: bool) void {
 // Workspace assignment
 
 fn resolveTargetWorkspace(
-    wm:                 *WM,
-    win:                u32,
-    current_ws:         u8,
-    c_net_wm_pid:       xcb.xcb_get_property_cookie_t,
-    has_pending_spawns: bool,
+    wm:          *WM,
+    win:         u32,
+    current_ws:  u8,
+    // Null when the spawn queue is empty — avoids the need for a separate
+    // `has_pending_spawns` bool and makes it impossible to access an
+    // undefined cookie.
+    c_net_wm_pid: ?xcb.xcb_get_property_cookie_t,
 ) u8 {
     // Phase 1 — Workspace class rules (highest priority).
     // g_atoms.wm_class is a cached direct field read; no hash probe.
@@ -141,16 +144,18 @@ fn resolveTargetWorkspace(
             xcb.XCB_ATOM_STRING, 0, 256,
         );
         if (workspaceRuleForClass(wm, c_class)) |target| {
-            if (has_pending_spawns)
-                xcb.xcb_discard_reply(wm.conn, c_net_wm_pid.sequence);
+            // Discard the PID cookie if one was fired; XCB requires every
+            // outstanding cookie to be consumed before the connection is closed.
+            if (c_net_wm_pid) |pid_cookie|
+                xcb.xcb_discard_reply(wm.conn, pid_cookie.sequence);
             return resolveWorkspace(target, current_ws);
         }
     }
 
     // Phase 2 — Exec-spawn workspace.
-    if (has_pending_spawns) {
+    if (c_net_wm_pid) |pid_cookie| {
         const win_pid: u32 = pid: {
-            const pid_reply = xcb.xcb_get_property_reply(wm.conn, c_net_wm_pid, null)
+            const pid_reply = xcb.xcb_get_property_reply(wm.conn, pid_cookie, null)
                 orelse break :pid 0;
             defer std.c.free(pid_reply);
             if (pid_reply.*.format != 32 or pid_reply.*.value_len < 1) break :pid 0;
@@ -211,18 +216,26 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         xcb.XCB_ATOM_WM_NORMAL_HINTS, xcb.XCB_ATOM_ANY, 0, 18,
     );
     // g_atoms.net_wm_pid is a direct field read; no string hash probe.
-    const has_pending_spawns = !wm.spawn_queue.isEmpty();
-    const c_net_wm_pid = if (has_pending_spawns) xcb.xcb_get_property(
-        wm.conn, 0, win,
-        g_atoms.net_wm_pid,
-        xcb.XCB_ATOM_CARDINAL, 0, 1,
-    ) else undefined;
+    // Use an optional so the type system enforces that this cookie is only
+    // consumed when the spawn queue is non-empty — no silent undefined reads.
+    const c_net_wm_pid: ?xcb.xcb_get_property_cookie_t =
+        if (!wm.spawn_queue.isEmpty()) xcb.xcb_get_property(
+            wm.conn, 0, win,
+            g_atoms.net_wm_pid,
+            xcb.XCB_ATOM_CARDINAL, 0, 1,
+        ) else null;
 
-    const target_ws            = resolveTargetWorkspace(wm, win, current_ws, c_net_wm_pid, has_pending_spawns);
+    const target_ws            = resolveTargetWorkspace(wm, win, current_ws, c_net_wm_pid);
     const on_current_workspace = (target_ws == current_ws);
 
     workspaces.moveWindowTo(wm, win, target_ws) catch |err| {
         debug.logError(err, win);
+        // Discard all outstanding property cookies.  XCB buffers uncollected
+        // replies internally; never discarding them causes unbounded growth in
+        // applications that fail to map frequently (e.g. crash-looping clients).
+        xcb.xcb_discard_reply(wm.conn, c_protocols.sequence);
+        xcb.xcb_discard_reply(wm.conn, c_hints.sequence);
+        xcb.xcb_discard_reply(wm.conn, c_normal_hints.sequence);
         utils.flush(wm.conn);
         return;
     };

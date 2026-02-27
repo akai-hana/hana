@@ -91,7 +91,13 @@ pub fn focusBestAvailable(wm: *WM) void {
         return;
     };
     if (workspaces.firstNonMinimized(wm, ws.windows.items())) |win| {
-        focus.setFocus(wm, win, .window_destroyed);
+        // Use .tiling_operation rather than .window_destroyed:
+        //  - tiling_operation skips the blocking xcb_get_window_attributes
+        //    mapped-check (windows in the tiling set are guaranteed mapped).
+        //  - window_destroyed would trigger the check unnecessarily and also
+        //    set the wrong suppress_focus_reason, potentially interfering with
+        //    crossing-event suppression logic.
+        focus.setFocus(wm, win, .tiling_operation);
     } else {
         focus.clearFocus(wm);
     }
@@ -105,9 +111,11 @@ pub fn minimizeWindow(wm: *WM) void {
     if (isMinimized(wm, win)) return;
 
     var saved_fs: ?defs.WindowGeometry = null;
+    var fs_ws_for_rollback: ?u8 = null;
     if (wm.fullscreen.window_to_workspace.get(win)) |fs_ws| {
         if (wm.fullscreen.getForWorkspace(fs_ws)) |info| {
             saved_fs = info.saved_geometry;
+            fs_ws_for_rollback = fs_ws;
             wm.fullscreen.removeForWorkspace(fs_ws);
         }
     }
@@ -117,9 +125,23 @@ pub fn minimizeWindow(wm: *WM) void {
 
     if (!trackMinimized(s, ws_idx, win, saved_fs)) {
         debug.err("minimize: allocation failure tracking window 0x{x} -- rolling back", .{win});
+        // Roll back tiling removal so the window remains in the layout.
         if (wm.config.tiling.enabled) {
             tiling.addWindow(wm, win);
             tiling.retileCurrentWorkspace(wm);
+        }
+        // Roll back fullscreen removal: the window is still visually fullscreen
+        // (it was never hidden), but without this the WM has no record of it.
+        // Re-inserting restores coherent state so toggleFullscreen still works.
+        if (was_fullscreen) {
+            wm.fullscreen.setForWorkspace(fs_ws_for_rollback.?, .{
+                .window         = win,
+                .saved_geometry = saved_fs.?,
+            }) catch {
+                // setForWorkspace itself failed under OOM — log and accept the
+                // incoherent state rather than panicking.
+                debug.err("minimize rollback: failed to re-insert fullscreen state for 0x{x}", .{win});
+            };
         }
         return;
     }
@@ -143,7 +165,12 @@ fn restoreWindow(wm: *WM, win: u32) void {
     const entry = s.minimized_info.fetchRemove(win) orelse return;
 
     if (entry.value.saved_fs) |geom| {
-        wm.focused_window = win;
+        // enterFullscreen does not set keyboard focus on its own; call setFocus
+        // first so grabButtons, xcb_set_input_focus, and tiling border state are
+        // all applied correctly before the window is raised to fullscreen size.
+        // .window_spawn skips the unnecessary isWindowMapped round-trip (the
+        // window is known-mapped: it was just offscreen, not unmapped).
+        focus.setFocus(wm, win, .window_spawn);
         fullscreen.enterFullscreen(wm, win, geom);
         bar.markDirty();
         return;

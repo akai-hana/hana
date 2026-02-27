@@ -1,4 +1,4 @@
-// Focus management
+//! Focus management — set, clear, and reason-aware focus routing.
 
 const std    = @import("std");
 const defs   = @import("defs");
