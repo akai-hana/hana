@@ -218,7 +218,7 @@ Mod+space       = "toggle_layout"          # Cycle layouts forward
 Mod+Shift+space = "toggle_layout_reverse"  # Cycle layouts backward
 Mod+Alt+space   = "cycle_layout_variation" # Cycle current layout's variation (Super+V)
 Mod+Tab         = "swap_master"            # Swap focused window with master (slave→master or master→slave)
-Mod+Shift+Tab = "drun_toggle"
+Mod+Shift+Tab   = "drun_toggle"
 
 # Layouts
 ## Master-stack

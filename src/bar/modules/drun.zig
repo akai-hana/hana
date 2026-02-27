@@ -51,6 +51,12 @@ const drawing = @import("drawing");
 const title   = @import("title");
 const debug   = @import("debug");
 
+const c = @cImport({
+    @cInclude("unistd.h");
+    @cInclude("stdlib.h");
+    @cInclude("sys/wait.h");
+});
+
 // ── xcb-keysyms bindings (link with -lxcb-keysyms) ───────────────────────────
 
 /// Opaque handle for the keysym table allocated by xcb_key_symbols_alloc().
@@ -261,16 +267,34 @@ fn deleteAfter() void {
     g.len -= 1;
 }
 
-/// Spawn `sh -c <cmd>` detached, ignoring stdin/stdout/stderr.
+/// Spawn `sh -c <cmd>` detached via double-fork so the grandchild is re-parented
+/// to init. Mirrors the pattern used by input.zig's executeShellCommand.
 fn spawnCommand(cmd: []const u8) void {
-    var child = std.process.Child.init(
-        &.{ "sh", "-c", cmd },
-        std.heap.page_allocator,
-    );
-    child.stdin_behavior  = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch |err| debug.warnOnErr(err, "drun: spawn");
+    // Need a null-terminated copy for execvp.
+    var buf: [MAX_INPUT + 1]u8 = undefined;
+    if (cmd.len >= buf.len) return;
+    @memcpy(buf[0..cmd.len], cmd);
+    buf[cmd.len] = 0;
+    const cmd_z: [*:0]const u8 = buf[0..cmd.len :0];
+
+    const pid = c.fork();
+    if (pid == 0) {
+        // Intermediate child: fork grandchild then exit so init inherits it.
+        const pid2 = c.fork();
+        if (pid2 == 0) {
+            // Grandchild: become a new session and exec the command.
+            _ = c.setsid();
+            _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{
+                "/bin/sh", "-c", cmd_z, null,
+            }));
+            std.process.exit(1);
+        }
+        std.process.exit(0);
+    } else if (pid > 0) {
+        // WM: reap the short-lived intermediate child immediately.
+        var status: c_int = 0;
+        _ = c.waitpid(pid, &status, 0);
+    }
 }
 
 /// Render the active input UI into the title area.

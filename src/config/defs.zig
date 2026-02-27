@@ -53,6 +53,7 @@ pub const Action = union(enum) {
     unminimize_fifo,
     unminimize_all,
     cycle_layout_variation,
+    drun_toggle,
 
     pub fn deinit(self: *Action, allocator: std.mem.Allocator) void {
         switch (self.*) {
