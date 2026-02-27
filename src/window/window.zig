@@ -466,14 +466,16 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) vo
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL) return;
     if (wm.drag_state.active) return;
     if (suppressSpawnCrossing(wm, event.root_x, event.root_y)) return;
-    const target: u32 = if (event.child != 0) event.child else blk: {
-        const reply = xcb.xcb_query_pointer_reply(
-            wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
-        ) orelse return;
-        defer std.c.free(reply);
-        break :blk reply.*.child;
-    };
-    maybeFocusWindow(wm, target);
+
+    // `event.child` is the new inferior of root being entered.
+    // When non-zero, the event already carries the answer — no round-trip needed.
+    // When zero, the pointer left to an area not covered by any X window
+    // (off-screen, inter-monitor gap, etc.).  A QueryPointer in that case also
+    // returns child=0, so maybeFocusWindow(wm, 0) would immediately fail
+    // isOnCurrentWorkspace and return.  Skip the useless round-trip entirely.
+    if (event.child == 0) return;
+
+    maybeFocusWindow(wm, event.child);
 }
 
 // Property notify
