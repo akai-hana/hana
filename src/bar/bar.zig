@@ -22,33 +22,9 @@ const bar_flags = @import("bar_flags");
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 
 const Impl = if (bar_flags.has_any_segment) BarFull else BarStub;
-pub const init                 = Impl.init;
-pub const deinit               = Impl.deinit;
-pub const reload               = Impl.reload;
-pub const toggleBarPosition    = Impl.toggleBarPosition;
-pub const getBarWindow         = Impl.getBarWindow;
-pub const isBarWindow          = Impl.isBarWindow;
-pub const getBarHeight         = Impl.getBarHeight;
-pub const isBarInitialized     = Impl.isBarInitialized;
-pub const hasClockSegment      = Impl.hasClockSegment;
-pub const markDirty            = Impl.markDirty;
-pub const redrawImmediate      = Impl.redrawImmediate;
-pub const raiseBar             = Impl.raiseBar;
-pub const isVisible            = Impl.isVisible;
-pub const getGlobalVisibility  = Impl.getGlobalVisibility;
-pub const setGlobalVisibility  = Impl.setGlobalVisibility;
-pub const setBarState          = Impl.setBarState;
-pub const updateIfDirty        = Impl.updateIfDirty;
-pub const checkClockUpdate     = Impl.checkClockUpdate;
-pub const pollTimeoutMs        = Impl.pollTimeoutMs;
-pub const updateTimerState     = Impl.updateTimerState;
-pub const handleExpose         = Impl.handleExpose;
-pub const handlePropertyNotify = Impl.handlePropertyNotify;
-pub const monitorFocusedWindow = Impl.monitorFocusedWindow;
-pub const handleButtonPress    = Impl.handleButtonPress;
-pub const notifyFocusChange    = Impl.notifyFocusChange;
+pub usingnamespace Impl;
 
-// Stub 
+// Stub
 
 const BarStub = struct {
     pub fn init(_: *defs.WM) error{BarDisabled}!void { return error.BarDisabled; }
@@ -78,7 +54,7 @@ const BarStub = struct {
     pub fn notifyFocusChange(_: *defs.WM, _: ?u32) void {}
 };
 
-// Full implementation 
+// Full implementation
 
 const BarFull = struct {
     const drawing    = @import("drawing");
@@ -180,10 +156,10 @@ const BarFull = struct {
         focus_new_win: ?u32                 = null,
     };
 
-    var g_channel: BarChannel   = .{};
+    var g_channel: BarChannel     = .{};
     var g_bar_thread: ?std.Thread = null;
 
-    // State 
+    // ── State ─────────────────────────────────────────────────────────────────
 
     const State = struct {
         window:               u32,
@@ -211,11 +187,11 @@ const BarFull = struct {
         cached_ws_wins:       []u32,
         cached_min_wins:      []u32,
         title_layout_valid:   bool,
-        cached_right_total:        u16,
+        cached_right_total:          u16,
         cached_right_total_ws_count: u32, // invalidation key for cached_right_total
-        last_monitored_window:    ?u32,
-        last_monitored_base_mask: u32,
-        net_wm_name_atom:         xcb.xcb_atom_t,
+        last_monitored_window:       ?u32,
+        last_monitored_base_mask:    u32,
+        net_wm_name_atom:            xcb.xcb_atom_t,
 
         fn init(
             allocator:        std.mem.Allocator,
@@ -255,11 +231,11 @@ const BarFull = struct {
                 .cached_ws_wins       = &.{},
                 .cached_min_wins      = &.{},
                 .title_layout_valid   = false,
-                .cached_right_total        = 0,
+                .cached_right_total          = 0,
                 .cached_right_total_ws_count = std.math.maxInt(u32),
-                .last_monitored_window    = null,
-                .last_monitored_base_mask = 0,
-                .net_wm_name_atom         = utils.getAtomCached("_NET_WM_NAME") catch 0,
+                .last_monitored_window       = null,
+                .last_monitored_base_mask    = 0,
+                .net_wm_name_atom            = utils.getAtomCached("_NET_WM_NAME") catch 0,
             };
             try s.status_text.ensureTotalCapacity(allocator, 256);
             try s.cached_title.ensureTotalCapacity(allocator, 256);
@@ -280,9 +256,8 @@ const BarFull = struct {
         }
 
         fn markDirty(self: *State) void { self.dirty = true; self.cached_clock_x = null; }
-        fn clearDirty(self: *State) void { self.dirty = false; }
 
-        // Segment drawing (bar thread only) 
+        // Segment drawing (bar thread only)
 
         fn calculateSegmentWidth(self: *State, snap: *const BarSnapshot, segment: defs.BarSegment) u16 {
             return switch (segment) {
@@ -415,7 +390,7 @@ const BarFull = struct {
         }
     };
 
-    // Bar thread 
+    // ── Bar thread ────────────────────────────────────────────────────────────
 
     fn barThreadFn(s: *State) void {
         while (true) {
@@ -545,13 +520,6 @@ const BarFull = struct {
         }
     }
 
-    fn signalClockDirty() void {
-        g_channel.mutex.lock();
-        g_channel.clock_dirty = true;
-        g_channel.work_cond.signal();
-        g_channel.mutex.unlock();
-    }
-
     // ── Module singleton ─────────────────────────────────────────────────────
 
     var state: ?*State = null;
@@ -612,8 +580,8 @@ const BarFull = struct {
             drawing.findVisualByDepth(wm.screen, 32)
         else
             drawing.VisualInfo{ .visual_type = null, .visual_id = wm.screen.root_visual };
-        const depth: u8    = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
-        const visual_id    = visual_info.visual_id;
+        const depth: u8 = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
+        const visual_id = visual_info.visual_id;
 
         const colormap: u32 = if (want_transparency) blk: {
             const cmap = xcb.xcb_generate_id(wm.conn);
@@ -719,7 +687,7 @@ const BarFull = struct {
         return @intCast(std.math.clamp(@as(u32, @intCast(asc + desc)), MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
     }
 
-    // Public API 
+    // ── Public API ────────────────────────────────────────────────────────────
 
     fn destroyBarWindow(conn: *xcb.xcb_connection_t, setup: BarWindowSetup) void {
         _ = xcb.xcb_destroy_window(conn, setup.window);
@@ -869,7 +837,7 @@ const BarFull = struct {
         const s = state orelse return;
         if (!s.visible) return;
         submitDraw(wm, true);
-        s.clearDirty();
+        s.dirty = false;
     }
 
     pub fn raiseBar() void {
@@ -920,16 +888,20 @@ const BarFull = struct {
         if (!s.visible) return;
         if (s.dirty) {
             submitDraw(wm, false);
-            s.clearDirty();
+            s.dirty = false;
         }
     }
 
     pub fn checkClockUpdate() void {
         const s = state orelse return;
-        if (s.visible) signalClockDirty();
+        if (!s.visible) return;
+        g_channel.mutex.lock();
+        g_channel.clock_dirty = true;
+        g_channel.work_cond.signal();
+        g_channel.mutex.unlock();
     }
 
-    pub fn pollTimeoutMs() i32  { return clock_segment.pollTimeoutMs(); }
+    pub fn pollTimeoutMs() i32     { return clock_segment.pollTimeoutMs(); }
     pub fn updateTimerState() void { clock_segment.updateTimerState(); }
 
     pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
