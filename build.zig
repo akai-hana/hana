@@ -244,17 +244,14 @@ fn linkSystemLibraries(root: *std.Build.Module, has_bar: bool) void {
     root.linkSystemLibrary("xkbcommon-x11", .{});
     root.linkSystemLibrary("X11", .{});
     root.linkSystemLibrary("xcb-cursor", .{});
+    root.linkSystemLibrary("xcb-keysyms", .{});
 
-    // Cairo, Pango, GLib, and GObject are only needed when at least one bar
-    // segment module is present. With zero segments, BarFull is never analyzed,
-    // drawing.zig is never compiled, and these symbols are never referenced.
     if (has_bar) {
         root.linkSystemLibrary("cairo", .{});
         root.linkSystemLibrary("pangocairo-1.0", .{});
         root.linkSystemLibrary("pango-1.0", .{});
         root.linkSystemLibrary("glib-2.0", .{});
         root.linkSystemLibrary("gobject-2.0", .{});
-        root.linkSystemLibrary("xcb-keysyms", .{});
     }
 }
 
