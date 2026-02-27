@@ -1,23 +1,52 @@
 //! Build configuration for Hana window manager
 const std = @import("std");
 
+/// Root source directory. Change this one constant to relocate the entire source tree.
+const ROOT_DIR = "./";
+
 pub fn build(b: *std.Build) void {
     const target   = b.standardTargetOptions(.{});
     const optimize = b.option(std.builtin.OptimizeMode, "optimize",
         "Set the optimization mode (Debug, ReleaseFast, ReleaseSafe, ReleaseSmall)")
         orelse .ReleaseFast;
 
+    // ── Install prefix ────────────────────────────────────────────────────────
+    // Try system-wide bin directories in order; fall back to ./bin/ if none are
+    // writable or exist. The user can still override with -Dprefix=... as usual.
+    if (b.install_prefix.len == 0 or std.mem.eql(u8, b.install_prefix, b.pathFromRoot("zig-out"))) {
+        // System bin dirs are only writable as root.  For non-root builds skip
+        // straight to the local fallback rather than probing dirs we can't use.
+        const is_root = std.posix.getuid() == 0;
+        var found = false;
+        if (is_root) {
+            const linux = std.os.linux;
+            const candidates = [_][*:0]const u8{ "/usr/bin", "/usr/local/bin", "/bin" };
+            for (candidates) |dir| {
+                // faccessat with W_OK=2 checks the dir is writable.
+                const rc = linux.faccessat(linux.AT.FDCWD, dir, 2, 0);
+                if (linux.errno(rc) == .SUCCESS) {
+                    b.install_prefix = std.mem.span(dir);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            b.install_prefix = b.pathFromRoot("bin");
+        }
+    }
+
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_debug_logging", optimize == .Debug);
     // Optional subsystem flags — false when the entry-point file is absent so
     // main.zig can guard @import("bar") / @import("input") at comptime.
-    const has_bar   = fileExists(b, "src/bar/bar.zig");
-    const has_input = fileExists(b, "src/input/input.zig");
+    const has_bar   = fileExists(b, ROOT_DIR ++ "bar/bar.zig");
+    const has_input = fileExists(b, ROOT_DIR ++ "input/input.zig");
     build_options.addOption(bool, "has_bar",   has_bar);
     build_options.addOption(bool, "has_input", has_input);
 
     const root_module = b.createModule(.{
-        .root_source_file = b.path("src/core/main.zig"),
+        .root_source_file = b.path(ROOT_DIR ++ "core/main.zig"),
         .target    = target,
         .optimize  = optimize,
         .link_libc = true,
@@ -36,7 +65,7 @@ pub fn build(b: *std.Build) void {
     // name -> (module, absolute source path)
     var all_modules = std.StringHashMap(ModuleEntry).init(allocator);
 
-    discoverModules(b, "src", target, optimize, allocator, &all_modules) catch |err| {
+    discoverModules(b, ROOT_DIR, target, optimize, allocator, &all_modules) catch |err| {
         std.debug.print("Fatal: failed to discover modules: {}\n", .{err});
         std.process.exit(1);
     };
