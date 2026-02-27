@@ -2,7 +2,7 @@
 const std = @import("std");
 
 /// Root source directory. Change this one constant to relocate the entire source tree.
-const ROOT_DIR = "./";
+const ROOT_DIR = "src/";
 
 pub fn build(b: *std.Build) void {
     const target   = b.standardTargetOptions(.{});
