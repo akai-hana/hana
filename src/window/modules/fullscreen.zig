@@ -144,13 +144,6 @@ fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
         });
 }
 
-fn enterFullscreen(wm: *WM, win: u32, ws: u8, geom: defs.WindowGeometry) void {
-    _ = xcb.xcb_grab_server(wm.conn);
-    enterFullscreenCommit(wm, win, ws, geom);
-    _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
-}
-
 fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
     _ = xcb.xcb_grab_server(wm.conn);
     exitFullscreenCommit(wm, win, ws);
@@ -158,16 +151,17 @@ fn exitFullscreen(wm: *WM, win: u32, ws: u8) void {
     utils.flush(wm.conn);
 }
 
-pub fn enterFullscreenForWindow(wm: *WM, win: u32) void {
-    const ws = workspaces.getCurrentWorkspace() orelse return;
-    // fetchWindowGeom uses the tiling cache for tiled windows, avoiding the
-    // blocking xcb_get_geometry round-trip in the common case.
-    enterFullscreen(wm, win, ws, fetchWindowGeom(wm, win));
-}
-
-pub fn enterFullscreenWithSavedGeom(wm: *WM, win: u32, geom: defs.WindowGeometry) void {
-    const ws = workspaces.getCurrentWorkspace() orelse return;
-    enterFullscreen(wm, win, ws, geom);
+/// Enter fullscreen for `win` on the current workspace.
+/// Pass a pre-computed geometry in `saved_geom` (e.g. when restoring a
+/// minimized fullscreen window); pass null to fetch it from the tiling cache
+/// or a live round-trip (the common path for new fullscreen requests).
+pub fn enterFullscreen(wm: *WM, win: u32, saved_geom: ?defs.WindowGeometry) void {
+    const ws   = workspaces.getCurrentWorkspace() orelse return;
+    const geom = saved_geom orelse fetchWindowGeom(wm, win);
+    _ = xcb.xcb_grab_server(wm.conn);
+    enterFullscreenCommit(wm, win, ws, geom);
+    _ = xcb.xcb_ungrab_server(wm.conn);
+    utils.flush(wm.conn);
 }
 
 pub fn toggleFullscreen(wm: *WM) void {
@@ -178,9 +172,7 @@ pub fn toggleFullscreen(wm: *WM) void {
         if (fs_info.window == win) {
             exitFullscreen(wm, win, current_ws);
         } else {
-            // Switching fullscreen from one window to another.
-            // fetchWindowGeom tries the cache; for tiled windows this avoids
-            // a blocking round-trip before the grab.
+            // Switching fullscreen from one window to another: share a single grab.
             const geom = fetchWindowGeom(wm, win);
             _ = xcb.xcb_grab_server(wm.conn);
             exitFullscreenCommit(wm, fs_info.window, current_ws);
@@ -189,6 +181,6 @@ pub fn toggleFullscreen(wm: *WM) void {
             utils.flush(wm.conn);
         }
     } else {
-        enterFullscreen(wm, win, current_ws, fetchWindowGeom(wm, win));
+        enterFullscreen(wm, win, null);
     }
 }

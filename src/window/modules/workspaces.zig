@@ -6,6 +6,7 @@ const xcb      = defs.xcb;
 const WM       = defs.WM;
 const utils    = @import("utils");
 const focus    = @import("focus");
+const window   = @import("window");
 const bar      = @import("bar");
 const tiling   = @import("tiling");
 const Tracking = @import("tracking").Tracking;
@@ -248,6 +249,14 @@ fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
 }
 
 // Step 4: resolve the post-switch focus target and apply it.
+//
+// Why this does not call focus.setFocus:
+//   focus.setFocus calls isWindowMapped, which is a blocking xcb_get_window_attributes
+//   round-trip.  This function runs inside xcb_grab_server (called by executeSwitch),
+//   and a blocking round-trip inside a server grab deadlocks.  We therefore inline
+//   the relevant side-effects here, omitting only the mapped-check (all windows on
+//   the new workspace were mapped by restoreWorkspaceWindows moments earlier) and
+//   the stack raise (workspace_switch never raises).
 fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace) void {
     const s = getState().?;
 
@@ -273,8 +282,22 @@ fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace) void 
 
     tiling.updateWindowFocus(wm, old_focused, wm.focused_window);
 
+    // Restore click-to-focus grab on whichever window just lost focus.
+    // Without this, the previously-focused window on the old workspace has no
+    // button grab, so clicking it after switching back would not focus it.
+    if (old_focused) |old_win| window.grabButtons(wm, old_win, false);
+
     if (wm.focused_window) |new_win| {
-        _ = xcb.xcb_ungrab_button(wm.conn, xcb.XCB_BUTTON_INDEX_ANY, new_win, xcb.XCB_MOD_MASK_ANY);
+        // Remove click-to-focus grab from the newly focused window.
+        window.grabButtons(wm, new_win, true);
+
+        // For WM_PROTOCOLS-aware windows (e.g. Electron/Chromium using the
+        // globally_active input model) xcb_set_input_focus alone is not
+        // sufficient — the app must also receive a WM_TAKE_FOCUS ClientMessage.
+        const input_model = utils.getInputModelCached(wm.conn, new_win);
+        if (input_model == .locally_active or input_model == .globally_active) {
+            utils.sendWMTakeFocus(wm.conn, new_win, wm.last_event_time);
+        }
     }
 
     _ = xcb.xcb_set_input_focus(wm.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,

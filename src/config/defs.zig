@@ -501,6 +501,8 @@ pub const SpawnQueue = struct {
     head: u8 = 0,
     len:  u8 = 0,
 
+    pub inline fn isEmpty(self: *const SpawnQueue) bool { return self.len == 0; }
+
     /// Push a spawn entry. Drops the oldest entry when the queue is full.
     pub fn push(self: *SpawnQueue, workspace: u8, pid: u32) void {
         if (self.len == SPAWN_QUEUE_CAP) {
