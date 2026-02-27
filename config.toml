@@ -144,7 +144,7 @@ workspace_tag_width = 100%  # Default base width
 transparency = 0% # [0.0 - 1.0] / [0% - 100%]
 
 # drun command runner prompt string (default: "run: ")
-drun_prompt = "> "
+drun_prompt = "❯ "
 
 # Main color palette
 ## Bar
@@ -174,9 +174,10 @@ title_minimized = "#007373"
 clock = "#ac3232"       # Custom accent for clock segment
 
 # drun command runner colors (all optional — omit to use bar-wide defaults)
-# drun_bg           = "#0d0d14"  # background (default: bar bg)
-# drun_fg           = "#ebd9bc"  # typed text  (default: bar fg)
-# drun_prompt_color = "#ac3232"  # prompt text + cursor (default: title accent)
+ # drun_bg           = "#0d0d14"  # background (default: bar bg)
+ drun_bg = "#007373"
+ # drun_fg           = "#ebd9bc"  # typed text  (default: bar fg)
+ # drun_prompt_color = "#ac3232"  # prompt text + cursor (default: title accent)
 
 # Configurable bar layout
 # You can rearrange segments however you like
@@ -263,9 +264,6 @@ Mod+Shift+R = "move_to_workspace_8"
 # Bar
 Mod+B       = "toggle_bar_visibility"  # shown/hidden
 Mod+Shift+B = "toggle_bar_position"    # top/bottom
-
-# Application launchers
-Mod+P = "rofi -show drun"
 
 # Program binds
 
