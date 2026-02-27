@@ -293,6 +293,16 @@ fn unmanageWindow(wm: *WM, win: u32) void {
     const window_workspace = workspaces.getWorkspaceForWindow(win);
     const current_ws       = workspaces.getCurrentWorkspace();
 
+    // Pre-fire pointer query before state cleanup so the round-trip runs
+    // concurrently with the in-memory operations below (tiling remove, cache
+    // evictions, workspace remove — all pure hash-table work, no X round-trips).
+    // By the time focusWindowUnderPointer consumes the reply the network
+    // latency is fully hidden and the reply is already in the receive buffer.
+    // The cookie is conditional: no query needed when the closed window was not
+    // focused, avoiding an unnecessary round-trip in the common case.
+    const ptr_cookie: ?xcb.xcb_query_pointer_cookie_t =
+        if (was_focused) xcb.xcb_query_pointer(wm.conn, wm.root) else null;
+
     if (wm.config.tiling.enabled) tiling.removeWindow(win);
     utils.uncacheWindowFocusProps(win);
     layouts.evictSizeHints(win);
@@ -308,7 +318,7 @@ fn unmanageWindow(wm: *WM, win: u32) void {
     if (was_focused) {
         if (wm.config.tiling.enabled) tiling.retileIfDirty(wm);
         focus.clearFocus(wm);
-        focusWindowUnderPointer(wm);
+        focusWindowUnderPointer(wm, ptr_cookie.?);
     } else if (!was_fullscreen and wm.config.tiling.enabled) {
         if (window_workspace) |ws| {
             if (current_ws == ws) {
@@ -338,11 +348,13 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t, wm: *WM
 }
 
 // Post-unmanage focus recovery
-
-fn focusWindowUnderPointer(wm: *WM) void {
-    const reply = xcb.xcb_query_pointer_reply(
-        wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
-    ) orelse {
+//
+// Accepts a pre-fired xcb_query_pointer cookie so the round-trip runs
+// concurrently with the in-memory state cleanup in unmanageWindow (tiling
+// remove, cache evictions, workspace remove).  By the time this is called
+// the reply is already in the receive buffer — zero additional wait.
+fn focusWindowUnderPointer(wm: *WM, ptr_cookie: xcb.xcb_query_pointer_cookie_t) void {
+    const reply = xcb.xcb_query_pointer_reply(wm.conn, ptr_cookie, null) orelse {
         minimize.focusBestAvailable(wm);
         return;
     };
