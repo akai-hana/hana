@@ -57,16 +57,17 @@ pub const DrawContext = struct {
     last_color:          ?u32                      = null,
 
     // ── Pango layout state cache ──────────────────────────────────────────────
-    // These track the current width/ellipsize/baseline values set on pango_layout
-    // so we can skip redundant Pango calls when the values haven't changed.
+    // These track the current width/ellipsize values set on pango_layout so we
+    // can skip redundant Pango calls when the values haven't changed.
+    // NOTE: pango_layout_get_baseline is intentionally NOT cached here. The
+    // baseline can vary per text run when font fallback is active (e.g. a CJK
+    // glyph falling back to Noto Sans CJK has a different ascent than FiraCode),
+    // so caching it would produce wrong positions for subsequent FiraCode draws.
 
     /// Last width set via pango_layout_set_width (-1 = unlimited, the default).
     last_layout_width:   i32                       = -1,
     /// Last ellipsize mode set on the layout.
     last_ellipsize_mode: c.PangoEllipsizeMode      = .NONE,
-    /// Cached result of pango_layout_get_baseline() in Pango units.
-    /// Depends only on font metrics; invalidated whenever the font changes.
-    cached_pango_baseline: ?i32                    = null,
 
     // ── drawTextSized cache ───────────────────────────────────────────────────
     // Avoids copying the font description on every indicator-glyph draw when the
@@ -209,10 +210,9 @@ pub const DrawContext = struct {
         }
         c.pango_layout_set_font_description(self.pango_layout, self.current_font_desc);
 
-        // Invalidate all font-derived caches: metrics, baseline offset, and the
-        // sized-font descriptor cached by drawTextSized.
+        // Invalidate all font-derived caches: metrics and the sized-font descriptor
+        // cached by drawTextSized.
         self.cached_metrics         = null;
-        self.cached_pango_baseline  = null;
         if (self.cached_sized_desc) |old| {
             c.pango_font_description_free(old);
             self.cached_sized_desc = null;
@@ -253,15 +253,12 @@ pub const DrawContext = struct {
 
     // Extracted from drawText and drawTextEllipsis to avoid duplicating
     // the identical cairo_move_to call in both functions.
-    // The baseline offset depends only on the font, so it is cached after the
-    // first call and reused until the font changes (loadFont clears the cache).
+    // pango_layout_get_baseline is called unconditionally every time: the
+    // baseline value can change across draws when font fallback is active
+    // (different scripts trigger different fonts with different ascents), so
+    // caching it would silently misalign text in multi-font configurations.
     inline fn moveToTextBaseline(self: *DrawContext, x: u16, y: u16) void {
-        const pango_baseline = self.cached_pango_baseline orelse blk: {
-            const b = c.pango_layout_get_baseline(self.pango_layout);
-            self.cached_pango_baseline = b;
-            break :blk b;
-        };
-        const baseline = @as(f64, @floatFromInt(pango_baseline))
+        const baseline = @as(f64, @floatFromInt(c.pango_layout_get_baseline(self.pango_layout)))
             / @as(f64, @floatFromInt(c.PANGO_SCALE));
         c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - baseline);
     }
@@ -280,9 +277,28 @@ pub const DrawContext = struct {
     /// Cairo's internal damage tracking stays coherent with the rest of the
     /// rendering. The old XCB GC path (xcb_change_gc + xcb_poly_fill_rectangle)
     /// bypassed Cairo's surface tracking, risking stale damage state.
+    ///
+    /// Does NOT go through setColor: setColor hardcodes alpha=1.0 and is only
+    /// appropriate for opaque text foreground colors. Here, applyTransparency has
+    /// packed the bar's alpha into bits 31-24 of final_color, so we extract it
+    /// directly and pass it to cairo_set_source_rgba. After the fill we null
+    /// last_color so the next drawText unconditionally re-applies its own opaque
+    /// foreground color (fill color ≠ text color in every normal code path).
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
         const final_color = self.applyTransparency(color);
-        self.setColor(final_color);
+        const a: f64 = if (self.is_argb)
+            @as(f64, @floatFromInt((final_color >> 24) & 0xFF)) / 255.0
+        else
+            1.0;
+        c.cairo_set_source_rgba(self.ctx,
+            @as(f64, @floatFromInt((final_color >> 16) & 0xFF)) / 255.0,
+            @as(f64, @floatFromInt((final_color >> 8)  & 0xFF)) / 255.0,
+            @as(f64, @floatFromInt( final_color         & 0xFF)) / 255.0,
+            a);
+        // Invalidate the text-color cache: fill colors carry alpha info that
+        // setColor doesn't model, so last_color is no longer a valid description
+        // of the current Cairo source after this call.
+        self.last_color = null;
         c.cairo_rectangle(self.ctx,
             @floatFromInt(x), @floatFromInt(y),
             @floatFromInt(width), @floatFromInt(height));
@@ -309,10 +325,6 @@ pub const DrawContext = struct {
 
         c.pango_layout_set_font_description(self.pango_layout, sized);
         defer c.pango_layout_set_font_description(self.pango_layout, desc);
-        // The baseline cache belongs to the main font. After this function
-        // temporarily switches the layout to `sized`, the cache is stale and must
-        // be cleared so the next drawText/drawTextEllipsis recomputes it.
-        defer self.cached_pango_baseline = null;
 
         self.setPangoText(text);
 
