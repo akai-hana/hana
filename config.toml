@@ -23,18 +23,14 @@
 #   (RRGGBB/rrggbb, ""/'') "#RRGGBB" / RRGGBB / 0xRRGGBB
 
 [tiling]
-enabled = true # true/false
+enabled = true
 
-# Per-workspace tiling layout cycling
-global_layout = false # true/false
+# Per-workspace tiling layouts
+global_layout = false
 
 # Enabled layouts
-## First value is the default layout across workspaces.
 ## Layouts not added to the array will not be available at runtime.
 ## Not defining the array at all enables all layouts in their default order.
-#
-# Each entry can optionally be followed (as the next array element) by:
-#   "<variation>"        — overrides that layout's default variation globally
 #   "<workspace_nums>"   — comma-separated workspace numbers that start in this layout
 # A layout entry may include either, both, or neither of these suffixes.
 # The <layout> order also defines the cycling order used by toggle_layout.
@@ -47,8 +43,9 @@ global_layout = false # true/false
 #       "fibonacci",                         # available in cycle but no workspace pinning
 #   ]
 layouts = [
-	"master-stack",
+	"master-stack", # Default layout
 	"monocle",
+	"2,3,4",
 	"grid",
 	"fibonacci",
 ]
@@ -103,14 +100,14 @@ variation = "relaxed"
 
 [bar]
 enabled = true
-position = "bottom" # "top"/"bottom"; can be swapped on runtime
+position = "bottom" # can be switched on runtime
 
 # Font
 ## First value is the default font used
 ## Subsequent values render in characters not included by first value (ej. non-ASCII)
 fonts = [
     "FiraCode Nerd Font Propo Ret",
-    "Noto Sans CJK JP", # to render japanese characters
+    "Noto Sans CJK JP", # japanese characters
 ]
 
 # Bar height
