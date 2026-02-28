@@ -126,7 +126,7 @@ indicator_size = 25%
 icons = ["あ", "か", "い", "は", "な", "つ", "ん", "で"]
 
 segment_spacing = 5%
-indicator_padding = 39.9%
+indicator_padding = 40%
 
 #
 ## if neither is set
