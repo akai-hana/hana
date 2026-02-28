@@ -273,31 +273,33 @@ pub const DrawContext = struct {
         self.last_color = null;
     }
 
-    /// Fills a rectangle using Cairo. All drawing goes through Cairo so that
-    /// Cairo's internal damage tracking stays coherent with the rest of the
-    /// rendering. The old XCB GC path (xcb_change_gc + xcb_poly_fill_rectangle)
-    /// bypassed Cairo's surface tracking, risking stale damage state.
+    /// Fills a rectangle using Cairo.
     ///
-    /// Does NOT go through setColor: setColor hardcodes alpha=1.0 and is only
-    /// appropriate for opaque text foreground colors. Here, applyTransparency has
-    /// packed the bar's alpha into bits 31-24 of final_color, so we extract it
-    /// directly and pass it to cairo_set_source_rgba. After the fill we null
-    /// last_color so the next drawText unconditionally re-applies its own opaque
-    /// foreground color (fill color ≠ text color in every normal code path).
+    /// All drawing goes through Cairo so that Cairo's internal damage tracking
+    /// stays coherent with the rest of the rendering.
+    ///
+    /// Color semantics:
+    ///   `color` is always a 24-bit RGB value (bits 31-24 are unused).
+    ///   The alpha applied to the fill comes from `self.transparency` directly:
+    ///     1.0 = fully opaque,  0.0 = fully transparent.
+    ///   For opaque bars (is_argb = false) alpha is always 1.0.
+    ///
+    /// Note: applyTransparency is intentionally NOT called here. That function
+    /// was designed for the old XCB path where the alpha had to be packed into
+    /// the high byte of a raw u32 pixel value. For Cairo, RGB and alpha are
+    /// passed as separate f64 parameters to cairo_set_source_rgba, so the
+    /// pack→unpack roundtrip is both unnecessary and error-prone (it can produce
+    /// a = 0.0 when transparency semantics differ from opacity semantics).
+    ///
+    /// After the fill, last_color is nulled so the next text draw unconditionally
+    /// re-applies its own opaque foreground color via setColor.
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        const final_color = self.applyTransparency(color);
-        const a: f64 = if (self.is_argb)
-            @as(f64, @floatFromInt((final_color >> 24) & 0xFF)) / 255.0
-        else
-            1.0;
+        const a: f64 = if (self.is_argb) @floatCast(self.transparency) else 1.0;
         c.cairo_set_source_rgba(self.ctx,
-            @as(f64, @floatFromInt((final_color >> 16) & 0xFF)) / 255.0,
-            @as(f64, @floatFromInt((final_color >> 8)  & 0xFF)) / 255.0,
-            @as(f64, @floatFromInt( final_color         & 0xFF)) / 255.0,
+            @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0,
+            @as(f64, @floatFromInt((color >> 8)  & 0xFF)) / 255.0,
+            @as(f64, @floatFromInt( color         & 0xFF)) / 255.0,
             a);
-        // Invalidate the text-color cache: fill colors carry alpha info that
-        // setColor doesn't model, so last_color is no longer a valid description
-        // of the current Cairo source after this call.
         self.last_color = null;
         c.cairo_rectangle(self.ctx,
             @floatFromInt(x), @floatFromInt(y),
