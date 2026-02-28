@@ -1,6 +1,8 @@
-//! Drawing context for the status bar.
+//! Cairo + Pango drawing context for the status bar.
 //!
-//! XCB handles rectangle fills; Cairo + Pango handle text layout and rendering.
+//! Cairo + Pango handle all rendering. Rectangle fills use Cairo's SOURCE
+//! operator to write straight-alpha ARGB pixels (matching what picom/XRender
+//! expect from a core-protocol drawable). Text uses the OVER operator.
 
 const std   = @import("std");
 const debug = @import("debug");
@@ -47,8 +49,6 @@ pub const DrawContext = struct {
 
     surface:      *c.cairo_surface_t,
     ctx:          *c.cairo_t,
-    gc:           u32,
-    /// Separate GC used exclusively for the xcb_copy_area in flush().
     copy_gc:      u32,
     pango_layout: *c.PangoLayout,
 
@@ -57,8 +57,6 @@ pub const DrawContext = struct {
     transparency:        f32                       = 1.0,
     cached_metrics:      ?struct { ascent: i16, descent: i16 } = null,
     last_color:          ?u32                      = null,
-    /// Cached GC foreground color — skips xcb_change_gc when color is unchanged.
-    last_gc_color:       ?u32                      = null,
 
     // ── Pango layout state cache ──────────────────────────────────────────────
     // These track the current width/ellipsize values set on pango_layout so we
@@ -137,22 +135,14 @@ pub const DrawContext = struct {
             .surface      = surface,
             .ctx          = ctx,
             .pango_layout = layout,
-            .gc           = 0,
             .copy_gc      = 0,
             .is_argb      = is_argb,
             .transparency = transparency,
         };
 
-        // Fire both GC-create requests before blocking on either reply,
-        // so both are in-flight in the same TCP segment.
-        dc.gc = defs.xcb.xcb_generate_id(conn);
+        // Create the single copy GC used only for the xcb_copy_area blit in flush().
         dc.copy_gc = defs.xcb.xcb_generate_id(conn);
-        const gc_cookie      = defs.xcb.xcb_create_gc_checked(conn, dc.gc,      pixmap, 0, null);
         const copy_gc_cookie = defs.xcb.xcb_create_gc_checked(conn, dc.copy_gc, window, 0, null);
-        if (defs.xcb.xcb_request_check(conn, gc_cookie)) |err| {
-            std.c.free(err);
-            return error.GCCreationFailed;
-        }
         if (defs.xcb.xcb_request_check(conn, copy_gc_cookie)) |err| {
             std.c.free(err);
             return error.GCCreationFailed;
@@ -190,8 +180,7 @@ pub const DrawContext = struct {
             .surface      = surface,
             .ctx          = ctx,
             .pango_layout = layout,
-            .gc           = 0, // sentinel: deinit skips xcb_free_gc
-            .copy_gc      = 0,
+            .copy_gc      = 0, // sentinel: deinit skips xcb_free_gc
         };
 
         return dc;
@@ -200,7 +189,6 @@ pub const DrawContext = struct {
     pub fn deinit(self: *DrawContext) void {
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
         if (self.cached_sized_desc) |desc| c.pango_font_description_free(desc);
-        if (self.gc      != 0) _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
         if (self.copy_gc != 0) _ = defs.xcb.xcb_free_gc(self.conn, self.copy_gc);
         c.g_object_unref(self.pango_layout);
         c.cairo_destroy(self.ctx);
@@ -282,20 +270,56 @@ pub const DrawContext = struct {
         c.cairo_set_operator(self.ctx, c.cairo_operator_t.CLEAR);
         c.cairo_paint(self.ctx);
         c.cairo_restore(self.ctx);
+        // Explicitly re-assert OVER after restore. cairo_restore does bring
+        // back the saved operator, but fillRect now temporarily sets SOURCE
+        // and then restores OVER itself; this belt-and-suspenders call keeps
+        // the operator unambiguously OVER for whatever follows clearTransparent.
         c.cairo_set_operator(self.ctx, c.cairo_operator_t.OVER);
         self.last_color = null;
     }
 
+    /// Fills a rectangle using Cairo with the SOURCE operator.
+    ///
+    /// Color semantics:
+    ///   `color` is a 24-bit RGB value (bits 31-24 are unused).
+    ///   For ARGB bars, the alpha written to the surface is `self.transparency`
+    ///   (1.0 = fully opaque, 0.0 = fully transparent). For opaque bars, alpha
+    ///   is always 1.0.
+    ///
+    /// Why SOURCE and not OVER:
+    ///   Cairo renders to the XCB pixmap via XRender, which uses premultiplied
+    ///   ARGB internally. However, picom (and the X11 Composite extension in
+    ///   general) reads core-protocol drawables as straight-alpha ARGB — the raw
+    ///   pixel value (A, R, G, B) where R/G/B are NOT pre-multiplied by A.
+    ///   Cairo's OVER operator writes premultiplied pixels (A, R*A, G*A, B*A),
+    ///   which picom then interprets as straight-alpha, perceiving the colour
+    ///   components as darker than intended (multiplied by A twice). At low
+    ///   transparency values this renders the bar completely invisible.
+    ///   SOURCE bypasses the compositing formula and writes the source pixel
+    ///   value directly — semantically equivalent to xcb_poly_fill_rectangle:
+    ///   (A, R, G, B) straight-alpha, ready for picom to composite correctly.
+    ///
+    /// After the fill, last_color is nulled so the next text draw unconditionally
+    /// re-applies its own opaque foreground colour via setColor.
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        const final_color = self.applyTransparency(color);
-        if (self.last_gc_color != final_color) {
-            _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
-            self.last_gc_color = final_color;
-        }
-        const rect = defs.xcb.xcb_rectangle_t{
-            .x = @intCast(x), .y = @intCast(y), .width = width, .height = height,
-        };
-        _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
+        const a: f64 = if (self.is_argb) @floatCast(self.transparency) else 1.0;
+        // SOURCE operator: write (A, R, G, B) straight-alpha directly to the
+        // pixmap without compositing against whatever was there before.
+        c.cairo_set_operator(self.ctx, c.cairo_operator_t.SOURCE);
+        c.cairo_set_source_rgba(self.ctx,
+            @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0,
+            @as(f64, @floatFromInt((color >> 8)  & 0xFF)) / 255.0,
+            @as(f64, @floatFromInt( color         & 0xFF)) / 255.0,
+            a);
+        c.cairo_rectangle(self.ctx,
+            @floatFromInt(x), @floatFromInt(y),
+            @floatFromInt(width), @floatFromInt(height));
+        c.cairo_fill(self.ctx);
+        // Restore OVER for all subsequent text/glyph drawing.
+        c.cairo_set_operator(self.ctx, c.cairo_operator_t.OVER);
+        // Null last_color so the next setColor call re-applies its source even
+        // if the RGB value happens to match, since the operator was just changed.
+        self.last_color = null;
     }
 
     /// Draws `text` at a temporarily-overridden absolute font size.

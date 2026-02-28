@@ -43,12 +43,14 @@ pub extern fn cairo_surface_flush(surface: *cairo_surface_t) void;
 pub extern fn cairo_create(surface: *cairo_surface_t) ?*cairo_t;
 pub extern fn cairo_destroy(cr: *cairo_t) void;
 
-// Iter 1: trimmed cairo_operator_t to only the two values actually used (CLEAR, OVER).
-// The full 29-variant enum listed every compositing mode but none beyond these two
+// Iter 1: trimmed cairo_operator_t to only the values actually used (CLEAR, SOURCE, OVER).
+// The full 29-variant enum listed every compositing mode but none beyond these three
 // appear in drawing.zig. The numeric values are unchanged so the ABI is unaffected.
+// SOURCE (1) is used by fillRect to write straight-alpha pixels for picom compatibility.
 pub const cairo_operator_t = enum(c_int) {
-    CLEAR = 0,
-    OVER  = 2,
+    CLEAR  = 0,
+    SOURCE = 1,
+    OVER   = 2,
 };
 
 pub extern fn cairo_set_source_rgba(cr: *cairo_t, red: f64, green: f64, blue: f64, alpha: f64) void;
