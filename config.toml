@@ -119,7 +119,7 @@ height = 4%
 
 ## Font size covers a percentage of the bar's area according to its height
 ## (e.g., 16% = font takes up 16% of the bar's vertical space)
-font_size = 72.5%
+font_size = 70%
 indicator_size = 25%
 
 # Workspace labels/icons (1-N)
