@@ -217,9 +217,9 @@ fn activate(wm: *defs.WM) void {
         xcb.XCB_GRAB_MODE_ASYNC,
         xcb.XCB_GRAB_MODE_ASYNC,
     );
-    if (xcb.xcb_grab_keyboard_reply(wm.conn, cookie, null)) |reply| {
-        std.c.free(reply);
-    }
+    // The grab either succeeds or it doesn't; we proceed the same way either
+    // way, so there's no point blocking for the status reply.
+    xcb.xcb_discard_reply(wm.conn, cookie.sequence);
     _ = xcb.xcb_flush(wm.conn);
 }
 
