@@ -115,7 +115,7 @@ fonts = [
 
 # Bar height
 ## Auto-adapts to font size by default.
-height = 4%
+height = 3.5%
 
 ## Font size covers a percentage of the bar's area according to its height
 ## (e.g., 16% = font takes up 16% of the bar's vertical space)
