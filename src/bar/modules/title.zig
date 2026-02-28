@@ -228,7 +228,7 @@ fn drawSegmentedTitles(
     std.mem.sort(WindowInfo, window_infos, {}, compareWindows);
 
     const num_windows: u32 = @intCast(window_infos.len);
-    if (num_windows == 0) return;
+    // n_infos > 0 is guaranteed above, so window_infos.len > 0 here.
 
     for (window_infos, 0..) |info, i| {
         // Pixel-perfect tiling: segment i spans [i*W/n, (i+1)*W/n).

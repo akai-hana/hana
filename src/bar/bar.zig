@@ -212,7 +212,22 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
             self.allocator.destroy(self);
         }
 
-        fn markDirty(self: *State) void { self.dirty = true; self.cached_clock_x = null; }
+        /// Marks the bar content as stale so the next updateIfDirty triggers a full
+        /// redraw. Does NOT invalidate cached_clock_x: the clock's X position is
+        /// determined solely by bar width and layout config, both of which are fixed
+        /// between reloads. Nulling it on every dirty mark would cause drawClockOnly
+        /// to silently bail for any clock tick that races a concurrent full-redraw,
+        /// delaying the clock display by up to one second unnecessarily.
+        fn markDirty(self: *State) void { self.dirty = true; }
+
+        /// Marks the bar dirty AND resets all layout-derived position caches.
+        /// Call this whenever the bar geometry or config changes (resize, reload,
+        /// position toggle, transparency toggle) — i.e. whenever the clock's pixel
+        /// X position may have moved.
+        fn invalidateLayout(self: *State) void {
+            self.dirty          = true;
+            self.cached_clock_x = null;
+        }
 
         // Segment drawing (bar thread only)
 
@@ -373,10 +388,14 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
                 g_channel.draw_gen += 1;
                 g_channel.done_cond.broadcast();
                 g_channel.mutex.unlock();
-            } else if (do_focus) {
-                s.drawTitleOnly(focus_new_win);
-            } else if (do_clock) {
-                s.drawClockOnly();
+            } else {
+                // Both do_focus and do_clock can be true simultaneously (e.g. a
+                // focus change arrives in the same wakeup as a clock tick). Handle
+                // both so neither is silently dropped. drawTitleOnly is ordered
+                // first because it is the more visually prominent update; the clock
+                // repaint costs essentially nothing on top.
+                if (do_focus) s.drawTitleOnly(focus_new_win);
+                if (do_clock) s.drawClockOnly();
             }
         }
     }
@@ -746,6 +765,7 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         };
         const new_y = barYPos(wm, s.height);
         setWindowProperties(wm, s.window, s.height);
+        s.invalidateLayout();
         _ = xcb.xcb_grab_server(wm.conn);
         _ = xcb.xcb_configure_window(s.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y,
             &[_]u32{@as(u32, @bitCast(@as(i32, new_y)))});
@@ -766,9 +786,14 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         const s = state orelse return;
         if (!s.visible) return;
         g_channel.mutex.lock();
-        g_channel.focus_dirty   = true;
-        g_channel.focus_new_win = new_win;
-        g_channel.work_cond.signal();
+        // If a full snapshot redraw is already queued the bar thread will ignore
+        // focus_dirty anyway (see barThreadFn). Skip the flag write and signal to
+        // avoid the unnecessary lock cycle and spurious wakeup.
+        if (!g_channel.snap_ready) {
+            g_channel.focus_dirty   = true;
+            g_channel.focus_new_win = new_win;
+            g_channel.work_cond.signal();
+        }
         g_channel.mutex.unlock();
     }
 

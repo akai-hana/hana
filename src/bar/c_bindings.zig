@@ -53,6 +53,8 @@ pub const cairo_operator_t = enum(c_int) {
 
 pub extern fn cairo_set_source_rgba(cr: *cairo_t, red: f64, green: f64, blue: f64, alpha: f64) void;
 pub extern fn cairo_move_to(cr: *cairo_t, x: f64, y: f64) void;
+pub extern fn cairo_rectangle(cr: *cairo_t, x: f64, y: f64, width: f64, height: f64) void;
+pub extern fn cairo_fill(cr: *cairo_t) void;
 pub extern fn cairo_save(cr: *cairo_t) void;
 pub extern fn cairo_restore(cr: *cairo_t) void;
 pub extern fn cairo_set_operator(cr: *cairo_t, op: cairo_operator_t) void;
