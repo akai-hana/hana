@@ -31,10 +31,7 @@ global_layout = false
 # Enabled layouts
 ## Layouts not added to the array will not be available at runtime.
 ## Not defining the array at all enables all layouts in their default order.
-#   "<workspace_nums>"   — comma-separated workspace numbers that start in this layout
-# A layout entry may include either, both, or neither of these suffixes.
-# The <layout> order also defines the cycling order used by toggle_layout.
-#
+
 # Examples:
 #   layouts = [
 #       "master-stack",                      # default layout, no override
@@ -42,9 +39,10 @@ global_layout = false
 #       "grid", "relaxed", "3,6",            # workspaces 3 & 6 start in grid/relaxed
 #       "fibonacci",                         # available in cycle but no workspace pinning
 #   ]
+
 layouts = [
 	"master-stack", # Default layout
-	"monocle", "gapless",
+	"monocle", "gapless", "4,8",
 	"grid",
 	"fibonacci",
 ]
