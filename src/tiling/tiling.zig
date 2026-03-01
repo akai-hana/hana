@@ -90,7 +90,7 @@ pub const LayoutVariations = struct {
     grid:    GridVariation    = .rigid,
 };
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// State 
 
 pub const State = struct {
     allocator:        std.mem.Allocator,
@@ -149,13 +149,13 @@ pub const State = struct {
     }
 };
 
-// ── Module singleton ──────────────────────────────────────────────────────────
+// Module singleton 
 
 var g_state: ?State = null;
 
 pub fn getState() ?*State { return if (g_state) |*s| s else null; }
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// Config 
 
 fn computeMasterWidth(wm: *WM) f32 {
     const raw = dpi.scaleMasterWidth(wm.config.tiling.master_width);
@@ -248,7 +248,7 @@ pub fn reloadConfig(wm: *WM) void {
     }
 }
 
-// ── Window management ─────────────────────────────────────────────────────────
+// Window management 
 
 pub fn addWindow(wm: *WM, window_id: u32) void {
     std.debug.assert(window_id != 0);
@@ -348,7 +348,7 @@ pub fn getCachedGeom(window_id: u32) ?utils.Rect {
     return wd.rect;
 }
 
-// ── Layout dispatch ───────────────────────────────────────────────────────────
+// Layout dispatch 
 
 fn dispatchLayout(layout: Layout, ctx: *const layouts.LayoutCtx, s: *State, wins: []const u32, w: u16, h: u16, y: u16) void {
     switch (layout) {
@@ -359,7 +359,7 @@ fn dispatchLayout(layout: Layout, ctx: *const layouts.LayoutCtx, s: *State, wins
     }
 }
 
-// ── Screen area ───────────────────────────────────────────────────────────────
+// Screen area 
 
 fn calculateScreenArea(wm: *WM) utils.Rect {
     const bar_height: u16 = if (bar.isVisible()) bar.getBarHeight() else 0;
@@ -372,7 +372,7 @@ fn calculateScreenArea(wm: *WM) utils.Rect {
     };
 }
 
-// ── Retiling ──────────────────────────────────────────────────────────────────
+// Retiling 
 
 // Retile every tiled window on every workspace.
 pub fn retileAllWorkspaces(wm: *WM) void {
@@ -526,7 +526,7 @@ fn retile(wm: *WM, screen: utils.Rect, for_ws: ?u8) void {
     markWsGeomValid(s, target_ws);
 }
 
-// ── Border management ─────────────────────────────────────────────────────────
+// Border management 
 
 // Send border pixel only if color changed since last send.
 // Uses the merged cache (WindowData.border) — one getOrPut covers dedup + insert.
@@ -554,7 +554,7 @@ pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
     }
 }
 
-// ── Window reordering ─────────────────────────────────────────────────────────
+// Window reordering 
 
 // Move the window at from_idx to to_idx in tiling order.
 // Buffer is capped at MAX_WS_WINDOWS to be consistent with all other
@@ -612,7 +612,7 @@ pub fn swapWithMaster(wm: *WM) void {
     retileCurrentWorkspace(wm);
 }
 
-// ── Layout and master controls ────────────────────────────────────────────────
+// Layout and master controls 
 
 pub fn toggleTiling(wm: *WM) void {
     const s = getState() orelse return;
@@ -738,7 +738,7 @@ pub fn getVariationIndicator(s: *const State) []const u8 {
     };
 }
 
-// ── Internal helpers ──────────────────────────────────────────────────────────
+// Internal helpers 
 
 // Set the per-workspace geometry-valid bit. ws_idx must be < 64.
 inline fn markWsGeomValid(s: *State, ws_idx: anytype) void {

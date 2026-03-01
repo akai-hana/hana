@@ -1,6 +1,11 @@
-//! Cairo + Pango drawing context for the status bar.
+//! Drawing context for the status bar.
 //!
-//! Cairo handles graphics and compositing; Pango handles text layout and fonts.
+//! Rectangle fills use XCB core drawing (xcb_poly_fill_rectangle) so that
+//! straight-alpha ARGB pixels are written directly into the pixmap — the format
+//! picom and the X11 Composite extension expect from a core-protocol drawable.
+//! Cairo's XRender backend always writes premultiplied pixels, which picom would
+//! interpret as straight-alpha, rendering colours far too dark at any transparency.
+//! Cairo + Pango handle all text layout and glyph rendering.
 
 const std   = @import("std");
 const debug = @import("debug");
@@ -47,18 +52,44 @@ pub const DrawContext = struct {
 
     surface:      *c.cairo_surface_t,
     ctx:          *c.cairo_t,
+    /// Drawing GC — used by fillRect (xcb_poly_fill_rectangle) to fill rectangles.
     gc:           u32,
-    /// Separate GC used exclusively for the xcb_copy_area in flush().
+    /// Separate GC used exclusively for the xcb_copy_area blit in flush().
     copy_gc:      u32,
     pango_layout: *c.PangoLayout,
 
-    current_font_desc: ?*c.PangoFontDescription = null,
-    is_argb:           bool                      = false,
-    transparency:      f32                       = 1.0,
-    cached_metrics:    ?struct { ascent: i16, descent: i16 } = null,
-    last_color:        ?u32                      = null,
-    /// Cached GC foreground color — skips xcb_change_gc when color is unchanged.
-    last_gc_color:     ?u32                      = null,
+    current_font_desc:   ?*c.PangoFontDescription = null,
+    is_argb:             bool                      = false,
+    transparency:        f32                       = 1.0,
+    /// Pre-computed alpha byte for XCB pixel packing: round(clamp(transparency)*255).
+    /// Computed once at init so applyTransparency pays zero floating-point cost per fill.
+    alpha_u8:            u8                        = 0xFF,
+    cached_metrics:      ?struct { ascent: i16, descent: i16 } = null,
+    last_color:          ?u32                      = null,
+    /// Cached GC foreground — skips xcb_change_gc when the packed ARGB pixel is unchanged.
+    last_gc_color:       ?u32                      = null,
+
+    // ── Pango layout state cache ──────────────────────────────────────────────
+    // These track the current width/ellipsize values set on pango_layout so we
+    // can skip redundant Pango calls when the values haven't changed.
+    // NOTE: pango_layout_get_baseline is intentionally NOT cached here. The
+    // baseline can vary per text run when font fallback is active (e.g. a CJK
+    // glyph falling back to Noto Sans CJK has a different ascent than FiraCode),
+    // so caching it would produce wrong positions for subsequent FiraCode draws.
+
+    /// Last width set via pango_layout_set_width (-1 = unlimited, the default).
+    last_layout_width:   i32                       = -1,
+    /// Last ellipsize mode set on the layout.
+    last_ellipsize_mode: c.PangoEllipsizeMode      = .NONE,
+
+    // ── drawTextSized cache ───────────────────────────────────────────────────
+    // Avoids copying the font description on every indicator-glyph draw when the
+    // requested size is the same as the previous call.
+
+    /// Cached font description with an absolute size override.
+    cached_sized_desc:   ?*c.PangoFontDescription  = null,
+    /// The absolute pixel size that cached_sized_desc was built for.
+    cached_sized_px:     u16                        = 0,
 
     /// Creates a DrawContext backed by an off-screen pixmap.
     /// All drawing targets the pixmap; call flush() to blit it to the window
@@ -119,11 +150,13 @@ pub const DrawContext = struct {
             .copy_gc      = 0,
             .is_argb      = is_argb,
             .transparency = transparency,
+            // Pre-compute once; applyTransparency uses this instead of recomputing per fill.
+            .alpha_u8     = @intFromFloat(@round(std.math.clamp(transparency, 0.0, 1.0) * 255.0)),
         };
 
         // Fire both GC-create requests before blocking on either reply,
         // so both are in-flight in the same TCP segment.
-        dc.gc = defs.xcb.xcb_generate_id(conn);
+        dc.gc      = defs.xcb.xcb_generate_id(conn);
         dc.copy_gc = defs.xcb.xcb_generate_id(conn);
         const gc_cookie      = defs.xcb.xcb_create_gc_checked(conn, dc.gc,      pixmap, 0, null);
         const copy_gc_cookie = defs.xcb.xcb_create_gc_checked(conn, dc.copy_gc, window, 0, null);
@@ -169,7 +202,7 @@ pub const DrawContext = struct {
             .ctx          = ctx,
             .pango_layout = layout,
             .gc           = 0, // sentinel: deinit skips xcb_free_gc
-            .copy_gc      = 0,
+            .copy_gc      = 0, // sentinel: deinit skips xcb_free_gc / flush is a no-op
         };
 
         return dc;
@@ -177,7 +210,8 @@ pub const DrawContext = struct {
 
     pub fn deinit(self: *DrawContext) void {
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
-        if (self.gc != 0)      _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
+        if (self.cached_sized_desc) |desc| c.pango_font_description_free(desc);
+        if (self.gc      != 0) _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
         if (self.copy_gc != 0) _ = defs.xcb.xcb_free_gc(self.conn, self.copy_gc);
         c.g_object_unref(self.pango_layout);
         c.cairo_destroy(self.ctx);
@@ -200,6 +234,15 @@ pub const DrawContext = struct {
             self.current_font_desc = c.pango_font_description_from_string("monospace 10");
         }
         c.pango_layout_set_font_description(self.pango_layout, self.current_font_desc);
+
+        // Invalidate all font-derived caches: metrics and the sized-font descriptor
+        // cached by drawTextSized.
+        self.cached_metrics         = null;
+        if (self.cached_sized_desc) |old| {
+            c.pango_font_description_free(old);
+            self.cached_sized_desc = null;
+        }
+
         debug.info("Cairo/Pango font loaded: {s}", .{pango_name});
     }
 
@@ -224,9 +267,7 @@ pub const DrawContext = struct {
 
     pub inline fn applyTransparency(self: *DrawContext, color: u32) u32 {
         if (!self.is_argb) return color;
-        const alpha: u32 = @intFromFloat(@round(
-            std.math.clamp(self.transparency, 0.0, 1.0) * 255.0));
-        return (alpha << 24) | (color & 0xFFFFFF);
+        return (@as(u32, self.alpha_u8) << 24) | (color & 0x00FFFFFF);
     }
 
     inline fn setPangoText(self: *DrawContext, text: []const u8) void {
@@ -235,6 +276,10 @@ pub const DrawContext = struct {
 
     // Extracted from drawText and drawTextEllipsis to avoid duplicating
     // the identical cairo_move_to call in both functions.
+    // pango_layout_get_baseline is called unconditionally every time: the
+    // baseline value can change across draws when font fallback is active
+    // (different scripts trigger different fonts with different ascents), so
+    // caching it would silently misalign text in multi-font configurations.
     inline fn moveToTextBaseline(self: *DrawContext, x: u16, y: u16) void {
         const baseline = @as(f64, @floatFromInt(c.pango_layout_get_baseline(self.pango_layout)))
             / @as(f64, @floatFromInt(c.PANGO_SCALE));
@@ -242,14 +287,26 @@ pub const DrawContext = struct {
     }
 
     pub fn clearTransparent(self: *DrawContext) void {
-        c.cairo_save(self.ctx);
+        // Skip cairo_save/cairo_restore: we only change the operator temporarily,
+        // and we always want to end at OVER. Direct set/reset is cheaper than a
+        // full graphics-state push/pop. The source pattern (last_color) is
+        // unaffected by either the operator change or cairo_paint, so no cache reset.
         c.cairo_set_operator(self.ctx, c.cairo_operator_t.CLEAR);
         c.cairo_paint(self.ctx);
-        c.cairo_restore(self.ctx);
         c.cairo_set_operator(self.ctx, c.cairo_operator_t.OVER);
-        self.last_color = null;
     }
 
+    /// Fills a rectangle via XCB core drawing (xcb_poly_fill_rectangle).
+    ///
+    /// XCB writes the raw packed pixel value (A, R, G, B) directly into the pixmap,
+    /// which is the straight-alpha format picom expects from a core-protocol drawable.
+    /// For ARGB bars, applyTransparency packs the pre-computed alpha byte into bits
+    /// 31-24. For opaque bars it passes the color through unchanged (alpha ignored
+    /// by the X server on a 24-bit visual anyway).
+    ///
+    /// last_gc_color guards xcb_change_gc: skips the round-trip when the packed
+    /// color hasn't changed, which is the common case when several segments share
+    /// the same background.
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
         const final_color = self.applyTransparency(color);
         if (self.last_gc_color != final_color) {
@@ -263,17 +320,24 @@ pub const DrawContext = struct {
     }
 
     /// Draws `text` at a temporarily-overridden absolute font size.
-    /// Uses a temporary copy of the font description so the shared
-    /// current_font_desc and cached_metrics are never touched.
+    /// The sized font description is cached by pixel size so repeated calls with
+    /// the same size (the common case — one indicator size per bar frame) pay zero
+    /// allocation after the first call. The cache is invalidated in loadFont.
     pub fn drawTextSized(self: *DrawContext, x: u16, y_top: u16, text: []const u8, size_px: u16, color: u32) !void {
         const desc = self.current_font_desc orelse return error.NoFont;
 
-        const temp = c.pango_font_description_copy(desc) orelse return error.PangoDescCopyFailed;
-        defer c.pango_font_description_free(temp);
+        // Rebuild the cached sized descriptor only when the size changes.
+        if (self.cached_sized_desc == null or self.cached_sized_px != size_px) {
+            if (self.cached_sized_desc) |old| c.pango_font_description_free(old);
+            const temp = c.pango_font_description_copy(desc) orelse return error.PangoDescCopyFailed;
+            c.pango_font_description_set_absolute_size(temp,
+                @as(f64, @floatFromInt(size_px)) * @as(f64, @floatFromInt(c.PANGO_SCALE)));
+            self.cached_sized_desc = temp;
+            self.cached_sized_px   = size_px;
+        }
+        const sized = self.cached_sized_desc.?;
 
-        c.pango_font_description_set_absolute_size(temp,
-            @as(f64, @floatFromInt(size_px)) * @as(f64, @floatFromInt(c.PANGO_SCALE)));
-        c.pango_layout_set_font_description(self.pango_layout, temp);
+        c.pango_layout_set_font_description(self.pango_layout, sized);
         defer c.pango_layout_set_font_description(self.pango_layout, desc);
 
         self.setPangoText(text);
@@ -305,13 +369,35 @@ pub const DrawContext = struct {
         color:     u32,
     ) !void {
         self.setPangoText(text);
-        c.pango_layout_set_width(self.pango_layout, @intCast(@as(i32, max_width) * c.PANGO_SCALE));
-        c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.END);
+
+        // Guard each Pango state change: Pango re-invalidates its internal layout
+        // shaping on every set_width / set_ellipsize call even when the value is
+        // unchanged, so skip the call when the cached value already matches.
+        const pango_width: i32 = @as(i32, max_width) * c.PANGO_SCALE;
+        if (self.last_layout_width != pango_width) {
+            c.pango_layout_set_width(self.pango_layout, pango_width);
+            self.last_layout_width = pango_width;
+        }
+        if (self.last_ellipsize_mode != .END) {
+            c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.END);
+            self.last_ellipsize_mode = .END;
+        }
+
         self.setColor(color);
         self.moveToTextBaseline(x, y);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
-        c.pango_layout_set_width(self.pango_layout, -1);
-        c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.NONE);
+
+        // Reset layout state so subsequent drawText / textWidth calls see a clean
+        // layout. The guards make these resets free when drawTextEllipsis is not
+        // called again before the next drawText.
+        if (self.last_layout_width != -1) {
+            c.pango_layout_set_width(self.pango_layout, -1);
+            self.last_layout_width = -1;
+        }
+        if (self.last_ellipsize_mode != .NONE) {
+            c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.NONE);
+            self.last_ellipsize_mode = .NONE;
+        }
     }
 
     pub fn textWidth(self: *DrawContext, text: []const u8) u16 {

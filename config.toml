@@ -32,19 +32,14 @@ global_layout = false
 ## Layouts not added to the array will not be available at runtime.
 ## Not defining the array at all enables all layouts in their default order.
 
-#   layouts = [
-#       "master-stack",              # default layout, no override
-#       "monocle", "gapless", "4,8", # workspaces 4 & 8 start in monocle/gapless
-#       "grid", "relaxed", "3,6",    # workspaces 3 & 6 start in grid/relaxed
-#       "fibonacci",                 # available in cycle but no workspace pinning
-#   ]
-
+#       Layout          Variation  Workspaces
+#              ("default"/"alts")  (restricted to)
 layouts = [
-	"master-stack", # Default layout
-	"monocle", "gapless", "4,5",
-	"monocle", "gaps", "6,7"
-	"grid",
-	"fibonacci",
+	"master-stack",                   # "lifo"/"fifo"
+	"monocle",      "gapless", "4,5", # "gapless"/"gaps"
+	"monocle",      "gaps",    "6,7"
+	"grid",         "rigid",          # "rigid"/"relaxed"
+	"fibonacci",                      # no variations
 ]
 
 [tiling.aesthetics]
