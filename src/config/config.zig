@@ -387,6 +387,8 @@ fn parseAction(allocator: std.mem.Allocator, cmd: []const u8) !defs.Action {
     if (ACTION_MAP.get(cmd))                         |a| return a;
     if (tryParseWorkspace(cmd, "workspace_"))         |ws| return .{ .switch_workspace  = ws };
     if (tryParseWorkspace(cmd, "move_to_workspace_")) |ws| return .{ .move_to_workspace = ws };
+    if (tryParseWorkspace(cmd, "tag_toggle_"))        |ws| return .{ .tag_toggle        = ws };
+    if (tryParseWorkspace(cmd, "tag_additive_"))      |ws| return .{ .tag_additive      = ws };
     return .{ .exec = try allocator.dupe(u8, cmd) };
 }
 

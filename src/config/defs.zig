@@ -48,6 +48,8 @@ pub const Action = union(enum) {
     swap_master,
     switch_workspace:  u8,
     move_to_workspace: u8,
+    tag_toggle:        u8, // Mod+Shift+N: toggle tag N (remove from current if adding)
+    tag_additive:      u8, // Mod+Alt+N:   toggle tag N (keep current workspace when adding)
     dump_state,
     emergency_recover,
     minimize_window,
@@ -597,8 +599,8 @@ pub const SpawnQueue = struct {
 
 /// Per-window minimize record.
 pub const MinimizedEntry = struct {
-    saved_fs:  ?WindowGeometry, // non-null iff the window was fullscreen when minimized
-    workspace: u8,              // index into MinimizeState.per_workspace
+    saved_fs:       ?WindowGeometry, // non-null iff the window was fullscreen when minimized
+    workspace_mask: u64,             // bitmask of all workspaces this window belongs to
 };
 
 /// Per-workspace minimization state, owned by WM.

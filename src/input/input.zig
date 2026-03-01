@@ -256,6 +256,8 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .unminimize_fifo        => minimize.unminimize(wm, .fifo),
         .unminimize_all         => minimize.unminimizeAll(wm),
         .toggle_float           => { if (wm.focused_window) |win| tiling.toggleWindowFloat(wm, win); },
+        .tag_toggle             => |ws| { if (wm.focused_window) |win| workspaces.tagToggle(wm, win, ws); },
+        .tag_additive           => |ws| { if (wm.focused_window) |win| workspaces.tagAdditive(wm, win, ws); },
         .exec                   => |cmd| try executeShellCommand(wm, cmd),
         .switch_workspace       => |ws| workspaces.switchTo(wm, ws),
         .move_to_workspace      => |ws| { if (wm.focused_window) |win| workspaces.moveWindowTo(wm, win, ws) catch |e| debug.warnOnErr(e, "move_to_workspace"); },

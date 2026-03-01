@@ -340,6 +340,20 @@ pub fn invalidateGeomCache(window_id: u32) void {
     }
 }
 
+/// Clear the workspace-valid bit for `ws_idx` so the next restoreWorkspaceGeom
+/// for that workspace triggers a full retile. Used when a window's tag changes
+/// for an inactive workspace without touching the current one.
+pub fn invalidateWsGeomBit(ws_idx: u8) void {
+    const s = getState() orelse return;
+    if (ws_idx < 64) s.ws_geom_valid &= ~(@as(u64, 1) << @intCast(ws_idx));
+}
+
+/// Mark tiling dirty without immediately retriling.
+pub fn dirty() void {
+    const s = getState() orelse return;
+    s.dirty = true;
+}
+
 // Restore windows on the current workspace to their cached tiled positions,
 // bypassing the layout algorithm.
 //
