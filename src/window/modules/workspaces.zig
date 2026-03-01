@@ -140,18 +140,15 @@ pub fn removeWindow(win: u32) void {
 }
 
 pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
-    // Implemented as a tag-toggle (remove from current, add to target).
-    // Errors are surfaced only when the initial map reservation fails.
     const s = getState() orelse return;
     if (target_ws >= s.workspaces.len) {
         debug.err("Invalid target workspace: {}", .{target_ws});
         return;
     }
-    const current = s.current;
-    if (target_ws == current) return;
 
     const mask = s.window_to_workspaces.get(win) orelse {
-        // Not yet tracked: add directly to target.
+        // Not yet tracked (new window): add directly to target workspace.
+        // This is the common case — a window spawning on the current workspace.
         try s.window_to_workspaces.ensureUnusedCapacity(1);
         try s.workspaces[target_ws].add(win);
         const target_bit: u64 = @as(u64, 1) << @intCast(target_ws);
@@ -159,8 +156,12 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
         return;
     };
 
+    // Already tracked. Check if already on target and nowhere else — no-op.
+    const target_bit: u64 = @as(u64, 1) << @intCast(target_ws);
+    if (mask == target_bit) return;
+
+    const current     = s.current;
     const current_bit: u64 = @as(u64, 1) << @intCast(current);
-    const target_bit:  u64 = @as(u64, 1) << @intCast(target_ws);
     var new_mask = (mask & ~current_bit) | target_bit;
     if (new_mask == 0) new_mask = target_bit; // safety: never leave mask empty
 
@@ -168,7 +169,6 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
     _ = s.workspaces[current].remove(win);
     if (s.workspaces[current].last_focused == win) s.workspaces[current].last_focused = null;
     s.workspaces[target_ws].add(win) catch |err| {
-        // Rollback: re-add to source.
         s.workspaces[current].add(win) catch {};
         return err;
     };
@@ -176,7 +176,6 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
 
     if (minimize.isMinimized(wm, win)) minimize.moveToWorkspace(wm, win, target_ws);
 
-    // Handle screen visibility.
     _ = xcb.xcb_configure_window(wm.conn, win,
         xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
     if (wm.focused_window == win) focus.clearFocus(wm);
@@ -502,8 +501,6 @@ fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace, old_ws: u8) void {
 // restoreWorkspaceWindows.  By the time we consume it here the reply is
 // already sitting in the receive buffer — zero additional wait.
 fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace, ptr_cookie: xcb.xcb_query_pointer_cookie_t) void {
-    const s = getState().?;
-
     const focus_target: ?u32 = blk: {
         const ptr = xcb.xcb_query_pointer_reply(wm.conn, ptr_cookie, null)
             orelse break :blk lastFocusedOrFirst(wm, new_ws_obj);
@@ -521,7 +518,6 @@ fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace, ptr_c
 
     const old_focused = wm.focused_window;
     wm.focused_window = focus_target;
-    std.debug.assert(wm.focused_window == null or isManaged(wm.focused_window.?));
 
     tiling.updateWindowFocus(wm, old_focused, wm.focused_window);
 
@@ -592,30 +588,4 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     utils.flush(wm.conn);
 }
 
-pub inline fn getCurrentWorkspace() ?u8 {
-    const s = getState() orelse return null;
-    return s.current;
-}
 
-pub inline fn getCurrentWorkspaceObject() ?*Workspace {
-    const s = getState() orelse return null;
-    return &s.workspaces[s.current];
-}
-
-pub inline fn getWorkspaceCount() usize {
-    const s = getState() orelse return 0;
-    return s.workspaces.len;
-}
-
-/// Returns the lowest-set-bit workspace index for `win`.
-/// Used by code that needs a single canonical workspace (e.g. tiling bucket).
-pub inline fn getWorkspaceForWindow(win: u32) ?u8 {
-    const mask = getWindowWorkspaceMask(win) orelse return null;
-    if (mask == 0) return null;
-    return @intCast(@ctz(mask));
-}
-
-pub fn isManaged(win: u32) bool {
-    const mask = getWindowWorkspaceMask(win) orelse return false;
-    return mask != 0;
-}

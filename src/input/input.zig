@@ -371,7 +371,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
 fn dumpState(wm: *WM) void {
     debug.info("========== STATE DUMP ==========", .{});
     debug.info("Focused: {?x}",         .{wm.focused_window});
-    const win_count = if (workspaces.getState()) |s| s.window_to_workspace.count() else 0;
+    const win_count = if (workspaces.getState()) |s| s.window_to_workspaces.count() else 0;
     debug.info("Total windows: {}",     .{win_count});
     debug.info("Suppress focus: {s}",   .{@tagName(wm.suppress_focus_reason)});
 

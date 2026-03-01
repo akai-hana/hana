@@ -810,7 +810,7 @@ fn filterWorkspaceWindows(s: *State, buf: []u32, for_ws: ?u8) usize {
     for (s.windows.items()) |win| {
         if (n >= buf.len) break;
         const on_ws = if (for_ws) |idx|
-            (workspaces.getWorkspaceForWindow(win) orelse continue) == @as(usize, idx)
+            workspaces.isWindowOnWorkspace(win, idx)
         else
             workspaces.isOnCurrentWorkspace(win);
         if (on_ws) { buf[n] = win; n += 1; }
