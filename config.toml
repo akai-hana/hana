@@ -40,8 +40,8 @@ global_layout = false
 #   ]
 
 layouts = [
-	"master-stack", "4,8", # Default layout
-	"monocle",
+	"master-stack", # Default layout
+	"monocle", "4,5",
 	"grid",
 	"fibonacci",
 ]
