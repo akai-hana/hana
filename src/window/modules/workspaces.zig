@@ -32,6 +32,9 @@ pub const Workspace = struct {
     // Optional layout variation override set via the layouts array in config.
     // Applied on every workspace switch; null means use the global defaults.
     variation: ?defs.LayoutVariationOverride = null,
+    // Last window that held focus on this workspace before the user left it.
+    // Restored on re-entry when the cursor is not hovering over any window.
+    last_focused: ?u32 = null,
 
     pub fn init(allocator: std.mem.Allocator, id: u8, name: []const u8, default_layout: tiling.Layout) Workspace {
         return .{ .id = id, .windows = Tracking.init(allocator), .name = name, .layout = default_layout };
@@ -119,8 +122,11 @@ pub fn deinit() void {
 pub fn removeWindow(win: u32) void {
     const s = getState() orelse return;
     if (s.window_to_workspace.fetchRemove(win)) |entry| {
-        if (entry.value < s.workspaces.len)
+        if (entry.value < s.workspaces.len) {
             _ = s.workspaces[entry.value].remove(win);
+            if (s.workspaces[entry.value].last_focused == win)
+                s.workspaces[entry.value].last_focused = null;
+        }
     }
 }
 
@@ -153,6 +159,8 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
     try s.window_to_workspace.ensureUnusedCapacity(1);
 
     _ = s.workspaces[from_ws].remove(win);
+    if (s.workspaces[from_ws].last_focused == win)
+        s.workspaces[from_ws].last_focused = null;
     s.workspaces[target_ws].add(win) catch |err| {
         debug.err("Failed to add window to workspace {}: {}", .{ target_ws, err });
         // Attempt to roll back by re-adding to the source workspace.
@@ -220,15 +228,58 @@ pub inline fn firstNonMinimized(wm: *const WM, windows: []const u32) ?u32 {
     return null;
 }
 
+// Prefer the workspace's remembered focus target; fall back to firstNonMinimized.
+// Used by applyPostSwitchFocus when the cursor is not over a window.
+inline fn lastFocusedOrFirst(wm: *const WM, ws: *const Workspace) ?u32 {
+    if (ws.last_focused) |win|
+        if (!minimize.isMinimized(wm, win)) return win;
+    return firstNonMinimized(wm, ws.windows.items());
+}
+
 // Step 1: move all old-workspace windows offscreen and evict their geom cache.
 // Without eviction, the next retile finds cache hits and skips configure_window,
 // leaving windows stranded offscreen when the user switches back.
 fn hideWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
+    // Batch-fire xcb_get_geometry requests for all non-tiled (floating) windows
+    // before moving anything.  All cookies are in-flight simultaneously so the
+    // round-trips are hidden behind each other.
+    const MAX_FLOAT = 64;
+    var float_wins:    [MAX_FLOAT]u32                          = undefined;
+    var float_cookies: [MAX_FLOAT]xcb.xcb_get_geometry_cookie_t = undefined;
+    var float_n: usize = 0;
+
+    for (ws.windows.items()) |win| {
+        if (!tiling.isWindowTiled(win) and !minimize.isMinimized(wm, win)) {
+            if (float_n < MAX_FLOAT) {
+                float_wins[float_n]    = win;
+                float_cookies[float_n] = xcb.xcb_get_geometry(wm.conn, win);
+                float_n += 1;
+            }
+        }
+    }
+
+    // Collect replies and persist geometry into the shared cache before any
+    // window is moved.  This guarantees restoreWorkspaceWindows can replay
+    // exact positions even for windows that have never been through the tiler.
+    for (float_wins[0..float_n], float_cookies[0..float_n]) |win, cookie| {
+        const geom = xcb.xcb_get_geometry_reply(wm.conn, cookie, null) orelse continue;
+        defer std.c.free(geom);
+        tiling.saveWindowGeom(win, .{
+            .x      = geom.*.x,
+            .y      = geom.*.y,
+            .width  = geom.*.width,
+            .height = geom.*.height,
+        });
+    }
+
+    // Push every window off-screen.  Tiled windows need their geometry cache
+    // invalidated so the next retile re-places them; floating windows must NOT
+    // be invalidated — we just saved their geometry above and need it intact.
     for (ws.windows.items()) |win| {
         _ = xcb.xcb_configure_window(wm.conn, win,
             xcb.XCB_CONFIG_WINDOW_X,
             &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
-        tiling.invalidateGeomCache(win);
+        if (tiling.isWindowTiled(win)) tiling.invalidateGeomCache(win);
     }
 }
 
@@ -261,29 +312,30 @@ fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace) void {
         // Fast path: replay cached tiled positions without running the layout
         // algorithm. Falls back to a full retile only if the cache is cold,
         // the workspace's valid bit is unset, or the screen area changed.
-        //
-        // The eviction loop only runs in the fallback branch — it does not
-        // discard pre-computed entries (written by retileInactiveWorkspace)
-        // unless restoreWorkspaceGeom has already determined those entries
-        // are stale or absent. This preserves the pre-computation fast path.
         if (!tiling.restoreWorkspaceGeom(wm)) {
             // Evict before retriling: windows are at OFFSCREEN_X_POSITION,
             // not their cached positions. Without eviction, configureSafe
             // finds matching rects and skips configure_window, leaving
             // windows stranded offscreen.
-            for (ws.windows.items()) |win| tiling.invalidateGeomCache(win);
+            for (ws.windows.items()) |win| {
+                if (tiling.isWindowTiled(win)) tiling.invalidateGeomCache(win);
+            }
             tiling.retileCurrentWorkspace(wm);
         }
-    } else {
-        // Floating: move all non-minimized windows to the default position.
-        // NOTE: all windows land at the same coordinate because per-window
-        // pre-hide geometry is not saved.  In practice this means two or more
-        // floating windows will stack on top of each other after a workspace
-        // switch.  Saving each window's last known x/y on hide (similar to
-        // MinimizedEntry.saved_fs) would fix this.
-        const pos = utils.floatDefaultPos(wm);
-        for (ws.windows.items()) |win| {
-            if (minimize.isMinimized(wm, win)) continue;
+    }
+
+    // Restore non-tiled (floating) windows to their saved positions.
+    // This runs in both tiling mode (for individually floated windows) and
+    // non-tiling mode (where every window is floating).
+    const pos = utils.floatDefaultPos(wm);
+    for (ws.windows.items()) |win| {
+        if (tiling.isWindowTiled(win)) continue;
+        if (minimize.isMinimized(wm, win)) continue;
+        if (tiling.getWindowGeom(win)) |rect| {
+            utils.configureWindow(wm.conn, win, rect);
+        } else {
+            // No saved geometry: window has never been on an active workspace.
+            // Place it at a sensible default rather than leaving it offscreen.
             _ = xcb.xcb_configure_window(wm.conn, win,
                 xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
                 &[_]u32{ pos.x, pos.y });
@@ -316,7 +368,7 @@ fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace, ptr_c
 
     const focus_target: ?u32 = blk: {
         const ptr = xcb.xcb_query_pointer_reply(wm.conn, ptr_cookie, null)
-            orelse break :blk firstNonMinimized(wm, new_ws_obj.windows.items());
+            orelse break :blk lastFocusedOrFirst(wm, new_ws_obj);
         defer std.c.free(ptr);
 
         const child = ptr.*.child;
@@ -326,7 +378,7 @@ fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace, ptr_c
         {
             break :blk child;
         }
-        break :blk firstNonMinimized(wm, new_ws_obj.windows.items());
+        break :blk lastFocusedOrFirst(wm, new_ws_obj);
     };
 
     const old_focused = wm.focused_window;
@@ -363,6 +415,10 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     const fs_info    = wm.fullscreen.getForWorkspace(new_ws);
 
     wm.suppress_focus_reason = .none;
+
+    // Remember which window had focus on the outgoing workspace so it can be
+    // restored if the cursor is not hovering over a window on return.
+    s.workspaces[old_ws].last_focused = wm.focused_window;
 
     // Pre-fire the pointer query before the server grab.
     //

@@ -60,7 +60,6 @@ pub const DrawContext = struct {
 
     current_font_desc:   ?*c.PangoFontDescription = null,
     is_argb:             bool                      = false,
-    transparency:        f32                       = 1.0,
     /// Pre-computed alpha byte for XCB pixel packing: round(clamp(transparency)*255).
     /// Computed once at init so applyTransparency pays zero floating-point cost per fill.
     alpha_u8:            u8                        = 0xFF,
@@ -149,9 +148,11 @@ pub const DrawContext = struct {
             .gc           = 0,
             .copy_gc      = 0,
             .is_argb      = is_argb,
-            .transparency = transparency,
-            // Pre-compute once; applyTransparency uses this instead of recomputing per fill.
-            .alpha_u8     = @intFromFloat(@round(std.math.clamp(transparency, 0.0, 1.0) * 255.0)),
+            // Only computed when ARGB is active; unused on the opaque path.
+            .alpha_u8     = if (is_argb)
+                @intFromFloat(@round(std.math.clamp(transparency, 0.0, 1.0) * 255.0))
+            else
+                0xFF,
         };
 
         // Fire both GC-create requests before blocking on either reply,
@@ -237,11 +238,9 @@ pub const DrawContext = struct {
 
         // Invalidate all font-derived caches: metrics and the sized-font descriptor
         // cached by drawTextSized.
-        self.cached_metrics         = null;
-        if (self.cached_sized_desc) |old| {
-            c.pango_font_description_free(old);
-            self.cached_sized_desc = null;
-        }
+        self.cached_metrics = null;
+        if (self.cached_sized_desc) |old| c.pango_font_description_free(old);
+        self.cached_sized_desc = null;
 
         debug.info("Cairo/Pango font loaded: {s}", .{pango_name});
     }
@@ -287,6 +286,7 @@ pub const DrawContext = struct {
     }
 
     pub fn clearTransparent(self: *DrawContext) void {
+        if (!self.is_argb) return; // opaque bar: clearing to transparent is meaningless
         // Skip cairo_save/cairo_restore: we only change the operator temporarily,
         // and we always want to end at OVER. Direct set/reset is cheaper than a
         // full graphics-state push/pop. The source pattern (last_color) is
@@ -300,15 +300,18 @@ pub const DrawContext = struct {
     ///
     /// XCB writes the raw packed pixel value (A, R, G, B) directly into the pixmap,
     /// which is the straight-alpha format picom expects from a core-protocol drawable.
-    /// For ARGB bars, applyTransparency packs the pre-computed alpha byte into bits
-    /// 31-24. For opaque bars it passes the color through unchanged (alpha ignored
-    /// by the X server on a 24-bit visual anyway).
+    /// For ARGB bars, the pre-computed alpha byte is packed into bits 31-24.
+    /// For opaque bars (is_argb = false), the color is used as-is — no alpha
+    /// packing, no function call, no overhead of any kind on the hot rendering path.
     ///
     /// last_gc_color guards xcb_change_gc: skips the round-trip when the packed
     /// color hasn't changed, which is the common case when several segments share
     /// the same background.
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        const final_color = self.applyTransparency(color);
+        const final_color: u32 = if (self.is_argb)
+            (@as(u32, self.alpha_u8) << 24) | (color & 0x00FFFFFF)
+        else
+            color;
         if (self.last_gc_color != final_color) {
             _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
             self.last_gc_color = final_color;
@@ -413,12 +416,10 @@ pub const DrawContext = struct {
             c.pango_layout_get_context(self.pango_layout), self.current_font_desc, null,
         );
         defer c.pango_font_metrics_unref(metrics);
-        const result = .{
-            @as(i16, @intCast(@divTrunc(c.pango_font_metrics_get_ascent(metrics),  c.PANGO_SCALE))),
-            @as(i16, @intCast(@divTrunc(c.pango_font_metrics_get_descent(metrics), c.PANGO_SCALE))),
-        };
-        self.cached_metrics = .{ .ascent = result[0], .descent = result[1] };
-        return result;
+        const ascent:  i16 = @intCast(@divTrunc(c.pango_font_metrics_get_ascent(metrics),  c.PANGO_SCALE));
+        const descent: i16 = @intCast(@divTrunc(c.pango_font_metrics_get_descent(metrics), c.PANGO_SCALE));
+        self.cached_metrics = .{ .ascent = ascent, .descent = descent };
+        return .{ ascent, descent };
     }
 
     /// Flushes the off-screen pixmap to the window in a single xcb_copy_area call.
@@ -445,6 +446,10 @@ pub const DrawContext = struct {
     }
 
     /// Fills a background rectangle and draws `text` with padding, returning the next X position.
+    ///
+    /// Sets the Pango text once and reuses the laid-out state for both the width
+    /// measurement and the render, avoiding the double pango_layout_set_text call
+    /// that would occur if textWidth() and drawText() were called separately.
     pub fn drawSegment(
         self:    *DrawContext,
         x:       u16,
@@ -454,9 +459,14 @@ pub const DrawContext = struct {
         bg:      u32,
         fg:      u32,
     ) !u16 {
-        const width = self.textWidth(text) + padding * 2;
+        self.setPangoText(text);
+        var tw: c_int = undefined;
+        c.pango_layout_get_pixel_size(self.pango_layout, &tw, null);
+        const width: u16 = @as(u16, @intCast(tw)) + padding * 2;
         self.fillRect(x, 0, width, height, bg);
-        try self.drawText(x + padding, self.baselineY(height), text, fg);
+        self.setColor(fg);
+        self.moveToTextBaseline(x + padding, self.baselineY(height));
+        c.pango_cairo_show_layout(self.ctx, self.pango_layout);
         return x + width;
     }
 };

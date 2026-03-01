@@ -285,6 +285,49 @@ pub fn removeWindow(window_id: u32) void {
     }
 }
 
+/// Toggle a window between tiled and floating.
+///
+/// Tiled → floating: removes the window from the tiling pool so it sits
+/// freely at its current position.
+///
+/// Floating → tiled: hands the window back to the tiling pool (respecting
+/// the current layout's LIFO/FIFO insertion rule) and immediately retiles
+/// the workspace so the new window gets a proper slot.
+pub fn toggleWindowFloat(wm: *WM, window_id: u32) void {
+    const s = getState() orelse return;
+    if (!s.enabled) return;
+
+    if (s.windows.contains(window_id)) {
+        removeWindow(window_id);
+        retileCurrentWorkspace(wm);
+        debug.info("[FLOAT] 0x{x} → floating", .{window_id});
+    } else {
+        addWindow(wm, window_id);
+        retileCurrentWorkspace(wm);
+        debug.info("[FLOAT] 0x{x} → tiled", .{window_id});
+    }
+    utils.flush(wm.conn);
+}
+
+/// Save geometry for any window (tiled or floating) into the shared cache.
+/// Called by the workspace switcher before pushing windows off-screen so that
+/// floating windows can be restored to their exact position on return.
+pub fn saveWindowGeom(window_id: u32, rect: utils.Rect) void {
+    const s = getState() orelse return;
+    const gop = s.cache.getOrPut(s.allocator, window_id) catch return;
+    gop.value_ptr.rect = rect;
+    if (!gop.found_existing) gop.value_ptr.border = 0;
+}
+
+/// Return the cached geometry for any window (tiled or floating).
+/// Returns null when no entry exists or the entry was invalidated (zeroed rect).
+pub fn getWindowGeom(window_id: u32) ?utils.Rect {
+    const s = getState() orelse return null;
+    const wd = s.cache.get(window_id) orelse return null;
+    if (wd.rect.width == 0 and wd.rect.height == 0) return null;
+    return wd.rect;
+}
+
 // Evict a window's rect from the cache without removing it from tiling.
 // Call whenever a window's position is changed outside the normal retile path
 // (e.g. pushed offscreen during fullscreen) so the next retile does not find
