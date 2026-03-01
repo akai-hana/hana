@@ -32,17 +32,16 @@ global_layout = false
 ## Layouts not added to the array will not be available at runtime.
 ## Not defining the array at all enables all layouts in their default order.
 
-# Examples:
 #   layouts = [
-#       "master-stack",                      # default layout, no override
-#       "monocle", "gapless", "4,8",         # workspaces 4 & 8 start in monocle/gapless
-#       "grid", "relaxed", "3,6",            # workspaces 3 & 6 start in grid/relaxed
-#       "fibonacci",                         # available in cycle but no workspace pinning
+#       "master-stack",              # default layout, no override
+#       "monocle", "gapless", "4,8", # workspaces 4 & 8 start in monocle/gapless
+#       "grid", "relaxed", "3,6",    # workspaces 3 & 6 start in grid/relaxed
+#       "fibonacci",                 # available in cycle but no workspace pinning
 #   ]
 
 layouts = [
 	"master-stack", # Default layout
-	"monocle", "gapless", "4,8",
+	"monocle",
 	"grid",
 	"fibonacci",
 ]
