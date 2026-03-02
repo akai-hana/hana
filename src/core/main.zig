@@ -10,6 +10,10 @@ const builtin = @import("builtin");
 const defs      = @import("defs");
     const WM    = defs.WM;
     const xcb   = defs.xcb;
+const xcb_cursor = @cImport({
+    @cInclude("xcb/xcb_cursor.h");
+});
+
 const constants = @import("constants");
 const config    = @import("config");
 const utils     = @import("utils");
@@ -25,6 +29,7 @@ const tiling    = @import("tiling");
 const layouts   = @import("layouts");
 
 const bar = @import("bar");
+const drun = @import("drun"); // Import the drun module
 
 //TODO: replace with something that is also bsd-compatible
 const IoUring = std.os.linux.IoUring; // async I/O interface
@@ -33,6 +38,7 @@ const IoUring = std.os.linux.IoUring; // async I/O interface
 const TAG_XCB    : u64 = 1;
 const TAG_SIGNAL : u64 = 2;
 const TAG_CLOCK  : u64 = 3;
+const TAG_BLINK  : u64 = 4; // New tag for the blink file descriptor
 
 // Stable storage for the clock timeout timespec.
 // Must outlive the io_uring operation
@@ -67,15 +73,46 @@ fn handleSignalFd(fd: std.posix.fd_t) void {
     }
 }
 
+// xcb-cursor extern declarations.
+// Declared manually instead of via cImport because xcb_cursor_load_name is a
+// static inline function in some versions of the header, which Zig's cImport
+// silently drops. extern declarations resolve directly against the linker symbol.
+const XcbCursorContext = opaque {};
+extern fn xcb_cursor_context_new(
+    conn:   *xcb.xcb_connection_t,
+    screen: *xcb.xcb_screen_t,
+    ctx:    *?*XcbCursorContext,
+) c_int;
+extern fn xcb_cursor_load_cursor(ctx: *XcbCursorContext, name: [*:0]const u8) u32;
+extern fn xcb_cursor_context_free(ctx: ?*XcbCursorContext) void;
+
 fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
+    var ctx: ?*XcbCursorContext = null;
+    if (xcb_cursor_context_new(conn, screen, &ctx) >= 0) {
+        defer xcb_cursor_context_free(ctx);
+        const cursor = xcb_cursor_load_cursor(ctx.?, "left_ptr");
+        if (cursor != xcb.XCB_NONE) {
+            _ = xcb.xcb_change_window_attributes(
+                conn, screen.*.root, xcb.XCB_CW_CURSOR, &[_]u32{cursor},
+            );
+            _ = xcb.xcb_free_cursor(conn, cursor);
+            return;
+        }
+    }
+
+    // Fallback: themed cursor unavailable, use core glyph cursor.
+    debug.warn("xcb_cursor unavailable, falling back to core cursor", .{});
     const font   = xcb.xcb_generate_id(conn);
     const cursor = xcb.xcb_generate_id(conn);
     _ = xcb.xcb_open_font(conn, font, 6, "cursor");
-    _ = xcb.xcb_create_glyph_cursor(conn, cursor, font, font,
-            constants.CURSOR_LEFT_PTR, constants.CURSOR_LEFT_PTR_MASK,
-            0, 0, 0, 65535, 65535, 65535);
-    _ = xcb.xcb_change_window_attributes(conn, screen.*.root,
-            xcb.XCB_CW_CURSOR, &[_]u32{cursor});
+    _ = xcb.xcb_create_glyph_cursor(
+        conn, cursor, font, font,
+        constants.CURSOR_LEFT_PTR, constants.CURSOR_LEFT_PTR_MASK,
+        0, 0, 0, 65535, 65535, 65535,
+    );
+    _ = xcb.xcb_change_window_attributes(
+        conn, screen.*.root, xcb.XCB_CW_CURSOR, &[_]u32{cursor},
+    );
     _ = xcb.xcb_close_font(conn, font);
 }
 
@@ -294,6 +331,8 @@ pub fn main() !void {
     debug.info("Started", .{});
 
     const x_fd: std.posix.fd_t = xcb.xcb_get_file_descriptor(conn);
+    const bfd = drun.blinkFd();
+    const blink_pending = bfd >= 0;
 
     var iou = try IoUring.init(8, 0);
     defer iou.deinit();
@@ -301,6 +340,7 @@ pub fn main() !void {
     // Submit initial polls.
     submitPollAdd(&iou, x_fd, TAG_XCB);
     submitPollAdd(&iou, signal_fd, TAG_SIGNAL);
+    if (blink_pending) submitPollAdd(&iou, bfd, TAG_BLINK);
     const ms_init = bar.pollTimeoutMs();
     var clock_pending = ms_init >= 0;
     if (clock_pending) submitClockTimeout(&iou, ms_init);
@@ -323,6 +363,7 @@ pub fn main() !void {
         var saw_xcb    = false;
         var saw_signal = false;
         var saw_clock  = false;
+        var saw_blink  = false;
         var x_dead     = false;
 
         for (cqes[0..n]) |cqe| {
@@ -340,6 +381,7 @@ pub fn main() !void {
                 },
                 TAG_SIGNAL => { saw_signal = true; },
                 TAG_CLOCK  => { clock_pending = false; saw_clock = true; },
+                TAG_BLINK  => { saw_blink = true; },
                 else => {},
             }
         }
@@ -377,6 +419,12 @@ pub fn main() !void {
             bar.checkClockUpdate();
             const ms = bar.pollTimeoutMs();
             if (ms >= 0) { submitClockTimeout(&iou, ms); clock_pending = true; }
+        }
+
+        if (saw_blink) {
+            drun.blinkTick();
+            bar.submitDrawAsync(&wm);
+            if (blink_pending) submitPollAdd(&iou, bfd, TAG_BLINK);
         }
     }
 
