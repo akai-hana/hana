@@ -93,12 +93,12 @@ fn grabKeybindings(wm: *WM) !void {
     const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };
     var cookies: [constants.Sizes.MAX_KEYBIND_COOKIES]CookieEntry = undefined;
     var n: usize = 0;
-    for (wm.config.keybindings.items) |kb| {
+    outer: for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
         for (constants.LOCK_MODIFIERS) |lock| {
             if (n >= cookies.len) {
                 debug.warn("Too many keybindings. Increase Sizes.MAX_KEYBIND_COOKIES (currently {})", .{constants.Sizes.MAX_KEYBIND_COOKIES});
-                break;
+                break :outer;
             }
             cookies[n] = .{
                 .cookie = xcb.xcb_grab_key_checked(
@@ -122,7 +122,7 @@ fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_flush(wm.conn);
 }
 
-fn maybeReload(wm: *WM) void {
+inline fn maybeReload(wm: *WM) void {
     if (lifecycle.consumeReload())
         handleConfigReload(wm) catch |err| debug.err("Reload failed: {}", .{err});
 }
@@ -151,7 +151,7 @@ fn handleConfigReload(wm: *WM) !void {
     // If it fails we can still roll back by restoring old_config; once
     // old_config.deinit() is called that rollback window is permanently closed.
     input.rebuildKeybindMap(wm) catch |err| {
-        debug.err("rebuildKeybindMap failed: {}, reverting\n", .{err});
+        debug.err("rebuildKeybindMap failed: {}, reverting", .{err});
         wm.config = old_config;
         // new_config is still live (errdefer will deinit it on return)
         return err;
@@ -179,7 +179,7 @@ fn getSqe(iou: *IoUring) *std.os.linux.io_uring_sqe {
     };
 }
 
-fn submitPollAdd(iou: *IoUring, fd: std.posix.fd_t, tag: u64) void {
+inline fn submitPollAdd(iou: *IoUring, fd: std.posix.fd_t, tag: u64) void {
     getSqe(iou).* = .{
         .opcode       = .POLL_ADD,
         .flags        = 0,
@@ -198,7 +198,7 @@ fn submitPollAdd(iou: *IoUring, fd: std.posix.fd_t, tag: u64) void {
     };
 }
 
-fn submitClockTimeout(iou: *IoUring, ms: i32) void {
+inline fn submitClockTimeout(iou: *IoUring, ms: i32) void {
     const ns: i64 = @as(i64, ms) * std.time.ns_per_ms;
     clock_ts = .{
         .sec  = @intCast(@divFloor(ns, std.time.ns_per_s)),
@@ -301,11 +301,9 @@ pub fn main() !void {
     // Submit initial polls.
     submitPollAdd(&iou, x_fd, TAG_XCB);
     submitPollAdd(&iou, signal_fd, TAG_SIGNAL);
-    var clock_pending = blk: {
-        const ms = bar.pollTimeoutMs();
-        if (ms >= 0) { submitClockTimeout(&iou, ms); break :blk true; }
-        break :blk false;
-    };
+    const ms_init = bar.pollTimeoutMs();
+    var clock_pending = ms_init >= 0;
+    if (clock_pending) submitClockTimeout(&iou, ms_init);
 
     var cqes: [16]std.os.linux.io_uring_cqe = undefined;
 
