@@ -244,7 +244,7 @@ pub fn reloadConfig(wm: *WM) void {
         retileCurrentWorkspace(wm);
         bar.redrawImmediate(wm);
         _ = xcb.xcb_ungrab_server(wm.conn);
-        utils.flush(wm.conn);
+        _ = xcb.xcb_flush(wm.conn);
     }
 }
 
@@ -306,7 +306,7 @@ pub fn toggleWindowFloat(wm: *WM, window_id: u32) void {
         retileCurrentWorkspace(wm);
         debug.info("[FLOAT] 0x{x} → tiled", .{window_id});
     }
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 /// Save geometry for any window (tiled or floating) into the shared cache.

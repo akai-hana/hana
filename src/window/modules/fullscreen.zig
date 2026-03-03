@@ -137,7 +137,7 @@ pub fn enterFullscreen(wm: *WM, win: u32, saved_geom: ?defs.WindowGeometry) void
     _ = xcb.xcb_grab_server(wm.conn);
     enterFullscreenCommit(wm, win, ws, geom);
     _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 pub fn toggleFullscreen(wm: *WM) void {
@@ -149,7 +149,7 @@ pub fn toggleFullscreen(wm: *WM) void {
             _ = xcb.xcb_grab_server(wm.conn);
             exitFullscreenCommit(wm, win, current_ws);
             _ = xcb.xcb_ungrab_server(wm.conn);
-            utils.flush(wm.conn);
+            _ = xcb.xcb_flush(wm.conn);
         } else {
             // Switching fullscreen from one window to another: share a single grab.
             const geom = fetchWindowGeom(wm, win);
@@ -157,7 +157,7 @@ pub fn toggleFullscreen(wm: *WM) void {
             exitFullscreenCommit(wm, fs_info.window, current_ws);
             enterFullscreenCommit(wm, win, current_ws, geom);
             _ = xcb.xcb_ungrab_server(wm.conn);
-            utils.flush(wm.conn);
+            _ = xcb.xcb_flush(wm.conn);
         }
     } else {
         enterFullscreen(wm, win, null);

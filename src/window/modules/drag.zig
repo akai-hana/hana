@@ -44,7 +44,7 @@ pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
         tiling.removeWindow(win);
         tiling.retileCurrentWorkspace(wm);
         _ = xcb.xcb_ungrab_server(wm.conn);
-        utils.flush(wm.conn);
+        _ = xcb.xcb_flush(wm.conn);
     }
 }
 
@@ -70,7 +70,7 @@ pub fn updateDrag(wm: *WM, x: i16, y: i16) void {
         },
     };
     utils.configureWindow(wm.conn, drag.window, rect);
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 pub inline fn stopDrag(wm: *WM) void {

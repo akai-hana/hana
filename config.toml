@@ -240,11 +240,9 @@ Mod+period = "decrease_master_count"
 # Switch to workspace N
 Mod+{1-4,Q,W,E,R} = "workspace"
 
-# Move window to workspace N (first press), tag onto more (subsequent presses)
-Mod+Shift+{1-4,Q,W,E,R} = "move_or_tag"
-
-# Pure tag-toggle — flip workspace membership without moving
-Mod+Shift+{1-4,Q,W,E,R} = "tag_toggle"
+# Workspace window sending
+Mod+Shift+{1-4,Q,W,E,R} = "move_to_workspace"
+Mod+Alt+{1-4,Q,W,E,R} = "tag_toggle"
 
 # Bar
 Mod+B       = "toggle_bar_visibility"  # shown/hidden

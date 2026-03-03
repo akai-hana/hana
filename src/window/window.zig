@@ -215,7 +215,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         xcb.xcb_discard_reply(wm.conn, c_protocols.sequence);
         xcb.xcb_discard_reply(wm.conn, c_hints.sequence);
         xcb.xcb_discard_reply(wm.conn, c_normal_hints.sequence);
-        utils.flush(wm.conn);
+        _ = xcb.xcb_flush(wm.conn);
         return;
     };
 
@@ -240,7 +240,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         grabButtons(wm, win, false);
     }
 
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 
     bar.markDirty();
 }
@@ -293,7 +293,7 @@ fn unmanageWindow(wm: *WM, win: u32) void {
 
     bar.redrawImmediate(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 pub fn handleUnmapNotify(event: *const xcb.xcb_unmap_notify_event_t, wm: *WM) void {
@@ -384,7 +384,7 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
     if (mask & xcb.XCB_CONFIG_WINDOW_HEIGHT != 0)       { values[n] = event.height;                           n += 1; }
     if (mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0) { values[n] = event.border_width;                     n += 1; }
     _ = xcb.xcb_configure_window(wm.conn, win, mask, &values);
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 // Focus / crossing events

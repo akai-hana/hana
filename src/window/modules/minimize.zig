@@ -167,7 +167,7 @@ pub fn minimizeWindow(wm: *WM) void {
     }
     bar.redrawImmediate(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 // Inner restore: called with an already-fetched entry to avoid a second
@@ -201,7 +201,7 @@ fn restoreWindowImpl(wm: *WM, win: u32, saved_fs: ?defs.WindowGeometry) void {
     focus.setFocus(wm, win, .window_spawn);
     bar.redrawImmediate(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 inline fn restoreWindow(wm: *WM, win: u32) void {
@@ -287,7 +287,7 @@ pub fn unminimizeAll(wm: *WM) void {
 
         bar.redrawImmediate(wm);
         _ = xcb.xcb_ungrab_server(wm.conn);
-        utils.flush(wm.conn);
+        _ = xcb.xcb_flush(wm.conn);
     }
 
     // Per-window path: fullscreen windows each need their own grab because

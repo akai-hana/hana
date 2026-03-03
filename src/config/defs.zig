@@ -48,6 +48,7 @@ pub const Action = union(enum) {
     swap_master,
     switch_workspace:  u8,
     move_to_workspace: u8,
+    move_window:       u8, // exclusive move — clears all tags, sets only target
     tag_toggle:        u8, // pure toggle — flips bit N, never moves
     tag_additive:      u8, // toggle keeping current workspace always set
     sequence:          []const Action, // ordered list of actions executed left-to-right

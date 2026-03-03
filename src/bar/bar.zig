@@ -16,50 +16,50 @@ const debug = @import("debug");
 const bar_flags = @import("bar_flags");
 
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
-    const drawing    = @import("drawing");
-    const tiling     = @import("tiling");
-    const utils      = @import("utils");
-    const workspaces = @import("workspaces");
-    const constants  = @import("constants");
-    const dpi_mod    = @import("dpi");
+const drawing    = @import("drawing");
+const tiling     = @import("tiling");
+const utils      = @import("utils");
+const workspaces = @import("workspaces");
+const constants  = @import("constants");
+const dpi_mod    = @import("dpi");
 
-    const workspaces_segment = if (bar_flags.has_tags) @import("tags") else struct {
-        pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16, _: u8, _: []const bool) !u16 { return x; }
-        pub fn invalidate() void {}
-        pub fn getCachedWorkspaceWidth() u16 { return 0; }
-    };
+const workspaces_segment = if (bar_flags.has_tags) @import("tags") else struct {
+    pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16, _: u8, _: []const bool) !u16 { return x; }
+    pub fn invalidate() void {}
+    pub fn getCachedWorkspaceWidth() u16 { return 0; }
+};
 
-    const DrawOnlyStub = struct {
-        pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16) !u16 { return x; }
-    };
-    const layout_segment     = if (bar_flags.has_layout)     @import("layout")     else DrawOnlyStub;
+const DrawOnlyStub = struct {
+    pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16) !u16 { return x; }
+};
+const layout_segment     = if (bar_flags.has_layout)     @import("layout")     else DrawOnlyStub;
     const variations_segment = if (bar_flags.has_variations) @import("variations") else DrawOnlyStub;
 
     const drun = @import("drun");
 
-    const title_segment = if (bar_flags.has_title) @import("title") else struct {
-        pub fn draw(
-            _: *drawing.DrawContext, _: defs.BarConfig, _: u16,
-            x: u16, w: u16,
-            _: *xcb.xcb_connection_t, _: ?u32,
-            _: []const u32, _: []const u32,
-            _: *std.ArrayList(u8), _: *?u32,
-            _: bool, _: std.mem.Allocator,
-        ) !u16 { return x + w; }
-    };
+const title_segment = if (bar_flags.has_title) @import("title") else struct {
+    pub fn draw(
+        _: *drawing.DrawContext, _: defs.BarConfig, _: u16,
+        x: u16, w: u16,
+        _: *xcb.xcb_connection_t, _: ?u32,
+        _: []const u32, _: []const u32,
+        _: *std.ArrayList(u8), _: *?u32,
+        _: bool, _: std.mem.Allocator,
+    ) !u16 { return x + w; }
+};
 
-    const clock_segment = if (bar_flags.has_clock) @import("clock") else struct {
-        pub const SAMPLE_STRING: []const u8 = "";
-        pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16) !u16 { return x; }
-        pub fn setTimerFd(_: i32) void {}
-        pub fn updateTimerState() void {}
-        pub fn pollTimeoutMs() i32 { return -1; }
-    };
+const clock_segment = if (bar_flags.has_clock) @import("clock") else struct {
+    pub const SAMPLE_STRING: []const u8 = "";
+    pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16) !u16 { return x; }
+    pub fn setTimerFd(_: i32) void {}
+    pub fn updateTimerState() void {}
+    pub fn pollTimeoutMs() i32 { return -1; }
+};
 
-    const status_segment = if (bar_flags.has_status) @import("status") else struct {
-        pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16, _: []const u8) !u16 { return x; }
-        pub fn update(_: *defs.WM, _: *std.ArrayList(u8), _: std.mem.Allocator) !void {}
-    };
+const status_segment = if (bar_flags.has_status) @import("status") else struct {
+    pub fn draw(_: *drawing.DrawContext, _: defs.BarConfig, _: u16, x: u16, _: []const u8) !u16 { return x; }
+    pub fn update(_: *defs.WM, _: *std.ArrayList(u8), _: std.mem.Allocator) !void {}
+};
 
     const MIN_BAR_HEIGHT:            u32 = 20;
     const MAX_BAR_HEIGHT:            u32 = 200;
@@ -145,8 +145,8 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         cached_ws_wins:       []u32,
         cached_min_wins:      []u32,
         title_layout_valid:   bool,
-        cached_right_total:          u16,
-        cached_right_total_ws_count: u32, // invalidation key for cached_right_total
+        cached_right_total:              u16,
+        cached_right_total_ws_count:     u32, // invalidation key for cached_right_total
         last_monitored_window:       ?u32,
         net_wm_name_atom:            xcb.xcb_atom_t,
 
@@ -180,7 +180,13 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
                 .cached_clock_width   = dc.textWidth(clock_segment.SAMPLE_STRING) + 2 * config.scaledSegmentPadding(height),
                 .cached_clock_x       = null,
                 .cached_workspace_x   = 0,
-                .has_clock_segment    = detectClockSegment(&config),
+                .has_clock_segment    = blk: {
+                    if (comptime !bar_flags.has_clock) break :blk false;
+                    for (config.layout.items) |layout|
+                        for (layout.segments.items) |seg|
+                            if (seg == .clock) break :blk true;
+                    break :blk false;
+                },
                 .cached_title_x       = 0,
                 .cached_title_w       = 0,
                 .cached_ws_wins       = &.{},
@@ -415,7 +421,7 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         g_channel.mutex.unlock();
 
         if (g_bar_thread) |t| { t.join(); g_bar_thread = null; }
-        g_channel.quit = false;
+        g_channel.quit = false; // Reset so the channel can be reused on the next init/reload.
     }
 
     // ── Snapshot capture (main thread) ───────────────────────────────────────
@@ -431,10 +437,9 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         try snap.status_text.appendSlice(allocator, s.status_text.items);
 
         // Minimized window IDs — count is known upfront, so no intermediate list needed.
-        const min_count: usize = if (wm.minimize) |*ms| ms.minimized_info.count() else 0;
         snap.minimized.clearRetainingCapacity();
-        try snap.minimized.ensureTotalCapacity(allocator, min_count);
         if (wm.minimize) |*ms| {
+            try snap.minimized.ensureTotalCapacity(allocator, ms.minimized_info.count());
             var it = ms.minimized_info.keyIterator();
             while (it.next()) |key| snap.minimized.appendAssumeCapacity(key.*);
         }
@@ -532,13 +537,6 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
             @field(g_atoms, e[0]) = utils.getAtomCached(e[1]) catch 0;
     }
 
-    fn detectClockSegment(config: *const defs.BarConfig) bool {
-        if (comptime !bar_flags.has_clock) return false;
-        for (config.layout.items) |layout|
-            for (layout.segments.items) |seg|
-                if (seg == .clock) return true;
-        return false;
-    }
 
     fn barYPos(wm: *defs.WM, height: u16) i16 {
         return if (wm.config.bar.vertical_position == .bottom)
@@ -568,15 +566,20 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         const value_mask = xcb.XCB_CW_BACK_PIXEL | xcb.XCB_CW_BORDER_PIXEL |
                            xcb.XCB_CW_OVERRIDE_REDIRECT | xcb.XCB_CW_EVENT_MASK |
                            if (want_transparency) xcb.XCB_CW_COLORMAP else 0;
-        const value_list = [_]u32{
-            0, 0, 1,
-            xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS,
-            colormap,
-        };
-        _ = xcb.xcb_create_window(wm.conn, depth, window, wm.screen.root,
-            0, y_pos, wm.screen.width_in_pixels, height, 0,
-            xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual_id,
-            @intCast(value_mask), &value_list);
+        const base_events = xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS;
+        if (want_transparency) {
+            const value_list = [_]u32{ 0, 0, 1, base_events, colormap };
+            _ = xcb.xcb_create_window(wm.conn, depth, window, wm.screen.root,
+                0, y_pos, wm.screen.width_in_pixels, height, 0,
+                xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual_id,
+                @intCast(value_mask), &value_list);
+        } else {
+            const value_list = [_]u32{ 0, 0, 1, base_events };
+            _ = xcb.xcb_create_window(wm.conn, depth, window, wm.screen.root,
+                0, y_pos, wm.screen.width_in_pixels, height, 0,
+                xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual_id,
+                @intCast(value_mask), &value_list);
+        }
 
         return .{ .window = window, .visual_id = visual_id, .has_argb = want_transparency, .colormap = colormap };
     }
@@ -692,7 +695,7 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         startBarThread(state.?);
         submitDraw(wm, true);
         _ = xcb.xcb_map_window(wm.conn, setup.window);
-        utils.flush(wm.conn);
+        _ = xcb.xcb_flush(wm.conn);
     }
 
     pub fn deinit() void {
@@ -746,14 +749,14 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         stopBarThread();
         state = new_state;
         submitDraw(wm, true);
-        utils.flush(wm.conn);
+        _ = xcb.xcb_flush(wm.conn);
 
         _ = xcb.xcb_grab_server(wm.conn);
         if (new_state.visible) _ = xcb.xcb_map_window(wm.conn, setup.window);
         _ = xcb.xcb_destroy_window(wm.conn, old.window);
         _ = xcb.xcb_flush(wm.conn);
         _ = xcb.xcb_ungrab_server(wm.conn);
-        utils.flush(wm.conn);
+        _ = xcb.xcb_flush(wm.conn);
 
         old.dc.deinit();
         old.deinit();
@@ -770,22 +773,22 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         setWindowProperties(wm, s.window, s.height);
         s.invalidateLayout();
         _ = xcb.xcb_grab_server(wm.conn);
-        _ = xcb.xcb_configure_window(s.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y,
+        _ = xcb.xcb_configure_window(wm.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y,
             &[_]u32{@as(u32, @bitCast(@as(i32, new_y)))});
         const current_ws = workspaces.getCurrentWorkspace() orelse {
             _ = xcb.xcb_ungrab_server(wm.conn);
-            utils.flush(wm.conn);
+            _ = xcb.xcb_flush(wm.conn);
             return;
         };
         if (wm.fullscreen.getForWorkspace(current_ws) == null)
             tiling.retileCurrentWorkspace(wm);
         _ = xcb.xcb_ungrab_server(wm.conn);
-        utils.flush(wm.conn);
+        _ = xcb.xcb_flush(wm.conn);
         debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
     }
 
     /// Posts a focus-only update. Skipped when a full redraw is already pending.
-    pub fn notifyFocusChange(_: *defs.WM, new_win: ?u32) void {
+    pub fn notifyFocusChange(new_win: ?u32) void {
         const s = state orelse return;
         if (!s.visible) return;
         g_channel.mutex.lock();
@@ -837,22 +840,22 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
         if (action == .toggle) {
             if (show) submitDraw(wm, true);
             _ = xcb.xcb_grab_server(wm.conn);
-            if (show) _ = xcb.xcb_map_window(s.conn, s.window)
-            else      _ = xcb.xcb_unmap_window(s.conn, s.window);
+            if (show) _ = xcb.xcb_map_window(wm.conn, s.window)
+            else      _ = xcb.xcb_unmap_window(wm.conn, s.window);
             const saved = s.visible;
             if (is_fullscreen) s.visible = s.global_visible;
             retileAllWorkspacesNoGrab(wm);
             if (is_fullscreen) s.visible = saved;
             _ = xcb.xcb_ungrab_server(wm.conn);
-            utils.flush(wm.conn);
+            _ = xcb.xcb_flush(wm.conn);
         } else {
             if (show) {
                 submitDraw(wm, true);
-                _ = xcb.xcb_map_window(s.conn, s.window);
+                _ = xcb.xcb_map_window(wm.conn, s.window);
             } else {
-                _ = xcb.xcb_unmap_window(s.conn, s.window);
+                _ = xcb.xcb_unmap_window(wm.conn, s.window);
             }
-            utils.flush(wm.conn);
+            _ = xcb.xcb_flush(wm.conn);
             tiling.retileCurrentWorkspace(wm);
         }
 

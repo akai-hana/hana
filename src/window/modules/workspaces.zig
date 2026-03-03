@@ -211,6 +211,42 @@ fn setWindowMask(s: *State, win: u32, new_mask: u64) void {
     }
 }
 
+/// `move_window` action — Mod+Shift+N.
+///
+/// Hard-moves `win` to `target_ws` exclusively: clears ALL workspace bits
+/// and sets only the target. Unlike moveWindowTo, no other workspace tags
+/// are preserved — the window ends up on exactly one workspace.
+///
+/// Visibility:
+///   target == current → window stays on screen, current workspace retiled.
+///   target != current → window pushed offscreen, focus cleared if needed.
+///
+/// Pair with tag_toggle (Mod+Alt+N) to accumulate extra workspaces after
+/// the initial move.
+pub fn moveWindowExclusive(wm: *WM, win: u32, target_ws: u8) void {
+    const s = getState() orelse return;
+    if (target_ws >= s.workspaces.len) return;
+    if (minimize.isMinimized(wm, win)) return;
+
+    const mask = s.window_to_workspaces.get(win) orelse return;
+    const target_bit: u64 = @as(u64, 1) << @intCast(target_ws);
+    if (mask == target_bit) return; // already exclusively on target — no-op
+
+    setWindowMask(s, win, target_bit);
+
+    if (target_ws != s.current) {
+        _ = xcb.xcb_configure_window(wm.conn, win,
+            xcb.XCB_CONFIG_WINDOW_X,
+            &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+        tiling.invalidateGeomCache(win);
+        if (wm.focused_window == win) focus.clearFocus(wm);
+    }
+
+    if (wm.config.tiling.enabled) tiling.retileCurrentWorkspace(wm);
+    bar.markDirty();
+    _ = xcb.xcb_flush(wm.conn);
+}
+
 /// Mod+Shift+N: pure toggle of workspace tag N.
 ///
 /// Flips bit N in the window's mask with no other side-effects on the mask.
@@ -257,7 +293,7 @@ pub fn tagToggle(wm: *WM, win: u32, target_ws: u8) void {
     }
 
     bar.markDirty();
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 /// Mod+Alt+N: additive tag toggle.
@@ -301,7 +337,7 @@ pub fn tagAdditive(wm: *WM, win: u32, target_ws: u8) void {
     }
 
     bar.markDirty();
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }
 
 // ── Workspace switch ──────────────────────────────────────────────────────────
@@ -550,5 +586,5 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     bar.raiseBar();
     bar.redrawImmediate(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
-    utils.flush(wm.conn);
+    _ = xcb.xcb_flush(wm.conn);
 }

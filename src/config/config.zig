@@ -295,12 +295,10 @@ const ACTION_MAP = std.StaticStringMap(defs.Action).initComptime(.{
 //
 // Allows compact syntax like:
 //   Mod+{1-4,Q,W,E,R}       = "workspace"
-//   Mod+Shift+{1-4,Q,W,E,R} = "move_or_tag"
 //
 // The {…} portion is expanded into individual keys. Each expanded key is
 // assigned a 1-based workspace index by its position in the list, which is
 // automatically appended to bare workspace action names ("workspace" → "workspace_1",
-// "move_or_tag" → "move_or_tag_1", etc.).
 //
 // Non-workspace actions (exec commands, toggles, etc.) are passed through
 // unchanged for every expanded key — useful for launching multiple programs:
@@ -372,7 +370,7 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
 /// `_<ws_idx>` appended when used inside a glob expansion.
 fn isWorkspaceActionBase(action: []const u8) bool {
     const bases = [_][]const u8{
-        "workspace", "move_to_workspace", "tag_toggle", "tag_additive", "move_or_tag",
+        "workspace", "move_to_workspace", "tag_toggle", "tag_additive",
     };
     for (bases) |base| if (std.mem.eql(u8, action, base)) return true;
     return false;
@@ -415,7 +413,6 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, c
             defer if (keybind_str.ptr != ge.key.ptr) allocator.free(keybind_str);
 
             // Build the action — string or array, with ws_idx resolved into
-            // bare workspace-action names ("move_or_tag" → "move_or_tag_3", etc.).
             const action: defs.Action = act: {
                 if (entry.value_ptr.*.asArray()) |arr| {
                     var acts: std.ArrayList(defs.Action) = .empty;
