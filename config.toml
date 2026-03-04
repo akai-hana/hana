@@ -273,9 +273,28 @@ Mod+Shift+V = "{kill} youtube-music"
 
 # Emergency/Debug
 # Emergency recovery: Disables tiling, clears fullscreen, maps all windows, stops drag
-Mod+Shift+Escape = "emergency_recover"
+Mod+Shift+Escape = "emergency_recover" #TODO: remove. this is hacky and assumes the program bugging out is a recurrent issue. therefore it is unneeded.
 
 # Workspace rules
+
+# Available formats:
+# 
+# - Per-workspace rules
+# Example: 
+#
+# ```toml
+# [workspace.rules.N] # N = workspace number
+# <program_name>
+# ```
+#
+# - Rule arrays
+# Example:
+#
+# ```toml
+# 1 = ["<program_1>", "<program_2>"] # Workspace 1
+# 2 = ["<program_3>"]                # Workspace 2
+# ```
+
 [workspace.rules.1] # browser
 Navigator
 Firefox
@@ -300,16 +319,10 @@ DDNet
 emacs
 xeyes
 
-[workspace.rules.7] # Media
+[workspace.rules.7] # media
 prismlauncher
 freetube
 gimp
 
 [workspace.rules.8] # torrenting
 deluge
-
-# Alternative array format (both formats are supported):
-# [workspace.rules]
-# 1 = ["Navigator", "Firefox"]           # browser
-# 2 = ["discord", "vesktop", "equibop"]  # socials  
-# 3 = ["com.github.th_ch.youtube_music"] # music

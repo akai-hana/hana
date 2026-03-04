@@ -17,7 +17,7 @@ const minimize   = @import("minimize");
 // Slow path (floating/cache miss): one blocking round-trip, falling back to
 // a centered quarter-screen default if the reply fails or the window is offscreen.
 fn fetchWindowGeom(wm: *WM, win: u32) defs.WindowGeometry {
-    if (tiling.getCachedGeom(win)) |rect| {
+    if (tiling.getWindowGeom(win)) |rect| {
         const bw: u16 = if (tiling.getState()) |ts| ts.border_width else 0;
         return .{
             .x            = rect.x,

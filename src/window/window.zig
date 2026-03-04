@@ -13,7 +13,6 @@ const bar        = @import("bar");
 const workspaces = @import("workspaces");
 const debug      = @import("debug");
 const minimize   = @import("minimize");
-const layouts    = @import("layouts");
 
 const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
@@ -267,7 +266,7 @@ fn unmanageWindow(wm: *WM, win: u32) void {
 
     if (wm.config.tiling.enabled) tiling.removeWindow(win);
     utils.uncacheWindowFocusProps(win);
-    layouts.evictSizeHints(win);
+    tiling.evictSizeHints(win);
     minimize.forceUntrack(wm, win);
     workspaces.removeWindow(win);
 
@@ -350,7 +349,7 @@ fn sendConfigureNotify(wm: *WM, win: u32, x: i16, y: i16, width: u16, height: u1
 
 fn sendSyntheticConfigureNotify(wm: *WM, win: u32) void {
     // Fast path: serve the geometry from the tiling cache — zero round-trips.
-    if (tiling.getCachedGeom(win)) |rect| {
+    if (tiling.getWindowGeom(win)) |rect| {
         const border: u16 = if (tiling.getState()) |s| s.border_width else 0;
         sendConfigureNotify(wm, win, rect.x, rect.y, rect.width, rect.height, border);
         return;
@@ -487,5 +486,5 @@ fn collectAndCacheSizeHints(
 
     // Don't occupy a cache slot for degenerate hints that declare zero on both axes.
     if (min_width > 0 or min_height > 0)
-        layouts.cacheSizeHints(wm.allocator, win, .{ .min_width = min_width, .min_height = min_height });
+        tiling.cacheSizeHints(wm.allocator, win, .{ .min_width = min_width, .min_height = min_height });
 }

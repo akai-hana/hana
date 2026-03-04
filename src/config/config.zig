@@ -162,7 +162,7 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
     try parseConfigSections(allocator, &doc, &cfg);
 
     // Iter 3: detectTerminal no longer needs an allocator (pure PATH scan).
-    const terminal = try fallback.detectTerminal();
+    const terminal = fallback.detectTerminal();
     for (cfg.keybindings.items) |*kb| {
         if (kb.action == .exec and std.mem.eql(u8, kb.action.exec, "auto_terminal")) {
             allocator.free(kb.action.exec);
@@ -480,7 +480,7 @@ inline fn applyPlaceholders(allocator: std.mem.Allocator, cmd: []const u8, kill_
 inline fn substituteModVariable(allocator: std.mem.Allocator, keybind: []const u8, mod: []const u8) ![]const u8 {
     if (std.mem.startsWith(u8, keybind, "Mod+"))
         return try std.fmt.allocPrint(allocator, "{s}+{s}", .{ mod, keybind["Mod+".len..] });
-    return try allocator.dupe(u8, keybind);
+    return keybind;
 }
 
 fn parseKeybindString(str: []const u8) !struct { modifiers: u16, keysym: u32 } {

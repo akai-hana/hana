@@ -21,7 +21,6 @@ const xkbcommon = @import("xkbcommon");
 const input     = @import("input");
 const events    = @import("events");
 
-const layouts = @import("layouts");
 const bar     = @import("bar");
 
 // xcb-cursor extern declarations.
@@ -51,20 +50,20 @@ fn setupRootCursor(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void 
         }
     }
 
-    // // Fallback: themed cursor unavailable, use core glyph cursor.
-    // debug.warn("xcb_cursor unavailable, falling back to core cursor", .{});
-    // const font   = xcb.xcb_generate_id(conn);
-    // const cursor = xcb.xcb_generate_id(conn);
-    // _ = xcb.xcb_open_font(conn, font, 6, "cursor");
-    // _ = xcb.xcb_create_glyph_cursor(
-    //     conn, cursor, font, font,
-    //     constants.CURSOR_LEFT_PTR, constants.CURSOR_LEFT_PTR_MASK,
-    //     0, 0, 0, 65535, 65535, 65535,
-    // );
-    // _ = xcb.xcb_change_window_attributes(
-    //     conn, screen.*.root, xcb.XCB_CW_CURSOR, &[_]u32{cursor},
-    // );
-    // _ = xcb.xcb_close_font(conn, font);
+    // Fallback: themed cursor unavailable, use core glyph cursor.
+    debug.warn("xcb_cursor unavailable, falling back to core cursor", .{});
+    const font   = xcb.xcb_generate_id(conn);
+    const cursor = xcb.xcb_generate_id(conn);
+    _ = xcb.xcb_open_font(conn, font, 6, "cursor");
+    _ = xcb.xcb_create_glyph_cursor(
+        conn, cursor, font, font,
+        constants.CURSOR_LEFT_PTR, constants.CURSOR_LEFT_PTR_MASK,
+        0, 0, 0, 65535, 65535, 65535,
+    );
+    _ = xcb.xcb_change_window_attributes(
+        conn, screen.*.root, xcb.XCB_CW_CURSOR, &[_]u32{cursor},
+    );
+    _ = xcb.xcb_close_font(conn, font);
 }
 
 fn becomeWindowManager(conn: *xcb.xcb_connection_t, root: u32) !void {
@@ -100,7 +99,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
-    const dpi_info = try dpi.detect(conn, screen);
+    const dpi_info = dpi.detect(conn, screen);
     debug.info("DPI Detection - DPI: {d:.1}, Scale: {d:.2}x", .{ dpi_info.dpi, dpi_info.scale_factor });
 
     const xkb_state = try allocator.create(xkbcommon.XkbState);
@@ -127,7 +126,6 @@ pub fn main() !void {
     try utils.initAtomCache(conn);
     utils.initInputModelCache(wm.allocator);
     defer utils.deinitInputModelCache();
-    defer layouts.deinitSizeHintsCache(allocator);
 
     const signal_fd = try events.setupSignalFd();
     defer std.posix.close(signal_fd);

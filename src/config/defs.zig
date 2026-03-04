@@ -604,25 +604,6 @@ pub const SpawnQueue = struct {
     }
 };
 
-/// Per-window minimize record.
-pub const MinimizedEntry = struct {
-    saved_fs:       ?WindowGeometry, // non-null iff the window was fullscreen when minimized
-    workspace_mask: u64,             // bitmask of all workspaces this window belongs to
-};
-
-/// Per-workspace minimization state, owned by WM.
-pub const MinimizeState = struct {
-    per_workspace:  []std.ArrayListUnmanaged(u32),
-    minimized_info: std.AutoHashMap(u32, MinimizedEntry),
-    allocator:      std.mem.Allocator,
-
-    pub fn deinit(self: *MinimizeState) void {
-        for (self.per_workspace) |*list| list.deinit(self.allocator);
-        self.allocator.free(self.per_workspace);
-        self.minimized_info.deinit();
-    }
-};
-
 pub const WM = struct {
     allocator:      std.mem.Allocator,
     conn:           *xcb.xcb_connection_t,
@@ -634,7 +615,6 @@ pub const WM = struct {
     xkb_state:      ?*xkbcommon.XkbState,
     dpi_info:       dpi.DpiInfo,
     drag_state:     DragState = .{},
-    minimize:       ?MinimizeState = null,
     spawn_queue:    SpawnQueue = .{},
     last_event_time:        u32 = 0,
     suppress_focus_reason:  FocusSuppressReason = .none,
@@ -642,7 +622,6 @@ pub const WM = struct {
     spawn_cursor_y: i16 = 0,
 
     pub fn deinit(self: *WM) void {
-        if (self.minimize) |*m| m.deinit();
         self.fullscreen.deinit();
         self.config.deinit();
     }

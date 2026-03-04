@@ -52,7 +52,6 @@ const KeybindState = struct {
 
 var keybind_state: ?KeybindState = null;
 
-
 pub fn init(wm: *WM) !void {
     var state = KeybindState.init(wm.allocator);
     errdefer state.deinit();
@@ -79,7 +78,8 @@ inline fn makeHash(mods: u16, keysym: u32) u64 {
 
 // Grab setup
 
-/// Grabs Super+Button1 (move) and Super+Button3 (resize) on the root window.
+/// Grabs Super+Button1/2/3 on the root window.
+/// Button1 = move, Button3 = resize, Button2 = config-driven binds (e.g. toggle_float).
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
     for (MOUSE_BUTTONS) |button| {
         _ = xcb.xcb_grab_button(
@@ -127,10 +127,6 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
     } else {
         debug.info("[KEY] no binding found for this key", .{});
     }
-}
-
-pub fn handleKeyRelease(event: *const xcb.xcb_key_release_event_t, wm: *WM) void {
-    wm.last_event_time = event.time;
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
@@ -251,8 +247,8 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .toggle_layout_reverse  => { tiling.toggleLayoutReverse(wm); bar.redrawImmediate(wm); },
         .toggle_bar_visibility  => bar.setBarState(wm, .toggle),
         .toggle_bar_position    => bar.toggleBarPosition(wm),
-        .increase_master        => tiling.increaseMasterWidth(),
-        .decrease_master        => tiling.decreaseMasterWidth(),
+        .increase_master        => tiling.increaseMasterWidth(wm),
+        .decrease_master        => tiling.decreaseMasterWidth(wm),
         .increase_master_count  => tiling.increaseMasterCount(wm),
         .decrease_master_count  => tiling.decreaseMasterCount(wm),
         .toggle_tiling          => tiling.toggleTiling(wm),

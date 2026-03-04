@@ -23,7 +23,7 @@ pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
     if (wm.drag_state.active) return;
     if (bar.isBarWindow(win)) return;
     // Prefer the tiling cache; fall back to a live round-trip for floating windows.
-    const geom = tiling.getCachedGeom(win) orelse
+    const geom = tiling.getWindowGeom(win) orelse
         utils.getGeometry(wm.conn, win) orelse return;
     wm.drag_state = .{
         .active           = true,

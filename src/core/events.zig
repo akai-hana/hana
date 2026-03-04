@@ -50,7 +50,7 @@ fn handlePropertyNotify(event: *anyopaque, wm: *WM) void {
 
 /// Comptime O(1) dispatch table indexed by XCB event type (low 7 bits).
 const dispatch_table = blk: {
-    var table = [_]?EventHandler{null} ** constants.Sizes.EVENT_DISPATCH_TABLE;
+    var table = [_]?EventHandler{null} ** constants.Limits.EVENT_DISPATCH_TABLE;
     table[xcb.XCB_KEY_PRESS]         = asHandler(input.handleKeyPress);
     table[xcb.XCB_BUTTON_PRESS]      = asHandler(input.handleButtonPress);
     table[xcb.XCB_BUTTON_RELEASE]    = asHandler(input.handleButtonRelease);
@@ -84,8 +84,8 @@ pub fn initModules(wm: *WM) !void {
 }
 
 pub fn deinitModules() void {
-    // minimize state is owned by WM.deinit — no separate deinit here.
     drun.deinit();
+    minimize.deinit();
     tiling.deinit();
     workspaces.deinit();
     input.deinit();
@@ -126,13 +126,13 @@ fn handleSignalFd(fd: std.posix.fd_t) void {
 pub fn grabKeybindings(wm: *WM) !void {
     _ = xcb.xcb_ungrab_key(wm.conn, xcb.XCB_GRAB_ANY, wm.root, xcb.XCB_MOD_MASK_ANY);
     const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };
-    var cookies: [constants.Sizes.MAX_KEYBIND_COOKIES]CookieEntry = undefined;
+    var cookies: [constants.Limits.MAX_KEYBIND_COOKIES]CookieEntry = undefined;
     var n: usize = 0;
     outer: for (wm.config.keybindings.items) |kb| {
         const keycode = kb.keycode orelse continue;
         for (constants.LOCK_MODIFIERS) |lock| {
             if (n >= cookies.len) {
-                debug.warn("Too many keybindings. Increase Sizes.MAX_KEYBIND_COOKIES (currently {})", .{constants.Sizes.MAX_KEYBIND_COOKIES});
+                debug.warn("Too many keybindings. Increase Limits.MAX_KEYBIND_COOKIES (currently {})", .{constants.Limits.MAX_KEYBIND_COOKIES});
                 break :outer;
             }
             cookies[n] = .{
