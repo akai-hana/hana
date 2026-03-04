@@ -102,7 +102,7 @@ pub const State = struct {
     master_side:      defs.MasterSide,
     master_width:     f32,
     master_count:     u8,
-    gaps:             u16,
+    gap_width:        u16,
     border_width:     u16,
     border_focused:   u32,
     border_unfocused: u32,
@@ -140,7 +140,7 @@ pub const State = struct {
     size_hints: std.AutoHashMapUnmanaged(u32, layouts.SizeHints),
 
     pub inline fn margins(self: *const State) utils.Margins {
-        return .{ .gap = self.gaps, .border = self.border_width };
+        return .{ .gap = self.gap_width, .border = self.border_width };
     }
 
     pub inline fn borderColor(self: *const State, wm: *const WM, win: u32) u32 {
@@ -191,7 +191,7 @@ fn buildState(wm: *WM) State {
         .master_side      = wm.config.tiling.master_side,
         .master_width     = computeMasterWidth(wm),
         .master_count     = wm.config.tiling.master_count,
-        .gaps             = dpi.scaleGaps(wm.config.tiling.gaps, wm.dpi_info.scale_factor, screen_height),
+        .gap_width             = dpi.scaleGaps(wm.config.tiling.gap_width, wm.dpi_info.scale_factor, screen_height),
         .border_width     = dpi.scaleBorderWidth(wm.config.tiling.border_width, wm.dpi_info.scale_factor, screen_height),
         .border_focused   = wm.config.tiling.border_focused,
         .border_unfocused = wm.config.tiling.border_unfocused,

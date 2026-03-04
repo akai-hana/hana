@@ -57,8 +57,8 @@ layouts = [
 # [0%-200%] / [0-N] px
 ## 100% makes a window's borders equal to the window's viewable area.
 ## 200% makes windows be swallowed by their borders.
-gaps             = 2.5%
-border_width     = 1%
+gap_width        = 1.5%
+border_width     = 0.5%
 border_focused   = "#ac3232"
 border_unfocused = "#52263e"
 

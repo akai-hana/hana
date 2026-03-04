@@ -583,8 +583,10 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
     }
 
     const aesthetic_src = doc.getSection("tiling.aesthetics") orelse section;
-    cfg.tiling.gaps         = aesthetic_src.getScalable("gaps")         orelse parser.ScalableValue.absolute(10.0);
-    cfg.tiling.border_width = aesthetic_src.getScalable("border_width") orelse parser.ScalableValue.absolute(2.0);
+
+    cfg.tiling.gap_width        = aesthetic_src.getScalable("gap_width")    orelse parser.ScalableValue.absolute(0.0);
+    cfg.tiling.border_width     = aesthetic_src.getScalable("border_width") orelse parser.ScalableValue.absolute(2.0);
+
     cfg.tiling.border_focused   = getColor(aesthetic_src, "border_focused",   0x5294E2);
     cfg.tiling.border_unfocused = getColor(aesthetic_src, "border_unfocused", 0x383C4A);
 
