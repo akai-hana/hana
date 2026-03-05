@@ -57,8 +57,9 @@ layouts = [                                 # ("default"/"alternative")
 [tiling.aesthetics]
 # [0%-200%] / [0-N] px
 ## 100% = Entire display; 0% = disabled
-gap_width        = %1.5
-border_width     = %0.5
+gap_width        = 1.5%
+border_width     = 100% #TODO: 100% doesn't cover 100% of the display.
+#TODO: make config parser accept both N% and %N values (currently %N doesn't work).
 
 border_focused   = "#ac3232"
 border_unfocused = "#52263e"

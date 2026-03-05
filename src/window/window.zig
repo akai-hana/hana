@@ -13,6 +13,7 @@ const bar        = @import("bar");
 const workspaces = @import("workspaces");
 const debug      = @import("debug");
 const minimize   = @import("minimize");
+const fullscreen = @import("fullscreen");
 
 const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
@@ -76,7 +77,7 @@ pub fn grabButtons(wm: *WM, win: u32, focused: bool) void {
 // Workspace rule matching
 
 inline fn resolveWorkspace(target: u8, fallback: u8) u8 {
-    const s = workspaces.getState() orelse return fallback;
+    const s = workspaces.getStateOpt() orelse return fallback;
     return if (target < s.workspaces.len) target else fallback;
 }
 
@@ -165,7 +166,7 @@ pub inline fn registerSpawn(wm: *WM, workspace: u8, pid: u32) void {
 }
 
 fn snapshotSpawnCursor(wm: *WM) void {
-    if (wm.suppress_focus_reason != .window_spawn) return;
+    if (focus.getSuppressReason() != .window_spawn) return;
     const ptr = xcb.xcb_query_pointer_reply(
         wm.conn, xcb.xcb_query_pointer(wm.conn, wm.root), null,
     ) orelse return;
@@ -247,12 +248,12 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 // Unmap / destroy
 
 fn unmanageWindow(wm: *WM, win: u32) void {
-    const was_fullscreen = if (wm.fullscreen.window_to_workspace.get(win)) |ws| blk: {
-        wm.fullscreen.removeForWorkspace(ws);
+    const was_fullscreen = if (fullscreen.workspaceFor(win)) |ws| blk: {
+        fullscreen.removeForWorkspace(ws);
         break :blk true;
     } else false;
 
-    const was_focused = (wm.focused_window == win);
+    const was_focused = (focus.getFocused() == win);
 
     const window_workspace = workspaces.getWorkspaceForWindow(win);
     const current_ws       = workspaces.getCurrentWorkspace();
@@ -350,7 +351,7 @@ fn sendConfigureNotify(wm: *WM, win: u32, x: i16, y: i16, width: u16, height: u1
 fn sendSyntheticConfigureNotify(wm: *WM, win: u32) void {
     // Fast path: serve the geometry from the tiling cache — zero round-trips.
     if (tiling.getWindowGeom(win)) |rect| {
-        const border: u16 = if (tiling.getState()) |s| s.border_width else 0;
+        const border: u16 = if (tiling.getStateOpt()) |s| s.border_width else 0;
         sendConfigureNotify(wm, win, rect.x, rect.y, rect.width, rect.height, border);
         return;
     }
@@ -366,7 +367,7 @@ fn sendSyntheticConfigureNotify(wm: *WM, win: u32) void {
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const win = event.window;
     if ((wm.config.tiling.enabled and tiling.isWindowTiled(win)) or
-        wm.fullscreen.isFullscreen(win))
+        fullscreen.isFullscreen(win))
     {
         sendSyntheticConfigureNotify(wm, win);
         return;
@@ -389,21 +390,21 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, w
 // Focus / crossing events
 
 inline fn suppressSpawnCrossing(wm: *WM, root_x: i16, root_y: i16) bool {
-    if (wm.suppress_focus_reason != .window_spawn) return false;
+    if (focus.getSuppressReason() != .window_spawn) return false;
     if (root_x == wm.spawn_cursor_x and root_y == wm.spawn_cursor_y) return true;
-    wm.suppress_focus_reason = .none;
+    focus.setSuppressReason(.none);
     return false;
 }
 
 inline fn maybeFocusWindow(wm: *WM, win: u32) void {
     if (!isOnCurrentWorkspace(wm, win)) return;
     if (minimize.isMinimized(wm, win)) return;
-    if (wm.focused_window == win) return;
+    if (focus.getFocused() == win) return;
     focus.setFocus(wm, win, .mouse_enter);
 }
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) void {
-    wm.last_event_time = event.time;
+    focus.setLastEventTime(event.time);
     if (event.mode == xcb.XCB_NOTIFY_MODE_GRAB or
         event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) return;
     if (wm.drag_state.active) return;
@@ -429,7 +430,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
 }
 
 pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) void {
-    wm.last_event_time = event.time;
+    focus.setLastEventTime(event.time);
     if (event.event != wm.root) return;
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL) return;
     if (wm.drag_state.active) return;

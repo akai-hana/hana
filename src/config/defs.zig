@@ -8,7 +8,14 @@ pub const xcb = @cImport({
     @cInclude("xcb/xcb.h");
 });
 
-pub const xkbcommon = @import("xkbcommon");
+/// Type alias for XCB window identifiers.
+/// xcb_window_t is uint32_t in every version of the XCB protocol spec —
+/// a 32-bit opaque handle by definition, never widened.
+/// Using this alias makes window-ID fields self-documenting and gives a
+/// single canonical grep target.
+pub const WindowId = u32;
+
+// xkbcommon is used by input.zig and events.zig directly; not re-exported from defs.
 
 // Modifier masks
 //
@@ -76,7 +83,7 @@ pub const Action = union(enum) {
 
 pub const Keybind = struct {
     modifiers: u16, // XCB API requirement
-    keysym:    u32, // X11 keysym (must be u32) //TODO: why?
+    keysym:    u32, // xcb_keysym_t is uint32_t in every version of the X11 protocol spec
     keycode:   ?u8 = null,
     action:    Action,
 };
@@ -159,10 +166,10 @@ pub const TilingConfig = struct {
     master_side:  MasterSide     = .left,
     master_width: parser.ScalableValue = parser.ScalableValue.percentage(50.0),
     master_count: u8             = 1,
-    gap_width:    parser.ScalableValue = parser.ScalableValue.absolute(0.0),
+    gap_width:    parser.ScalableValue = parser.ScalableValue.absolute(10.0),
     border_width: parser.ScalableValue = parser.ScalableValue.absolute(2.0),
-    border_focused:   u32 = 0x5294E2, // RGB color (must be u32) //TODO: why?
-    border_unfocused: u32 = 0x383C4A, // RGB color (must be u32) //TODO: why?
+    border_focused:   u32 = 0x5294E2, // 0xRRGGBB packed into 32 bits (X11 color format)
+    border_unfocused: u32 = 0x383C4A, // 0xRRGGBB packed into 32 bits (X11 color format)
 
     // Per-layout variation preferences
     //
@@ -295,7 +302,7 @@ pub const BarConfig = struct {
     scaled_font_size:  u16                    = 10, // Can exceed 255 on high DPI - u16 is correct //TODO: it isn't clear what this comment refers to
     spacing:           parser.ScalableValue   = parser.ScalableValue.absolute(12.0),
 
-    // RGB colors (must be u32) //TODO: why?
+    // Colors: 0xRRGGBB packed into 32 bits (X11 color format).
     bg:          u32 = 0x222222,
     fg:          u32 = 0xBBBBBB,
     selected_bg: u32 = 0x005577,
@@ -477,7 +484,7 @@ pub const WindowGeometry = struct {
 };
 
 pub const FullscreenInfo = struct {
-    window:         u32, // XCB window ID (must be u32) //TODO: why?
+    window:         WindowId,
     saved_geometry: WindowGeometry,
 };
 
@@ -527,7 +534,7 @@ pub const FullscreenState = struct {
 
 pub const DragState = struct {
     active:           bool  = false,
-    window:           u32   = 0, // XCB window ID (must be u32) //TODO: why?
+    window:           WindowId = 0,
     mode:             enum  { move, resize } = .move,
     start_x:          i16   = 0,
     start_y:          i16   = 0,
@@ -608,21 +615,15 @@ pub const WM = struct {
     allocator:      std.mem.Allocator,
     conn:           *xcb.xcb_connection_t,
     screen:         *xcb.xcb_screen_t,
-    root:           u32, // XCB window ID - must be u32 (TODO)
+    root:           WindowId,
     config:         Config,
-    focused_window: ?u32 = null,
-    fullscreen:     FullscreenState,
-    xkb_state:      ?*xkbcommon.XkbState,
     dpi_info:       dpi.DpiInfo,
     drag_state:     DragState = .{},
     spawn_queue:    SpawnQueue = .{},
-    last_event_time:        u32 = 0,
-    suppress_focus_reason:  FocusSuppressReason = .none,
     spawn_cursor_x: i16 = 0,
     spawn_cursor_y: i16 = 0,
 
     pub fn deinit(self: *WM) void {
-        self.fullscreen.deinit();
         self.config.deinit();
     }
 };

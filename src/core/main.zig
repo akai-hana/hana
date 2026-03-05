@@ -117,8 +117,6 @@ pub fn main() !void {
         .screen     = screen,
         .root       = root,
         .config     = user_config,
-        .fullscreen = defs.FullscreenState.init(allocator),
-        .xkb_state  = xkb_state,
         .dpi_info   = dpi_info,
     };
     defer wm.deinit();
@@ -130,12 +128,12 @@ pub fn main() !void {
     const signal_fd = try events.setupSignalFd();
     defer std.posix.close(signal_fd);
 
-    try events.initModules(&wm);
+    try events.initModules(&wm, xkb_state);
     defer events.deinitModules();
 
-    bar.init(&wm) catch |err| {
-        if (err != error.BarDisabled) debug.err("Bar init failed: {}", .{err});
-    };
+    if (wm.config.bar.enabled) {
+        bar.init(&wm) catch |err| debug.err("Bar init failed: {}", .{err});
+    }
     defer bar.deinit();
 
     bar.updateTimerState();

@@ -1,4 +1,13 @@
-//! Fullscreen management — enter, exit, and toggle fullscreen for the focused window.
+//! Fullscreen management — enter, exit, toggle, and state queries.
+//!
+//! All fullscreen state lives in the module-level g_state singleton,
+//! owned and freed here. WM no longer carries a fullscreen field.
+//! Callers use the module-level query functions (isFullscreen,
+//! getForWorkspace, etc.) rather than going through WM.
+//!
+//! The two commit helpers only queue XCB requests; the caller owns
+//! grab/ungrab/flush so paired exit+enter transitions can share one
+//! grab with no intermediate composited frame.
 
 const std        = @import("std");
 const defs       = @import("defs");
@@ -7,10 +16,66 @@ const WM         = defs.WM;
 const utils      = @import("utils");
 const tiling     = @import("tiling");
 const workspaces = @import("workspaces");
+const focus    = @import("focus");
 const bar        = @import("bar");
 const constants  = @import("constants");
 const debug      = @import("debug");
 const minimize   = @import("minimize");
+
+// ── Module state ──────────────────────────────────────────────────────────────
+
+var g_state: ?defs.FullscreenState = null;
+
+pub fn init(wm: *WM) void {
+    g_state = defs.FullscreenState.init(wm.allocator);
+}
+
+pub fn deinit() void {
+    if (g_state) |*s| s.deinit();
+    g_state = null;
+}
+
+// ── Public state queries ──────────────────────────────────────────────────────
+
+pub inline fn isFullscreen(win: u32) bool {
+    const s = g_state orelse return false;
+    return s.isFullscreen(win);
+}
+
+pub inline fn getForWorkspace(ws: u8) ?defs.FullscreenInfo {
+    const s = g_state orelse return null;
+    return s.getForWorkspace(ws);
+}
+
+/// Returns the workspace index that `win` is fullscreen on, or null.
+/// Used instead of direct window_to_workspace.get() access.
+pub inline fn workspaceFor(win: u32) ?u8 {
+    const s = g_state orelse return null;
+    return s.window_to_workspace.get(win);
+}
+
+pub fn setForWorkspace(ws: u8, info: defs.FullscreenInfo) !void {
+    const s = &(g_state orelse return);
+    try s.setForWorkspace(ws, info);
+}
+
+pub fn removeForWorkspace(ws: u8) void {
+    const s = &(g_state orelse return);
+    s.removeForWorkspace(ws);
+}
+
+pub fn clear() void {
+    const s = &(g_state orelse return);
+    s.clear();
+}
+
+/// Iterator over per-workspace fullscreen entries. Diagnostics only.
+pub fn perWorkspaceIterator() ?std.AutoHashMap(u8, defs.FullscreenInfo).Iterator {
+    const s = &(g_state orelse return null);
+    return s.per_workspace.iterator();
+}
+
+// ── Geometry helpers ──────────────────────────────────────────────────────────
 
 // Fast path: tiled windows have a valid rect in the geometry cache; reading
 // from it avoids the blocking xcb_get_geometry round-trip.
@@ -18,7 +83,7 @@ const minimize   = @import("minimize");
 // a centered quarter-screen default if the reply fails or the window is offscreen.
 fn fetchWindowGeom(wm: *WM, win: u32) defs.WindowGeometry {
     if (tiling.getWindowGeom(win)) |rect| {
-        const bw: u16 = if (tiling.getState()) |ts| ts.border_width else 0;
+        const bw: u16 = if (tiling.getStateOpt()) |ts| ts.border_width else 0;
         return .{
             .x            = rect.x,
             .y            = rect.y,
@@ -52,11 +117,10 @@ fn fetchWindowGeom(wm: *WM, win: u32) defs.WindowGeometry {
     };
 }
 
-// Only queue XCB requests; the caller owns grab/ungrab/flush so that paired
-// exit+enter transitions can share a single grab with no intermediate frame.
+// ── Commit helpers (XCB-only; caller owns grab/ungrab/flush) ──────────────────
 
 fn enterFullscreenCommit(wm: *WM, win: u32, ws: u8, geom: defs.WindowGeometry) void {
-    wm.fullscreen.setForWorkspace(ws, .{
+    setForWorkspace(ws, .{
         .window         = win,
         .saved_geometry = geom,
     }) catch {
@@ -93,12 +157,12 @@ fn enterFullscreenCommit(wm: *WM, win: u32, ws: u8, geom: defs.WindowGeometry) v
 }
 
 fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
-    const fs_info = wm.fullscreen.getForWorkspace(ws) orelse return;
+    const fs_info = getForWorkspace(ws) orelse return;
     if (fs_info.window != win) return;
 
     const saved = fs_info.saved_geometry;
 
-    wm.fullscreen.removeForWorkspace(ws);
+    removeForWorkspace(ws);
 
     bar.setBarState(wm, .show_fullscreen);
 
@@ -122,10 +186,12 @@ fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
 
     _ = xcb.xcb_change_window_attributes(wm.conn, win,
         xcb.XCB_CW_BORDER_PIXEL, &[_]u32{
-            if (wm.focused_window == win) wm.config.tiling.border_focused
+            if (focus.getFocused() == win) wm.config.tiling.border_focused
             else wm.config.tiling.border_unfocused,
         });
 }
+
+// ── Public actions ────────────────────────────────────────────────────────────
 
 /// Enter fullscreen for `win` on the current workspace.
 /// Pass a pre-computed geometry in `saved_geom` (e.g. when restoring a
@@ -141,10 +207,10 @@ pub fn enterFullscreen(wm: *WM, win: u32, saved_geom: ?defs.WindowGeometry) void
 }
 
 pub fn toggleFullscreen(wm: *WM) void {
-    const win        = wm.focused_window orelse return;
+    const win        = focus.getFocused() orelse return;
     const current_ws = workspaces.getCurrentWorkspace() orelse return;
 
-    if (wm.fullscreen.getForWorkspace(current_ws)) |fs_info| {
+    if (getForWorkspace(current_ws)) |fs_info| {
         if (fs_info.window == win) {
             _ = xcb.xcb_grab_server(wm.conn);
             exitFullscreenCommit(wm, win, current_ws);

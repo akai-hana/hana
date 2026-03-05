@@ -50,13 +50,20 @@ const KeybindState = struct {
     }
 };
 
-var keybind_state: ?KeybindState = null;
+var keybind_state: ?KeybindState     = null;
+var xkb_state:     ?*xkbcommon.XkbState = null;
 
-pub fn init(wm: *WM) !void {
+/// Returns the XkbState pointer. Used by events.zig for config reload.
+pub fn getXkbState() *xkbcommon.XkbState {
+    return xkb_state.?;
+}
+
+pub fn init(wm: *WM, xkb: *xkbcommon.XkbState) !void {
     var state = KeybindState.init(wm.allocator);
     errdefer state.deinit();
     try state.rebuild(wm);
     keybind_state = state;
+    xkb_state     = xkb;
 }
 
 pub fn deinit() void {
@@ -95,12 +102,11 @@ pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
 // Event handlers
 
 pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
-    wm.last_event_time = event.time;
+    focus.setLastEventTime(event.time);
 
     const state  = &(keybind_state orelse return);
-    const xkb_ptr: *xkbcommon.XkbState = @ptrCast(@alignCast(wm.xkb_state.?));
     const mods   = utils.normalizeModifiers(event.state);
-    const keysym = xkb_ptr.keycodeToKeysym(event.detail);
+    const keysym = xkb_state.?.keycodeToKeysym(event.detail);
     const key    = makeHash(mods, keysym);
 
     // When drun is active it owns all key input — with one exception: if the
@@ -130,7 +136,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) void {
-    wm.last_event_time = event.time;
+    focus.setLastEventTime(event.time);
     const clicked_window = if (event.child != 0) event.child else event.event;
 
     if (clicked_window == 0 or clicked_window == wm.root) {
@@ -176,18 +182,18 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
 }
 
 pub fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, wm: *WM) void {
-    wm.last_event_time = event.time;
+    focus.setLastEventTime(event.time);
     if (drag.isDragging(wm)) drag.stopDrag(wm);
 }
 
 pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
-    wm.last_event_time = event.time;
+    focus.setLastEventTime(event.time);
     if (drag.isDragging(wm)) {
         drag.updateDrag(wm, event.root_x, event.root_y);
         return;
     }
     // Real movement lifts window-spawn focus suppression.
-    if (wm.suppress_focus_reason == .window_spawn) wm.suppress_focus_reason = .none;
+    if (focus.getSuppressReason() == .window_spawn) focus.setSuppressReason(.none);
     // POINTER_MOTION_HINT delivers one event per gesture; re-arm by querying pointer.
     //
     // We fire the request and immediately discard the reply — we don't use any
@@ -218,7 +224,7 @@ fn closeWindow(wm: *WM, win: u32) void {
 }
 
 /// Send a WM_DELETE_WINDOW client message (ICCCM §4.1.2.7).
-/// Uses wm.last_event_time as required by ICCCM §4.1.7.
+/// Uses focus.getLastEventTime() as required by ICCCM §4.1.7.
 fn sendDeleteEvent(wm: *WM, win: u32) void {
     const protocols_atom = utils.getAtomCached("WM_PROTOCOLS")    catch return;
     const delete_atom    = utils.getAtomCached("WM_DELETE_WINDOW") catch return;
@@ -228,7 +234,7 @@ fn sendDeleteEvent(wm: *WM, win: u32) void {
     event.window         = win;
     event.type           = protocols_atom;
     event.data.data32[0] = delete_atom;
-    event.data.data32[1] = wm.last_event_time;
+    event.data.data32[1] = focus.getLastEventTime();
     _ = xcb.xcb_send_event(wm.conn, 0, win, xcb.XCB_EVENT_MASK_NO_EVENT, @ptrCast(&event));
     _ = xcb.xcb_flush(wm.conn);
 }
@@ -238,13 +244,13 @@ fn sendDeleteEvent(wm: *WM, win: u32) void {
 fn executeAction(action: *const defs.Action, wm: *WM) !void {
     switch (action.*) {
         .toggle_fullscreen      => fullscreen.toggleFullscreen(wm),
-        .close_window           => { if (wm.focused_window) |win| closeWindow(wm, win); },
+        .close_window           => { if (focus.getFocused()) |win| closeWindow(wm, win); },
         .reload_config          => {
             debug.info("[RELOAD] flag set by keybinding", .{});
             utils.reload();
         },
-        .toggle_layout          => { tiling.toggleLayout(wm);        bar.redrawImmediate(wm); },
-        .toggle_layout_reverse  => { tiling.toggleLayoutReverse(wm); bar.redrawImmediate(wm); },
+        .toggle_layout          => { tiling.toggleLayout(wm);        bar.markDirty(); }, // no grab — coalesce
+        .toggle_layout_reverse  => { tiling.toggleLayoutReverse(wm); bar.markDirty(); }, // no grab — coalesce
         .toggle_bar_visibility  => bar.setBarState(wm, .toggle),
         .toggle_bar_position    => bar.toggleBarPosition(wm),
         .increase_master        => tiling.increaseMasterWidth(wm),
@@ -254,21 +260,21 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .toggle_tiling          => tiling.toggleTiling(wm),
         .swap_master            => tiling.swapWithMaster(wm),
         .cycle_layout_variation => tiling.cycleLayoutVariation(wm),
-        .drun_toggle            => { drun.toggle(wm); bar.redrawImmediate(wm); },
+        .drun_toggle            => { drun.toggle(wm); bar.markDirty(); }, // no grab — coalesce
         .dump_state             => dumpState(wm),
         .emergency_recover      => emergencyRecover(wm),
         .minimize_window        => minimize.minimizeWindow(wm),
         .unminimize_lifo        => minimize.unminimize(wm, .lifo),
         .unminimize_fifo        => minimize.unminimize(wm, .fifo),
         .unminimize_all         => minimize.unminimizeAll(wm),
-        .toggle_float           => { if (wm.focused_window) |win| tiling.toggleWindowFloat(wm, win); },
-        .tag_toggle             => |ws| { if (wm.focused_window) |win| workspaces.tagToggle(wm, win, ws); },
-        .tag_additive           => |ws| { if (wm.focused_window) |win| workspaces.tagAdditive(wm, win, ws); },
+        .toggle_float           => { if (focus.getFocused()) |win| tiling.toggleWindowFloat(wm, win); },
+        .tag_toggle             => |ws| { if (focus.getFocused()) |win| workspaces.tagToggle(wm, win, ws); },
+        .tag_additive           => |ws| { if (focus.getFocused()) |win| workspaces.tagAdditive(wm, win, ws); },
         .sequence               => |acts| { for (acts) |*a| try executeAction(a, wm); },
         .exec                   => |cmd| try executeShellCommand(wm, cmd),
         .switch_workspace       => |ws| workspaces.switchTo(wm, ws),
-        .move_to_workspace      => |ws| { if (wm.focused_window) |win| workspaces.moveWindowTo(wm, win, ws) catch |e| debug.warnOnErr(e, "move_to_workspace"); },
-        .move_window            => |ws| { if (wm.focused_window) |win| workspaces.moveWindowExclusive(wm, win, ws); },
+        .move_to_workspace      => |ws| { if (focus.getFocused()) |win| workspaces.moveWindowTo(wm, win, ws) catch |e| debug.warnOnErr(e, "move_to_workspace"); },
+        .move_window            => |ws| { if (focus.getFocused()) |win| workspaces.moveWindowExclusive(wm, win, ws); },
     }
 }
 
@@ -380,28 +386,28 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
 
 fn dumpState(wm: *WM) void {
     debug.info("========== STATE DUMP ==========", .{});
-    debug.info("Focused: {?x}",         .{wm.focused_window});
-    const win_count = if (workspaces.getState()) |s| s.window_to_workspaces.count() else 0;
+    debug.info("Focused: {?x}",         .{focus.getFocused()});
+    const win_count = if (workspaces.getStateOpt()) |s| s.window_to_workspaces.count() else 0;
     debug.info("Total windows: {}",     .{win_count});
-    debug.info("Suppress focus: {s}",   .{@tagName(wm.suppress_focus_reason)});
+    debug.info("Suppress focus: {s}",   .{@tagName(focus.getSuppressReason())});
 
-    var fs_it = wm.fullscreen.per_workspace.iterator();
+    var fs_opt_it = fullscreen.perWorkspaceIterator();
     var fs_count: u8 = 0;
-    while (fs_it.next()) |entry| {
+    if (fs_opt_it) |*fs_it| while (fs_it.next()) |entry| {
         debug.info("Fullscreen on workspace {}: {x}", .{ entry.key_ptr.*, entry.value_ptr.window });
         fs_count += 1;
-    }
+    };
     if (fs_count == 0) debug.info("Fullscreen: none", .{});
     debug.info("Drag active: {}", .{wm.drag_state.active});
 
-    if (workspaces.getState()) |ws_state| {
+    if (workspaces.getStateOpt()) |ws_state| {
         debug.info("Current workspace: {}", .{ws_state.current + 1});
         for (ws_state.workspaces, 0..) |*ws, i| {
             debug.info("  WS{}: {} windows", .{ i + 1, ws.windows.count() });
         }
     }
 
-    if (tiling.getState()) |t_state| {
+    if (tiling.getStateOpt()) |t_state| {
         debug.info("Tiling enabled: {}",  .{t_state.enabled});
         debug.info("Tiling layout: {s}", .{@tagName(t_state.layout)});
         debug.info("Tiled windows: {}",  .{t_state.windows.count()});
@@ -414,18 +420,18 @@ fn dumpState(wm: *WM) void {
 fn emergencyRecover(wm: *WM) void {
     debug.warn("========== EMERGENCY RECOVERY ==========", .{});
 
-    if (workspaces.getState()) |ws_state| {
+    if (workspaces.getStateOpt()) |ws_state| {
         for (ws_state.workspaces) |*ws| {
             for (ws.windows.items()) |win| _ = xcb.xcb_map_window(wm.conn, win);
         }
     }
 
-    if (tiling.getState()) |t_state| {
+    if (tiling.getStateOpt()) |t_state| {
         t_state.enabled = false;
         debug.warn("Tiling disabled", .{});
     }
 
-    wm.fullscreen.clear();
+    fullscreen.clear();
     debug.warn("Fullscreen cleared", .{});
 
     if (wm.drag_state.active) {

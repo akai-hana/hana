@@ -12,6 +12,7 @@ const Tracking = @import("tracking").Tracking;
 const constants = @import("constants");
 const debug    = @import("debug");
 const minimize = @import("minimize");
+const fullscreen = @import("fullscreen");
 
 // Comptime-generated workspace name strings ("1".."20"), never heap-allocated.
 // Workspaces beyond index 20 fall back to "?". Config validation does not
@@ -59,9 +60,23 @@ pub const State = struct {
     allocator:            std.mem.Allocator,
 };
 
-var g_state: ?State = null;
+// Module singleton — guaranteed live after init(), never null during normal operation.
+// g_initialized guards debug assertions; production builds pay zero cost.
+var g_state:       State = undefined;
+var g_initialized: bool  = false;
 
-pub inline fn getState() ?*State { return if (g_state) |*s| s else null; }
+/// Returns a pointer to the live state.
+/// Asserts in Debug builds that init() has been called.
+pub inline fn getState() *State {
+    std.debug.assert(g_initialized);
+    return &g_state;
+}
+
+/// Safe pre-init query for code that may run before the event loop starts.
+/// Returns null only during the narrow startup window before init() is called.
+pub inline fn getStateOpt() ?*State {
+    return if (g_initialized) &g_state else null;
+}
 
 /// Resolves a canonical layout name string (e.g. "master-stack", "monocle")
 /// to the tiling.Layout enum. Falls back to the first available layout.
@@ -70,15 +85,12 @@ fn layoutFromName(name: []const u8) tiling.Layout {
     return std.meta.stringToEnum(tiling.Layout, name) orelse tiling.defaultLayout();
 }
 
-pub fn init(wm: *WM) void {
+pub fn init(wm: *WM) !void {
     const count = wm.config.workspaces.count;
-    const wss = wm.allocator.alloc(Workspace, count) catch {
-        debug.err("Failed to allocate workspaces", .{});
-        return;
-    };
+    const wss = try wm.allocator.alloc(Workspace, count);
 
     const default_layout: tiling.Layout =
-        if (tiling.getState()) |ts| ts.layout else .master;
+        if (tiling.getStateOpt()) |ts| ts.layout else .master;
 
     const cfg_tiling = &wm.config.tiling;
 
@@ -113,19 +125,19 @@ pub fn init(wm: *WM) void {
         .window_to_workspaces = w2ws,
         .allocator            = wm.allocator,
     };
+    g_initialized = true;
 }
 
 pub fn deinit() void {
-    if (g_state) |*s| {
-        for (s.workspaces) |*ws| ws.deinit();
-        s.allocator.free(s.workspaces);
-        s.window_to_workspaces.deinit();
-    }
-    g_state = null;
+    if (!g_initialized) return;
+    for (g_state.workspaces) |*ws| ws.deinit();
+    g_state.allocator.free(g_state.workspaces);
+    g_state.window_to_workspaces.deinit();
+    g_initialized = false;
 }
 
 pub fn removeWindow(win: u32) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (s.window_to_workspaces.fetchRemove(win)) |entry| {
         var remaining = entry.value;
         while (remaining != 0) {
@@ -141,7 +153,7 @@ pub fn removeWindow(win: u32) void {
 }
 
 pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
-    const s = getState() orelse return;
+    const s = getState();
     if (target_ws >= s.workspaces.len) {
         debug.err("Invalid target workspace: {}", .{target_ws});
         return;
@@ -176,7 +188,7 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
 
     _ = xcb.xcb_configure_window(wm.conn, win,
         xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
-    if (wm.focused_window == win) focus.clearFocus(wm);
+    if (focus.getFocused() == win) focus.clearFocus(wm);
     if (wm.config.tiling.enabled) tiling.dirty();
     tiling.invalidateGeomCache(win);
     bar.markDirty();
@@ -226,7 +238,7 @@ fn setWindowMask(s: *State, win: u32, new_mask: u64) void {
 /// Pair with tag_toggle (Mod+Alt+N) to accumulate extra workspaces after
 /// the initial move.
 pub fn moveWindowExclusive(wm: *WM, win: u32, target_ws: u8) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (target_ws >= s.workspaces.len) return;
     if (minimize.isMinimized(wm, win)) return;
 
@@ -241,7 +253,7 @@ pub fn moveWindowExclusive(wm: *WM, win: u32, target_ws: u8) void {
             xcb.XCB_CONFIG_WINDOW_X,
             &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
         tiling.invalidateGeomCache(win);
-        if (wm.focused_window == win) focus.clearFocus(wm);
+        if (focus.getFocused() == win) focus.clearFocus(wm);
     }
 
     if (wm.config.tiling.enabled) tiling.retileCurrentWorkspace(wm);
@@ -260,7 +272,7 @@ pub fn moveWindowExclusive(wm: *WM, win: u32, target_ws: u8) void {
 /// • Bit N clear → set it  (window gains N). Silently added to an inactive workspace.
 /// • Last workspace is protected: cannot clear the final bit.
 pub fn tagToggle(wm: *WM, win: u32, target_ws: u8) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (target_ws >= s.workspaces.len) return;
     if (minimize.isMinimized(wm, win)) return;
 
@@ -310,7 +322,7 @@ pub fn tagToggle(wm: *WM, win: u32, target_ws: u8) void {
 /// • N != current → pure toggle of bit N, current bit unaffected.
 /// • Last workspace protected as in tagToggle.
 pub fn tagAdditive(wm: *WM, win: u32, target_ws: u8) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (target_ws >= s.workspaces.len) return;
     if (minimize.isMinimized(wm, win)) return;
 
@@ -345,7 +357,7 @@ pub fn tagAdditive(wm: *WM, win: u32, target_ws: u8) void {
 // ── Workspace switch ──────────────────────────────────────────────────────────
 
 pub fn switchTo(wm: *WM, ws_id: u8) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (ws_id >= s.workspaces.len or ws_id == s.current) return;
     const old = s.current;
     s.current = ws_id;
@@ -356,7 +368,7 @@ pub fn switchTo(wm: *WM, ws_id: u8) void {
 
 /// Returns the workspace bitmask for `win`, or null if unmanaged.
 pub inline fn getWindowWorkspaceMask(win: u32) ?u64 {
-    const s = getState() orelse return null;
+    const s = getStateOpt() orelse return null;
     return s.window_to_workspaces.get(win);
 }
 
@@ -383,22 +395,22 @@ inline fn lastFocusedOrFirst(wm: *const WM, ws: *const Workspace) ?u32 {
 }
 
 pub inline fn getCurrentWorkspace() ?u8 {
-    const s = getState() orelse return null;
+    const s = getStateOpt() orelse return null;
     return s.current;
 }
 
 pub inline fn isOnCurrentWorkspace(win: u32) bool {
-    const s = getState() orelse return false;
+    const s = getStateOpt() orelse return false;
     return isWindowOnWorkspace(win, s.current);
 }
 
 pub inline fn getCurrentWorkspaceObject() ?*Workspace {
-    const s = getState() orelse return null;
+    const s = getStateOpt() orelse return null;
     return &s.workspaces[s.current];
 }
 
 pub inline fn getWorkspaceCount() usize {
-    const s = getState() orelse return 0;
+    const s = getStateOpt() orelse return 0;
     return s.workspaces.len;
 }
 
@@ -472,7 +484,7 @@ fn showFullscreenWindow(wm: *WM, info: defs.FullscreenInfo) void {
 
 // Step 3b: restore geometry for the new workspace.
 fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace, old_ws: u8) void {
-    const tiling_active = if (tiling.getState()) |t| t.enabled else false;
+    const tiling_active = if (tiling.getStateOpt()) |t| t.enabled else false;
 
     if (tiling_active) {
         if (!wm.config.tiling.global_layout) tiling.syncLayoutFromWorkspace(ws);
@@ -546,14 +558,14 @@ fn applyPostSwitchFocus(wm: *WM, new_ws: u8, new_ws_obj: *const Workspace, ptr_c
 }
 
 fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
-    const s          = getState().?;
+    const s          = getState();
     const new_ws_obj = &s.workspaces[new_ws];
-    const fs_info    = wm.fullscreen.getForWorkspace(new_ws);
+    const fs_info    = fullscreen.getForWorkspace(new_ws);
 
-    wm.suppress_focus_reason = .none;
+    focus.setSuppressReason(.none);
 
     // Remember which window had focus on the outgoing workspace.
-    s.workspaces[old_ws].last_focused = wm.focused_window;
+    s.workspaces[old_ws].last_focused = focus.getFocused();
 
     // Pre-fire the pointer query before the server grab so the round-trip
     // overlaps with hideWorkspaceWindows + restoreWorkspaceWindows.

@@ -17,6 +17,7 @@ const tiling     = @import("tiling");
 const workspaces = @import("workspaces");
 const bar        = @import("bar");
 const minimize   = @import("minimize");
+const fullscreen = @import("fullscreen");
 const drun       = @import("drun");
 
 const IoUring = std.os.linux.IoUring;
@@ -75,16 +76,18 @@ pub inline fn dispatch(event_type: u8, event: *anyopaque, wm: *WM) void {
 
 // Module lifecycle
 
-pub fn initModules(wm: *WM) !void {
-    try input.init(wm);
-    workspaces.init(wm);
-    tiling.init(wm);
-    minimize.init(wm);
+pub fn initModules(wm: *WM, xkb: *xkbcommon.XkbState) !void {
+    try input.init(wm, xkb);
+    try workspaces.init(wm);
+    try tiling.init(wm);
+    try minimize.init(wm);
+    fullscreen.init(wm);
     drun.init(wm.conn);
 }
 
 pub fn deinitModules() void {
     drun.deinit();
+    fullscreen.deinit();
     minimize.deinit();
     tiling.deinit();
     workspaces.deinit();
@@ -175,7 +178,7 @@ fn handleConfigReload(wm: *WM) !void {
         debug.err("Invalid config: master_count must be > 0, keeping old", .{});
         return error.InvalidConfig;
     }
-    config.resolveKeybindings(new_config.keybindings.items, @ptrCast(@alignCast(wm.xkb_state)), wm.allocator);
+    config.resolveKeybindings(new_config.keybindings.items, input.getXkbState(), wm.allocator);
     config.finalizeConfig(&new_config, wm.screen);
     var old_config = wm.config;
     wm.config = new_config;
@@ -193,7 +196,12 @@ fn handleConfigReload(wm: *WM) !void {
         // new_config is still live (errdefer will deinit it on return)
         return err;
     };
+    // All fallible operations that reference old_config are complete.
+    // Deinit old config only now — the rollback window is closed after this point.
     old_config.deinit();
+    // The post-swap steps below (tiling reload, bar reload) do not reference
+    // old_config and do not have rollback semantics — they may log errors but
+    // are not expected to fail in ways that require reverting the config swap.
     tiling.reloadConfig(wm);
     bar.updateTimerState();
     bar.reload(wm);

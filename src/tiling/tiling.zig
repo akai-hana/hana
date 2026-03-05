@@ -7,6 +7,7 @@ const WM         = defs.WM;
 const utils      = @import("utils");
 const constants  = @import("constants");
 const workspaces = @import("workspaces");
+const focus    = @import("focus");
 const bar        = @import("bar");
 const Tracking   = @import("tracking").Tracking;
 const debug      = @import("debug");
@@ -31,10 +32,11 @@ const master_layout    = if (layout_flags.has_master)    @import("master")    el
 const monocle_layout   = if (layout_flags.has_monocle)   @import("monocle")   else LayoutStub;
 const grid_layout      = if (layout_flags.has_grid)      @import("grid")      else LayoutStub;
 const fibonacci_layout = if (layout_flags.has_fibonacci) @import("fibonacci") else LayoutStub;
+const fullscreen = @import("fullscreen");
 
 const MAX_MASTER_WIDTH: f32 = 0.95;
 // Stack-local buffer size for per-retile workspace window list.
-const MAX_WS_WINDOWS: u7 = 127; //TODO: make dynamically memory allocated, instead of hard-capped to an arbitrary number
+const MAX_WS_WINDOWS: usize = 128;
 
 pub const Layout = enum { master, monocle, grid, fibonacci };
 
@@ -102,7 +104,7 @@ pub const State = struct {
     master_side:      defs.MasterSide,
     master_width:     f32,
     master_count:     u8,
-    gap_width:        u16,
+    gaps:             u16,
     border_width:     u16,
     border_focused:   u32,
     border_unfocused: u32,
@@ -140,12 +142,12 @@ pub const State = struct {
     size_hints: std.AutoHashMapUnmanaged(u32, layouts.SizeHints),
 
     pub inline fn margins(self: *const State) utils.Margins {
-        return .{ .gap = self.gap_width, .border = self.border_width };
+        return .{ .gap = self.gaps, .border = self.border_width };
     }
 
-    pub inline fn borderColor(self: *const State, wm: *const WM, win: u32) u32 {
-        if (wm.fullscreen.isFullscreen(win)) return 0;
-        return if (wm.focused_window == win) self.border_focused else self.border_unfocused;
+    pub inline fn borderColor(self: *const State, win: u32) u32 {
+        if (fullscreen.isFullscreen(win)) return 0;
+        return if (focus.getFocused() == win) self.border_focused else self.border_unfocused;
     }
 
     pub fn deinit(self: *State) void {
@@ -157,9 +159,23 @@ pub const State = struct {
 
 // Module singleton
 
-var g_state: ?State = null;
+// Module singleton — guaranteed live after init(), never null during normal operation.
+// g_initialized guards debug assertions; production builds pay zero cost.
+var g_state:       State = undefined;
+var g_initialized: bool  = false;
 
-pub inline fn getState() ?*State { return if (g_state) |*s| s else null; }
+/// Returns a pointer to the live state.
+/// Asserts in Debug builds that init() has been called.
+pub inline fn getState() *State {
+    std.debug.assert(g_initialized);
+    return &g_state;
+}
+
+/// Safe pre-init query for code that may run before the event loop starts.
+/// Returns null only during the narrow startup window before init() is called.
+pub inline fn getStateOpt() ?*State {
+    return if (g_initialized) &g_state else null;
+}
 
 // Config
 
@@ -191,7 +207,7 @@ fn buildState(wm: *WM) State {
         .master_side      = wm.config.tiling.master_side,
         .master_width     = computeMasterWidth(wm),
         .master_count     = wm.config.tiling.master_count,
-        .gap_width             = dpi.scaleGaps(wm.config.tiling.gap_width, wm.dpi_info.scale_factor, screen_height),
+        .gaps             = dpi.scaleGaps(wm.config.tiling.gap_width, wm.dpi_info.scale_factor, screen_height),
         .border_width     = dpi.scaleBorderWidth(wm.config.tiling.border_width, wm.dpi_info.scale_factor, screen_height),
         .border_focused   = wm.config.tiling.border_focused,
         .border_unfocused = wm.config.tiling.border_unfocused,
@@ -204,17 +220,19 @@ fn buildState(wm: *WM) State {
     };
 }
 
-pub fn init(wm: *WM) void {
-    g_state = buildState(wm);
+pub fn init(wm: *WM) !void {
+    g_state       = buildState(wm);
+    g_initialized = true;
 }
 
 pub fn deinit() void {
-    if (g_state) |*s| s.deinit();
-    g_state = null;
+    if (!g_initialized) return;
+    g_state.deinit();
+    g_initialized = false;
 }
 
 pub fn reloadConfig(wm: *WM) void {
-    const s = getState() orelse return;
+    const s = getState();
 
     // Preserve runtime tracking state.
     const saved_windows = s.windows;
@@ -235,13 +253,14 @@ pub fn reloadConfig(wm: *WM) void {
     s.size_hints = .{};  // disown so buildState/deinit doesn't double-free
 
     g_state = buildState(wm);
-    const ns = &g_state.?;
+    const ns = &g_state;
     ns.windows    = saved_windows;
     ns.cache      = saved_cache;    // reuse the allocation
     ns.size_hints = saved_size_hints;
 
     // On config reload, reset all workspace layouts to the new default.
-    if (workspaces.getState()) |ws_state| {
+    {
+        const ws_state = workspaces.getState();
         for (ws_state.workspaces) |*ws| ws.layout = ns.layout;
     }
 
@@ -255,7 +274,7 @@ pub fn reloadConfig(wm: *WM) void {
                 xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{ns.border_width});
         }
         retileCurrentWorkspace(wm);
-        bar.redrawImmediate(wm);
+        bar.redrawImmediate(wm); // inside grab — must complete before ungrab
         _ = xcb.xcb_ungrab_server(wm.conn);
         _ = xcb.xcb_flush(wm.conn);
     }
@@ -265,13 +284,13 @@ pub fn reloadConfig(wm: *WM) void {
 /// Called from window.zig at MapRequest time.
 pub fn cacheSizeHints(allocator: std.mem.Allocator, win: u32, hints: layouts.SizeHints) void {
     if (hints.min_width == 0 and hints.min_height == 0) return;
-    const s = getState() orelse return;
+    const s = getState();
     s.size_hints.put(allocator, win, hints) catch {};
 }
 
 /// Evict the size-hint entry for `win`. Called from window.zig at unmanage time.
 pub fn evictSizeHints(win: u32) void {
-    const s = getState() orelse return;
+    const s = getState();
     _ = s.size_hints.remove(win);
 }
 
@@ -279,7 +298,7 @@ pub fn evictSizeHints(win: u32) void {
 
 pub fn addWindow(wm: *WM, window_id: u32) void {
     std.debug.assert(window_id != 0);
-    const s = getState() orelse return;
+    const s = getState();
     if (!s.enabled) return;
 
     if (s.layout == .master and s.layout_variations.master == .fifo) {
@@ -290,7 +309,7 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
     s.dirty = true;
     s.ws_geom_valid = 0;
 
-    const border_color = s.borderColor(wm, window_id);
+    const border_color = s.borderColor(window_id);
     _ = xcb.xcb_change_window_attributes(wm.conn, window_id,
         xcb.XCB_CW_BORDER_PIXEL, &[_]u32{border_color});
     _ = xcb.xcb_configure_window(wm.conn, window_id,
@@ -304,7 +323,7 @@ pub fn addWindow(wm: *WM, window_id: u32) void {
 }
 
 pub fn removeWindow(window_id: u32) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (s.windows.remove(window_id)) {
         s.dirty = true;
         s.ws_geom_valid = 0;
@@ -321,7 +340,7 @@ pub fn removeWindow(window_id: u32) void {
 /// the current layout's LIFO/FIFO insertion rule) and immediately retiles
 /// the workspace so the new window gets a proper slot.
 pub fn toggleWindowFloat(wm: *WM, window_id: u32) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (!s.enabled) return;
 
     if (s.windows.contains(window_id)) {
@@ -340,7 +359,7 @@ pub fn toggleWindowFloat(wm: *WM, window_id: u32) void {
 /// Called by the workspace switcher before pushing windows off-screen so that
 /// floating windows can be restored to their exact position on return.
 pub fn saveWindowGeom(window_id: u32, rect: utils.Rect) void {
-    const s = getState() orelse return;
+    const s = getState();
     const gop = s.cache.getOrPut(s.allocator, window_id) catch return;
     gop.value_ptr.rect = rect;
     if (!gop.found_existing) gop.value_ptr.border = 0;
@@ -349,7 +368,7 @@ pub fn saveWindowGeom(window_id: u32, rect: utils.Rect) void {
 /// Return the cached geometry for any window (tiled or floating).
 /// Returns null when no entry exists or the entry was invalidated (zeroed rect).
 pub inline fn getWindowGeom(window_id: u32) ?utils.Rect {
-    const s = getState() orelse return null;
+    const s = getStateOpt() orelse return null;
     const wd = s.cache.get(window_id) orelse return null;
     if (wd.rect.width == 0 and wd.rect.height == 0) return null;
     return wd.rect;
@@ -361,7 +380,7 @@ pub inline fn getWindowGeom(window_id: u32) ?utils.Rect {
 // a stale cache hit and skip configure_window.
 // The border entry is preserved; only the rect is zeroed.
 pub fn invalidateGeomCache(window_id: u32) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (s.cache.getPtr(window_id)) |wd| {
         wd.rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
     }
@@ -371,13 +390,13 @@ pub fn invalidateGeomCache(window_id: u32) void {
 /// for that workspace triggers a full retile. Used when a window's tag changes
 /// for an inactive workspace without touching the current one.
 pub inline fn invalidateWsGeomBit(ws_idx: u8) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (ws_idx < 64) s.ws_geom_valid &= ~(@as(u64, 1) << @intCast(ws_idx));
 }
 
 /// Mark tiling dirty without immediately retriling.
 pub inline fn dirty() void {
-    const s = getState() orelse return;
+    const s = getState();
     s.dirty = true;
 }
 
@@ -387,7 +406,7 @@ pub inline fn dirty() void {
 // Returns true  if cache is valid and positions have been replayed.
 // Returns false if cache is stale; caller must fall back to retileCurrentWorkspace.
 pub fn restoreWorkspaceGeom(wm: *WM) bool {
-    const s = getState() orelse return false;
+    const s = getStateOpt() orelse return false;
 
     var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
     const ws_count = filterWorkspaceWindows(s, &ws_buf, null);
@@ -419,7 +438,7 @@ pub fn restoreWorkspaceGeom(wm: *WM) bool {
 }
 
 pub inline fn isWindowTiled(window_id: u32) bool {
-    const s = getState() orelse return false;
+    const s = getStateOpt() orelse return false;
     return s.windows.contains(window_id);
 }
 
@@ -451,14 +470,14 @@ inline fn calculateScreenArea(wm: *WM) utils.Rect {
 
 // Retile every tiled window on every workspace.
 pub fn retileAllWorkspaces(wm: *WM) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (!s.enabled) return;
 
     const screen     = calculateScreenArea(wm);
     const ws_count   = workspaces.getWorkspaceCount();
     const current_ws = workspaces.getCurrentWorkspace() orelse return;
 
-    const ws_state_opt = if (!wm.config.tiling.global_layout) workspaces.getState() else null;
+    const ws_state_opt = if (!wm.config.tiling.global_layout) workspaces.getStateOpt() else null;
 
     const ctx = layouts.LayoutCtx{
         .conn       = wm.conn,
@@ -487,7 +506,7 @@ pub fn retileAllWorkspaces(wm: *WM) void {
     var ws_idx: u8 = 0;
     while (ws_idx < effective_ws) : (ws_idx += 1) {
         if (ws_idx == current_ws) continue;
-        if (wm.fullscreen.getForWorkspace(ws_idx)) |_| continue;
+        if (fullscreen.getForWorkspace(ws_idx)) |_| continue;
 
         const ws_windows = bufs[ws_idx][0..lens[ws_idx]];
         if (ws_windows.len == 0) continue;
@@ -506,13 +525,13 @@ pub fn retileAllWorkspaces(wm: *WM) void {
 }
 
 pub fn retileIfDirty(wm: *WM) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (!s.enabled or !s.dirty) return;
     retileCurrentWorkspace(wm);
 }
 
 pub fn retileCurrentWorkspace(wm: *WM) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (!s.enabled) return;
     retile(wm, calculateScreenArea(wm), null);
     s.dirty = false;
@@ -530,10 +549,10 @@ pub fn retileCurrentWorkspace(wm: *WM) void {
 // MUST be called inside a server grab: retile transiently moves windows to
 // their on-screen positions.
 pub fn retileInactiveWorkspace(wm: *WM, ws_idx: u8) void {
-    const s = getState() orelse return;
+    const s = getState();
     if (!s.enabled) return;
 
-    const ws_state = workspaces.getState() orelse return;
+    const ws_state = workspaces.getState();
     if (ws_idx >= ws_state.workspaces.len) return;
 
     if (ws_idx == ws_state.current) {
@@ -561,12 +580,12 @@ pub fn retileInactiveWorkspace(wm: *WM, ws_idx: u8) void {
 //           current one.  This replaces the previous ws_state.current mutation
 //           pattern used by retileInactiveWorkspace.
 fn retile(wm: *WM, screen: utils.Rect, for_ws: ?u8) void {
-    const s = getState() orelse return;
+    const s = getState();
 
     const target_ws: u8 = for_ws orelse
         @intCast(workspaces.getCurrentWorkspace() orelse return);
 
-    if (wm.fullscreen.getForWorkspace(target_ws)) |_| return;
+    if (fullscreen.getForWorkspace(target_ws)) |_| return;
 
     var ws_buf: [MAX_WS_WINDOWS]u32 = undefined;
     const ws_count = filterWorkspaceWindows(s, &ws_buf, for_ws);
@@ -586,7 +605,7 @@ fn retile(wm: *WM, screen: utils.Rect, for_ws: ?u8) void {
         .allocator  = s.allocator,
     };
     const layout: Layout = if (!wm.config.tiling.global_layout)
-        if (workspaces.getState()) |ws_state|
+        if (workspaces.getStateOpt()) |ws_state|
             if (target_ws < ws_state.workspaces.len) ws_state.workspaces[target_ws].layout else s.layout
         else s.layout
     else
@@ -615,15 +634,15 @@ fn sendBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u32)
 }
 
 inline fn updateBorders(s: *State, wm: *WM, ws_windows: []const u32) void {
-    for (ws_windows) |win| sendBorderColor(s, wm.conn, win, s.borderColor(wm, win));
+    for (ws_windows) |win| sendBorderColor(s, wm.conn, win, s.borderColor(win));
 }
 
 pub fn updateWindowFocus(wm: *WM, old_focused: ?u32, new_focused: ?u32) void {
-    const s = getState() orelse return;
+    const s = getState();
     for ([2]?u32{ old_focused, new_focused }) |opt| {
         const win = opt orelse continue;
         if (!s.windows.contains(win)) continue;
-        sendBorderColor(s, wm.conn, win, s.borderColor(wm, win));
+        sendBorderColor(s, wm.conn, win, s.borderColor(win));
     }
 }
 
@@ -655,8 +674,8 @@ fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
 }
 
 pub fn swapWithMaster(wm: *WM) void {
-    const s = getState() orelse return;
-    const focused = wm.focused_window orelse return;
+    const s = getState();
+    const focused = focus.getFocused() orelse return;
     if (!s.windows.contains(focused) or !workspaces.isOnCurrentWorkspace(focused)) return;
 
     const all = s.windows.items();
@@ -688,14 +707,14 @@ pub fn swapWithMaster(wm: *WM) void {
 // Layout and master controls 
 
 pub fn toggleTiling(wm: *WM) void {
-    const s = getState() orelse return;
+    const s = getState();
     s.enabled = !s.enabled;
     if (s.enabled) retileCurrentWorkspace(wm);
     debug.info("Tiling {s}", .{if (s.enabled) "enabled" else "disabled"});
 }
 
 pub fn syncLayoutFromWorkspace(ws: *const workspaces.Workspace) void {
-    const s = getState() orelse return;
+    const s = getState();
     const layout = ws.layout;
     const needs_retile = s.layout != layout or ws.variation != null;
     s.layout = layout;
@@ -728,17 +747,17 @@ fn applyLayout(wm: *WM, s: *State, layout: Layout) void {
 }
 
 pub fn toggleLayout(wm: *WM) void {
-    const s = getState() orelse return;
+    const s = getState();
     applyLayout(wm, s, stepCycle(s.layout, true));
 }
 
 pub fn toggleLayoutReverse(wm: *WM) void {
-    const s = getState() orelse return;
+    const s = getState();
     applyLayout(wm, s, stepCycle(s.layout, false));
 }
 
 pub fn adjustMasterCount(wm: *WM, delta: i8) void {
-    const s = getState() orelse return;
+    const s = getState();
     const new: i16 = @as(i16, s.master_count) + delta;
     if (new < 0) return;
     const clamped: u8 = @intCast(@min(new, 10));
@@ -751,7 +770,7 @@ pub inline fn increaseMasterCount(wm: *WM) void { adjustMasterCount(wm,  1); }
 pub inline fn decreaseMasterCount(wm: *WM) void { adjustMasterCount(wm, -1); }
 
 pub fn adjustMasterWidth(wm: *WM, delta: f32) void {
-    const s = getState() orelse return;
+    const s = getState();
     s.master_width = @max(defs.MIN_MASTER_WIDTH, @min(MAX_MASTER_WIDTH, s.master_width + delta));
     s.dirty = true;
     s.ws_geom_valid = 0;
@@ -762,7 +781,7 @@ pub inline fn increaseMasterWidth(wm: *WM) void { adjustMasterWidth(wm,  0.025);
 pub inline fn decreaseMasterWidth(wm: *WM) void { adjustMasterWidth(wm, -0.025); }
 
 pub fn cycleLayoutVariation(wm: *WM) void {
-    const s = getState() orelse return;
+    const s = getState();
     switch (s.layout) {
         .master => {
             s.layout_variations.master = switch (s.layout_variations.master) {
