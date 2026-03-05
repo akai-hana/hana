@@ -1,6 +1,7 @@
 //! Input handling — keyboard, mouse buttons, pointer motion, drag operations.
 
 const std        = @import("std");
+const constants = @import("constants");
 const defs       = @import("defs");
 const xkbcommon  = @import("xkbcommon");
 const utils      = @import("utils");
@@ -93,7 +94,7 @@ pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
             conn, 0, root,
             xcb.XCB_EVENT_MASK_BUTTON_PRESS | xcb.XCB_EVENT_MASK_BUTTON_RELEASE | xcb.XCB_EVENT_MASK_POINTER_MOTION,
             xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC,
-            root, xcb.XCB_NONE, button, defs.MOD_SUPER,
+            root, xcb.XCB_NONE, button, constants.MOD_SUPER,
         );
     }
     _ = xcb.xcb_flush(conn);
@@ -154,7 +155,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     // Check config-driven mouse binds (e.g. Super+MiddleClick = "toggle_float").
     // These take priority over the default drag behaviour so a bind is never
     // swallowed by the drag handler.
-    if ((event.state & defs.MOD_SUPER) != 0) {
+    if ((event.state & constants.MOD_SUPER) != 0) {
         const mods = utils.normalizeModifiers(event.state);
         for (wm.config.mouse_bindings.items) |*mb| {
             if (mb.modifiers == mods and mb.button == event.detail) {
@@ -168,7 +169,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
         }
     }
 
-    if ((event.state & defs.MOD_SUPER) != 0 and
+    if ((event.state & constants.MOD_SUPER) != 0 and
         (event.detail == MOUSE_BUTTON_LEFT or event.detail == MOUSE_BUTTON_RIGHT)) {
         drag.startDrag(wm, managed_window, event.detail, event.root_x, event.root_y);
     } else {
@@ -181,14 +182,14 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *WM) vo
     _ = xcb.xcb_flush(wm.conn);
 }
 
-pub fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, wm: *WM) void {
+pub fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t, _: *WM) void {
     focus.setLastEventTime(event.time);
-    if (drag.isDragging(wm)) drag.stopDrag(wm);
+    if (drag.isDragging()) drag.stopDrag();
 }
 
 pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) void {
     focus.setLastEventTime(event.time);
-    if (drag.isDragging(wm)) {
+    if (drag.isDragging()) {
         drag.updateDrag(wm, event.root_x, event.root_y);
         return;
     }
@@ -371,7 +372,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
 
         if (workspaces.getCurrentWorkspace()) |ws| {
             const pid_u32: u32 = if (grandchild_pid > 0) @intCast(grandchild_pid) else 0;
-            window.registerSpawn(wm, ws, pid_u32);
+            window.registerSpawn(ws, pid_u32);
         }
     } else {
         closePipe(exec_pipe);
@@ -384,7 +385,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
 // Diagnostics and recovery
 // TODO: consider migrating dumpState -> debug.zig, emergencyRecover -> utils.zig.
 
-fn dumpState(wm: *WM) void {
+fn dumpState(_: *WM) void {
     debug.info("========== STATE DUMP ==========", .{});
     debug.info("Focused: {?x}",         .{focus.getFocused()});
     const win_count = if (workspaces.getStateOpt()) |s| s.window_to_workspaces.count() else 0;
@@ -398,7 +399,7 @@ fn dumpState(wm: *WM) void {
         fs_count += 1;
     };
     if (fs_count == 0) debug.info("Fullscreen: none", .{});
-    debug.info("Drag active: {}", .{wm.drag_state.active});
+    debug.info("Drag active: {}", .{drag.isDragging()});
 
     if (workspaces.getStateOpt()) |ws_state| {
         debug.info("Current workspace: {}", .{ws_state.current + 1});
@@ -434,8 +435,8 @@ fn emergencyRecover(wm: *WM) void {
     fullscreen.clear();
     debug.warn("Fullscreen cleared", .{});
 
-    if (wm.drag_state.active) {
-        drag.stopDrag(wm);
+    if (drag.isDragging()) {
+        drag.stopDrag();
         debug.warn("Drag stopped", .{});
     }
 

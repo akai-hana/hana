@@ -5,6 +5,7 @@ const defs      = @import("defs");
 const debug     = @import("debug");
 const parser    = @import("parser");
 const xkbcommon = @import("xkbcommon");
+const constants  = @import("constants");
 
 const parseColor = parser.parseColor;
 
@@ -211,13 +212,13 @@ fn parseConfigSections(allocator: std.mem.Allocator, doc: *const parser.Document
 // Keybinding parsing
 
 const MOD_MAP = std.StaticStringMap(u16).initComptime(.{
-    .{ "Super",   defs.MOD_SUPER   },
-    .{ "Mod4",    defs.MOD_SUPER   },
-    .{ "Alt",     defs.MOD_ALT     },
-    .{ "Mod1",    defs.MOD_ALT     },
-    .{ "Control", defs.MOD_CONTROL },
-    .{ "Ctrl",    defs.MOD_CONTROL },
-    .{ "Shift",   defs.MOD_SHIFT   },
+    .{ "Super",   constants.MOD_SUPER   },
+    .{ "Mod4",    constants.MOD_SUPER   },
+    .{ "Alt",     constants.MOD_ALT     },
+    .{ "Mod1",    constants.MOD_ALT     },
+    .{ "Control", constants.MOD_CONTROL },
+    .{ "Ctrl",    constants.MOD_CONTROL },
+    .{ "Shift",   constants.MOD_SHIFT   },
 });
 
 /// Case-insensitive map from button name → XCB button number.
@@ -480,7 +481,7 @@ inline fn applyPlaceholders(allocator: std.mem.Allocator, cmd: []const u8, kill_
 inline fn substituteModVariable(allocator: std.mem.Allocator, keybind: []const u8, mod: []const u8) ![]const u8 {
     if (std.mem.startsWith(u8, keybind, "Mod+"))
         return try std.fmt.allocPrint(allocator, "{s}+{s}", .{ mod, keybind["Mod+".len..] });
-    return keybind;
+    return try allocator.dupe(u8, keybind);
 }
 
 fn parseKeybindString(str: []const u8) !struct { modifiers: u16, keysym: u32 } {

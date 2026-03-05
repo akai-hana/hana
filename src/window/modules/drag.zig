@@ -1,6 +1,7 @@
 //! Window dragging and resizing via pointer button grabs.
 
 const std   = @import("std");
+const constants = @import("constants");
 const defs   = @import("defs");
 const xcb    = defs.xcb;
 const WM     = defs.WM;
@@ -15,17 +16,22 @@ const bar    = @import("bar");
 inline fn clampDim(base: u16, delta: i16) u16 {
     return @intCast(@min(
         @as(i32, std.math.maxInt(u16)),
-        @max(@as(i32, defs.MIN_WINDOW_DIM), @as(i32, base) + @as(i32, delta)),
+        @max(@as(i32, constants.MIN_WINDOW_DIM), @as(i32, base) + @as(i32, delta)),
     ));
 }
 
+
+/// Module-level drag state. Lives here instead of WM so drag.zig is the
+/// single owner of drag state — consistent with the module-g_state pattern.
+var g_drag: defs.DragState = .{};
+
 pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
-    if (wm.drag_state.active) return;
+    if (g_drag.active) return;
     if (bar.isBarWindow(win)) return;
     // Prefer the tiling cache; fall back to a live round-trip for floating windows.
     const geom = tiling.getWindowGeom(win) orelse
         utils.getGeometry(wm.conn, win) orelse return;
-    wm.drag_state = .{
+    g_drag = .{
         .active           = true,
         .window           = win,
         .mode             = if (button == 1) .move else .resize,
@@ -49,8 +55,8 @@ pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
 }
 
 pub fn updateDrag(wm: *WM, x: i16, y: i16) void {
-    if (!wm.drag_state.active) return;
-    const drag = &wm.drag_state;
+    if (!g_drag.active) return;
+    const drag = &g_drag;
     const dx = x - drag.start_x;
     const dy = y - drag.start_y;
     const rect = switch (drag.mode) {
@@ -73,10 +79,10 @@ pub fn updateDrag(wm: *WM, x: i16, y: i16) void {
     _ = xcb.xcb_flush(wm.conn);
 }
 
-pub inline fn stopDrag(wm: *WM) void {
-    wm.drag_state.active = false;
+pub inline fn stopDrag() void {
+    g_drag.active = false;
 }
 
-pub inline fn isDragging(wm: *WM) bool {
-    return wm.drag_state.active;
+pub inline fn isDragging() bool {
+    return g_drag.active;
 }

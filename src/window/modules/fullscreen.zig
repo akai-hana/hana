@@ -22,12 +22,66 @@ const constants  = @import("constants");
 const debug      = @import("debug");
 const minimize   = @import("minimize");
 
+// ── Fullscreen types ──────────────────────────────────────────────────────────
+// Defined here (not in defs.zig) so fullscreen.zig is the single owner.
+// defs.zig used to declare these; remaining references should use fullscreen.X.
+
+pub const FullscreenInfo = struct {
+    window:         defs.WindowId,
+    saved_geometry: defs.WindowGeometry,
+};
+
+pub const FullscreenState = struct {
+    per_workspace:       std.AutoHashMap(u8, FullscreenInfo),
+    window_to_workspace: std.AutoHashMap(u32, u8),
+
+    pub fn init(allocator: std.mem.Allocator) FullscreenState {
+        var per_ws    = std.AutoHashMap(u8, FullscreenInfo).init(allocator);
+        var win_to_ws = std.AutoHashMap(u32, u8).init(allocator);
+        per_ws.ensureTotalCapacity(4)    catch {};
+        win_to_ws.ensureTotalCapacity(4) catch {};
+        return .{ .per_workspace = per_ws, .window_to_workspace = win_to_ws };
+    }
+
+    pub fn deinit(self: *FullscreenState) void {
+        self.per_workspace.deinit();
+        self.window_to_workspace.deinit();
+    }
+
+    pub inline fn isFullscreen(self: *const FullscreenState, win: u32) bool {
+        return self.window_to_workspace.contains(win);
+    }
+
+    pub inline fn getForWorkspace(self: *const FullscreenState, ws: u8) ?FullscreenInfo {
+        return self.per_workspace.get(ws);
+    }
+
+    pub fn setForWorkspace(self: *FullscreenState, ws: u8, info: FullscreenInfo) !void {
+        try self.per_workspace.ensureUnusedCapacity(1);
+        try self.window_to_workspace.ensureUnusedCapacity(1);
+        self.per_workspace.putAssumeCapacity(ws, info);
+        self.window_to_workspace.putAssumeCapacity(info.window, ws);
+    }
+
+    pub fn removeForWorkspace(self: *FullscreenState, ws: u8) void {
+        if (self.per_workspace.get(ws)) |info|
+            _ = self.window_to_workspace.remove(info.window);
+        _ = self.per_workspace.remove(ws);
+    }
+
+    pub inline fn clear(self: *FullscreenState) void {
+        self.per_workspace.clearRetainingCapacity();
+        self.window_to_workspace.clearRetainingCapacity();
+    }
+};
+
+
 // ── Module state ──────────────────────────────────────────────────────────────
 
-var g_state: ?defs.FullscreenState = null;
+var g_state: ?FullscreenState = null;
 
 pub fn init(wm: *WM) void {
-    g_state = defs.FullscreenState.init(wm.allocator);
+    g_state = FullscreenState.init(wm.allocator);
 }
 
 pub fn deinit() void {
@@ -42,7 +96,7 @@ pub inline fn isFullscreen(win: u32) bool {
     return s.isFullscreen(win);
 }
 
-pub inline fn getForWorkspace(ws: u8) ?defs.FullscreenInfo {
+pub inline fn getForWorkspace(ws: u8) ?FullscreenInfo {
     const s = g_state orelse return null;
     return s.getForWorkspace(ws);
 }
@@ -54,7 +108,7 @@ pub inline fn workspaceFor(win: u32) ?u8 {
     return s.window_to_workspace.get(win);
 }
 
-pub fn setForWorkspace(ws: u8, info: defs.FullscreenInfo) !void {
+pub fn setForWorkspace(ws: u8, info: FullscreenInfo) !void {
     const s = &(g_state orelse return);
     try s.setForWorkspace(ws, info);
 }
@@ -70,7 +124,7 @@ pub fn clear() void {
 }
 
 /// Iterator over per-workspace fullscreen entries. Diagnostics only.
-pub fn perWorkspaceIterator() ?std.AutoHashMap(u8, defs.FullscreenInfo).Iterator {
+pub fn perWorkspaceIterator() ?std.AutoHashMap(u8, FullscreenInfo).Iterator {
     const s = &(g_state orelse return null);
     return s.per_workspace.iterator();
 }
@@ -228,4 +282,15 @@ pub fn toggleFullscreen(wm: *WM) void {
     } else {
         enterFullscreen(wm, win, null);
     }
+}
+
+// ── WM event bus handler ─────────────────────────────────────────────────────
+
+pub fn onWMEvent(wm: *WM, event: @import("wm_bus").WMEvent) void {
+    // Fullscreen state cleanup (removeForWorkspace) is done by window.zig before
+    // emitting window_closed, so the payload already reflects post-removal state.
+    // The bar visibility update for fullscreen windows is handled by bar.onWMEvent
+    // to avoid a fullscreen → bar import inside the bus handler chain.
+    _ = wm;
+    _ = event;
 }

@@ -1,6 +1,7 @@
 //! XKB (X Keyboard Extension) bindings and keyboard state management.
 
 const std  = @import("std");
+const constants = @import("constants");
 const defs = @import("defs");
 
 pub const xkb = @cImport({
@@ -97,7 +98,7 @@ pub const XkbState = struct {
 inline fn retryDelay(attempt: u8) void {
     if (attempt < MAX_ATTEMPTS - 1)
         std.Io.Clock.Duration.sleep(
-            .{ .clock = .awake, .raw = .fromMilliseconds(defs.XKB_RETRY_DELAY_MS) },
+            .{ .clock = .awake, .raw = .fromMilliseconds(constants.XKB_RETRY_DELAY_MS) },
             std.Options.debug_io,
         ) catch {};
 }

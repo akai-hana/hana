@@ -18,6 +18,7 @@ const bar_flags = @import("bar_flags");
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 const drawing    = @import("drawing");
 const tiling     = @import("tiling");
+const drag       = @import("drag");
 const utils      = @import("utils");
 const workspaces = @import("workspaces");
 const focus    = @import("focus");
@@ -925,7 +926,7 @@ pub fn updateTimerState() void { clock_segment.updateTimerState(); }
 
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
     if (state) |s| if (event.window == s.window and event.count == 0) {
-        if (wm.drag_state.active) s.markDirty() else submitDraw(wm, false);
+        if (drag.isDragging()) s.markDirty() else submitDraw(wm, false);
     };
 }
 
@@ -1002,3 +1003,20 @@ fn retileAllWorkspacesNoGrab(wm: *defs.WM) void {
         }
     }
 }
+
+// ── WM event bus handler ─────────────────────────────────────────────────────
+
+pub fn onWMEvent(wm: *defs.WM, event: @import("wm_bus").WMEvent) void {
+    switch (event) {
+        .window_mapped => |_| markDirty(),
+        .window_closed => |p| {
+            // Restore bar visibility if the closed window was fullscreen
+            // (fullscreen.zig deferred this to bar.onWMEvent to avoid a
+            // fullscreen → bar import inside the handler chain).
+            if (p.was_fullscreen) setBarState(wm, .show_fullscreen);
+            redrawImmediate(wm);
+        },
+        else => {},
+    }
+}
+

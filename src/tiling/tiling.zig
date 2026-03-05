@@ -183,7 +183,7 @@ fn computeMasterWidth(wm: *WM) f32 {
     const raw = dpi.scaleMasterWidth(wm.config.tiling.master_width);
     if (raw < 0) {
         const ratio = -raw / @as(f32, @floatFromInt(wm.screen.width_in_pixels));
-        return @min(MAX_MASTER_WIDTH, @max(defs.MIN_MASTER_WIDTH, ratio));
+        return @min(MAX_MASTER_WIDTH, @max(constants.MIN_MASTER_WIDTH, ratio));
     }
     return raw;
 }
@@ -771,7 +771,7 @@ pub inline fn decreaseMasterCount(wm: *WM) void { adjustMasterCount(wm, -1); }
 
 pub fn adjustMasterWidth(wm: *WM, delta: f32) void {
     const s = getState();
-    s.master_width = @max(defs.MIN_MASTER_WIDTH, @min(MAX_MASTER_WIDTH, s.master_width + delta));
+    s.master_width = @max(constants.MIN_MASTER_WIDTH, @min(MAX_MASTER_WIDTH, s.master_width + delta));
     s.dirty = true;
     s.ws_geom_valid = 0;
     retileCurrentWorkspace(wm);
@@ -836,3 +836,37 @@ fn filterWorkspaceWindows(s: *State, buf: []u32, for_ws: ?u8) usize {
     }
     return n;
 }
+
+// ── WM event bus handler ─────────────────────────────────────────────────────
+
+pub fn onWMEvent(wm: *WM, event: @import("wm_bus").WMEvent) void {
+    switch (event) {
+        .window_mapped => |p| {
+            if (!wm.config.tiling.enabled) return;
+            addWindow(wm, p.win);
+            if (p.on_current) retileCurrentWorkspace(wm);
+        },
+        .window_closed => |p| {
+            if (wm.config.tiling.enabled) removeWindow(p.win);
+            evictSizeHints(p.win);
+            if (!p.was_focused and !p.was_fullscreen and wm.config.tiling.enabled) {
+                if (p.window_workspace) |ws| {
+                    const cur = p.current_ws orelse return;
+                    if (cur == ws) {
+                        retileIfDirty(wm);
+                    } else {
+                        retileInactiveWorkspace(wm, ws);
+                    }
+                }
+            } else if (p.was_focused and wm.config.tiling.enabled) {
+                retileIfDirty(wm);
+            }
+        },
+        .size_hints_changed => |p| {
+            cacheSizeHints(wm.allocator, p.win,
+                .{ .min_width = p.min_w, .min_height = p.min_h });
+        },
+        else => {},
+    }
+}
+

@@ -1,7 +1,26 @@
 //! Central location for the constants used across all files.
 
-const defs = @import("defs");
-const xcb = defs.xcb;
+const xcb = @cImport({
+    @cInclude("xcb/xcb.h");
+});
+
+// ── Modifier masks ────────────────────────────────────────────────────────────
+// Must be u16 per XCB API; widening to u32 breaks xcb_grab_key.
+pub const MOD_SHIFT: u16   = xcb.XCB_MOD_MASK_SHIFT;
+pub const MOD_LOCK:  u16   = xcb.XCB_MOD_MASK_LOCK;
+pub const MOD_CONTROL: u16 = xcb.XCB_MOD_MASK_CONTROL;
+pub const MOD_ALT:   u16   = xcb.XCB_MOD_MASK_1;
+pub const MOD_2:     u16   = xcb.XCB_MOD_MASK_2;   // NumLock
+pub const MOD_SUPER: u16   = xcb.XCB_MOD_MASK_4;
+
+pub const MOD_MASK_RELEVANT: u16 = MOD_SHIFT | MOD_CONTROL | MOD_ALT | MOD_SUPER;
+
+// ── Window constraints ────────────────────────────────────────────────────────
+pub const MIN_WINDOW_DIM: u16  = 50;
+pub const MIN_MASTER_WIDTH: f32 = 0.05;
+
+// ── XKB retry parameters ──────────────────────────────────────────────────────
+pub const XKB_RETRY_DELAY_MS: u64 = 20;
 
 /// X coordinate for positioning windows off-screen (far left).
 pub const OFFSCREEN_X_POSITION: i32 = -4000;
@@ -17,7 +36,7 @@ pub const OFFSCREEN_X_POSITION: i32 = -4000;
 pub const OFFSCREEN_THRESHOLD_MIN: i32 = -1000;
 
 /// Maximum depth when walking the X11 window tree in findManagedWindow.
-pub const MAX_WINDOW_TREE_DEPTH: u4 = 15;
+pub const MAX_WINDOW_TREE_DEPTH: usize = 10;
 
 /// Event masks for window types
 pub const EventMasks = struct {
@@ -44,9 +63,9 @@ pub const EventMasks = struct {
 /// Lock key combinations grabbed alongside every keybinding.
 pub const LOCK_MODIFIERS = [_]u16{
     0,
-    defs.MOD_LOCK,
-    defs.MOD_2, // NumLock
-    defs.MOD_LOCK | defs.MOD_2,
+    MOD_LOCK,
+    MOD_2, // NumLock
+    MOD_LOCK | MOD_2,
 };
 
 /// X11 Cursor constants (mask glyph is always source + 1 by convention).
