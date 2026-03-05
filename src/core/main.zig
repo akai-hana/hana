@@ -21,6 +21,7 @@ const xkbcommon = @import("xkbcommon");
 const input     = @import("input");
 const events    = @import("events");
 
+const layouts = @import("layouts");
 const bar     = @import("bar");
 
 // xcb-cursor extern declarations.
@@ -124,6 +125,7 @@ pub fn main() !void {
     try utils.initAtomCache(conn);
     utils.initInputModelCache(wm.allocator);
     defer utils.deinitInputModelCache();
+    defer layouts.deinitSizeHintsCache(allocator);
 
     const signal_fd = try events.setupSignalFd();
     defer std.posix.close(signal_fd);
@@ -131,9 +133,9 @@ pub fn main() !void {
     try events.initModules(&wm, xkb_state);
     defer events.deinitModules();
 
-    if (wm.config.bar.enabled) {
-        bar.init(&wm) catch |err| debug.err("Bar init failed: {}", .{err});
-    }
+    bar.init(&wm) catch |err| {
+        if (err != error.BarDisabled) debug.err("Bar init failed: {}", .{err});
+    };
     defer bar.deinit();
 
     bar.updateTimerState();

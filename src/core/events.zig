@@ -1,6 +1,7 @@
 //! X event dispatch, signal handling, config reload, and the main event loop.
 
 const std = @import("std");
+const fullscreen = @import("fullscreen");
 
 const defs      = @import("defs");
 const xcb       = defs.xcb;
@@ -17,7 +18,6 @@ const tiling     = @import("tiling");
 const workspaces = @import("workspaces");
 const bar        = @import("bar");
 const minimize   = @import("minimize");
-const fullscreen = @import("fullscreen");
 const drun       = @import("drun");
 
 const IoUring = std.os.linux.IoUring;
@@ -76,21 +76,21 @@ pub inline fn dispatch(event_type: u8, event: *anyopaque, wm: *WM) void {
 
 // Module lifecycle
 
-pub fn initModules(wm: *WM, xkb: *xkbcommon.XkbState) !void {
-    try input.init(wm, xkb);
-    try workspaces.init(wm);
+pub fn initModules(wm: *WM, xkb_state: *xkbcommon.XkbState) !void {
+    try input.init(wm, xkb_state);
+    fullscreen.init(wm);
+    workspaces.init(wm);
     try tiling.init(wm);
     try minimize.init(wm);
-    fullscreen.init(wm);
     drun.init(wm.conn);
 }
 
 pub fn deinitModules() void {
+    // minimize state is owned by WM.deinit — no separate deinit here.
     drun.deinit();
-    fullscreen.deinit();
-    minimize.deinit();
     tiling.deinit();
     workspaces.deinit();
+    fullscreen.deinit();
     input.deinit();
 }
 
@@ -196,12 +196,7 @@ fn handleConfigReload(wm: *WM) !void {
         // new_config is still live (errdefer will deinit it on return)
         return err;
     };
-    // All fallible operations that reference old_config are complete.
-    // Deinit old config only now — the rollback window is closed after this point.
     old_config.deinit();
-    // The post-swap steps below (tiling reload, bar reload) do not reference
-    // old_config and do not have rollback semantics — they may log errors but
-    // are not expected to fail in ways that require reverting the config swap.
     tiling.reloadConfig(wm);
     bar.updateTimerState();
     bar.reload(wm);
@@ -343,7 +338,7 @@ pub fn run(wm: *WM, signal_fd: std.posix.fd_t) !void {
 
         if (saw_blink) {
             drun.blinkTick();
-            bar.submitDrawAsync(wm);
+            bar.submitDraw(wm, false);
             submitPollAdd(&iou, bfd, TAG_BLINK);
         }
     }

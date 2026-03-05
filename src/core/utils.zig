@@ -63,7 +63,7 @@ pub const Rect = extern struct {
     }
 
     pub inline fn isValid(self: Rect) bool {
-        return self.width >= defs.MIN_WINDOW_DIM and self.height >= defs.MIN_WINDOW_DIM;
+        return self.width >= constants.MIN_WINDOW_DIM and self.height >= constants.MIN_WINDOW_DIM;
     }
 };
 
@@ -72,7 +72,7 @@ pub const Margins = struct {
     border: u16,
 
     pub inline fn total(self: Margins) u16 {
-        return 2 * (self.gap + self.border);
+        return self.gap + 2 * self.border;
     }
 };
 
@@ -116,7 +116,7 @@ pub fn getGeometry(conn: *xcb.xcb_connection_t, win: u32) ?Rect {
 }
 
 pub inline fn normalizeModifiers(state: u16) u16 {
-    return state & defs.MOD_MASK_RELEVANT;
+    return state & constants.MOD_MASK_RELEVANT;
 }
 
 /// Default floating window position: one quarter of the screen in from the top-left.
@@ -211,13 +211,13 @@ pub fn fetchPropertyToBuffer(
     atom_type: u32,
     buffer:    *std.ArrayListUnmanaged(u8),
     allocator: std.mem.Allocator,
-) ![]const u8 {
+) !?[]const u8 {
     const reply = xcb.xcb_get_property_reply(conn,
         xcb.xcb_get_property(conn, PROPERTY_NO_DELETE, window, atom, atom_type, 0, MAX_PROPERTY_LENGTH),
         null,
-    ) orelse return "";
+    ) orelse return null;
     defer std.c.free(reply);
-    if (reply.*.format != 8 or reply.*.value_len == 0) return "";
+    if (reply.*.format != 8 or reply.*.value_len == 0) return null;
 
     // value_len is already bounded by MAX_PROPERTY_LENGTH from the request.
     buffer.clearRetainingCapacity();
@@ -311,41 +311,45 @@ pub fn populateFocusCacheFromCookies(
         }
     }
 
-    storeCachedProps(win, .{
+    if (input_model_cache) |*c| c.put(win, .{
         .model     = inputModelFrom(take_focus, accepts),
         .wm_delete = wm_delete,
-    });
+    }) catch {};
 }
 
 /// Recompute and cache the focus properties after a WM_PROTOCOLS or WM_HINTS
 /// change.  Two round-trips (WM_PROTOCOLS + WM_HINTS); called only on rare
 /// PropertyNotify events so latency is not a concern.
 pub fn recacheInputModel(conn: *xcb.xcb_connection_t, win: u32) void {
-    const proto = queryWMProtocolsProps(conn, win);
-    storeCachedProps(win, .{
-        .model     = inputModelFrom(proto.take_focus, queryWMHintsInput(conn, win)),
-        .wm_delete = proto.wm_delete,
-    });
+    _ = queryAndCacheProps(conn, win);
 }
 
 pub inline fn uncacheWindowFocusProps(win: u32) void {
     if (input_model_cache) |*c| _ = c.remove(win);
 }
 
-/// Return the cached InputModel, falling back to a live query if not cached.
-/// For the hover focus hot path this should always be a cache hit.
-pub fn getInputModelCached(conn: *xcb.xcb_connection_t, win: u32) InputModel {
-    if (input_model_cache) |*c| {
-        if (c.get(win)) |props| return props.model;
-    }
-    // Cache miss — query all protocol props in one scan and cache everything.
+/// Returns the cached property entry for `win`, or null on miss or uninitialised cache.
+inline fn getCachedProps(win: u32) ?CachedProps {
+    return if (input_model_cache) |*c| c.get(win) else null;
+}
+
+/// Runs both WM_PROTOCOLS and WM_HINTS queries, stores the result, and returns it.
+/// Used by cache-miss paths so the populate logic lives in exactly one place.
+fn queryAndCacheProps(conn: *xcb.xcb_connection_t, win: u32) CachedProps {
     const proto = queryWMProtocolsProps(conn, win);
     const props = CachedProps{
         .model     = inputModelFrom(proto.take_focus, queryWMHintsInput(conn, win)),
         .wm_delete = proto.wm_delete,
     };
-    storeCachedProps(win, props);
-    return props.model;
+    if (input_model_cache) |*c| c.put(win, props) catch {};
+    return props;
+}
+
+/// Return the cached InputModel, falling back to a live query if not cached.
+/// For the hover focus hot path this should always be a cache hit.
+pub fn getInputModelCached(conn: *xcb.xcb_connection_t, win: u32) InputModel {
+    if (getCachedProps(win)) |props| return props.model;
+    return queryAndCacheProps(conn, win).model;
 }
 
 /// Return true if `win` declared WM_DELETE_WINDOW support at map time.
@@ -353,11 +357,7 @@ pub fn getInputModelCached(conn: *xcb.xcb_connection_t, win: u32) InputModel {
 /// property was already scanned at map time and the result cached.
 /// Falls back to a live query only on a genuine cache miss (extremely rare).
 pub fn supportsWMDeleteCached(conn: *xcb.xcb_connection_t, win: u32) bool {
-    if (input_model_cache) |*c| {
-        if (c.get(win)) |props| return props.wm_delete;
-    }
-    // Cache miss: query WM_PROTOCOLS live.  No point caching without the
-    // WM_HINTS result too; closeWindow is called at most once per window.
+    if (getCachedProps(win)) |props| return props.wm_delete;
     return queryWMProtocolsProps(conn, win).wm_delete;
 }
 
@@ -422,10 +422,6 @@ inline fn inputModelFrom(supports_take_focus: bool, accepts_input: bool) InputMo
         (if (accepts_input) .locally_active else .globally_active)
     else
         (if (accepts_input) .passive else .no_input);
-}
-
-inline fn storeCachedProps(win: u32, props: CachedProps) void {
-    if (input_model_cache) |*c| c.put(win, props) catch {};
 }
 
 const WMProtocolsProps = struct { take_focus: bool = false, wm_delete: bool = false };

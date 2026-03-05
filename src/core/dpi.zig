@@ -195,9 +195,10 @@ pub inline fn scaleToInt(comptime T: type, base_value: f32, scale_factor: f32) T
 /// For absolute pixel values, `scale_factor` is intentionally ignored — absolute
 /// pixel values are screen-independent and should render at their stated size.
 pub inline fn scaleBorderWidth(value: ScalableValue, scale_factor: f32, reference_dimension: u16) u16 {
+    _ = scale_factor; // percentage values are screen-relative; applying scale_factor would double-scale on HiDPI
     if (value.is_percentage) {
         const dim_f: f32 = @floatFromInt(reference_dimension);
-        return @intFromFloat(@max(0.0, @round((value.value / 100.0) * 0.5 * dim_f * scale_factor)));
+        return @intFromFloat(@max(0.0, @round((value.value / 100.0) * 0.5 * dim_f)));
     } else {
         return @intFromFloat(@max(0.0, @round(value.value)));
     }

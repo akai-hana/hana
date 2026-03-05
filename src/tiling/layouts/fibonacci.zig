@@ -2,6 +2,7 @@
 //! Windows spiral counter-clockwise: right, down, left, up, repeat.
 
 const defs    = @import("defs");
+const constants = @import("constants");
 const utils   = @import("utils");
 const layouts = @import("layouts");
 const tiling  = @import("tiling");
@@ -56,8 +57,8 @@ pub fn tileWithOffset(
             const rect = utils.Rect{
                 .x      = @intCast(x),
                 .y      = @intCast(y),
-                .width  = if (w > border * 2) w - border * 2 else defs.MIN_WINDOW_DIM,
-                .height = if (h > border * 2) h - border * 2 else defs.MIN_WINDOW_DIM,
+                .width  = if (w > border * 2) w - border * 2 else constants.MIN_WINDOW_DIM,
+                .height = if (h > border * 2) h - border * 2 else constants.MIN_WINDOW_DIM,
             };
             for (visible[i..]) |ow| layouts.configureSafe(ctx, ow, rect);
             return;

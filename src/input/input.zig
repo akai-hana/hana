@@ -247,7 +247,7 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .toggle_fullscreen      => fullscreen.toggleFullscreen(wm),
         .close_window           => { if (focus.getFocused()) |win| closeWindow(wm, win); },
         .reload_config          => {
-            debug.info("[RELOAD] flag set by keybinding", .{});
+            debug.info("[RELOAD] triggered config reloading...", .{});
             utils.reload();
         },
         .toggle_layout          => { tiling.toggleLayout(wm);        bar.markDirty(); }, // no grab — coalesce
@@ -269,8 +269,7 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .unminimize_fifo        => minimize.unminimize(wm, .fifo),
         .unminimize_all         => minimize.unminimizeAll(wm),
         .toggle_float           => { if (focus.getFocused()) |win| tiling.toggleWindowFloat(wm, win); },
-        .tag_toggle             => |ws| { if (focus.getFocused()) |win| workspaces.tagToggle(wm, win, ws); },
-        .tag_additive           => |ws| { if (focus.getFocused()) |win| workspaces.tagAdditive(wm, win, ws); },
+        .tag_toggle             => |ws| { if (focus.getFocused()) |win| workspaces.tagToggle(wm, win, ws, true); },
         .sequence               => |acts| { for (acts) |*a| try executeAction(a, wm); },
         .exec                   => |cmd| try executeShellCommand(wm, cmd),
         .switch_workspace       => |ws| workspaces.switchTo(wm, ws),
@@ -388,7 +387,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
 fn dumpState(_: *WM) void {
     debug.info("========== STATE DUMP ==========", .{});
     debug.info("Focused: {?x}",         .{focus.getFocused()});
-    const win_count = if (workspaces.getStateOpt()) |s| s.window_to_workspaces.count() else 0;
+    const win_count = if (workspaces.getState()) |s| s.window_to_workspaces.count() else 0;
     debug.info("Total windows: {}",     .{win_count});
     debug.info("Suppress focus: {s}",   .{@tagName(focus.getSuppressReason())});
 
@@ -401,7 +400,7 @@ fn dumpState(_: *WM) void {
     if (fs_count == 0) debug.info("Fullscreen: none", .{});
     debug.info("Drag active: {}", .{drag.isDragging()});
 
-    if (workspaces.getStateOpt()) |ws_state| {
+    if (workspaces.getState()) |ws_state| {
         debug.info("Current workspace: {}", .{ws_state.current + 1});
         for (ws_state.workspaces, 0..) |*ws, i| {
             debug.info("  WS{}: {} windows", .{ i + 1, ws.windows.count() });
@@ -421,7 +420,7 @@ fn dumpState(_: *WM) void {
 fn emergencyRecover(wm: *WM) void {
     debug.warn("========== EMERGENCY RECOVERY ==========", .{});
 
-    if (workspaces.getStateOpt()) |ws_state| {
+    if (workspaces.getState()) |ws_state| {
         for (ws_state.workspaces) |*ws| {
             for (ws.windows.items()) |win| _ = xcb.xcb_map_window(wm.conn, win);
         }

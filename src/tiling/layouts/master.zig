@@ -1,6 +1,7 @@
 //! Master-stack layout with overflow handling.
 
 const defs    = @import("defs");
+const constants = @import("constants");
 const xcb     = defs.xcb;
 const utils   = @import("utils");
 const layouts = @import("layouts");
@@ -10,14 +11,14 @@ const State  = tiling.State;
 
 inline fn calcAvailable(total_h: u16, count: u16, margins: utils.Margins) u16 {
     const overhead = margins.gap * (count + 1) + margins.border * 2 * count;
-    return if (total_h > overhead) total_h - overhead else count * defs.MIN_WINDOW_DIM;
+    return if (total_h > overhead) total_h - overhead else count * constants.MIN_WINDOW_DIM;
 }
 
 // Height of window i out of count, distributing available pixels via cumulative
 // integer division. No window differs from any sibling by more than 1px.
 inline fn windowHeight(i: u16, count: u16, available: u16) u16 {
     const h = ((i + 1) * available / count) -| (i * available / count);
-    return @max(defs.MIN_WINDOW_DIM, h);
+    return @max(constants.MIN_WINDOW_DIM, h);
 }
 
 // Y position of window i, derived from the cumulative formula so preceding
@@ -29,7 +30,7 @@ inline fn windowY(i: u16, count: u16, available: u16, y_offset: u16, margins: ut
 
 inline fn calcMarginedWidth(full_w: u16, left_margin: u16, right_margin: u16) u16 {
     const total_margin = left_margin + right_margin;
-    return if (full_w > total_margin) full_w - total_margin else defs.MIN_WINDOW_DIM;
+    return if (full_w > total_margin) full_w - total_margin else constants.MIN_WINDOW_DIM;
 }
 
 pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []const u32, screen_w: u16, screen_h: u16, y_offset: u16) void {
@@ -75,7 +76,7 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
 fn tileStack(ctx: *const layouts.LayoutCtx, windows: []const u32, x: u16, y_offset: u16, w: u16, h: u16, m: utils.Margins) void {
     const s_count: u16 = @intCast(windows.len);
 
-    const space_per_window: u32 = defs.MIN_WINDOW_DIM + 2 * @as(u32, m.border) + @as(u32, m.gap);
+    const space_per_window: u32 = constants.MIN_WINDOW_DIM + 2 * @as(u32, m.border) + @as(u32, m.gap);
     const available: u32        = @as(u32, h) -| @as(u32, m.gap);
     const max_fit: u16          = @intCast(@max(1, available / space_per_window));
 
@@ -121,12 +122,12 @@ fn tileStackOverflow(ctx: *const layouts.LayoutCtx, windows: []const u32, x: u16
         if (cols_in_row == 0) break;
 
         const gaps_in_row = m.gap / 2 + m.gap * cols_in_row;
-        const row_total_w = if (w > gaps_in_row) w - gaps_in_row else cols_in_row * defs.MIN_WINDOW_DIM;
+        const row_total_w = if (w > gaps_in_row) w - gaps_in_row else cols_in_row * constants.MIN_WINDOW_DIM;
         const row_col_w   = row_total_w / cols_in_row;
         const row_inner_w = if (row_col_w > 2 * m.border)
-            @max(defs.MIN_WINDOW_DIM, row_col_w - 2 * m.border)
+            @max(constants.MIN_WINDOW_DIM, row_col_w - 2 * m.border)
         else
-            defs.MIN_WINDOW_DIM;
+            constants.MIN_WINDOW_DIM;
 
         const y_pos = windowY(row, max_fit, s_avail, y_offset, m);
         const row_h  = windowHeight(row, max_fit, s_avail);

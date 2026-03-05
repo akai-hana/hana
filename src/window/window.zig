@@ -88,7 +88,6 @@ var g_spawn_cursor_x: i16       = 0;
 var g_spawn_cursor_y: i16       = 0;
 
 
-
 // Module-level atom cache 
 //
 // The three atoms used on every MapRequest are resolved once into plain u32
@@ -145,7 +144,7 @@ pub fn grabButtons(wm: *WM, win: u32, focused: bool) void {
 // Workspace rule matching
 
 inline fn resolveWorkspace(target: u8, fallback: u8) u8 {
-    const s = workspaces.getStateOpt() orelse return fallback;
+    const s = workspaces.getState() orelse return fallback;
     return if (target < s.workspaces.len) target else fallback;
 }
 
@@ -316,12 +315,9 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
 // Unmap / destroy
 
 fn unmanageWindow(wm: *WM, win: u32) void {
-    var fs_workspace_or_zero: u8 = 0;
-    const was_fullscreen = if (fullscreen.workspaceFor(win)) |ws| blk: {
-        fs_workspace_or_zero = ws;
-        fullscreen.removeForWorkspace(ws);
-        break :blk true;
-    } else false;
+    const fs_ws = fullscreen.workspaceFor(win);
+    if (fs_ws) |ws| fullscreen.removeForWorkspace(ws);
+    const was_fullscreen = fs_ws != null;
 
     const was_focused = (focus.getFocused() == win);
 
@@ -476,24 +472,9 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t, wm: *WM) vo
         event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) return;
     if (drag.isDragging()) return;
     if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
-    var win = if (event.event == wm.root and event.child != 0) event.child else event.event;
-    // If the entered window isn't managed it may be an unmanaged child sub-window.
-    // Java/AWT (Minecraft, etc.) and other toolkits can nest multiple levels deep
-    // beneath the managed top-level, so walk up the full ancestor chain rather than
-    // a single hop — ICCCM §4.1.3.1 permits arbitrarily deep sub-window hierarchies.
-    if (!isOnCurrentWorkspace(wm, win)) {
-        var cur = win;
-        while (cur != 0 and cur != wm.root and !isOnCurrentWorkspace(wm, cur)) {
-            const tree = xcb.xcb_query_tree_reply(
-                wm.conn, xcb.xcb_query_tree(wm.conn, cur), null,
-            ) orelse break;
-            const parent = tree.*.parent;
-            std.c.free(tree);
-            cur = parent;
-        }
-        if (isOnCurrentWorkspace(wm, cur)) win = cur;
-    }
-    maybeFocusWindow(wm, win);
+
+    const win = if (event.event == wm.root and event.child != 0) event.child else event.event;
+    maybeFocusWindow(wm, utils.findManagedWindow(wm.conn, win, workspaces.isManaged));
 }
 
 pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t, wm: *WM) void {
@@ -519,10 +500,6 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
 
 // Size-hint parsing
 
-inline fn clampU16(v: u32) u16 {
-    return @intCast(@min(v, std.math.maxInt(u16)));
-}
-
 fn collectAndCacheSizeHints(
     wm:     *WM,
     win:    u32,
@@ -544,12 +521,12 @@ fn collectAndCacheSizeHints(
     var min_height: u16 = 0;
 
     if (flags & XSIZE_HINTS_P_MIN_SIZE != 0 and field_count >= 7) {
-        min_width  = clampU16(fields[5]);
-        min_height = clampU16(fields[6]);
+        min_width  = @intCast(@min(fields[5], std.math.maxInt(u16)));
+        min_height = @intCast(@min(fields[6], std.math.maxInt(u16)));
     }
     if (flags & XSIZE_HINTS_P_BASE_SIZE != 0 and field_count >= 17) {
-        min_width  = @max(min_width,  clampU16(fields[15]));
-        min_height = @max(min_height, clampU16(fields[16]));
+        min_width  = @max(min_width,  @as(u16, @intCast(@min(fields[15], std.math.maxInt(u16)))));
+        min_height = @max(min_height, @as(u16, @intCast(@min(fields[16], std.math.maxInt(u16)))));
     }
 
     // Don't occupy a cache slot for degenerate hints that declare zero on both axes.

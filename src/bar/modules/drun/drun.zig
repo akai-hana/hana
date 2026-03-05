@@ -87,7 +87,7 @@ pub fn needsRedraw() bool { return g.active and g.vim.mode == .insert; }
 
 /// Returns the blink timerfd (or -1 if not active / not supported).
 /// Add this fd to the main poll set.  When it becomes readable, call
-/// blinkTick() and then redraw the bar (e.g. bar.submitDrawAsync(wm)).
+/// blinkTick() and then redraw the bar (e.g. bar.submitDraw(wm)).
 /// The fd is opened in activate() and closed in deactivate().
 pub fn blinkFd() i32 { return g.blink_fd; }
 
@@ -96,7 +96,7 @@ pub fn blinkFd() i32 { return g.blink_fd; }
 ///
 ///   if (drun.blinkFd() >= 0 and poll says fd is readable) {
 ///       drun.blinkTick();
-///       bar.submitDrawAsync(wm);
+///       bar.submitDraw(wm);
 ///   }
 pub fn blinkTick() void {
     if (g.blink_fd >= 0) {

@@ -318,11 +318,12 @@ fn getFocusedWindowTitle(
     const utf_type = atoms.utf8Type();
 
     if (atoms.net_wm_name != 0) {
-        const title = try utils.fetchPropertyToBuffer(conn, win, atoms.net_wm_name, utf_type, cached_title, allocator);
-        if (title.len > 0) { cached_title_window.* = win; return title; }
+        if (try utils.fetchPropertyToBuffer(conn, win, atoms.net_wm_name, utf_type, cached_title, allocator)) |title| {
+            if (title.len > 0) { cached_title_window.* = win; return title; }
+        }
     }
 
-    const title = try utils.fetchPropertyToBuffer(conn, win, xcb.XCB_ATOM_WM_NAME, xcb.XCB_ATOM_STRING, cached_title, allocator);
+    const title = (try utils.fetchPropertyToBuffer(conn, win, xcb.XCB_ATOM_WM_NAME, xcb.XCB_ATOM_STRING, cached_title, allocator)) orelse "";
     if (title.len > 0) cached_title_window.* = win;
     return title;
 }
@@ -340,8 +341,9 @@ pub fn fetchFocusedTitleInto(
     const utf_type = atoms.utf8Type();
 
     if (atoms.net_wm_name != 0) {
-        const t = utils.fetchPropertyToBuffer(conn, win, atoms.net_wm_name, utf_type, buf, allocator) catch return;
-        if (t.len > 0) return;
+        if (utils.fetchPropertyToBuffer(conn, win, atoms.net_wm_name, utf_type, buf, allocator) catch null) |t| {
+            if (t.len > 0) return;
+        }
     }
     _ = utils.fetchPropertyToBuffer(conn, win, xcb.XCB_ATOM_WM_NAME, xcb.XCB_ATOM_STRING, buf, allocator) catch {};
 }

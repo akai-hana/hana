@@ -331,3 +331,4 @@ pub fn moveToWorkspace(_: *WM, win: u32, new_ws: u8) void {
     const entry = s.minimized_info.getPtr(win) orelse return;
     entry.workspace_mask = @as(u64, 1) << @intCast(new_ws);
 }
+

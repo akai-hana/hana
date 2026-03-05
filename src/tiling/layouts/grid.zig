@@ -1,6 +1,7 @@
 //! Grid layout: arrange windows in an optimal grid.
 
 const defs    = @import("defs");
+const constants = @import("constants");
 const utils   = @import("utils");
 const layouts = @import("layouts");
 
@@ -33,8 +34,8 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
     const cell_h = (screen_h -| total_gap_h) / dims.rows;
 
     const border_margin = 2 * m.border;
-    const win_w = if (cell_w > border_margin) cell_w - border_margin else defs.MIN_WINDOW_DIM;
-    const win_h = if (cell_h > border_margin) cell_h - border_margin else defs.MIN_WINDOW_DIM;
+    const win_w = if (cell_w > border_margin) cell_w - border_margin else constants.MIN_WINDOW_DIM;
+    const win_h = if (cell_h > border_margin) cell_h - border_margin else constants.MIN_WINDOW_DIM;
 
     const cell_spacing_w = cell_w + m.gap;
     const cell_spacing_h = cell_h + m.gap;
@@ -50,7 +51,7 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
                     // Last window in a partial row: expand to the right margin.
                     const x_start    = m.gap +| col *| cell_spacing_w;
                     const available  = screen_w -| x_start -| m.gap -| border_margin;
-                    break :blk @max(available, defs.MIN_WINDOW_DIM);
+                    break :blk @max(available, constants.MIN_WINDOW_DIM);
                 }
                 break :blk win_w;
             },

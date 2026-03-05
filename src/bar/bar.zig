@@ -84,9 +84,7 @@ const BarSnapshot = struct {
     /// captureIntoSlot — never fetched by the bar thread.
     focused_title:     std.ArrayListUnmanaged(u8)    = .empty,
     current_ws_wins:   std.ArrayListUnmanaged(u32)   = .empty,
-    minimized:         std.ArrayListUnmanaged(u32)          = .empty,
-    /// O(1) membership companion to `minimized`. Populated from the same data
-    /// in captureIntoSlot; avoids O(n) scans in isMinimizedInSnap.
+    /// O(1) set for minimized window membership checks during rendering.
     minimized_set:     std.AutoHashMapUnmanaged(u32, void)  = .{},
     ws_has_windows:    std.ArrayListUnmanaged(bool)  = .empty,
     ws_current:        u8                            = 0,
@@ -97,7 +95,6 @@ const BarSnapshot = struct {
     fn deinit(snap: *BarSnapshot, allocator: std.mem.Allocator) void {
         snap.focused_title.deinit(allocator);
         snap.current_ws_wins.deinit(allocator);
-        snap.minimized.deinit(allocator);
         snap.minimized_set.deinit(allocator);
         snap.ws_has_windows.deinit(allocator);
         snap.status_text.deinit(allocator);
@@ -156,7 +153,6 @@ const State = struct {
     cached_title_x:       u16,
     cached_title_w:       u16,
     cached_ws_wins:       []u32,
-    cached_min_wins:      []u32,
     title_layout_valid:   bool,
     cached_right_total:              u16,
     cached_right_total_ws_count:     u32, // invalidation key for cached_right_total
@@ -203,7 +199,6 @@ const State = struct {
             .cached_title_x       = 0,
             .cached_title_w       = 0,
             .cached_ws_wins       = &.{},
-            .cached_min_wins      = &.{},
             .title_layout_valid   = false,
             .cached_right_total          = 0,
             .cached_right_total_ws_count = std.math.maxInt(u32),
@@ -224,7 +219,6 @@ const State = struct {
         self.status_text.deinit(self.allocator);
         self.cached_title.deinit(self.allocator);
         self.allocator.free(self.cached_ws_wins);
-        self.allocator.free(self.cached_min_wins);
         self.allocator.destroy(self);
     }
 
@@ -282,12 +276,13 @@ const State = struct {
     fn drawRightSegments(self: *State, snap: *const BarSnapshot, segments: []const defs.BarSegment) !void {
         var right_x          = self.width;
         const scaled_spacing = self.config.scaledSpacing(self.height);
-        for (0..segments.len) |i| {
-            const idx = segments.len - 1 - i;
-            right_x -= self.calculateSegmentWidth(snap, segments[idx]);
-            if (segments[idx] == .clock) self.cached_clock_x = right_x;
-            _ = try self.drawSegment(snap, segments[idx], right_x, null);
-            if (i < segments.len - 1) right_x -= scaled_spacing;
+        var i = segments.len;
+        while (i > 0) {
+            i -= 1;
+            right_x -= self.calculateSegmentWidth(snap, segments[i]);
+            if (segments[i] == .clock) self.cached_clock_x = right_x;
+            _ = try self.drawSegment(snap, segments[i], right_x, null);
+            if (i > 0) right_x -= scaled_spacing;
         }
     }
 
@@ -370,7 +365,6 @@ const State = struct {
 
     fn updateTitleCache(self: *State, snap: *const BarSnapshot, x: u16, w: u16) void {
         dupeIfChanged(self.allocator, &self.cached_ws_wins, snap.current_ws_wins.items);
-        dupeIfChanged(self.allocator, &self.cached_min_wins, snap.minimized.items);
         self.cached_title_x     = x;
         self.cached_title_w     = w;
         self.title_layout_valid = true;
@@ -451,21 +445,16 @@ fn captureIntoSlot(wm: *defs.WM, s: *State, snap: *BarSnapshot) !void {
     snap.status_text.clearRetainingCapacity();
     try snap.status_text.appendSlice(allocator, s.status_text.items);
 
-    // Minimized window IDs — count is known upfront, so no intermediate list needed.
-    snap.minimized.clearRetainingCapacity();
+    // Minimized window set — O(1) membership checks during rendering.
     snap.minimized_set.clearRetainingCapacity();
     if (minimize.getStateOpt()) |ms| {
-        try snap.minimized.ensureTotalCapacity(allocator, ms.minimized_info.count());
         try snap.minimized_set.ensureTotalCapacity(allocator, ms.minimized_info.count());
         var it = ms.minimized_info.keyIterator();
-        while (it.next()) |key| {
-            snap.minimized.appendAssumeCapacity(key.*);
-            snap.minimized_set.putAssumeCapacity(key.*, {});
-        }
+        while (it.next()) |key| snap.minimized_set.putAssumeCapacity(key.*, {});
     }
 
     // Workspace state.
-    const ws_state  = workspaces.getState();
+    const ws_state = workspaces.getState() orelse return;
     snap.ws_count   = @intCast(ws_state.workspaces.len);
     snap.ws_current = ws_state.current;
 
@@ -497,7 +486,7 @@ fn captureIntoSlot(wm: *defs.WM, s: *State, snap: *BarSnapshot) !void {
 ///
 /// write_idx is only mutated by the main thread, so reading it without the
 /// lock is safe here. The mutex acquire before the flip acts as the fence.
-fn submitDraw(wm: *defs.WM, wait: bool) void {
+pub fn submitDraw(wm: *defs.WM, wait: bool) void {
     const s = state orelse return;
     if (!s.visible) return;
 
@@ -520,10 +509,6 @@ fn submitDraw(wm: *defs.WM, wait: bool) void {
     }
 }
 
-/// Non-blocking draw submission for use by external callers (e.g. drun blink tick).
-/// Equivalent to submitDraw(wm, false): posts a snapshot to the bar thread and
-/// returns immediately without waiting for the draw to complete.
-pub fn submitDrawAsync(wm: *defs.WM) void { submitDraw(wm, false); }
 
 // ── Module singleton ─────────────────────────────────────────────────────
 
@@ -773,8 +758,8 @@ fn reloadImpl(wm: *defs.WM, old: *State, setup: BarWindowSetup, height: u16) !vo
 
     stopBarThread();
     state = new_state;
+    startBarThread(new_state);
     submitDraw(wm, true);
-    _ = xcb.xcb_flush(wm.conn);
 
     _ = xcb.xcb_grab_server(wm.conn);
     if (new_state.visible) _ = xcb.xcb_map_window(wm.conn, setup.window);
@@ -785,7 +770,6 @@ fn reloadImpl(wm: *defs.WM, old: *State, setup: BarWindowSetup, height: u16) !vo
 
     old.dc.deinit();
     old.deinit();
-    startBarThread(new_state);
 }
 
 pub fn toggleBarPosition(wm: *defs.WM) void {
@@ -970,7 +954,7 @@ pub fn monitorFocusedWindow(wm: *defs.WM) void {
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.WM) void {
     if (state) |s| if (event.event == s.window) {
-        const ws_state = workspaces.getState();
+        const ws_state = workspaces.getState() orelse return;
         const ws_w     = workspaces_segment.getCachedWorkspaceWidth();
         if (ws_w == 0) return;
         const click_x           = @max(0, event.event_x - s.cached_workspace_x);
@@ -983,7 +967,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.W
 }
 
 fn retileAllWorkspacesNoGrab(wm: *defs.WM) void {
-    const ws_state = workspaces.getState();
+    const ws_state = workspaces.getState() orelse return;
     const tiling_active = wm.config.tiling.enabled and
         if (tiling.getStateOpt()) |t| t.enabled else false;
 
@@ -1003,20 +987,3 @@ fn retileAllWorkspacesNoGrab(wm: *defs.WM) void {
         }
     }
 }
-
-// ── WM event bus handler ─────────────────────────────────────────────────────
-
-pub fn onWMEvent(wm: *defs.WM, event: @import("wm_bus").WMEvent) void {
-    switch (event) {
-        .window_mapped => |_| markDirty(),
-        .window_closed => |p| {
-            // Restore bar visibility if the closed window was fullscreen
-            // (fullscreen.zig deferred this to bar.onWMEvent to avoid a
-            // fullscreen → bar import inside the handler chain).
-            if (p.was_fullscreen) setBarState(wm, .show_fullscreen);
-            redrawImmediate(wm);
-        },
-        else => {},
-    }
-}
-

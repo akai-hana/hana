@@ -371,7 +371,7 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
 /// `_<ws_idx>` appended when used inside a glob expansion.
 fn isWorkspaceActionBase(action: []const u8) bool {
     const bases = [_][]const u8{
-        "workspace", "move_to_workspace", "tag_toggle", "tag_additive",
+        "workspace", "move_to_workspace", "tag_toggle",
     };
     for (bases) |base| if (std.mem.eql(u8, action, base)) return true;
     return false;
@@ -523,7 +523,6 @@ fn parseAction(allocator: std.mem.Allocator, cmd: []const u8) !defs.Action {
     if (tryParseWorkspace(cmd, "workspace_"))         |ws| return .{ .switch_workspace  = ws };
     if (tryParseWorkspace(cmd, "move_to_workspace_")) |ws| return .{ .move_to_workspace = ws };
     if (tryParseWorkspace(cmd, "tag_toggle_"))        |ws| return .{ .tag_toggle        = ws };
-    if (tryParseWorkspace(cmd, "tag_additive_"))      |ws| return .{ .tag_additive      = ws };
     return .{ .exec = try allocator.dupe(u8, cmd) };
 }
 
@@ -584,7 +583,7 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
     }
 
     const aesthetic_src = doc.getSection("tiling.aesthetics") orelse section;
-    cfg.tiling.gap_width    = aesthetic_src.getScalable("gaps")         orelse parser.ScalableValue.absolute(10.0);
+    cfg.tiling.gap_width    = aesthetic_src.getScalable("gap_width")    orelse parser.ScalableValue.absolute(10.0);
     cfg.tiling.border_width = aesthetic_src.getScalable("border_width") orelse parser.ScalableValue.absolute(2.0);
     cfg.tiling.border_focused   = getColor(aesthetic_src, "border_focused",   0x5294E2);
     cfg.tiling.border_unfocused = getColor(aesthetic_src, "border_unfocused", 0x383C4A);

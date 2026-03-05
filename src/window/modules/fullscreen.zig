@@ -284,13 +284,4 @@ pub fn toggleFullscreen(wm: *WM) void {
     }
 }
 
-// ── WM event bus handler ─────────────────────────────────────────────────────
 
-pub fn onWMEvent(wm: *WM, event: @import("wm_bus").WMEvent) void {
-    // Fullscreen state cleanup (removeForWorkspace) is done by window.zig before
-    // emitting window_closed, so the payload already reflects post-removal state.
-    // The bar visibility update for fullscreen windows is handled by bar.onWMEvent
-    // to avoid a fullscreen → bar import inside the bus handler chain.
-    _ = wm;
-    _ = event;
-}

@@ -49,16 +49,16 @@ global_layout = false # Per-workspace tiling layouts
 #       Layout          Variation  Workspaces
 layouts = [                                 # ("default"/"alternative") 
 	"master-stack",                     # "lifo"/"fifo"
-	"monocle",      "gaps",    "2,5,8", # "gapless"/"gaps"
-	"grid",         "relaxed", "6",     # "rigid"/"relaxed"
+	"monocle",      "gaps",             # "gapless"/"gaps"
+	"grid",         "relaxed", "6,8",   # "rigid"/"relaxed"
 	# "fibonacci",                      # no variations
 ]
 
 [tiling.aesthetics]
 # [0%-200%] / [0-N] px
 ## 100% = Entire display; 0% = disabled
-gap_width        = 1.5%
-border_width     = 1% #TODO: 100% doesn't cover 100% of the display.
+gap_width        = 3%
+border_width     = 1.5% #TODO: 100% doesn't cover 100% of the display.
 #TODO: make config parser accept both N% and %N values (currently %N doesn't work).
 
 border_focused   = "#ac3232"
@@ -67,7 +67,7 @@ border_unfocused = "#52263e"
 [tiling.layouts.master-stack]
 count = 1      # Number of windows in master area (master stack size)
 side  = "left" # "left"/"right" / 'L'/'R'
-width = %50    # [5%-95%] / (0-N] px
+width = 50%    # [5%-95%] / (0-N] px
 
 # "lifo" = Last (window remains) In (master area), First (window gets) Out (of master, and onto the stack).
 # "fifo" = First (window goes) In (master area), First (window goes) Out (of master, and onto the stack).
