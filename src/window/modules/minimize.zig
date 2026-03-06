@@ -170,7 +170,7 @@ pub fn minimizeWindow(wm: *WM) void {
     } else if (wm.config.tiling.enabled) {
         tiling.retileCurrentWorkspace(wm);
     }
-    bar.redrawImmediate(wm);
+    bar.redrawInsideGrab(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
     _ = xcb.xcb_flush(wm.conn);
 }
@@ -185,7 +185,7 @@ fn restoreWindowImpl(wm: *WM, win: u32, saved_fs: ?defs.WindowGeometry) void {
         // just offscreen).
         focus.setFocus(wm, win, .window_spawn);
         fullscreen.enterFullscreen(wm, win, geom);
-        bar.markDirty();
+        bar.scheduleRedraw();
         return;
     }
 
@@ -204,7 +204,7 @@ fn restoreWindowImpl(wm: *WM, win: u32, saved_fs: ?defs.WindowGeometry) void {
     }
 
     focus.setFocus(wm, win, .window_spawn);
-    bar.redrawImmediate(wm);
+    bar.redrawInsideGrab(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
     _ = xcb.xcb_flush(wm.conn);
 }
@@ -308,7 +308,7 @@ pub fn unminimizeAll(wm: *WM) void {
 
         focus.setFocus(wm, plain_wins[plain_wins.len - 1].win, .window_spawn);
 
-        bar.redrawImmediate(wm);
+        bar.redrawInsideGrab(wm);
         _ = xcb.xcb_ungrab_server(wm.conn);
         _ = xcb.xcb_flush(wm.conn);
     }

@@ -1,19 +1,19 @@
 //! Workspace management — creation, window assignment, and workspace switching.
 
-const std      = @import("std");
+const std        = @import("std");
 const fullscreen = @import("fullscreen");
-const defs     = @import("defs");
-const xcb      = defs.xcb;
-const WM       = defs.WM;
-const utils    = @import("utils");
-const focus    = @import("focus");
-const window   = @import("window");
-const bar      = @import("bar");
-const tiling   = @import("tiling");
-const Tracking = @import("tracking").Tracking;
-const constants = @import("constants");
-const debug    = @import("debug");
-const minimize = @import("minimize");
+const defs       = @import("defs");
+const xcb        = defs.xcb;
+const WM         = defs.WM;
+const utils      = @import("utils");
+const focus      = @import("focus");
+const window     = @import("window");
+const bar        = @import("bar");
+const tiling     = @import("tiling");
+const Tracking   = @import("tracking").Tracking;
+const constants  = @import("constants");
+const debug      = @import("debug");
+const minimize   = @import("minimize");
 
 // Comptime-generated workspace name strings ("1".."20"), never heap-allocated.
 const WORKSPACE_NAMES = blk: {
@@ -103,8 +103,7 @@ pub fn init(wm: *WM) void {
         return;
     };
 
-    const default_layout: tiling.Layout =
-        tiling.getState().layout;
+    const default_layout = tiling.getState().layout;
 
     const cfg_tiling = &wm.config.tiling;
 
@@ -131,7 +130,7 @@ pub fn init(wm: *WM) void {
     }
 
     var w2ws = std.AutoHashMap(u32, u64).init(wm.allocator);
-    w2ws.ensureTotalCapacity(32) catch {};
+    w2ws.ensureTotalCapacity(32) catch |err| debug.err("workspaces: capacity pre-alloc failed: {}", .{err});
 
     g_state = .{
         .workspaces           = wss,
@@ -196,10 +195,10 @@ pub fn moveWindowTo(wm: *WM, win: u32, target_ws: u8) !void {
     if (focus.getFocused() == win) focus.clearFocus(wm);
     if (wm.config.tiling.enabled) tiling.dirty();
     tiling.invalidateGeomCache(win);
-    bar.markDirty();
+    bar.scheduleRedraw();
 }
 
-// ── Tag operations ────────────────────────────────────────────────────────────
+// Tag operations
 
 /// Low-level: set a window's workspace bitmask and keep every workspace
 /// Tracking consistent. Does NOT handle screen visibility or tiling.
@@ -252,7 +251,7 @@ pub fn moveWindowExclusive(wm: *WM, win: u32, target_ws: u8) void {
     }
 
     if (wm.config.tiling.enabled) tiling.retileCurrentWorkspace(wm);
-    bar.markDirty();
+    bar.scheduleRedraw();
     _ = xcb.xcb_flush(wm.conn);
 }
 
@@ -304,11 +303,11 @@ pub fn tagToggle(wm: *WM, win: u32, target_ws: u8, protect_current: bool) void {
         }
     }
 
-    bar.markDirty();
+    bar.scheduleRedraw();
     _ = xcb.xcb_flush(wm.conn);
 }
 
-// ── Workspace switch ──────────────────────────────────────────────────────────
+// Workspace switch
 
 pub fn switchTo(wm: *WM, ws_id: u8) void {
     const s = getState() orelse return;
@@ -318,7 +317,7 @@ pub fn switchTo(wm: *WM, ws_id: u8) void {
     executeSwitch(wm, old, ws_id);
 }
 
-// ── Query helpers ─────────────────────────────────────────────────────────────
+// Query helpers
 
 /// Returns the workspace bitmask for `win`, or null if unmanaged.
 pub inline fn getWindowWorkspaceMask(win: u32) ?u64 {
@@ -333,7 +332,7 @@ pub inline fn isWindowOnWorkspace(win: u32, ws_idx: u8) bool {
     return (mask >> @intCast(ws_idx)) & 1 != 0;
 }
 
-// Returns the first non-minimized window in `windows`, or null if all are minimized.
+/// Returns the first non-minimized window in `windows`, or null if all are minimized.
 pub inline fn firstNonMinimized(wm: *const WM, windows: []const u32) ?u32 {
     for (windows) |win| {
         if (!minimize.isMinimized(wm, win)) return win;
@@ -544,7 +543,7 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
     applyPostSwitchFocus(wm, new_ws, new_ws_obj, ptr_cookie);
 
     bar.raiseBar();
-    bar.redrawImmediate(wm);
+    bar.redrawInsideGrab(wm);
     _ = xcb.xcb_ungrab_server(wm.conn);
     _ = xcb.xcb_flush(wm.conn);
 }

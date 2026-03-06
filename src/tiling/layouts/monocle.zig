@@ -1,9 +1,9 @@
 //! Monocle layout: all windows fullscreen, stacked; only top window visible.
 
-const defs    = @import("defs");
+const defs      = @import("defs");
 const constants = @import("constants");
-const utils   = @import("utils");
-const layouts = @import("layouts");
+const utils     = @import("utils");
+const layouts   = @import("layouts");
 
 const tiling = @import("tiling");
 const State  = tiling.State;
@@ -13,15 +13,15 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
     if (windows.len == 0) return;
 
     const margin = state.margins();
-    const gap    = margin.gap;
-    const border = margin.border;
+    const gap     = margin.gap;
+    const border2 = margin.border * 2;
 
     // All windows share the same geometry but only the top one is visible.
     // Configure and raise only that one; the others are configured lazily
     // when brought to the top, keeping cost O(1).
     const top_win = windows[windows.len - 1];
 
-    const border2 = border * 2;
+    const gap2b = gap * 2 + border2;
     const rect: utils.Rect = switch (state.layout_variations.monocle) {
         .gapless => .{
             .x      = 0,
@@ -32,8 +32,8 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
         .gaps => .{
             .x      = @intCast(gap),
             .y      = @intCast(y_offset +| gap),
-            .width  = if (screen_w > gap * 2 + border2) screen_w - gap * 2 - border2 else constants.MIN_WINDOW_DIM,
-            .height = if (screen_h > gap * 2 + border2) screen_h - gap * 2 - border2 else constants.MIN_WINDOW_DIM,
+            .width  = if (screen_w > gap2b) screen_w - gap2b else constants.MIN_WINDOW_DIM,
+            .height = if (screen_h > gap2b) screen_h - gap2b else constants.MIN_WINDOW_DIM,
         },
     };
 

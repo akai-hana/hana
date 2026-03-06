@@ -148,7 +148,45 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     }
 
     tiling.updateWindowFocus(wm, old, win);
-    bar.notifyFocusChange(win);
+    bar.scheduleFocusRedraw(win);
+}
+
+/// Called when the X server reports a FocusIn on a managed window.
+///
+/// When a window focuses itself (e.g. an app received a replayed click and
+/// handled focus internally), the WM is never told via setFocus, so
+/// g_focused_window stays stale.  A stale g_focused_window causes the
+/// `getFocused() == win` guard in maybeFocusWindow to fire spuriously,
+/// silently blocking all subsequent hover-focus attempts.
+///
+/// Syncing here keeps WM state consistent with the actual X focus so that
+/// hover focus works correctly after any application-driven focus change.
+///
+/// NotifyGrab / NotifyUngrab are skipped — they are transient and do not
+/// represent a real focus change (e.g. WM grabbing the server, key grabs).
+pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t, wm: *WM) void {
+    if (event.mode == xcb.XCB_NOTIFY_MODE_GRAB or
+        event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) return;
+    // NotifyWhileGrabbed: focus change during an active grab — skip to avoid
+    // spurious updates during drag or key-grab sequences.
+    if (event.mode == xcb.XCB_NOTIFY_MODE_WHILE_GRABBED) return;
+    // NotifyInferior: a child of this window received focus; the managed
+    // top-level did not change focus itself.  We only track top-level granularity.
+    if (event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR) return;
+    // NotifyPointerRoot / NotifyNone: focus moved to no real window.
+    if (event.detail == xcb.XCB_NOTIFY_DETAIL_POINTER_ROOT or
+        event.detail == xcb.XCB_NOTIFY_DETAIL_NONE) return;
+
+    const win = event.event;
+    if (win == 0 or win == wm.root) return;
+    if (bar.isBarWindow(win)) return;
+    if (!window.isValidManagedWindow(wm, win)) return;
+    if (g_focused_window == win) return;
+
+    const old = g_focused_window;
+    g_focused_window = win;
+    tiling.updateWindowFocus(wm, old, win);
+    bar.scheduleFocusRedraw(win);
 }
 
 pub fn clearFocus(wm: *WM) void {
@@ -164,7 +202,7 @@ pub fn clearFocus(wm: *WM) void {
         wm.root,
         g_last_event_time,
     );
-    bar.notifyFocusChange(null);
+    bar.scheduleFocusRedraw(null);
 }
 
 inline fn shouldRaise(reason: Reason) bool {
@@ -189,3 +227,4 @@ fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
     defer std.c.free(reply);
     return reply.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE;
 }
+

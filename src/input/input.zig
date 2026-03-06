@@ -117,11 +117,11 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t, wm: *WM) void {
         if (state.map.get(key)) |action| {
             if (action.* == .close_window) {
                 drun.toggle(wm);
-                bar.redrawImmediate(wm);
+                bar.scheduleRedraw();
                 return;
             }
         }
-        if (drun.handleKeyPress(event, wm)) bar.redrawImmediate(wm);
+        if (drun.handleKeyPress(event, wm)) bar.scheduleRedraw();
         return;
     }
 
@@ -250,8 +250,8 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
             debug.info("[RELOAD] triggered config reloading...", .{});
             utils.reload();
         },
-        .toggle_layout          => { tiling.toggleLayout(wm);        bar.markDirty(); }, // no grab — coalesce
-        .toggle_layout_reverse  => { tiling.toggleLayoutReverse(wm); bar.markDirty(); }, // no grab — coalesce
+        .toggle_layout          => { tiling.toggleLayout(wm);        bar.scheduleRedraw(); },
+        .toggle_layout_reverse  => { tiling.toggleLayoutReverse(wm); bar.scheduleRedraw(); },
         .toggle_bar_visibility  => bar.setBarState(wm, .toggle),
         .toggle_bar_position    => bar.toggleBarPosition(wm),
         .increase_master        => tiling.increaseMasterWidth(wm),
@@ -259,11 +259,11 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .increase_master_count  => tiling.increaseMasterCount(wm),
         .decrease_master_count  => tiling.decreaseMasterCount(wm),
         .toggle_tiling          => tiling.toggleTiling(wm),
-        .swap_master            => tiling.swapWithMaster(wm),
+        .swap_master            => { tiling.swapWithMaster(wm);          bar.scheduleRedraw(); },
+        .swap_master_focus_swap => { tiling.swapWithMasterFocusSwap(wm); bar.scheduleRedraw(); },
         .cycle_layout_variation => tiling.cycleLayoutVariation(wm),
-        .drun_toggle            => { drun.toggle(wm); bar.markDirty(); }, // no grab — coalesce
+        .drun_toggle            => { drun.toggle(wm); bar.scheduleRedraw(); },
         .dump_state             => dumpState(wm),
-        .emergency_recover      => emergencyRecover(wm),
         .minimize_window        => minimize.minimizeWindow(wm),
         .unminimize_lifo        => minimize.unminimize(wm, .lifo),
         .unminimize_fifo        => minimize.unminimize(wm, .fifo),
@@ -381,8 +381,7 @@ fn executeShellCommand(wm: *WM, cmd: []const u8) !void {
     }
 }
 
-// Diagnostics and recovery
-// TODO: consider migrating dumpState -> debug.zig, emergencyRecover -> utils.zig.
+// Diagnostics
 
 fn dumpState(_: *WM) void {
     debug.info("========== STATE DUMP ==========", .{});
@@ -415,32 +414,6 @@ fn dumpState(_: *WM) void {
         debug.info("Master width: {d:.2}", .{t_state.master_width});
     }
     debug.info("================================", .{});
-}
-
-fn emergencyRecover(wm: *WM) void {
-    debug.warn("========== EMERGENCY RECOVERY ==========", .{});
-
-    if (workspaces.getState()) |ws_state| {
-        for (ws_state.workspaces) |*ws| {
-            for (ws.windows.items()) |win| _ = xcb.xcb_map_window(wm.conn, win);
-        }
-    }
-
-    if (tiling.getStateOpt()) |t_state| {
-        t_state.enabled = false;
-        debug.warn("Tiling disabled", .{});
-    }
-
-    fullscreen.clear();
-    debug.warn("Fullscreen cleared", .{});
-
-    if (drag.isDragging()) {
-        drag.stopDrag();
-        debug.warn("Drag stopped", .{});
-    }
-
-    _ = xcb.xcb_flush(wm.conn);
-    debug.warn("Recovery complete — all windows mapped, special modes disabled", .{});
 }
 
 // Helpers

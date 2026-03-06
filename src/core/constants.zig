@@ -54,7 +54,11 @@ pub const EventMasks = struct {
     /// events from root (it returns immediately for all other windows), so
     /// subscribing managed windows to leave events would generate traffic that
     /// is always discarded.
+    /// FOCUS_CHANGE is included so XCB_FOCUS_IN events are delivered when an
+    /// application focuses itself (e.g. via a replayed click), keeping
+    /// g_focused_window in sync with the actual X focus state.
     pub const MANAGED_WINDOW = xcb.XCB_EVENT_MASK_ENTER_WINDOW |
+                               xcb.XCB_EVENT_MASK_FOCUS_CHANGE |
                                xcb.XCB_EVENT_MASK_BUTTON_PRESS |
                                xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY |
                                xcb.XCB_EVENT_MASK_PROPERTY_CHANGE;
@@ -74,7 +78,7 @@ pub const CURSOR_LEFT_PTR_MASK = CURSOR_LEFT_PTR + 1;
 
 /// Capacity limits and upper bounds.
 pub const Limits = struct {
-    /// Dispatch table size (covers all X11 event types)
+    /// Dispatch table size (covers all X11 event types up to XCB_FOCUS_OUT=10).
     pub const EVENT_DISPATCH_TABLE = 36;
 
     /// Upper bound for the XCB cookie scratch buffer in grabKeybindings.

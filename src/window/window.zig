@@ -19,10 +19,11 @@ const fullscreen = @import("fullscreen");
 const WINDOW_EVENT_MASK = constants.EventMasks.MANAGED_WINDOW;
 
 // XSizeHints flags (ICCCM §4.1.2.3)
-const XSIZE_HINTS_P_MIN_SIZE:  u32 = 0x010;
+const XSIZE_HINTS_P_MIN_SIZE:  u32 = 0x10;
 const XSIZE_HINTS_P_BASE_SIZE: u32 = 0x100;
 
-// ── Spawn queue ───────────────────────────────────────────────────────────────
+// Spawn queue
+//
 // Tracks pending (workspace, pid) assignments for newly-mapped windows.
 // Lives here (window.zig) because it is exclusively accessed by this module.
 
@@ -82,13 +83,12 @@ const SpawnQueue = struct {
     }
 };
 
-/// Module-level spawn state (replaces wm.spawn_queue, g_spawn_cursor_x/y).
+/// Module-level spawn state.
 var g_spawn_queue:    SpawnQueue = .{};
 var g_spawn_cursor_x: i16       = 0;
 var g_spawn_cursor_y: i16       = 0;
 
-
-// Module-level atom cache 
+// Module-level atom cache
 //
 // The three atoms used on every MapRequest are resolved once into plain u32
 // fields, turning per-event hash probes into direct field reads.
@@ -177,13 +177,14 @@ fn workspaceRuleForClass(wm: *WM, cookie: xcb.xcb_get_property_cookie_t) ?u8 {
 
 // Workspace assignment
 
+/// Resolves the target workspace for a newly mapped window.
+/// `c_net_wm_pid` is null when the spawn queue is empty — avoids the need for
+/// a separate `has_pending_spawns` bool and makes it impossible to access an
+/// undefined cookie.
 fn resolveTargetWorkspace(
-    wm:          *WM,
-    win:         u32,
-    current_ws:  u8,
-    // Null when the spawn queue is empty — avoids the need for a separate
-    // `has_pending_spawns` bool and makes it impossible to access an
-    // undefined cookie.
+    wm:           *WM,
+    win:          u32,
+    current_ws:   u8,
     c_net_wm_pid: ?xcb.xcb_get_property_cookie_t,
 ) u8 {
     // Phase 1 — Workspace class rules (highest priority).
@@ -275,7 +276,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         ) else null;
 
     const target_ws            = resolveTargetWorkspace(wm, win, current_ws, c_net_wm_pid);
-    const on_current_workspace = (target_ws == current_ws);
+    const on_current_workspace = target_ws == current_ws;
 
     workspaces.moveWindowTo(wm, win, target_ws) catch |err| {
         debug.logError(err, win);
@@ -314,7 +315,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     }
 
     if (on_current_workspace) focus.setFocus(wm, win, .window_spawn);
-    bar.markDirty();
+    bar.scheduleRedraw();
 
     if (on_current_workspace) _ = xcb.xcb_ungrab_server(wm.conn);
     _ = xcb.xcb_flush(wm.conn);
@@ -331,7 +332,6 @@ fn unmanageWindow(wm: *WM, win: u32) void {
 
     const window_workspace = workspaces.getWorkspaceForWindow(win);
     const current_ws       = workspaces.getCurrentWorkspace();
-
 
     utils.uncacheWindowFocusProps(win);
 
@@ -364,7 +364,7 @@ fn unmanageWindow(wm: *WM, win: u32) void {
         }
     }
 
-    bar.redrawImmediate(wm);
+    bar.redrawInsideGrab(wm);
 
     _ = xcb.xcb_ungrab_server(wm.conn);
     _ = xcb.xcb_flush(wm.conn);
@@ -422,7 +422,7 @@ fn sendConfigureNotify(wm: *WM, win: u32, x: i16, y: i16, width: u16, height: u1
 fn sendSyntheticConfigureNotify(wm: *WM, win: u32) void {
     // Fast path: serve the geometry from the tiling cache — zero round-trips.
     if (tiling.getWindowGeom(win)) |rect| {
-        const border: u16 = (if (tiling.getStateOpt()) |s| s.border_width else 0);
+        const border: u16 = if (tiling.getStateOpt()) |s| s.border_width else 0;
         sendConfigureNotify(wm, win, rect.x, rect.y, rect.width, rect.height, border);
         return;
     }
@@ -537,7 +537,5 @@ fn collectAndCacheSizeHints(
         min_height = @max(min_height, @as(u16, @intCast(@min(fields[16], std.math.maxInt(u16)))));
     }
 
-    // Don't occupy a cache slot for degenerate hints that declare zero on both axes.
-    if (min_width > 0 or min_height > 0)
-        tiling.cacheSizeHints(wm.allocator, win, .{ .min_width = min_width, .min_height = min_height });
+    tiling.cacheSizeHints(wm.allocator, win, .{ .min_width = min_width, .min_height = min_height });
 }

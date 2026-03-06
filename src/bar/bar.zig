@@ -3,7 +3,7 @@
 //! A dedicated bar thread owns the DrawContext and all rendering. The main thread
 //! captures a lightweight BarSnapshot and posts it to a BarChannel; the bar thread
 //! wakes, draws, and loops. Draws that must complete before the caller returns (e.g.
-//! inside xcb_grab_server) use submitDraw(wm, true), which blocks until done.
+//! inside xcb_grab_server) use redrawInsideGrab(wm), which blocks until done.
 //!
 //! Clock-only updates bypass the snapshot path: the bar thread redraws just the
 //! clock segment using its cached x-position.
@@ -228,7 +228,7 @@ const State = struct {
     /// between reloads. Nulling it on every dirty mark would cause drawClockOnly
     /// to silently bail for any clock tick that races a concurrent full-redraw,
     /// delaying the clock display by up to one second unnecessarily.
-    fn markDirty(self: *State) void { self.dirty = true; }
+    fn setDirty(self: *State) void { self.dirty = true; }
 
     /// Marks the bar dirty AND resets all layout-derived position caches.
     /// Call this whenever the bar geometry or config changes (resize, reload,
@@ -796,8 +796,11 @@ pub fn toggleBarPosition(wm: *defs.WM) void {
     debug.info("Bar position toggled to: {s}", .{@tagName(wm.config.bar.vertical_position)});
 }
 
-/// Posts a focus-only update. Skipped when a full redraw is already pending.
-pub fn notifyFocusChange(new_win: ?u32) void {
+/// Schedules a lightweight focus-only redraw. Skips the full snapshot capture
+/// and posts only the new focused window ID to the bar thread, which runs the
+/// fast drawTitleOnly path instead of a full drawAll. Skipped when a full
+/// redraw is already pending — the full draw will include the focus state.
+pub fn scheduleFocusRedraw(new_win: ?u32) void {
     const s = state orelse return;
     if (!s.visible) return;
     g_channel.mutex.lock();
@@ -817,27 +820,24 @@ pub fn isBarWindow(win: u32) bool { return if (state) |s| s.window == win else f
 pub fn getBarHeight() u16         { return if (state) |s| s.height else 0; }
 pub fn isBarInitialized() bool    { return state != null; }
 pub fn hasClockSegment() bool     { return if (state) |s| s.has_clock_segment else false; }
-/// Mark the bar as needing a redraw. The draw is coalesced by the main event
-/// loop and dispatched via updateIfDirty at the end of each XCB batch —
-/// zero X11 I/O on the caller's stack.
+/// Schedule a full bar redraw, coalesced to the end of the current XCB event
+/// batch via updateIfDirty. Zero X11 I/O on the caller's stack.
 ///
-/// DEFAULT choice for: focus changes, window map/unmap, workspace membership
-/// changes — anything that fires outside a server grab.
-pub fn markDirty() void           { if (state) |s| s.markDirty(); }
-pub fn isVisible() bool           { return if (state) |s| s.visible else false; }
-pub fn getGlobalVisibility() bool { return if (state) |s| s.global_visible else false; }
+/// DEFAULT choice for everything outside a server grab: focus changes, window
+/// map/unmap, layout toggles, workspace membership changes, etc.
+pub fn scheduleRedraw() void        { if (state) |s| s.setDirty(); }
+pub fn isVisible() bool             { return if (state) |s| s.visible else false; }
+pub fn getGlobalVisibility() bool   { return if (state) |s| s.global_visible else false; }
 pub fn setGlobalVisibility(visible: bool) void { if (state) |s| s.global_visible = visible; }
 
-/// Flush the bar to screen immediately, bypassing the dirty-coalescing loop.
+/// Redraw the bar synchronously, blocking until the bar thread finishes.
 ///
-/// USE ONLY when the draw must complete before returning to the caller:
-///   • The caller holds xcb_grab_server and must release before the bar thread
-///     can render — without an immediate flush the bar shows stale geometry.
-///   • The call is inside or directly after a server grab (minimize, restore,
-///     workspace switch, tiling reload with grab).
+/// ONLY for use inside or directly before xcb_ungrab_server: the bar thread
+/// cannot render while the server is grabbed, so the draw must complete before
+/// the grab is released or the bar will show stale content.
 ///
-/// For everything else, use markDirty() so draws are coalesced.
-pub fn redrawImmediate(wm: *defs.WM) void {
+/// For everything outside a grab, use scheduleRedraw().
+pub fn redrawInsideGrab(wm: *defs.WM) void {
     const s = state orelse return;
     if (!s.visible) return;
     submitDraw(wm, true);
@@ -910,7 +910,7 @@ pub fn updateTimerState() void { clock_segment.updateTimerState(); }
 
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
     if (state) |s| if (event.window == s.window and event.count == 0) {
-        if (drag.isDragging()) s.markDirty() else submitDraw(wm, false);
+        if (drag.isDragging()) s.setDirty() else submitDraw(wm, false);
     };
 }
 
@@ -920,7 +920,7 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
     if (event.window == wm.root and event.atom == xcb.XCB_ATOM_WM_NAME) {
         status_segment.update(wm, &s.status_text, s.allocator) catch |e|
             debug.warnOnErr(e, "status_segment.update");
-        s.markDirty();
+        s.setDirty();
         return;
     }
 
@@ -930,7 +930,7 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t, wm: *
     const net_wm_name = s.net_wm_name_atom;
     if (event.atom == xcb.XCB_ATOM_WM_NAME or (net_wm_name != 0 and event.atom == net_wm_name)) {
         s.title_invalidated = true;
-        s.markDirty();
+        s.setDirty();
     }
 }
 
@@ -961,7 +961,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t, wm: *defs.W
         const clicked_ws: usize = @intCast(@divFloor(click_x, ws_w));
         if (clicked_ws < ws_state.workspaces.len) {
             workspaces.switchTo(wm, clicked_ws);
-            s.markDirty();
+            s.setDirty();
         }
     };
 }

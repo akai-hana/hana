@@ -38,13 +38,13 @@ pub const Action = union(enum) {
     toggle_tiling,
     toggle_fullscreen,
     swap_master,
+    swap_master_focus_swap,
     switch_workspace:  u8,
     move_to_workspace: u8,
     move_window:       u8, // exclusive move — clears all tags, sets only target
     tag_toggle:        u8, // pure toggle — flips bit N, never moves
     sequence:          []const Action, // ordered list of actions executed left-to-right
     dump_state,
-    emergency_recover,
     minimize_window,
     unminimize_lifo,
     unminimize_fifo,

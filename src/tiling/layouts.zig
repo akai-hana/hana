@@ -1,4 +1,4 @@
-// Common layout interface and utilities.
+//! Common layout interface and utilities.
 
 const std   = @import("std");
 const utils = @import("utils");
@@ -26,7 +26,9 @@ var g_hints: std.AutoHashMapUnmanaged(u32, SizeHints) = .{};
 
 pub fn cacheSizeHints(allocator: std.mem.Allocator, win: u32, hints: SizeHints) void {
     if (hints.min_width == 0 and hints.min_height == 0) return;
-    g_hints.put(allocator, win, hints) catch {};
+    g_hints.put(allocator, win, hints) catch |err| {
+        debug.err("cacheSizeHints: failed to cache hints for 0x{x}: {}", .{ win, err });
+    };
 }
 
 pub fn evictSizeHints(win: u32) void {
@@ -40,13 +42,10 @@ pub fn deinitSizeHintsCache(allocator: std.mem.Allocator) void {
 
 // ── Per-window combined cache entry ──────────────────────────────────────────
 //
-// Merges the previous pair of separate geom_cache and border_cache maps into a
-// single AutoHashMapUnmanaged, halving hash lookups on the hot retile and
-// border-update paths and improving cache-line locality.
-//
-// configureSafe writes only `.rect`; tiling.sendBorderColor writes only
-// `.border`. Both use getOrPut so a single hash probe handles both the
-// "found / skip if unchanged" and "insert" cases.
+// A single AutoHashMapUnmanaged keyed by window ID, storing both geometry and
+// border color. configureSafe writes only `.rect`; tiling.sendBorderColor
+// writes only `.border`. Both use getOrPut so a single hash probe handles
+// both the "found / skip if unchanged" and "insert" cases.
 
 pub const WindowData = struct {
     rect:   utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
@@ -57,11 +56,9 @@ pub const CacheMap = std.AutoHashMapUnmanaged(u32, WindowData);
 
 // ── Layout context ────────────────────────────────────────────────────────────
 //
-// Replaces the previous arm/disarm global pointer (g_geom_ctx). Every layout
-// module receives a *const LayoutCtx; configureSafe reads the cache from it
-// rather than from a module-level global. This makes the dependency explicit,
-// eliminates hidden call-site ordering requirements, and lets the compiler see
-// the null-cache case statically.
+// Every layout module receives a *const LayoutCtx; configureSafe reads the
+// cache from it rather than from a module-level global, making the dependency
+// explicit and eliminating hidden call-site ordering requirements.
 
 pub const LayoutCtx = struct {
     conn:      *xcb.xcb_connection_t,
@@ -72,24 +69,19 @@ pub const LayoutCtx = struct {
     allocator: std.mem.Allocator,
 };
 
-// ── Rect comparison ───────────────────────────────────────────────────────────
-//
-// utils.Rect is `extern struct { i16, i16, u16, u16 }` — 8 bytes, no padding.
-// A single 64-bit integer comparison replaces the original four 16-bit ones.
-// The comptime assert makes the layout assumption explicit and catches any
-// future struct changes that would silently break the bitcast.
-
+/// Returns true if two rects are identical via a single 64-bit comparison.
+/// utils.Rect is `extern struct { i16, i16, u16, u16 }` — 8 bytes, no padding.
+/// The comptime assert makes the layout assumption explicit and catches any
+/// future struct changes that would silently break the bitcast.
 pub inline fn rectsEqual(a: utils.Rect, b: utils.Rect) bool {
     comptime std.debug.assert(@sizeOf(utils.Rect) == @sizeOf(u64));
     return @as(u64, @bitCast(a)) == @as(u64, @bitCast(b));
 }
 
-// ── configureSafe ─────────────────────────────────────────────────────────────
-
 /// The single call-site every layout module uses to apply geometry.
 /// Clamps to WM_NORMAL_HINTS minimums and, when the cache is non-null,
 /// skips the XCB call for windows whose rect matches the last applied value.
-pub inline fn configureSafe(
+pub fn configureSafe(
     ctx:  *const LayoutCtx,
     win:  u32,
     rect: utils.Rect,
@@ -109,8 +101,6 @@ pub inline fn configureSafe(
     }
 
     if (ctx.cache) |cache| {
-        // getOrPut: single hash probe covers both the "already exists" (dedup)
-        // and "new entry" (insert) paths.
         const gop = cache.getOrPut(ctx.allocator, win) catch {
             // Allocation failure: send the XCB call without caching.
             utils.configureWindow(ctx.conn, win, effective);

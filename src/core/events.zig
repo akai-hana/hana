@@ -14,6 +14,7 @@ const xkbcommon = @import("xkbcommon");
 
 const input      = @import("input");
 const window     = @import("window");
+const focus      = @import("focus");
 const tiling     = @import("tiling");
 const workspaces = @import("workspaces");
 const bar        = @import("bar");
@@ -58,6 +59,7 @@ const dispatch_table = blk: {
     table[xcb.XCB_MOTION_NOTIFY]     = asHandler(input.handleMotionNotify);
     table[xcb.XCB_ENTER_NOTIFY]      = asHandler(window.handleEnterNotify);
     table[xcb.XCB_LEAVE_NOTIFY]      = asHandler(window.handleLeaveNotify);
+    table[xcb.XCB_FOCUS_IN]          = asHandler(focus.handleFocusIn);
     table[xcb.XCB_MAP_REQUEST]       = asHandler(window.handleMapRequest);
     table[xcb.XCB_CONFIGURE_REQUEST] = asHandler(window.handleConfigureRequest);
     table[xcb.XCB_UNMAP_NOTIFY]      = asHandler(window.handleUnmapNotify);
