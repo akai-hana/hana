@@ -294,6 +294,18 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
     // visible when the flush preceded these round-trips.
     utils.populateFocusCacheFromCookies(wm.conn, win, c_protocols, c_hints);
 
+    if (on_current_workspace) _ = xcb.xcb_grab_server(wm.conn);
+
+    // Configure geometry BEFORE mapping.  xcb_configure_window is valid on
+    // an unmapped window — the geometry is stored and takes effect atomically
+    // when the window is mapped.  Retiling here (which also pushes background
+    // monocle windows offscreen) means the compositor never sees the new
+    // window at its default X position or background windows still on-screen.
+    if (wm.config.tiling.enabled) {
+        tiling.addWindow(wm, win);
+        if (on_current_workspace) tiling.retileCurrentWorkspace(wm);
+    }
+
     if (on_current_workspace) {
         _ = xcb.xcb_map_window(wm.conn, win);
         snapshotSpawnCursor(wm);
@@ -301,14 +313,10 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         grabButtons(wm, win, false);
     }
 
-    // Notify each module in order (bus pattern without a separate module).
-    if (wm.config.tiling.enabled) {
-        tiling.addWindow(wm, win);
-        if (on_current_workspace) tiling.retileCurrentWorkspace(wm);
-    }
     if (on_current_workspace) focus.setFocus(wm, win, .window_spawn);
     bar.markDirty();
 
+    if (on_current_workspace) _ = xcb.xcb_ungrab_server(wm.conn);
     _ = xcb.xcb_flush(wm.conn);
 }
 

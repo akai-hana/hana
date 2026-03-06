@@ -49,7 +49,7 @@ global_layout = false # Per-workspace tiling layouts
 #       Layout          Variation  Workspaces
 layouts = [                                 # ("default"/"alternative") 
 	"master-stack",                     # "lifo"/"fifo"
-	"monocle",      "gaps",             # "gapless"/"gaps"
+	"monocle",      "gaps",    "5",     # "gapless"/"gaps"
 	"grid",         "relaxed", "6,8",   # "rigid"/"relaxed"
 	# "fibonacci",                      # no variations
 ]

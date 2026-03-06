@@ -39,4 +39,22 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
 
     layouts.configureSafe(ctx, top_win, rect);
     _ = xcb.xcb_configure_window(ctx.conn, top_win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+
+    // Push every non-top window offscreen immediately so they never sit on top
+    // of (or show through) the top window.  This mirrors what the workspace
+    // switcher does in retileInactiveWorkspace — without it, background windows
+    // remain at their last on-screen coordinates, which is visible through
+    // transparent windows.
+    //
+    // We also zero each window's cached rect so restoreWorkspaceGeom does not
+    // attempt to replay a stale on-screen position for them; it will instead
+    // fall back to a full retile, which correctly repeats this offscreen push.
+    for (windows[0 .. windows.len - 1]) |win| {
+        _ = xcb.xcb_configure_window(ctx.conn, win,
+            xcb.XCB_CONFIG_WINDOW_X,
+            &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+        if (ctx.cache) |cache| {
+            if (cache.getPtr(win)) |wd| wd.rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        }
+    }
 }

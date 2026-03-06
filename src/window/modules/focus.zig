@@ -148,7 +148,7 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     }
 
     tiling.updateWindowFocus(wm, old, win);
-    bar.markDirty();
+    bar.notifyFocusChange(win);
 }
 
 pub fn clearFocus(wm: *WM) void {
@@ -164,7 +164,7 @@ pub fn clearFocus(wm: *WM) void {
         wm.root,
         g_last_event_time,
     );
-    bar.markDirty();
+    bar.notifyFocusChange(null);
 }
 
 inline fn shouldRaise(reason: Reason) bool {
@@ -189,4 +189,3 @@ fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
     defer std.c.free(reply);
     return reply.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE;
 }
-

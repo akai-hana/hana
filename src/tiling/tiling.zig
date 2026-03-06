@@ -59,8 +59,45 @@ const LAYOUT_CYCLE: []const Layout = blk: {
     break :blk list;
 };
 
+/// Maps a canonical layout name string (as stored in cfg.tiling.layouts) to the
+/// corresponding Layout enum value.  Returns null for unrecognised names.
 /// Returns the first layout available at build time (fallback default).
 pub inline fn defaultLayout() Layout { return LAYOUT_CYCLE[0]; }
+
+fn layoutFromString(name: []const u8) ?Layout {
+    if (std.mem.eql(u8, name, "master-stack") or std.mem.eql(u8, name, "master")) return .master;
+    if (std.mem.eql(u8, name, "monocle"))    return .monocle;
+    if (std.mem.eql(u8, name, "grid"))       return .grid;
+    if (std.mem.eql(u8, name, "fibonacci"))  return .fibonacci;
+    return null;
+}
+
+/// Builds the runtime-enabled layout list from the config's `layouts` array,
+/// keeping only entries whose .zig file is present on disk (layout_flags).
+/// Duplicates are silently dropped.  Falls back to LAYOUT_CYCLE when the
+/// config produces an empty list (e.g. no `layouts` key was set).
+fn buildEnabledLayouts(layouts_cfg: []const []const u8) struct { arr: [4]Layout, len: u8 } {
+    var arr: [4]Layout = undefined;
+    var len: u8 = 0;
+    for (layouts_cfg) |name| {
+        if (len >= arr.len) break;
+        const layout = layoutFromString(name) orelse continue;
+        if (!isLayoutAvailable(layout)) continue; // file not on disk
+        // Deduplicate.
+        var seen = false;
+        for (arr[0..len]) |l| if (l == layout) { seen = true; break; };
+        if (seen) continue;
+        arr[len] = layout;
+        len += 1;
+    }
+    if (len == 0) {
+        // Fallback: respect whatever the disk has (original behavior).
+        for (LAYOUT_CYCLE) |l| { arr[len] = l; len += 1; }
+    }
+    return .{ .arr = arr, .len = len };
+}
+
+
 
 /// True when the module file for `layout` was present at build time.
 pub inline fn isLayoutAvailable(layout: Layout) bool {
@@ -72,18 +109,28 @@ pub inline fn isLayoutAvailable(layout: Layout) bool {
     };
 }
 
-// Walk the LAYOUT_CYCLE slice to find `current`, then step forward or backward.
-// The list is at most 4 elements long; linear scan is intentional and fine.
-// If `current` names a layout whose file was removed (not in LAYOUT_CYCLE),
-// we jump to the first available entry.
-inline fn stepCycle(current: Layout, comptime forward: bool) Layout {
-    for (LAYOUT_CYCLE, 0..) |l, i| {
-        if (l == current) return LAYOUT_CYCLE[
-            if (forward) (i + 1) % LAYOUT_CYCLE.len
-            else         (LAYOUT_CYCLE.len + i - 1) % LAYOUT_CYCLE.len
+// Walk the runtime-enabled layout list (s.enabled_layouts) to find `current`,
+// then step forward or backward.  Falls back to LAYOUT_CYCLE if state has no
+// enabled layouts (should not happen after init, but guarded defensively).
+inline fn stepCycle(s: *const State, current: Layout, comptime forward: bool) Layout {
+    const cycle = s.enabled_layouts[0..s.enabled_layouts_len];
+    if (cycle.len == 0) {
+        // Defensive fallback: walk the comptime list.
+        for (LAYOUT_CYCLE, 0..) |l, i| {
+            if (l == current) return LAYOUT_CYCLE[
+                if (forward) (i + 1) % LAYOUT_CYCLE.len
+                else         (LAYOUT_CYCLE.len + i - 1) % LAYOUT_CYCLE.len
+            ];
+        }
+        return LAYOUT_CYCLE[0];
+    }
+    for (cycle, 0..) |l, i| {
+        if (l == current) return cycle[
+            if (forward) (i + 1) % cycle.len
+            else         (cycle.len + i - 1) % cycle.len
         ];
     }
-    return LAYOUT_CYCLE[0];
+    return cycle[0]; // current not in list (layout disabled at reload) — jump to first
 }
 
 // Variation enums are defined in defs.zig to allow config.zig to parse them
@@ -116,6 +163,14 @@ pub const State = struct {
     border_unfocused: u32,
     windows:          Tracking,
     dirty:            bool,
+
+    /// Runtime layout cycle: intersection of config `layouts` array and disk-present
+    /// layout files (layout_flags).  Populated at init/reload from cfg.tiling.layouts.
+    /// stepCycle walks this instead of the comptime LAYOUT_CYCLE so that layouts
+    /// omitted from the config array are invisible on runtime even when their .zig
+    /// file is present on disk.
+    enabled_layouts:     [4]Layout,
+    enabled_layouts_len: u8,
 
     /// Per-workspace geometry validity bitmask (64 bits → up to 64 workspaces).
     ///
@@ -190,6 +245,7 @@ fn computeMasterWidth(wm: *WM) f32 {
 
 fn buildState(wm: *WM) State {
     const screen_height = wm.screen.height_in_pixels;
+    const el = buildEnabledLayouts(wm.config.tiling.layouts.items);
     return .{
         .allocator        = wm.allocator,
         .enabled          = wm.config.tiling.enabled,
@@ -198,6 +254,8 @@ fn buildState(wm: *WM) State {
                 orelse LAYOUT_CYCLE[0];
             break :blk if (isLayoutAvailable(requested)) requested else LAYOUT_CYCLE[0];
         },
+        .enabled_layouts     = el.arr,
+        .enabled_layouts_len = el.len,
         .layout_variations = .{
             .master  = wm.config.tiling.master_variation,
             .monocle = wm.config.tiling.monocle_variation,
@@ -720,12 +778,12 @@ fn applyLayout(wm: *WM, s: *State, layout: Layout) void {
 
 pub fn toggleLayout(wm: *WM) void {
     const s = getState();
-    applyLayout(wm, s, stepCycle(s.layout, true));
+    applyLayout(wm, s, stepCycle(s, s.layout, true));
 }
 
 pub fn toggleLayoutReverse(wm: *WM) void {
     const s = getState();
-    applyLayout(wm, s, stepCycle(s.layout, false));
+    applyLayout(wm, s, stepCycle(s, s.layout, false));
 }
 
 pub fn adjustMasterCount(wm: *WM, delta: i8) void {
