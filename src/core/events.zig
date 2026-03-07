@@ -38,7 +38,6 @@ const bar      = @import("bar");
 // Indices into the poll fd array.
 const FD_XCB:    usize = 0;
 const FD_SIGNAL: usize = 1;
-const FD_BLINK:  usize = 2;
 
 // Self-pipe for portable signal delivery.
 // Signal handlers write to [1]; the event loop polls [0].
@@ -281,19 +280,26 @@ fn handleConfigReload(wm: *WM) !void {
 
 // Event loop
 
+/// Returns the shortest timeout across all subsystems that need periodic wakeups,
+/// or -1 if nothing needs one right now (block indefinitely).
+fn combinedTimeoutMs() i32 {
+    const clock_ms = bar.pollTimeoutMs();
+    const blink_ms = drun.blinkPollTimeoutMs();
+    if (clock_ms < 0) return blink_ms;
+    if (blink_ms < 0) return clock_ms;
+    return @min(clock_ms, blink_ms);
+}
+
 pub fn run(wm: *WM, signal_fd: std.posix.fd_t) !void {
     const x_fd: std.posix.fd_t = xcb.xcb_get_file_descriptor(wm.conn);
-    const bfd = drun.blinkFd();
 
     var fds = [_]std.posix.pollfd{
         .{ .fd = x_fd,      .events = std.posix.POLL.IN, .revents = 0 },
         .{ .fd = signal_fd, .events = std.posix.POLL.IN, .revents = 0 },
-        .{ .fd = bfd,       .events = std.posix.POLL.IN, .revents = 0 },
     };
-    const nfds: usize = if (bfd >= 0) 3 else 2;
 
     while (utils.running.load(.acquire)) {
-        const ready = std.posix.poll(fds[0..nfds], bar.pollTimeoutMs()) catch |err| {
+        const ready = std.posix.poll(&fds, combinedTimeoutMs()) catch |err| {
             if (err == error.SignalInterrupt) continue;
             debug.err("poll error: {s}", .{@errorName(err)});
             break;
@@ -301,12 +307,14 @@ pub fn run(wm: *WM, signal_fd: std.posix.fd_t) !void {
 
         if (ready == 0) {
             bar.checkClockUpdate();
+            if (drun.blinkPollTimeoutMs() >= 0) {
+                drun.blinkTick();
+                bar.submitDraw(wm, false);
+            }
             continue;
         }
 
-        if ((fds[FD_XCB].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0 or
-            xcb.xcb_connection_has_error(wm.conn) != 0)
-        {
+        if ((fds[FD_XCB].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0) {
             debug.err("X11 connection error, shutting down", .{});
             break;
         }
@@ -316,7 +324,6 @@ pub fn run(wm: *WM, signal_fd: std.posix.fd_t) !void {
                 defer std.c.free(event);
                 dispatch(@as(*u8, @ptrCast(event)).*, event, wm);
             }
-            maybeReload(wm);
             tiling.retileIfDirty(wm);
             bar.updateIfDirty(wm) catch |err| debug.err("Failed to update bar: {}", .{err});
             _ = xcb.xcb_flush(wm.conn);
@@ -325,11 +332,6 @@ pub fn run(wm: *WM, signal_fd: std.posix.fd_t) !void {
         if ((fds[FD_SIGNAL].revents & std.posix.POLL.IN) != 0) {
             handleSignalPipe(signal_fd);
             maybeReload(wm);
-        }
-
-        if (nfds > FD_BLINK and (fds[FD_BLINK].revents & std.posix.POLL.IN) != 0) {
-            drun.blinkTick();
-            bar.submitDraw(wm, false);
         }
     }
 }

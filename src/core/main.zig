@@ -21,6 +21,7 @@ const xcb   = defs.xcb;
 // input/
 const input     = @import("input");
 const xkbcommon = @import("xkbcommon");
+const focus     = @import("focus");
 
 // tiling/
 const layouts = @import("layouts");
@@ -146,12 +147,14 @@ pub fn main() !void {
 fn initGlobalCaches(conn: *xcb.xcb_connection_t, allocator: std.mem.Allocator) !void {
     try utils.initAtomCache(conn);
     utils.initInputModelCache(allocator);
+    focus.init(allocator);
 }
 
 /// Cleans up global utility caches.
 fn deinitGlobalCaches(allocator: std.mem.Allocator) void {
     utils.deinitInputModelCache();
     layouts.deinitSizeHintsCache(allocator);
+    focus.deinit();
 }
 
 // XCB CURSOR NAMESPACE
