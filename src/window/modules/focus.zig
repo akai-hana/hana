@@ -270,10 +270,15 @@ inline fn shouldRaise(reason: Reason) bool {
 }
 
 inline fn suppressionFor(reason: Reason) defs.FocusSuppressReason {
+    // Only window_spawn suppresses enter-notify via setFocus.
+    // tiling_operation must NOT suppress here: callers such as focusBestAvailable
+    // (minimize) and focusPrevOrBest (window kill) set focus programmatically and
+    // should not block subsequent hover-focus events.  The one caller that genuinely
+    // needs enter-notify suppression (fullscreen exit) calls setSuppressReason
+    // directly and is therefore unaffected by this change.
     return switch (reason) {
-        .mouse_click, .mouse_enter, .user_command, .workspace_switch => .none,
-        .tiling_operation => .tiling_operation,
-        .window_spawn     => .window_spawn,
+        .window_spawn => .window_spawn,
+        else          => .none,
     };
 }
 
@@ -284,3 +289,4 @@ fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
     defer std.c.free(reply);
     return reply.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE;
 }
+
