@@ -193,8 +193,8 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t, wm: *WM) 
         drag.updateDrag(wm, event.root_x, event.root_y);
         return;
     }
-    // Real movement lifts window-spawn focus suppression.
-    if (focus.getSuppressReason() == .window_spawn) focus.setSuppressReason(.none);
+    // Real movement lifts any active focus suppression (window_spawn or tiling_operation).
+    if (focus.getSuppressReason() != .none) focus.setSuppressReason(.none);
     // POINTER_MOTION_HINT delivers one event per gesture; re-arm by querying pointer.
     //
     // We fire the request and immediately discard the reply — we don't use any
@@ -259,8 +259,8 @@ fn executeAction(action: *const defs.Action, wm: *WM) !void {
         .increase_master_count  => tiling.increaseMasterCount(wm),
         .decrease_master_count  => tiling.decreaseMasterCount(wm),
         .toggle_tiling          => tiling.toggleTiling(wm),
-        .swap_master            => { tiling.swapWithMaster(wm);          bar.scheduleRedraw(); },
-        .swap_master_focus_swap => { tiling.swapWithMasterFocusSwap(wm); bar.scheduleRedraw(); },
+        .swap_master            => { focus.setSuppressReason(.tiling_operation); tiling.swapWithMaster(wm);          bar.scheduleRedraw(); },
+        .swap_master_focus_swap => { focus.setSuppressReason(.tiling_operation); tiling.swapWithMasterFocusSwap(wm); bar.scheduleRedraw(); },
         .cycle_layout_variation => tiling.cycleLayoutVariation(wm),
         .drun_toggle            => { drun.toggle(wm); bar.scheduleRedraw(); },
         .dump_state             => dumpState(wm),

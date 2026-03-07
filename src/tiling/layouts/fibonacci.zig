@@ -57,7 +57,6 @@ pub fn tileWithOffset(
             return;
         }
 
-        // Last window gets all remaining space.
         if (i == visible.len - 1) {
             layouts.configureSafe(ctx, win, .{
                 .x      = @intCast(x),

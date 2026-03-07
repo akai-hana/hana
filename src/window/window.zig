@@ -437,8 +437,7 @@ fn sendSyntheticConfigureNotify(wm: *WM, win: u32) void {
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t, wm: *WM) void {
     const win = event.window;
-    if ((wm.config.tiling.enabled and tiling.isWindowTiled(win)) or
-        fullscreen.isFullscreen(win))
+    if (tiling.isWindowActiveTiled(win) or fullscreen.isFullscreen(win))
     {
         sendSyntheticConfigureNotify(wm, win);
         return;

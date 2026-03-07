@@ -6,14 +6,13 @@ const layouts   = @import("layouts");
 const tiling    = @import("tiling");
 const State     = tiling.State;
 
-// Subtract the border margin from a cell dimension, floored at MIN_WINDOW_DIM.
 inline fn toWinDim(cell: u16, border_margin: u16) u16 {
     return if (cell > border_margin) cell - border_margin else constants.MIN_WINDOW_DIM;
 }
 
 // Integer ceiling-sqrt: smallest c such that c*c >= n.
 // Avoids the float pipeline entirely; terminates in ≤12 iterations for any
-// realistic window count in a tiling WM.
+// realistic window count.
 inline fn calcGridDims(n: usize) struct { cols: u16, rows: u16 } {
     if (n == 3) return .{ .cols = 3, .rows = 1 };
     var cols: u16 = 1;
@@ -33,9 +32,8 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
     const cell_h = (screen_h -| (dims.rows + 1) * m.gap) / dims.rows;
     const win_h  = toWinDim(cell_h, bm);
 
-    // Pre-compute the equal cell width for a partial last row (if any).
-    // Windows in that row divide the full screen width among themselves rather
-    // than inheriting the narrower grid-column width.
+    // In relaxed mode, windows on a partial last row divide the full screen
+    // width among themselves rather than inheriting the narrower grid-column width.
     const last_row_count = n % dims.cols;
     const partial_cell_w: u16 = if (last_row_count != 0) blk: {
         const count: u16 = @intCast(last_row_count);

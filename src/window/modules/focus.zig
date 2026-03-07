@@ -16,12 +16,14 @@ const WM     = defs.WM;
 // typed accessors below rather than reaching into WM.
 
 var g_focused_window:       ?u32                      = null;
+var g_prev_focused_window:  ?u32                      = null;
 var g_suppress_reason:      defs.FocusSuppressReason  = .none;
 var g_last_event_time:      u32                       = 0;
 
 // ── Public accessors ──────────────────────────────────────────────────────────
 
 pub inline fn getFocused()      ?u32                     { return g_focused_window; }
+pub inline fn getPrevFocused()  ?u32                     { return g_prev_focused_window; }
 pub inline fn getSuppressReason() defs.FocusSuppressReason { return g_suppress_reason; }
 pub inline fn getLastEventTime() u32                     { return g_last_event_time; }
 
@@ -70,6 +72,7 @@ pub fn setFocus(wm: *WM, win: u32, reason: Reason) void {
     }) return;
 
     const old = g_focused_window;
+    if (old != null) g_prev_focused_window = old;
     g_focused_window = win;
     g_suppress_reason = suppressionFor(reason);
 
@@ -184,6 +187,7 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t, wm: *WM) void {
     if (g_focused_window == win) return;
 
     const old = g_focused_window;
+    if (old != null) g_prev_focused_window = old;
     g_focused_window = win;
     tiling.updateWindowFocus(wm, old, win);
     bar.scheduleFocusRedraw(win);

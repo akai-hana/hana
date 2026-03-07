@@ -3,9 +3,8 @@
 const constants = @import("constants");
 const utils     = @import("utils");
 const layouts   = @import("layouts");
-
-const tiling = @import("tiling");
-const State  = tiling.State;
+const tiling    = @import("tiling");
+const State     = tiling.State;
 
 // Total pixel height available for window content after gaps and borders.
 // Falls back to count * MIN_WINDOW_DIM if margins exceed total_h.
@@ -21,8 +20,8 @@ inline fn windowHeight(i: u16, count: u16, available: u16) u16 {
     return @max(constants.MIN_WINDOW_DIM, h);
 }
 
-// Y position of window i, derived from the cumulative formula so preceding
-// windows' heights (which may vary by 1px) are accounted for.
+// Y position of window i, derived from the same cumulative formula so that
+// preceding windows' heights (which may vary by 1px) are accounted for.
 inline fn windowY(i: u16, count: u16, available: u16, y_offset: u16, margins: utils.Margins) u16 {
     return y_offset +| margins.gap +| (i * available / count) +| i *| (margins.gap +| 2 * margins.border);
 }
@@ -99,13 +98,12 @@ fn tileStackSimple(ctx: *const layouts.LayoutCtx, windows: []const u32, x: u16, 
     }
 }
 
+// Column-major overflow grid: row r contains windows at indices r, r+max_fit,
+// r+2*max_fit, … Each row's column count is ceil((s_count - r) / max_fit).
 fn tileStackOverflow(ctx: *const layouts.LayoutCtx, windows: []const u32, x: u16, y_offset: u16, w: u16, h: u16, max_fit: u16, m: utils.Margins) void {
     const s_count: u16 = @intCast(windows.len);
     const s_avail  = calcAvailable(h, max_fit, m);
 
-    // Column-major overflow grid: row r contains windows at indices
-    // r, r+max_fit, r+2*max_fit, … The column count for row r is
-    // ceil((s_count - r) / max_fit), computed with integer arithmetic.
     var row: u16 = 0;
     while (row < max_fit) : (row += 1) {
         const remaining   = s_count - row;

@@ -1,18 +1,18 @@
 //! Window dragging and resizing via pointer button grabs.
 
-const std   = @import("std");
+const std       = @import("std");
 const constants = @import("constants");
-const defs   = @import("defs");
-const xcb    = defs.xcb;
-const WM     = defs.WM;
-const utils  = @import("utils");
-const focus  = @import("focus");
-const tiling = @import("tiling");
-const bar    = @import("bar");
+const defs      = @import("defs");
+const xcb       = defs.xcb;
+const WM        = defs.WM;
+const utils     = @import("utils");
+const focus     = @import("focus");
+const tiling    = @import("tiling");
+const bar       = @import("bar");
 
-/// Apply an i16 delta to a u16 dimension, clamped to [MIN_WINDOW_DIM, u16_MAX].
-/// Without the upper clamp, base=65535 + delta=32767 = 98302 overflows u16 and
-/// panics in safe builds (Debug/ReleaseSafe).
+// Apply an i16 delta to a u16 dimension, clamped to [MIN_WINDOW_DIM, u16_MAX].
+// Without the upper clamp, base=65535 + delta=32767 = 98302 overflows u16 and
+// panics in safe builds.
 inline fn clampDim(base: u16, delta: i16) u16 {
     return @intCast(@min(
         @as(i32, std.math.maxInt(u16)),
@@ -20,9 +20,8 @@ inline fn clampDim(base: u16, delta: i16) u16 {
     ));
 }
 
-
-/// Module-level drag state. Lives here instead of WM so drag.zig is the
-/// single owner of drag state — consistent with the module-g_state pattern.
+// Module-level drag state. Lives here instead of WM so drag.zig is the
+// single owner — consistent with the module-g_state pattern used elsewhere.
 var g_drag: defs.DragState = .{};
 
 pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
@@ -43,7 +42,6 @@ pub fn startDrag(wm: *WM, win: u32, button: u8, x: i16, y: i16) void {
         .start_win_height = geom.height,
     };
     focus.setFocus(wm, win, .user_command);
-    // Remove from tiling so the drag moves the window freely.
     // Wrap removal + retile in a grab to prevent a one-frame gap in the layout.
     if (tiling.isWindowTiled(win)) {
         _ = xcb.xcb_grab_server(wm.conn);
@@ -66,8 +64,8 @@ pub fn updateDrag(wm: *WM, x: i16, y: i16) void {
             .width  = drag.start_win_width,
             .height = drag.start_win_height,
         },
-        // Resize anchors to the window's top-left corner: position is fixed
-        // while width and height grow with the drag delta.
+        // Resize anchors to the window's top-left: position is fixed while
+        // width and height grow with the drag delta.
         .resize => utils.Rect{
             .x      = drag.start_win_x,
             .y      = drag.start_win_y,
@@ -79,10 +77,5 @@ pub fn updateDrag(wm: *WM, x: i16, y: i16) void {
     _ = xcb.xcb_flush(wm.conn);
 }
 
-pub inline fn stopDrag() void {
-    g_drag.active = false;
-}
-
-pub inline fn isDragging() bool {
-    return g_drag.active;
-}
+pub inline fn stopDrag() void  { g_drag.active = false; }
+pub inline fn isDragging() bool { return g_drag.active; }

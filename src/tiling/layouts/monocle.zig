@@ -1,24 +1,22 @@
-//! Monocle layout: all windows fullscreen, stacked; only top window visible.
+//! Monocle layout: all windows fullscreen, stacked; only the top window visible.
 
 const defs      = @import("defs");
 const constants = @import("constants");
 const utils     = @import("utils");
 const layouts   = @import("layouts");
-
-const tiling = @import("tiling");
-const State  = tiling.State;
-const xcb    = defs.xcb;
+const tiling    = @import("tiling");
+const State     = tiling.State;
+const xcb       = defs.xcb;
 
 pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []const u32, screen_w: u16, screen_h: u16, y_offset: u16) void {
     if (windows.len == 0) return;
 
-    const margin = state.margins();
+    const margin  = state.margins();
     const gap     = margin.gap;
     const border2 = margin.border * 2;
 
-    // All windows share the same geometry but only the top one is visible.
-    // Configure and raise only that one; the others are configured lazily
-    // when brought to the top, keeping cost O(1).
+    // Only configure and raise the top window; background windows are
+    // configured lazily when brought to top, keeping cost O(1).
     const top_win = windows[windows.len - 1];
 
     const gap2b = gap * 2 + border2;
@@ -40,15 +38,10 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
     layouts.configureSafe(ctx, top_win, rect);
     _ = xcb.xcb_configure_window(ctx.conn, top_win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
-    // Push every non-top window offscreen immediately so they never sit on top
-    // of (or show through) the top window.  This mirrors what the workspace
-    // switcher does in retileInactiveWorkspace — without it, background windows
-    // remain at their last on-screen coordinates, which is visible through
-    // transparent windows.
-    //
-    // We also zero each window's cached rect so restoreWorkspaceGeom does not
-    // attempt to replay a stale on-screen position for them; it will instead
-    // fall back to a full retile, which correctly repeats this offscreen push.
+    // Push non-top windows offscreen so they never show through a transparent
+    // top window. Their cached rects are zeroed so restoreWorkspaceGeom won't
+    // replay stale on-screen positions — it will fall back to a full retile,
+    // which repeats this offscreen push correctly.
     for (windows[0 .. windows.len - 1]) |win| {
         _ = xcb.xcb_configure_window(ctx.conn, win,
             xcb.XCB_CONFIG_WINDOW_X,

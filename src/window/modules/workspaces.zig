@@ -33,6 +33,11 @@ pub const Workspace = struct {
     // Optional layout variation override set via the layouts array in config.
     // Applied on every workspace switch; null means use the global defaults.
     variation: ?defs.LayoutVariationOverride = null,
+    // Per-workspace master width override (master-stack layout).
+    // null = use the global default from tiling state.
+    // Set when the user adjusts master width in per-workspace layout mode;
+    // loaded back into tiling state on every workspace switch-in.
+    master_width: ?f32 = null,
     // Last window that held focus on this workspace before the user left it.
     // Restored on re-entry when the cursor is not hovering over any window.
     last_focused: ?u32 = null,

@@ -223,8 +223,10 @@ Mod+Alt+T       = "unminimize_fifo"
 Mod+Shift+Alt+T = "unminimize_all"
 
 # wallpaper
-Mod+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-switch.sh" # start shader wallpaper
-Mod+Shift+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-stop.sh" # stop shader wallpaper
+## start shader wallpaper
+Mod+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-switch.sh" 
+## stop shader wallpaper
+Mod+Shift+G = "~/eudaimonia/shader-wallpaper/shadow/scripts/shader-stop.sh"
 
 # Tiling
 Mod+N           = "toggle_tiling"          # Enable/disable tiling
@@ -268,7 +270,8 @@ Mod+Shift+S = "{kill} equibop"
 Mod+D       = "ghostty"
 Mod+Shift+D = "{kill} ghostty"
 
-# z -> osu
+Mod+Z       = "wine ~/Games/isaac-repentance/isaac-ng.exe"
+Mod+Shift+Z = "pkill isaac-ng"
 
 Mod+X       = "~/Games/t-client/DDNet"
 Mod+Shift+X = "{kill} DDNet"
