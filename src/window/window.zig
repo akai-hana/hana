@@ -314,8 +314,8 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t, wm: *WM) void
         grabButtons(wm, win, false);
     }
 
-    if (on_current_workspace) focus.setFocus(wm, win, .window_spawn);
     bar.scheduleRedraw();
+    if (on_current_workspace) focus.setFocus(wm, win, .window_spawn);
 
     if (on_current_workspace) _ = xcb.xcb_ungrab_server(wm.conn);
     _ = xcb.xcb_flush(wm.conn);

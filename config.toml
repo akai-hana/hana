@@ -16,7 +16,7 @@
 #         the workspace indicators be +25% of their default 100% (5 px).
 #
 # #TODO: move to future colors.toml
-# + HEX color code values can be set to either of the following formats:
+# - HEX color code values can be set to either of the following formats:
 #   "#RRGGBB" / RRGGBB / 0xRRGGBB
 #
 # + Keys in a keybind can be expanded by using `{}` in the key combination
@@ -27,16 +27,19 @@
 #   - `Mod+{1-9} = "workspace"` sets workspace switching to 9 binds, keys
 #     Mod+1 through 9.
 #   - Both can be combined at will: `Mod+{1-4,Q,W,E,R} = "workspace"`.
+#
 # + `{}` in place of the action instead of the keybind serves as an alias
-#   `Mod+L = "larry"; kill = "pkill -9"; Mod+Shift+L = "{kill} larry"`
+#   ```toml
+#   Mod+L = "larry"
+#   kill = "pkill -9"
+#   Mod+Shift+L = "{kill} larry"
+#   ```
 #   
 # + A single keybind can invoke multiple actions at once.
 #   - `Mod+A = "foo"; Mod+A = "bar"` aren't conflicting;
 #     both `foo` and `bar` will be executed upon pressing Mod+A.
 #   - More conveniently, arrays of actions can be set onto a bind:
 #     `Mod+A = ["foo", "bar"]`
-# + A single keybind can contain multiple actions
-#   Keys are assigned workspace indices by their position in the list.
 
 [tiling]
 enabled       = true
@@ -241,10 +244,11 @@ Mod+comma  = "increase_master_count"
 Mod+period = "decrease_master_count" 
 
 # Workspaces
-# Switch to workspace N
+## Switch to workspace N
+### Keys are assigned workspace indices by their position in the list.
 Mod+{1-4,Q,W,E,R} = "workspace" #TODO: rename to "switch_to_workspace"
 
-# Workspace window sending
+## Workspace window sending
 Mod+Shift+{1-4,Q,W,E,R} = "move_to_workspace"
 Mod+Alt+{1-4,Q,W,E,R} = "tag_toggle" #TODO: rename to toggle_to_workspace
 

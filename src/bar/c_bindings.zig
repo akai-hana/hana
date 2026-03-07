@@ -1,5 +1,4 @@
-//! C bindings for Cairo, Pango, GLib, and xcb-cursor.
-//! XCB types come from defs.zig via @cImport.
+//! C bindings for Cairo/Pango functions, GLib and xcb-cursor.
 
 const defs = @import("defs");
 

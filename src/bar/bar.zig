@@ -803,11 +803,11 @@ pub fn toggleBarPosition(wm: *defs.WM) void {
 pub fn scheduleFocusRedraw(new_win: ?u32) void {
     const s = state orelse return;
     if (!s.visible) return;
+    // If a full redraw is already scheduled (dirty) or already in-flight in the
+    // channel (snap_ready), the bar thread will run drawAll which supersedes
+    // drawTitleOnly — skip the lightweight update entirely.
     g_channel.mutex.lock();
-    // If a full snapshot redraw is already queued the bar thread will ignore
-    // focus_dirty anyway (see barThreadFn). Skip the flag write and signal to
-    // avoid the unnecessary lock cycle and spurious wakeup.
-    if (!g_channel.snap_ready) {
+    if (!s.dirty and !g_channel.snap_ready) {
         g_channel.focus_dirty   = true;
         g_channel.focus_new_win = new_win;
         g_channel.work_cond.signal();
@@ -825,7 +825,7 @@ pub fn hasClockSegment() bool     { return if (state) |s| s.has_clock_segment el
 ///
 /// DEFAULT choice for everything outside a server grab: focus changes, window
 /// map/unmap, layout toggles, workspace membership changes, etc.
-pub fn scheduleRedraw() void        { if (state) |s| s.setDirty(); }
+pub fn scheduleRedraw() void        { if (state) |s| if (s.visible) s.setDirty(); }
 pub fn isVisible() bool             { return if (state) |s| s.visible else false; }
 pub fn getGlobalVisibility() bool   { return if (state) |s| s.global_visible else false; }
 pub fn setGlobalVisibility(visible: bool) void { if (state) |s| s.global_visible = visible; }
