@@ -53,7 +53,7 @@ const TITLE_LEAD_PX: u16 = 4;
 // right.  At cycle_w the state is identical to 0 → seamless loop.
 
 /// Horizontal scroll speed in pixels per millisecond (≈ 90 px/s).
-const CAROUSEL_PX_PER_MS: f64 = 0.400;
+const CAROUSEL_PX_PER_MS: f64 = 0.300;
 /// Pixel gap between the end of one copy and the start of the next.
 const CAROUSEL_GAP_PX: u16 = 60;
 

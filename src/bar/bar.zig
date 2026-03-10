@@ -650,7 +650,7 @@ fn createBarWindow(wm: *defs.WM, height: u16, y_pos: i16) BarWindowSetup {
 fn loadBarFonts(dc: *drawing.DrawContext, wm: *defs.WM) !void {
     const cfg         = wm.config.bar;
     const alloc       = wm.allocator;
-    const scaled_size = cfg.scaledFontSize();
+    const scaled_size = wm.config.bar.scaled_font_size;
     const fonts       = cfg.fonts.items;
     if (fonts.len == 0) return;
 
