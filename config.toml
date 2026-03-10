@@ -235,7 +235,7 @@ Mod+Shift+space = "toggle_layout_reverse"  # Cycle layouts backward
 Mod+Alt+space   = "cycle_layout_variation" # Cycle current layout's variation (Super+V)
 Mod+Tab         = "swap_master"            # Swap focused window with master (slave→master or master→slave)
 Mod+Shift+Tab   = "swap_master_focus_swap" # Same swap, but focus transfers to the displaced window
-Mod+grave       = "drun_toggle"
+Mod+grave       = "prompt_toggle"
 Mod+MiddleClick = "toggle_float"           # Toggle clicked window between tiled and floating
 
 # Layouts
