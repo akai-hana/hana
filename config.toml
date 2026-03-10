@@ -282,6 +282,9 @@ Mod+Shift+C = "{kill} steam"
 Mod+V       = "flatpak run com.github.th_ch.youtube_music"
 Mod+Shift+V = "{kill} youtube-music"
 
+Mod+Y       = "thunar"
+Mod+Shift+Y = "{kill} thunar"
+
 # Emergency/Debug
 # Emergency recovery: Disables tiling, clears fullscreen, maps all windows, stops drag
 Mod+Shift+Escape = "emergency_recover" #TODO: remove. this is hacky and assumes the program bugging out is a recurrent issue. therefore it is unneeded.
