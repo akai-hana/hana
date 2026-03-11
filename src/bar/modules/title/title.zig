@@ -54,7 +54,7 @@ const TITLE_LEAD_PX: u16 = 4;
 
 // Public carousel pass-throughs
 //
-// Callers (e.g., bar.zig) use these three functions.  All state lives in
+// Callers (e.g., bar.zig) use these functions.  All state lives in
 // carousel.zig; title.zig is purely a thin re-export layer here.
 
 pub fn isCarouselActive() bool { return carousel.isCarouselActive(); }
@@ -73,6 +73,15 @@ pub fn drawCarouselTick(
 ) bool {
     return carousel.drawCarouselTick(dc, bg, height, x, avail_w);
 }
+
+/// Enable or disable the carousel feature.
+///
+/// When disabled, all title overflow is rendered with ellipsis instead of
+/// scrolling.  Disabling immediately frees any live carousel pixmaps.
+pub fn setCarouselEnabled(enabled: bool) void { carousel.setCarouselEnabled(enabled); }
+
+/// Returns true when the carousel feature is currently enabled.
+pub fn isCarouselEnabled() bool { return carousel.isCarouselEnabled(); }
 
 // draw — main entry point
 
@@ -110,6 +119,12 @@ pub fn draw(
     const window_count = current_ws_wins.len;
 
     if (window_count == 0) {
+        // No windows on this workspace — tear down any live carousel immediately
+        // so it does not keep scrolling invisibly in the background.  When the
+        // carousel becomes visible again (e.g. switching back to a workspace
+        // with a long window title) it will be rebuilt from scratch and will
+        // start scrolling from position 0.
+        carousel.deinitCarousel();
         dc.fillRect(start_x, 0, width, height, config.bg);
         return start_x + width;
     }
@@ -166,6 +181,7 @@ pub fn draw(
 /// Render a window title into `avail_w` pixels starting at (`x`, `y`).
 ///
 /// Delegates all carousel state and scroll logic to carousel.zig.
+/// When the carousel feature is disabled, overflow is rendered with ellipsis.
 fn drawTitleText(
     dc:                *drawing.DrawContext,
     x:                 u16,
@@ -323,9 +339,10 @@ fn drawSegmentedTitles(
                     try dc.drawText(text_x, baseline_y, info.title, text_fg)
                 else
                     try dc.drawTextEllipsis(text_x, baseline_y, info.title, avail_w, text_fg);
-            } else {
-                // Focused: delegate to carousel module — it decides whether to
-                // scroll or draw normally based on text_w vs avail_w.
+            } else if (carousel.isCarouselEnabled()) {
+                // Focused + carousel enabled: delegate to carousel module —
+                // it decides whether to scroll or draw normally based on
+                // text_w vs avail_w.
                 const scrolled = try carousel.blitSegCarousel(
                     dc, text_x, baseline_y, avail_w, text_w,
                     info.title, accent, text_fg, info.window, title_invalidated,
@@ -334,6 +351,12 @@ fn drawSegmentedTitles(
                     // Text fits in the available width — draw it directly.
                     try dc.drawText(text_x, baseline_y, info.title, text_fg);
                 }
+            } else {
+                // Focused + carousel disabled: use ellipsis as fallback.
+                if (text_w <= avail_w)
+                    try dc.drawText(text_x, baseline_y, info.title, text_fg)
+                else
+                    try dc.drawTextEllipsis(text_x, baseline_y, info.title, avail_w, text_fg);
             }
         }
     }

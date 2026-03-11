@@ -32,26 +32,27 @@ const defs    = @import("defs");
 const drawing = @import("drawing");
 const hertz   = @import("hertz");
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Constants
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Horizontal scroll speed in pixels per second (≈ 90 px/s).
 /// Divided by the monitor Hz to get pixels-per-frame at detection time.
-pub const CAROUSEL_PX_PER_S: f64 = 90.0;
+pub const CAROUSEL_PX_PER_S: f64 = 150.0;
 
 /// Pixel gap between the end of one text copy and the start of the next.
 pub const CAROUSEL_GAP_PX: u16 = 60;
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Types
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Pre-rendered title pixmap for the single-window carousel.
 const CarouselCache = struct {
-    cp:      drawing.CarouselPixmap,
-    window:  ?u32,
-    cycle_w: u16,
+    cp:       drawing.CarouselPixmap,
+    window:   ?u32,
+    cycle_w:  u16,
+    /// Monotonic timestamp (ms) when this pixmap was first built.
+    /// The scroll offset is derived from `now - start_ms` so the animation
+    /// always restarts from position 0 whenever the carousel is rebuilt after
+    /// being hidden (e.g. workspace switch to an empty workspace).
+    start_ms: i64,
 };
 
 /// Pre-rendered title pixmap for the focused segment in split-view.
@@ -66,18 +67,39 @@ const SegCarousel = struct {
     start_ms: i64,
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Module state
-// ─────────────────────────────────────────────────────────────────────────────
 
 var g_carousel:            ?CarouselCache = null;
 var g_carousel_active:     bool           = false;
 var g_seg_carousel:        ?SegCarousel   = null;
 var g_seg_carousel_active: bool           = false;
 
-// ─────────────────────────────────────────────────────────────────────────────
+/// When false the carousel is disabled globally.  Both single-window and
+/// split-view title rendering fall back to ellipsis on overflow.
+/// Defaults to true (carousel enabled) to match the previous behaviour.
+var g_carousel_enabled: bool = true;
+
+// Public API — feature toggle
+
+/// Enable or disable the carousel globally.
+///
+/// Disabling immediately frees all carousel pixmaps and deactivates the
+/// carousel so the bar rendering loop stops scheduling fast carousel ticks.
+pub fn setCarouselEnabled(enabled: bool) void {
+    if (!enabled and g_carousel_enabled) {
+        // Turning off — release all carousel resources right away so no stale
+        // pixmap lingers in the background while the feature is disabled.
+        deinitCarousel();
+    }
+    g_carousel_enabled = enabled;
+}
+
+/// Returns true when the carousel feature is enabled.
+pub fn isCarouselEnabled() bool {
+    return g_carousel_enabled;
+}
+
 // Public API — lifecycle
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub fn isCarouselActive() bool {
     return g_carousel_active or g_seg_carousel_active;
@@ -91,9 +113,7 @@ pub fn deinitCarousel() void {
     g_seg_carousel_active = false;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Public API — hot-path tick
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Fast per-tick single-window carousel redraw.
 ///
@@ -114,24 +134,25 @@ pub fn drawCarouselTick(
 ) bool {
     const cc = g_carousel orelse return false;
     dc.fillRect(x, 0, avail_w, height, bg);
-    const offset = carouselOffset(0, cc.cycle_w);
+    const offset = carouselOffset(cc.start_ms, cc.cycle_w);
     cc.cp.blitFrame(dc.drawable, dc.gc, x, avail_w, offset, cc.cycle_w);
     dc.flushRect(x, avail_w);
     return true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Public API — single-window title rendering
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Render `text` into `avail_w` pixels starting at (`x`, `y`).
 ///
 /// If the text fits it is drawn normally via Pango/Cairo.
-/// If it overflows, a CarouselPixmap is built (or reused) and blitted with a
-/// v-synced scroll offset.
+/// If it overflows and the carousel is enabled, a CarouselPixmap is built (or
+/// reused) and blitted with a v-synced scroll offset.
+/// If it overflows and the carousel is disabled, ellipsis is used as fallback.
 ///
 /// The pixmap is rebuilt only when `window` changes or `title_invalidated` is
-/// true, keeping the hot path allocation-free.
+/// true, keeping the hot path allocation-free.  On every rebuild `start_ms` is
+/// reset to now so the animation restarts from position 0 rather than
+/// continuing where a previous carousel left off.
 pub fn drawOrScrollTitle(
     dc:                *drawing.DrawContext,
     x:                 u16,
@@ -147,9 +168,17 @@ pub fn drawOrScrollTitle(
 
     if (text_w <= avail_w) {
         // Text fits — release any stale pixmap and draw normally.
-        if (g_carousel != null) deinitCarousel();
+        if (g_carousel) |*cc| { cc.cp.deinit(); g_carousel = null; }
         g_carousel_active = false;
         try dc.drawText(x, y, text, fg);
+        return;
+    }
+
+    // Text overflows — use ellipsis when the carousel feature is disabled.
+    if (!g_carousel_enabled) {
+        if (g_carousel) |*cc| { cc.cp.deinit(); g_carousel = null; }
+        g_carousel_active = false;
+        try dc.drawTextEllipsis(x, y, text, avail_w, fg);
         return;
     }
 
@@ -166,17 +195,24 @@ pub fn drawOrScrollTitle(
         errdefer cp.deinit();
         try cp.render(dc, text, bg, fg, y);
         const cycle_w: u16 = text_w + CAROUSEL_GAP_PX;
-        g_carousel = .{ .cp = cp, .window = window, .cycle_w = cycle_w };
+        // Reset start_ms on every rebuild so the scroll always begins from
+        // position 0 — the carousel is never "resumed" mid-scroll after it
+        // was previously hidden (e.g. after switching back from an empty
+        // workspace).
+        g_carousel = .{
+            .cp       = cp,
+            .window   = window,
+            .cycle_w  = cycle_w,
+            .start_ms = nowMs(),
+        };
     }
 
     const cc     = g_carousel.?;
-    const offset = carouselOffset(0, cc.cycle_w);
+    const offset = carouselOffset(cc.start_ms, cc.cycle_w);
     cc.cp.blitFrame(dc.drawable, dc.gc, x, avail_w, offset, cc.cycle_w);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Public API — split-view segmented carousel
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Call at the top of a segmented-titles draw pass.
 ///
@@ -252,9 +288,7 @@ pub fn blitSegCarousel(
     return true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 fn nowMs() i64 {
     const ts = std.posix.clock_gettime(.MONOTONIC) catch return 0;
@@ -275,9 +309,11 @@ fn nowMs() i64 {
 /// the partial-frame tearing that arises when the bar redraws at an arbitrary
 /// sub-frame moment.
 ///
-/// Pass `start_ms = 0` for the absolute-time (single-window) behaviour where
-/// the scroll position is derived from wall-clock time rather than from the
-/// moment a window gained focus.
+/// `start_ms` is the monotonic timestamp at which this carousel was last
+/// built.  All carousels (single-window and split-view) derive their offset
+/// from `now - start_ms`, so the animation always begins at position 0 when
+/// first shown and never "resumes" a previous scroll position after the
+/// carousel was destroyed and recreated.
 fn carouselOffset(start_ms: i64, cycle_w: u16) u16 {
     const hz           = hertz.getCached();
     const frame_ms     = 1000.0 / hz;

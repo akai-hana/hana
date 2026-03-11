@@ -5,8 +5,6 @@
 
 improve fallback defaults
 
-when attempting to toggle off a window's tag on the current workspace, instead of rejecting it on all cases, accept it on the case that the window has another tag elsewhere; at least one tag. at least one must be available, because if not, the window would be available on zero workspaces, which'd make no sense. 
-
 {
 when a window title bar on carroussel mode covers the whole title segment, and i switch to a workspace with no windows, the title carroussel keeps going on, as if i didn't change workspaces at all. 
 

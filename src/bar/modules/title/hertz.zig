@@ -16,9 +16,7 @@ pub const DEFAULT_HZ: f64 = 60.0;
 var g_hz: f64 = DEFAULT_HZ;
 var g_detected: bool = false;
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Public API
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Return the cached refresh rate (Hz).
 /// Always safe to call; returns DEFAULT_HZ if detection has not yet run.
@@ -42,9 +40,7 @@ pub fn invalidate() void {
     g_detected = false;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Extract the root window of the first screen from the XCB connection.
 fn getRootWindow(conn: *xcb.xcb_connection_t) u32 {
