@@ -1,6 +1,10 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+make carroussel a togglable feature, keep ellipsis as fallback
+
+improve fallback defaults
+
 when i spawn a window bound to workspace 1, while there's a full-screened window in workspace 1, and i'm currently in a different workspace, when i go back to workspace 1 and un-fullscreen this window, it will tile to the left, with a gap covering the right half of the screen, where the bound window i spawned should be tiled, but instead is an empty gap. switching workspaces back and forth onto workspace 1 triggers a window re-tiling and solves this issue, filling the gap with the bound window i spawned. can you please handle this edge-case causing this visual bug?
 
 carroussel title: when the bar is hidden, pause the carroussel. this includes switching to another workspace, or hiding bar, or entering full-screen.
