@@ -21,7 +21,7 @@ pub const xcb = @cImport({
 /// single canonical grep target.
 pub const WindowId = u32;
 
-// ── Config types ─────────────────────────────────────────────────────────────
+// Config types 
 
 pub const Action = union(enum) {
     exec: []const u8,
@@ -445,7 +445,7 @@ pub const Config = struct {
     }
 };
 
-// ── Core geometric type ───────────────────────────────────────────────────────
+// Core geometric type 
 
 /// Geometry snapshot used by both fullscreen and minimize.
 pub const WindowGeometry = struct {
@@ -456,7 +456,7 @@ pub const WindowGeometry = struct {
     border_width: u16,
 };
 
-// ── Input model types ─────────────────────────────────────────────────────────
+// Input model types 
 
 pub const DragState = struct {
     active:           bool  = false,
@@ -477,7 +477,7 @@ pub const FocusSuppressReason = enum {
     tiling_operation, // currently tiling: don't let cursor steal focus
 };
 
-// ── WM connection context ─────────────────────────────────────────────────────
+// WM connection context 
 // After the full modular refactor, WM holds only connection plumbing + config.
 // Runtime state (focus, drag, spawn queue, fullscreen, workspaces, tiling,
 // minimize) lives in each module's own g_state.

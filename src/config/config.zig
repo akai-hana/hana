@@ -166,9 +166,10 @@ pub fn loadConfigFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !de
 
         var it = dir.iterate();
         while (try it.next(io)) |entry| {
-            // Skip subdirectories and non-.toml files.
+            // Skip subdirectories, non-.toml files, and the embedded fallback.
             if (entry.kind == .directory) continue;
             if (!std.mem.endsWith(u8, entry.name, ".toml")) continue;
+            if (std.mem.eql(u8, entry.name, "fallback.toml")) continue;
             try names.append(allocator, try allocator.dupe(u8, entry.name));
         }
     }
@@ -291,7 +292,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !defs.Config {
 
 fn loadFallbackConfig(allocator: std.mem.Allocator) !defs.Config {
     const fallback      = @import("fallback");
-    const fallback_toml = fallback.getFallbackToml();
+    const fallback_toml = try fallback.getFallbackToml();
 
     var doc = try parser.parse(allocator, fallback_toml);
     defer doc.deinit();

@@ -1,7 +1,11 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+0117    
+
 make carroussel a togglable feature, keep ellipsis as fallback
+
+make monitor refresh rate be automatically detected, and carroussel be ran to v-sync the monitor
 
 improve fallback defaults
 

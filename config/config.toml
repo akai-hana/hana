@@ -37,7 +37,7 @@
 #   - More conveniently, arrays of actions can be set onto a bind:
 #     `Mod+A = ["foo", "bar"]`
 
-# Theme file(s) to load (relative to config/).
+# TOML File(s) to load (relative to config/).
 # Sub-directories are ignored by auto-loading, so themes must be listed here.
 # Multiple files can be included and will all be merged.
 include = ["themes/akai.toml"]
