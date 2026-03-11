@@ -5,6 +5,8 @@
 
 improve fallback defaults
 
+when exiting fullscreen on a workspace, and then trying to hover over windows, focus isn't switched. mouse hovering switching focus is broken after un-fullscreening. clicking on an unfocused window solves this and it starts working fine again. please solve this edge case.
+
 {
 when a window title bar on carroussel mode covers the whole title segment, and i switch to a workspace with no windows, the title carroussel keeps going on, as if i didn't change workspaces at all. 
 

@@ -36,7 +36,7 @@ const hertz   = @import("hertz");
 
 /// Horizontal scroll speed in pixels per second (≈ 90 px/s).
 /// Divided by the monitor Hz to get pixels-per-frame at detection time.
-pub const CAROUSEL_PX_PER_S: f64 = 300.0;
+pub const CAROUSEL_PX_PER_S: f64 = 150.0;
 
 /// Pixel gap between the end of one text copy and the start of the next.
 pub const CAROUSEL_GAP_PX: u16 = 60;
@@ -73,6 +73,16 @@ var g_carousel:            ?CarouselCache = null;
 var g_carousel_active:     bool           = false;
 var g_seg_carousel:        ?SegCarousel   = null;
 var g_seg_carousel_active: bool           = false;
+
+/// Monotonic timestamp (ms) recorded the instant focus changed to a new
+/// window — set by notifyFocusChanged and consumed once by blitSegCarousel
+/// when it builds the replacement pixmap.
+///
+/// Keeping this separate from SegCarousel.start_ms means the animation
+/// clock starts ticking at focus-click time even if several milliseconds
+/// elapse before the next draw cycle actually runs.  A value of 0 means
+/// no pending focus change (the draw cycle will call nowMs() as usual).
+var g_seg_focus_start_ms: i64 = 0;
 
 /// When false the carousel is disabled globally.  Both single-window and
 /// split-view title rendering fall back to ellipsis on overflow.
@@ -111,6 +121,45 @@ pub fn deinitCarousel() void {
     if (g_seg_carousel) |*sc| { sc.cp.deinit(); g_seg_carousel = null; }
     g_carousel_active     = false;
     g_seg_carousel_active = false;
+    g_seg_focus_start_ms  = 0;
+}
+
+/// Called by the focus system the instant the focused window changes.
+///
+/// Two things happen here that cannot wait for the next draw cycle:
+///
+///   1. The stale seg-carousel pixmap is freed immediately.
+///      Without this, the bar keeps blitting the old window's title for
+///      however many frames elapse before the next full draw runs.
+///
+///   2. g_seg_focus_start_ms is stamped to the current monotonic clock.
+///      blitSegCarousel consumes this timestamp when it builds the new
+///      pixmap, anchoring the animation to focus-click time rather than
+///      draw time.  Any scheduling latency between the focus event and the
+///      draw therefore does not add a visible delay before the scroll starts,
+///      nor does it cause the title to appear mid-scroll on the first frame.
+///
+/// Pass new_window = null when focus is cleared entirely (no focused window).
+/// Safe to call at any time; a no-op when the window is unchanged.
+pub fn notifyFocusChanged(new_window: ?u32) void {
+    if (g_seg_carousel) |*sc| {
+        // Only act when the focused window actually changed.  If new_window
+        // matches the carousel's window, the user re-focused the same title
+        // segment — nothing to reset.
+        const same = if (new_window) |nw| nw == sc.window else false;
+        if (!same) {
+            sc.cp.deinit();
+            g_seg_carousel = null;
+            // Stamp now so the animation clock starts at the focus event,
+            // not at the (potentially later) draw-cycle moment.
+            g_seg_focus_start_ms = nowMs();
+        }
+    } else {
+        // No existing seg-carousel to free, but still record the timestamp
+        // so the very first carousel built after this focus change starts
+        // from position 0 relative to when the user clicked, not draw time.
+        g_seg_focus_start_ms = nowMs();
+    }
 }
 
 // Public API — hot-path tick
@@ -274,11 +323,20 @@ pub fn blitSegCarousel(
         var cp = try drawing.CarouselPixmap.init(dc, text_w);
         errdefer cp.deinit();
         try cp.render(dc, text, accent, text_fg, baseline_y);
+        // Use the focus-event timestamp when available so the animation
+        // clock is anchored to when the user clicked, not when the draw
+        // cycle ran.  Consume it (reset to 0) so subsequent invalidations
+        // (e.g. title text changes) fall back to the normal nowMs() path.
+        const start: i64 = if (g_seg_focus_start_ms != 0) blk: {
+            const t = g_seg_focus_start_ms;
+            g_seg_focus_start_ms = 0;
+            break :blk t;
+        } else nowMs();
         g_seg_carousel = .{
             .cp       = cp,
             .window   = window,
             .cycle_w  = expected_cycle_w,
-            .start_ms = nowMs(),
+            .start_ms = start,
         };
     }
 
