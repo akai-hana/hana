@@ -3,15 +3,19 @@
 
 0117    
 
-make carroussel a togglable feature, keep ellipsis as fallback
-
-make monitor refresh rate be automatically detected, and carroussel be ran to v-sync the monitor
-
 improve fallback defaults
 
-when i spawn a window bound to workspace 1, while there's a full-screened window in workspace 1, and i'm currently in a different workspace, when i go back to workspace 1 and un-fullscreen this window, it will tile to the left, with a gap covering the right half of the screen, where the bound window i spawned should be tiled, but instead is an empty gap. switching workspaces back and forth onto workspace 1 triggers a window re-tiling and solves this issue, filling the gap with the bound window i spawned. can you please handle this edge-case causing this visual bug?
+when attempting to toggle off a window's tag on the current workspace, instead of rejecting it on all cases, accept it on the case that the window has another tag elsewhere; at least one tag. at least one must be available, because if not, the window would be available on zero workspaces, which'd make no sense. 
 
-carroussel title: when the bar is hidden, pause the carroussel. this includes switching to another workspace, or hiding bar, or entering full-screen.
+{
+when a window title bar on carroussel mode covers the whole title segment, and i switch to a workspace with no windows, the title carroussel keeps going on, as if i didn't change workspaces at all. 
+
+when the carroussel is no longer visible, it should be immediately terminated, and not ran on the background. when ran again, it should start from the very beginning of the window title's text, not continue where it left off.
+
+make carroussel a togglable feature, keep ellipsis as a fallback if carroussel is disabled.
+}
+
+when i spawn a window bound to workspace 1, while there's a full-screened window in workspace 1, and i'm currently in a different workspace, when i go back to workspace 1 and un-fullscreen this window, it will tile to the left, with a gap covering the right half of the screen, where the bound window i spawned should be tiled, but instead is an empty gap. switching workspaces back and forth onto workspace 1 triggers a window re-tiling and solves this issue, filling the gap with the bound window i spawned. can you please handle this edge-case causing this visual bug?
 
 make zig build compilation be done onto /usr/bin, or /bin, instead of /zig-out. if compilation to either of those dirs fails, create and build onto ./bin, instead of ./zig-out/bin
 
