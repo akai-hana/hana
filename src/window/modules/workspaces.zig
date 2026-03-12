@@ -394,7 +394,7 @@ fn hideWorkspaceWindows(wm: *WM, ws: *const Workspace, new_ws: u8) void {
 
     for (ws.windows.items()) |win| {
         if (isWindowOnWorkspace(win, new_ws)) continue; // stays visible
-        if (!tiling.isWindowTiled(win) and !minimize.isMinimized(wm, win)) {
+        if (!tiling.isWindowActiveTiled(win) and !minimize.isMinimized(wm, win)) {
             if (float_n < MAX_FLOAT) {
                 float_wins[float_n]    = win;
                 float_cookies[float_n] = xcb.xcb_get_geometry(wm.conn, win);
@@ -420,7 +420,7 @@ fn hideWorkspaceWindows(wm: *WM, ws: *const Workspace, new_ws: u8) void {
             fi += 1;
         }
         pushOffscreen(wm.conn, win);
-        if (tiling.isWindowTiled(win)) tiling.invalidateGeomCache(win);
+        if (tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
     }
 }
 
@@ -452,7 +452,7 @@ fn restoreWorkspaceWindows(wm: *WM, ws: *const Workspace, old_ws: u8) void {
     const pos = utils.floatDefaultPos(wm);
     for (ws.windows.items()) |win| {
         _ = xcb.xcb_map_window(wm.conn, win);
-        if (!tiling.isWindowTiled(win) and !minimize.isMinimized(wm, win) and
+        if (!tiling.isWindowActiveTiled(win) and !minimize.isMinimized(wm, win) and
             !isWindowOnWorkspace(win, old_ws))
         {
             if (tiling.getWindowGeom(win)) |rect| {
@@ -540,20 +540,6 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
         });
         _ = xcb.xcb_configure_window(wm.conn, info.window,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
-        // Map all non-minimized background windows on this workspace so they
-        // are ready the moment fullscreen exits. Without this, any window that
-        // arrived while fullscreen was active on an inactive workspace (e.g. a
-        // spawn-rule window mapped while the user was elsewhere) is never given
-        // an xcb_map_window call: handleMapRequest skips it for off-screen
-        // workspaces, and the fullscreen branch here was skipping
-        // restoreWorkspaceWindows entirely. When fullscreen later exits and the
-        // tiler retiles, those windows receive correct geometry but remain
-        // invisible (unmapped), producing a gap in the layout.
-        for (new_ws_obj.windows.items()) |win| {
-            if (win == info.window) continue;
-            if (minimize.isMinimized(wm, win)) continue;
-            _ = xcb.xcb_map_window(wm.conn, win);
-        }
     } else {
         restoreWorkspaceWindows(wm, new_ws_obj, old_ws);
     }
