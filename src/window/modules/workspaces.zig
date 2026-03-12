@@ -540,6 +540,20 @@ fn executeSwitch(wm: *WM, old_ws: u8, new_ws: u8) void {
         });
         _ = xcb.xcb_configure_window(wm.conn, info.window,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+        // Map all non-minimized background windows on this workspace so they
+        // are ready the moment fullscreen exits. Without this, any window that
+        // arrived while fullscreen was active on an inactive workspace (e.g. a
+        // spawn-rule window mapped while the user was elsewhere) is never given
+        // an xcb_map_window call: handleMapRequest skips it for off-screen
+        // workspaces, and the fullscreen branch here was skipping
+        // restoreWorkspaceWindows entirely. When fullscreen later exits and the
+        // tiler retiles, those windows receive correct geometry but remain
+        // invisible (unmapped), producing a gap in the layout.
+        for (new_ws_obj.windows.items()) |win| {
+            if (win == info.window) continue;
+            if (minimize.isMinimized(wm, win)) continue;
+            _ = xcb.xcb_map_window(wm.conn, win);
+        }
     } else {
         restoreWorkspaceWindows(wm, new_ws_obj, old_ws);
     }
