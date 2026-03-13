@@ -1,6 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+opening a new window on a workspace with only one window whose title is on carousel mode, does not update the bar to reflect the new window spawned. 
+
 0117    
 
 improve fallback defaults

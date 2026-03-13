@@ -91,6 +91,12 @@ const BarSnapshot = struct {
     ws_count:          u32                           = 0,
     status_text:       std.ArrayListUnmanaged(u8)    = .empty,
     title_invalidated: bool                          = false,
+    /// Per-segment dirty flags, computed during captureIntoSlot by comparing
+    /// against the previous snapshot. drawAll uses these to skip segments
+    /// whose inputs have not changed, avoiding unnecessary Pango layout passes.
+    dirty_all:   bool = true,  // ws_count changed or full-redraw forced
+    dirty_ws:    bool = true,  // workspace state changed
+    dirty_title: bool = true,  // title / focus / minimized state changed
 
     fn deinit(snap: *BarSnapshot, allocator: std.mem.Allocator) void {
         snap.focused_title.deinit(allocator);
@@ -105,20 +111,29 @@ const BarSnapshot = struct {
 
 /// Lock-based channel between main thread (producer) and bar thread (consumer).
 ///
-/// The mutex serializes capture (main thread) and drawing (bar thread) against
-/// each other. captureIntoSlot runs under the lock; the bar thread holds it for
-/// the duration of the draw. Contention is negligible for a status bar.
+/// Double-buffer protocol — zero heap allocation per frame:
+///   - main  writes into slots[write_idx], then flips write_idx under mutex
+///   - bar   reads  from slots[1 - write_idx] (the just-filled slot)
+/// Since write_idx is only mutated by the main thread, reading it outside
+/// the lock before writing is safe; the mutex acquire before the flip
+/// establishes the required memory fence for the bar thread.
 const BarChannel = struct {
     mutex:         std.Thread.Mutex     = .{},
     work_cond:     std.Thread.Condition = .{},
     done_cond:     std.Thread.Condition = .{},
-    snap:          BarSnapshot          = .{},
-    snap_ready:    bool                 = false,
-    clock_dirty:   bool                 = false,
-    quit:          bool                 = false,
-    draw_gen:      u64                  = 0,
-    focus_dirty:   bool                 = false,
-    focus_new_win: ?u32                 = null,
+    slots:         [2]BarSnapshot       = .{ .{}, .{} },
+    write_idx:     u1                   = 0,
+    snap_ready:       bool  = false,
+    clock_dirty:      bool  = false,
+    quit:             bool  = false,
+    draw_gen:         u64   = 0,
+    focus_dirty:      bool  = false,
+    focus_new_win:    ?u32  = null,
+    /// Set by callers (main thread only) that require a full bar redraw
+    /// regardless of per-segment dirty state: expose events, bar show/hide,
+    /// config reload, bar position toggle.  Consumed and cleared by
+    /// captureIntoSlot on the next submitDraw.
+    force_dirty_all:  bool  = false,
 };
 
 var g_channel: BarChannel     = .{};
@@ -291,9 +306,11 @@ const State = struct {
 
     fn drawAll(self: *State, snap: *const BarSnapshot) !void {
         if (snap.title_invalidated) self.cached_title_window = null;
-        // No clearTransparent needed: fillRect(0, 0, width, height) covers every pixel,
-        // so a preceding full CLEAR pass would be pure wasted server-side work.
-        self.dc.fillRect(0, 0, self.width, self.height, self.config.bg);
+        // Fill the whole bar background only on a full redraw.  Partial redraws
+        // skip this: non-dirty segments retain their previous pixels (which are
+        // correct since their inputs did not change), and every "always-draw"
+        // segment (layout, variations, clock, status) fills its own background.
+        if (snap.dirty_all) self.dc.fillRect(0, 0, self.width, self.height, self.config.bg);
 
         const scaled_spacing = self.config.scaledSpacing(self.height);
 
@@ -319,8 +336,14 @@ const State = struct {
         for (self.config.layout.items) |layout| {
             switch (layout.position) {
                 .left => for (layout.segments.items) |seg| {
-                    if (seg == .title) { title_seg_x = x; title_seg_w = self.calculateSegmentWidth(snap, seg); }
-                    x  = try self.drawSegment(snap, seg, x, null);
+                    const seg_w = self.calculateSegmentWidth(snap, seg);
+                    if (seg == .title) { title_seg_x = x; title_seg_w = seg_w; }
+                    const skip = !snap.dirty_all and switch (seg) {
+                        .workspaces => !snap.dirty_ws,
+                        .title      => !snap.dirty_title,
+                        else        => false,
+                    };
+                    if (skip) { x += seg_w; } else { x = try self.drawSegment(snap, seg, x, null); }
                     x += scaled_spacing;
                 },
                 .center => {
@@ -328,7 +351,12 @@ const State = struct {
                     for (layout.segments.items) |seg| {
                         const w = if (seg == .title) remaining else self.calculateSegmentWidth(snap, seg);
                         if (seg == .title) { title_seg_x = x; title_seg_w = w; }
-                        x = try self.drawSegment(snap, seg, x, w);
+                        const skip = !snap.dirty_all and switch (seg) {
+                            .workspaces => !snap.dirty_ws,
+                            .title      => !snap.dirty_title,
+                            else        => false,
+                        };
+                        if (skip) { x += w; } else { x = try self.drawSegment(snap, seg, x, w); }
                         if (seg != .title) x += scaled_spacing;
                     }
                 },
@@ -426,6 +454,7 @@ fn barThreadFn(s: *State) void {
         if (g_channel.quit) { g_channel.mutex.unlock(); return; }
 
         const snap_ready    = g_channel.snap_ready;
+        const read_idx: u1  = 1 - g_channel.write_idx;
         const do_clock      = g_channel.clock_dirty and !snap_ready;
         const do_focus      = g_channel.focus_dirty and !snap_ready;
         const focus_new_win = g_channel.focus_new_win;
@@ -433,12 +462,14 @@ fn barThreadFn(s: *State) void {
         g_channel.clock_dirty   = false;
         g_channel.focus_dirty   = false;
         g_channel.focus_new_win = null;
-        // Hold the lock for the draw: this serializes against submitDraw's
-        // captureIntoSlot, ensuring the snapshot is never written mid-render.
+        g_channel.mutex.unlock();
+
         if (snap_ready) {
-            s.drawAll(&g_channel.snap) catch |e| debug.warnOnErr(e, "bar thread drawAll");
+            s.drawAll(&g_channel.slots[read_idx]) catch |e| debug.warnOnErr(e, "bar thread drawAll");
+            g_channel.mutex.lock();
             g_channel.draw_gen += 1;
             g_channel.done_cond.broadcast();
+            g_channel.mutex.unlock();
         } else {
             if (do_focus) {
                 s.drawTitleOnly(focus_new_win);
@@ -451,7 +482,6 @@ fn barThreadFn(s: *State) void {
             }
             if (do_clock) s.drawClockOnly();
         }
-        g_channel.mutex.unlock();
     }
 }
 
@@ -486,7 +516,7 @@ fn stopBarThread() void {
 /// Populates a pre-allocated BarSnapshot slot in-place.
 /// All variable-length fields use ArrayListUnmanaged that grow only when
 /// their content exceeds the previously allocated capacity.
-fn captureIntoSlot(wm: *defs.WM, s: *State, snap: *BarSnapshot) !void {
+fn captureIntoSlot(wm: *defs.WM, s: *State, snap: *BarSnapshot, prev: *const BarSnapshot) !void {
     const allocator = s.allocator;
 
     // Status text.
@@ -527,22 +557,43 @@ fn captureIntoSlot(wm: *defs.WM, s: *State, snap: *BarSnapshot) !void {
     if (snap.focused_window) |fw| {
         title_mod.fetchFocusedTitleInto(wm.conn, fw, &snap.focused_title, allocator) catch {};
     }
+
+    // Compute per-segment dirty flags by comparing against the previous snapshot.
+    // force_dirty_all is set by callers that need a full redraw regardless of
+    // content changes (expose, show, reload, position toggle).
+    const forced = g_channel.force_dirty_all;
+    g_channel.force_dirty_all = false;
+
+    snap.dirty_all = forced or (snap.ws_count != prev.ws_count);
+    snap.dirty_ws  = snap.dirty_all or
+        snap.ws_current != prev.ws_current or
+        !std.mem.eql(bool, snap.ws_has_windows.items, prev.ws_has_windows.items);
+    snap.dirty_title =
+        snap.focused_window != prev.focused_window or
+        snap.title_invalidated or
+        !std.mem.eql(u8,  snap.focused_title.items,  prev.focused_title.items)   or
+        !std.mem.eql(u32, snap.current_ws_wins.items, prev.current_ws_wins.items) or
+        snap.minimized_set.count() != prev.minimized_set.count();
 }
 
 /// Posts a snapshot to the bar thread. `wait = true` blocks until the draw
 /// completes — use this inside xcb_grab_server regions.
+///
+/// write_idx is only mutated by the main thread, so reading it without the
+/// lock is safe here. The mutex acquire before the flip acts as the fence.
 pub fn submitDraw(wm: *defs.WM, wait: bool) void {
     const s = state orelse return;
     if (!s.visible) return;
 
-    g_channel.mutex.lock();
-    defer g_channel.mutex.unlock();
-
-    captureIntoSlot(wm, s, &g_channel.snap) catch |e| {
+    const idx = g_channel.write_idx;
+    captureIntoSlot(wm, s, &g_channel.slots[idx], &g_channel.slots[1 - idx]) catch |e| {
         debug.warnOnErr(e, "bar captureIntoSlot");
         return;
     };
 
+    g_channel.mutex.lock();
+    defer g_channel.mutex.unlock();
+    g_channel.write_idx ^= 1;
     g_channel.snap_ready = true;
     const gen_before = g_channel.draw_gen;
     g_channel.work_cond.signal();
@@ -750,8 +801,8 @@ pub fn deinit() void {
     stopBarThread();
     if (state) |s| {
         title_mod.deinitCarousel();
-        // Free the buffers grown inside the channel snapshot.
-        g_channel.snap.deinit(s.allocator);
+        // Free the buffers grown inside the double-buffer channel slots.
+        for (&g_channel.slots) |*slot| slot.deinit(s.allocator);
         _ = xcb.xcb_destroy_window(s.conn, s.window);
         s.dc.deinit();
         drawing.deinitFontCache(s.allocator);
@@ -798,6 +849,9 @@ fn reloadImpl(wm: *defs.WM, old: *State, setup: BarWindowSetup, height: u16) !vo
     stopBarThread();
     state = new_state;
     startBarThread(new_state);
+    // Config changed (fonts, colors, spacing) — force a full redraw so the
+    // new state is not compared against stale slot data from the old config.
+    g_channel.force_dirty_all = true;
     submitDraw(wm, true);
 
     _ = xcb.xcb_grab_server(wm.conn);
@@ -819,6 +873,8 @@ pub fn toggleBarPosition(wm: *defs.WM) void {
     };
     const new_y = barYPos(wm, s.height);
     setWindowProperties(wm, s.window, s.height);
+    // The bar window moves to a new y position — all pixels must be redrawn.
+    g_channel.force_dirty_all = true;
     s.invalidateLayout();
     _ = xcb.xcb_grab_server(wm.conn);
     _ = xcb.xcb_configure_window(wm.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y,
@@ -901,6 +957,7 @@ pub fn setBarState(wm: *defs.WM, action: BarAction) void {
     s.visible = show;
 
     if (action == .toggle) {
+        if (show) g_channel.force_dirty_all = true;
         if (show) submitDraw(wm, true);
         _ = xcb.xcb_grab_server(wm.conn);
         if (show) _ = xcb.xcb_map_window(wm.conn, s.window)
@@ -913,6 +970,8 @@ pub fn setBarState(wm: *defs.WM, action: BarAction) void {
         _ = xcb.xcb_flush(wm.conn);
     } else {
         if (show) {
+            // Freshly mapped window has uninitialised pixels — force full redraw.
+            g_channel.force_dirty_all = true;
             submitDraw(wm, true);
             _ = xcb.xcb_map_window(wm.conn, s.window);
         } else {
@@ -949,6 +1008,8 @@ pub fn updateTimerState() void { clock_segment.updateTimerState(); }
 
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t, wm: *defs.WM) void {
     if (state) |s| if (event.window == s.window and event.count == 0) {
+        // The bar was covered and is now exposed — all pixels must be redrawn.
+        g_channel.force_dirty_all = true;
         if (drag.isDragging()) s.setDirty() else submitDraw(wm, false);
     };
 }
