@@ -105,18 +105,14 @@ const BarSnapshot = struct {
 
 /// Lock-based channel between main thread (producer) and bar thread (consumer).
 ///
-/// Double-buffer protocol — zero heap allocation per frame:
-///   - main  writes into slots[write_idx], then flips write_idx under mutex
-///   - bar   reads  from slots[1 - write_idx] (the just-filled slot)
-/// Since write_idx is only mutated by the main thread, reading it outside
-/// the lock before writing is safe; the mutex acquire before the flip
-/// establishes the required memory fence for the bar thread.
+/// The mutex serializes capture (main thread) and drawing (bar thread) against
+/// each other. captureIntoSlot runs under the lock; the bar thread holds it for
+/// the duration of the draw. Contention is negligible for a status bar.
 const BarChannel = struct {
     mutex:         std.Thread.Mutex     = .{},
     work_cond:     std.Thread.Condition = .{},
     done_cond:     std.Thread.Condition = .{},
-    slots:         [2]BarSnapshot       = .{ .{}, .{} },
-    write_idx:     u1                   = 0,
+    snap:          BarSnapshot          = .{},
     snap_ready:    bool                 = false,
     clock_dirty:   bool                 = false,
     quit:          bool                 = false,
@@ -430,7 +426,6 @@ fn barThreadFn(s: *State) void {
         if (g_channel.quit) { g_channel.mutex.unlock(); return; }
 
         const snap_ready    = g_channel.snap_ready;
-        const read_idx: u1  = 1 - g_channel.write_idx;
         const do_clock      = g_channel.clock_dirty and !snap_ready;
         const do_focus      = g_channel.focus_dirty and !snap_ready;
         const focus_new_win = g_channel.focus_new_win;
@@ -438,14 +433,12 @@ fn barThreadFn(s: *State) void {
         g_channel.clock_dirty   = false;
         g_channel.focus_dirty   = false;
         g_channel.focus_new_win = null;
-        g_channel.mutex.unlock();
-
+        // Hold the lock for the draw: this serializes against submitDraw's
+        // captureIntoSlot, ensuring the snapshot is never written mid-render.
         if (snap_ready) {
-            s.drawAll(&g_channel.slots[read_idx]) catch |e| debug.warnOnErr(e, "bar thread drawAll");
-            g_channel.mutex.lock();
+            s.drawAll(&g_channel.snap) catch |e| debug.warnOnErr(e, "bar thread drawAll");
             g_channel.draw_gen += 1;
             g_channel.done_cond.broadcast();
-            g_channel.mutex.unlock();
         } else {
             if (do_focus) {
                 s.drawTitleOnly(focus_new_win);
@@ -458,6 +451,7 @@ fn barThreadFn(s: *State) void {
             }
             if (do_clock) s.drawClockOnly();
         }
+        g_channel.mutex.unlock();
     }
 }
 
@@ -537,22 +531,18 @@ fn captureIntoSlot(wm: *defs.WM, s: *State, snap: *BarSnapshot) !void {
 
 /// Posts a snapshot to the bar thread. `wait = true` blocks until the draw
 /// completes — use this inside xcb_grab_server regions.
-///
-/// write_idx is only mutated by the main thread, so reading it without the
-/// lock is safe here. The mutex acquire before the flip acts as the fence.
 pub fn submitDraw(wm: *defs.WM, wait: bool) void {
     const s = state orelse return;
     if (!s.visible) return;
 
-    const idx = g_channel.write_idx;
-    captureIntoSlot(wm, s, &g_channel.slots[idx]) catch |e| {
+    g_channel.mutex.lock();
+    defer g_channel.mutex.unlock();
+
+    captureIntoSlot(wm, s, &g_channel.snap) catch |e| {
         debug.warnOnErr(e, "bar captureIntoSlot");
         return;
     };
 
-    g_channel.mutex.lock();
-    defer g_channel.mutex.unlock();
-    g_channel.write_idx ^= 1;
     g_channel.snap_ready = true;
     const gen_before = g_channel.draw_gen;
     g_channel.work_cond.signal();
@@ -760,8 +750,8 @@ pub fn deinit() void {
     stopBarThread();
     if (state) |s| {
         title_mod.deinitCarousel();
-        // Free the buffers grown inside the double-buffer channel slots.
-        for (&g_channel.slots) |*slot| slot.deinit(s.allocator);
+        // Free the buffers grown inside the channel snapshot.
+        g_channel.snap.deinit(s.allocator);
         _ = xcb.xcb_destroy_window(s.conn, s.window);
         s.dc.deinit();
         drawing.deinitFontCache(s.allocator);
