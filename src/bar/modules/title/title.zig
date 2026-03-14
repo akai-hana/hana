@@ -342,13 +342,17 @@ fn drawSegmentedTitles(
             } else if (carousel.isCarouselEnabled()) {
                 // Focused + carousel enabled: delegate to carousel module —
                 // it decides whether to scroll or draw normally based on
-                // text_w vs avail_w.
+                // text_w vs segment_width.
+                // Pass the full segment bounds (segment_x / segment_width) so
+                // the carousel blit covers the entire segment with no static
+                // padding gaps on either side, matching the single-window
+                // carousel behaviour where scrolling spans the full segment.
                 const scrolled = try carousel.blitSegCarousel(
-                    dc, text_x, baseline_y, avail_w, text_w,
+                    dc, segment_x, baseline_y, segment_width, text_w,
                     info.title, accent, text_fg, info.window, title_invalidated,
                 );
                 if (!scrolled) {
-                    // Text fits in the available width — draw it directly.
+                    // Text fits in the segment width — draw it inset as normal.
                     try dc.drawText(text_x, baseline_y, info.title, text_fg);
                 }
             } else {

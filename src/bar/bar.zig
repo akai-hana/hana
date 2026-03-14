@@ -381,7 +381,18 @@ const State = struct {
         // Fast path: if the carousel is active, skip the full title.draw() —
         // no Pango, no cairo_surface_flush, no full-bar blit.
         if (title_mod.isCarouselActive()) {
-            const accent = self.config.getTitleAccent();
+            // When there is exactly one window on the workspace and it is
+            // minimized, the title segment uses the minimized accent, not the
+            // focused accent.  Using the wrong color here causes the gap
+            // between the two virtual text copies (filled by the initial
+            // fillRect in drawCarouselTick) to render in the focused color
+            // even after a minimize/unminimize, requiring a workspace switch
+            // to recover.
+            const accent: u32 = if (self.cached_ws_wins.len == 1 and
+                self.cached_minimized_set.contains(self.cached_ws_wins[0]))
+                self.config.getTitleMinimizedAccent()
+            else
+                self.config.getTitleAccent();
             if (title_mod.drawCarouselTick(self.dc, accent, self.height,
                     self.cached_title_x, self.cached_title_w)) return;
         }

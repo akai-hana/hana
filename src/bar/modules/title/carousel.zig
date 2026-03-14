@@ -53,6 +53,10 @@ const CarouselCache = struct {
     /// always restarts from position 0 whenever the carousel is rebuilt after
     /// being hidden (e.g. workspace switch to an empty workspace).
     start_ms: i64,
+    /// Background color baked into the pixmap during the last render() call.
+    /// The pixmap is rebuilt whenever this differs from the current `bg` so
+    /// that minimize/unminimize accent-color changes are reflected immediately.
+    last_bg:  u32,
 };
 
 /// Pre-rendered title pixmap for the focused segment in split-view.
@@ -235,7 +239,8 @@ pub fn drawOrScrollTitle(
 
     const stale = g_carousel == null
         or g_carousel.?.window != window
-        or title_invalidated;
+        or title_invalidated
+        or g_carousel.?.last_bg != bg;
 
     if (stale) {
         if (g_carousel) |*cc| { cc.cp.deinit(); g_carousel = null; }
@@ -253,6 +258,7 @@ pub fn drawOrScrollTitle(
             .window   = window,
             .cycle_w  = cycle_w,
             .start_ms = nowMs(),
+            .last_bg  = bg,
         };
     }
 
