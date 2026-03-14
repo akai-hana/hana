@@ -1,11 +1,7 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-fullscreening and unfullscreening breaks mouse hover cursor focus
-
 after attempting to close a window gracefully, check if it really did close. if it didn't, do the fallback that is currently implemented, but isn't being really executed due to a lack of a system that triggers it.
-
-opening a new window on a workspace with only one window whose title is on carousel mode, does not update the bar to reflect the new window spawned. 
 
 0117    
 
