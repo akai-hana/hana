@@ -9,20 +9,20 @@
 
 const std   = @import("std");
 const debug = @import("debug");
-const defs  = @import("defs");
+const core  = @import("core");
 const c     = @import("c_bindings");
 
 pub const VisualInfo = struct {
-    visual_type: ?*defs.xcb.xcb_visualtype_t,
+    visual_type: ?*core.xcb.xcb_visualtype_t,
     visual_id:   u32,
 };
 
 /// Find the first visual at `depth` bits. Falls back to the root visual if none found.
-pub fn findVisualByDepth(screen: *defs.xcb.xcb_screen_t, depth: u8) VisualInfo {
-    var depth_iter = defs.xcb.xcb_screen_allowed_depths_iterator(screen);
-    while (depth_iter.rem > 0) : (defs.xcb.xcb_depth_next(&depth_iter)) {
+pub fn findVisualByDepth(screen: *core.xcb.xcb_screen_t, depth: u8) VisualInfo {
+    var depth_iter = core.xcb.xcb_screen_allowed_depths_iterator(screen);
+    while (depth_iter.rem > 0) : (core.xcb.xcb_depth_next(&depth_iter)) {
         if (depth_iter.data.*.depth == depth) {
-            var visual_iter = defs.xcb.xcb_depth_visuals_iterator(depth_iter.data);
+            var visual_iter = core.xcb.xcb_depth_visuals_iterator(depth_iter.data);
             if (visual_iter.rem > 0) {
                 const vt = visual_iter.data;
                 return .{ .visual_type = vt, .visual_id = vt.*.visual_id };
@@ -42,7 +42,7 @@ const FALLBACK_FONT = "monospace:size=10";
 
 pub const DrawContext = struct {
     allocator: std.mem.Allocator,
-    conn:      *defs.xcb.xcb_connection_t,
+    conn:      *core.xcb.xcb_connection_t,
     /// The real X window — only used as the copy destination in flush().
     window:    u32,
     /// Off-screen pixmap — all drawing targets this.
@@ -87,7 +87,7 @@ pub const DrawContext = struct {
     cached_sized_px:     u16                        = 0,
 
     /// Stored for CarouselPixmap — needed to create a Cairo surface with the same visual.
-    visual_type: ?*defs.xcb.xcb_visualtype_t = null,
+    visual_type: ?*core.xcb.xcb_visualtype_t = null,
     /// DPI used when rendering into a CarouselPixmap (must match bar's Pango layout).
     dpi:         f32                          = 96.0,
     /// Actual pixel depth of dc.drawable — 32 for ARGB, screen root_depth otherwise.
@@ -98,7 +98,7 @@ pub const DrawContext = struct {
     /// atomically via xcb_copy_area, eliminating visible partial-frame compositing.
     pub fn initWithVisual(
         allocator:    std.mem.Allocator,
-        conn:         *defs.xcb.xcb_connection_t,
+        conn:         *core.xcb.xcb_connection_t,
         window:       u32,
         width:        u16,
         height:       u16,
@@ -110,23 +110,23 @@ pub const DrawContext = struct {
         const dc = try allocator.create(DrawContext);
         errdefer allocator.destroy(dc);
 
-        const setup  = defs.xcb.xcb_get_setup(conn);
-        const screen = defs.xcb.xcb_setup_roots_iterator(setup).data;
+        const setup  = core.xcb.xcb_get_setup(conn);
+        const screen = core.xcb.xcb_setup_roots_iterator(setup).data;
 
         const visual_type = if (visual_id) |vid|
             findVisualType(conn, vid) orelse getDefaultVisualType(screen)
         else
             getDefaultVisualType(screen);
 
-        const depth: u8 = if (is_argb) 32 else defs.xcb.XCB_COPY_FROM_PARENT;
+        const depth: u8 = if (is_argb) 32 else core.xcb.XCB_COPY_FROM_PARENT;
 
-        const pixmap = defs.xcb.xcb_generate_id(conn);
-        _ = defs.xcb.xcb_create_pixmap(conn, depth, pixmap, window, width, height);
+        const pixmap = core.xcb.xcb_generate_id(conn);
+        _ = core.xcb.xcb_create_pixmap(conn, depth, pixmap, window, width, height);
 
         const surface = c.cairo_xcb_surface_create(
             conn, pixmap, visual_type, @intCast(width), @intCast(height),
         ) orelse {
-            _ = defs.xcb.xcb_free_pixmap(conn, pixmap);
+            _ = core.xcb.xcb_free_pixmap(conn, pixmap);
             return error.CairoSurfaceCreateFailed;
         };
         errdefer c.cairo_surface_destroy(surface);
@@ -161,15 +161,15 @@ pub const DrawContext = struct {
 
         // Fire both GC-create requests before blocking on either reply so both
         // land in the same TCP segment.
-        dc.gc      = defs.xcb.xcb_generate_id(conn);
-        dc.copy_gc = defs.xcb.xcb_generate_id(conn);
-        const gc_cookie      = defs.xcb.xcb_create_gc_checked(conn, dc.gc,      pixmap, 0, null);
-        const copy_gc_cookie = defs.xcb.xcb_create_gc_checked(conn, dc.copy_gc, window, 0, null);
-        if (defs.xcb.xcb_request_check(conn, gc_cookie)) |err| {
+        dc.gc      = core.xcb.xcb_generate_id(conn);
+        dc.copy_gc = core.xcb.xcb_generate_id(conn);
+        const gc_cookie      = core.xcb.xcb_create_gc_checked(conn, dc.gc,      pixmap, 0, null);
+        const copy_gc_cookie = core.xcb.xcb_create_gc_checked(conn, dc.copy_gc, window, 0, null);
+        if (core.xcb.xcb_request_check(conn, gc_cookie)) |err| {
             std.c.free(err);
             return error.GCCreationFailed;
         }
-        if (defs.xcb.xcb_request_check(conn, copy_gc_cookie)) |err| {
+        if (core.xcb.xcb_request_check(conn, copy_gc_cookie)) |err| {
             std.c.free(err);
             return error.GCCreationFailed;
         }
@@ -181,7 +181,7 @@ pub const DrawContext = struct {
     /// Intended for one-shot font measurement. Do NOT call fillRect/drawText/flush.
     pub fn initOffscreen(
         allocator: std.mem.Allocator,
-        conn:      *defs.xcb.xcb_connection_t,
+        conn:      *core.xcb.xcb_connection_t,
         dpi:       f32,
     ) !*DrawContext {
         const dc = try allocator.create(DrawContext);
@@ -216,13 +216,13 @@ pub const DrawContext = struct {
     pub fn deinit(self: *DrawContext) void {
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
         if (self.cached_sized_desc) |desc| c.pango_font_description_free(desc);
-        if (self.gc      != 0) _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
-        if (self.copy_gc != 0) _ = defs.xcb.xcb_free_gc(self.conn, self.copy_gc);
+        if (self.gc      != 0) _ = core.xcb.xcb_free_gc(self.conn, self.gc);
+        if (self.copy_gc != 0) _ = core.xcb.xcb_free_gc(self.conn, self.copy_gc);
         c.g_object_unref(self.pango_layout);
         c.cairo_destroy(self.ctx);
         // Destroy surface before pixmap — Cairo holds a reference to the pixmap.
         c.cairo_surface_destroy(self.surface);
-        if (self.drawable != 0) _ = defs.xcb.xcb_free_pixmap(self.conn, self.drawable);
+        if (self.drawable != 0) _ = core.xcb.xcb_free_pixmap(self.conn, self.drawable);
         self.allocator.destroy(self);
     }
 
@@ -310,13 +310,13 @@ pub const DrawContext = struct {
         else
             color;
         if (self.last_gc_color != final_color) {
-            _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
+            _ = core.xcb.xcb_change_gc(self.conn, self.gc, core.xcb.XCB_GC_FOREGROUND, &[_]u32{final_color});
             self.last_gc_color = final_color;
         }
-        const rect = defs.xcb.xcb_rectangle_t{
+        const rect = core.xcb.xcb_rectangle_t{
             .x = @intCast(x), .y = @intCast(y), .width = width, .height = height,
         };
-        _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
+        _ = core.xcb.xcb_poly_fill_rectangle(self.conn, self.drawable, self.gc, 1, &rect);
     }
 
     /// Draw `text` at a temporarily-overridden absolute font size.
@@ -423,7 +423,7 @@ pub const DrawContext = struct {
     pub fn flush(self: *DrawContext) void {
         c.cairo_surface_flush(self.surface);
         if (self.copy_gc == 0) return;
-        _ = defs.xcb.xcb_copy_area(
+        _ = core.xcb.xcb_copy_area(
             self.conn,
             self.drawable,
             self.window,
@@ -440,7 +440,7 @@ pub const DrawContext = struct {
     /// written to the pixmap in the current frame, e.g. carousel blits.
     pub fn flushRect(self: *DrawContext, x: u16, w: u16) void {
         if (self.copy_gc == 0) return;
-        _ = defs.xcb.xcb_copy_area(
+        _ = core.xcb.xcb_copy_area(
             self.conn,
             self.drawable,
             self.window,
@@ -449,7 +449,7 @@ pub const DrawContext = struct {
             @intCast(x), 0,
             w, self.height,
         );
-        _ = defs.xcb.xcb_flush(self.conn);
+        _ = core.xcb.xcb_flush(self.conn);
     }
 
     pub fn baselineY(self: *DrawContext, bar_height: u16) u16 {
@@ -497,20 +497,20 @@ pub const DrawContext = struct {
 // offset == 0, giving a perfectly seamless loop.
 
 pub const CarouselPixmap = struct {
-    conn:    *defs.xcb.xcb_connection_t,
+    conn:    *core.xcb.xcb_connection_t,
     pixmap:  u32,
     gc:      u32,
     text_w:  u16,
     height:  u16,
 
     pub fn init(dc: *const DrawContext, text_w: u16) !CarouselPixmap {
-        const pixmap = defs.xcb.xcb_generate_id(dc.conn);
-        _ = defs.xcb.xcb_create_pixmap(dc.conn, dc.depth, pixmap, dc.drawable, text_w, dc.height);
-        errdefer _ = defs.xcb.xcb_free_pixmap(dc.conn, pixmap);
+        const pixmap = core.xcb.xcb_generate_id(dc.conn);
+        _ = core.xcb.xcb_create_pixmap(dc.conn, dc.depth, pixmap, dc.drawable, text_w, dc.height);
+        errdefer _ = core.xcb.xcb_free_pixmap(dc.conn, pixmap);
 
-        const gc     = defs.xcb.xcb_generate_id(dc.conn);
-        const cookie = defs.xcb.xcb_create_gc_checked(dc.conn, gc, pixmap, 0, null);
-        if (defs.xcb.xcb_request_check(dc.conn, cookie)) |err| {
+        const gc     = core.xcb.xcb_generate_id(dc.conn);
+        const cookie = core.xcb.xcb_create_gc_checked(dc.conn, gc, pixmap, 0, null);
+        if (core.xcb.xcb_request_check(dc.conn, cookie)) |err| {
             std.c.free(err);
             return error.GCCreationFailed;
         }
@@ -520,8 +520,8 @@ pub const CarouselPixmap = struct {
     }
 
     pub fn deinit(self: *CarouselPixmap) void {
-        _ = defs.xcb.xcb_free_gc(self.conn, self.gc);
-        _ = defs.xcb.xcb_free_pixmap(self.conn, self.pixmap);
+        _ = core.xcb.xcb_free_gc(self.conn, self.gc);
+        _ = core.xcb.xcb_free_pixmap(self.conn, self.pixmap);
     }
 
     /// Render background colour + text into the pixmap.
@@ -536,9 +536,9 @@ pub const CarouselPixmap = struct {
     ) !void {
         // Background fill (XCB, straight-alpha, matches fillRect) 
         const packed_bg = dc.applyTransparency(bg);
-        _ = defs.xcb.xcb_change_gc(self.conn, self.gc, defs.xcb.XCB_GC_FOREGROUND, &[_]u32{packed_bg});
-        _ = defs.xcb.xcb_poly_fill_rectangle(self.conn, self.pixmap, self.gc, 1,
-            &defs.xcb.xcb_rectangle_t{ .x = 0, .y = 0, .width = self.text_w, .height = self.height });
+        _ = core.xcb.xcb_change_gc(self.conn, self.gc, core.xcb.XCB_GC_FOREGROUND, &[_]u32{packed_bg});
+        _ = core.xcb.xcb_poly_fill_rectangle(self.conn, self.pixmap, self.gc, 1,
+            &core.xcb.xcb_rectangle_t{ .x = 0, .y = 0, .width = self.text_w, .height = self.height });
 
         // Text (Cairo + Pango, short-lived context) 
         const vt = dc.visual_type orelse return error.NoVisualType;
@@ -595,7 +595,7 @@ pub const CarouselPixmap = struct {
             const vis_end   = @min(draw_x + tw, cx + cw);
             if (vis_end <= vis_start) continue;
 
-            _ = defs.xcb.xcb_copy_area(
+            _ = core.xcb.xcb_copy_area(
                 self.conn,
                 self.pixmap, dst, dst_gc,
                 @intCast(vis_start - draw_x), 0,   // src_x, src_y
@@ -612,14 +612,14 @@ fn createPangoLayout(ctx: *c.cairo_t, dpi: f32) !*c.PangoLayout {
     return layout;
 }
 
-fn findVisualType(conn: *defs.xcb.xcb_connection_t, visual_id: u32) ?*defs.xcb.xcb_visualtype_t {
-    const setup = defs.xcb.xcb_get_setup(conn);
-    var screen_iter = defs.xcb.xcb_setup_roots_iterator(setup);
-    while (screen_iter.rem > 0) : (defs.xcb.xcb_screen_next(&screen_iter)) {
-        var depth_iter = defs.xcb.xcb_screen_allowed_depths_iterator(screen_iter.data);
-        while (depth_iter.rem > 0) : (defs.xcb.xcb_depth_next(&depth_iter)) {
-            var visual_iter = defs.xcb.xcb_depth_visuals_iterator(depth_iter.data);
-            while (visual_iter.rem > 0) : (defs.xcb.xcb_visualtype_next(&visual_iter)) {
+fn findVisualType(conn: *core.xcb.xcb_connection_t, visual_id: u32) ?*core.xcb.xcb_visualtype_t {
+    const setup = core.xcb.xcb_get_setup(conn);
+    var screen_iter = core.xcb.xcb_setup_roots_iterator(setup);
+    while (screen_iter.rem > 0) : (core.xcb.xcb_screen_next(&screen_iter)) {
+        var depth_iter = core.xcb.xcb_screen_allowed_depths_iterator(screen_iter.data);
+        while (depth_iter.rem > 0) : (core.xcb.xcb_depth_next(&depth_iter)) {
+            var visual_iter = core.xcb.xcb_depth_visuals_iterator(depth_iter.data);
+            while (visual_iter.rem > 0) : (core.xcb.xcb_visualtype_next(&visual_iter)) {
                 if (visual_iter.data.*.visual_id == visual_id) return visual_iter.data;
             }
         }
@@ -627,10 +627,10 @@ fn findVisualType(conn: *defs.xcb.xcb_connection_t, visual_id: u32) ?*defs.xcb.x
     return null;
 }
 
-fn getDefaultVisualType(screen: *defs.xcb.xcb_screen_t) *defs.xcb.xcb_visualtype_t {
-    var depth_iter = defs.xcb.xcb_screen_allowed_depths_iterator(screen);
-    while (depth_iter.rem > 0) : (defs.xcb.xcb_depth_next(&depth_iter)) {
-        var visual_iter = defs.xcb.xcb_depth_visuals_iterator(depth_iter.data);
+fn getDefaultVisualType(screen: *core.xcb.xcb_screen_t) *core.xcb.xcb_visualtype_t {
+    var depth_iter = core.xcb.xcb_screen_allowed_depths_iterator(screen);
+    while (depth_iter.rem > 0) : (core.xcb.xcb_depth_next(&depth_iter)) {
+        var visual_iter = core.xcb.xcb_depth_visuals_iterator(depth_iter.data);
         if (visual_iter.rem > 0) return visual_iter.data;
     }
     unreachable;
