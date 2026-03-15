@@ -33,8 +33,6 @@ const Atoms = struct {
     inline fn utf8Type(self: *const Atoms) u32 {
         return if (self.utf8_string != 0) self.utf8_string else xcb.XCB_ATOM_STRING;
     }
-
-    fn invalidate(self: *Atoms) void { self.initialized = false; }
 };
 
 var atoms: Atoms = .{};
@@ -52,37 +50,6 @@ const WindowInfo = struct {
 /// Fixed left indent independent of scaledSegmentPadding.
 const TITLE_LEAD_PX: u16 = 4;
 
-// Public carousel pass-throughs
-//
-// Callers (e.g., bar.zig) use these functions.  All state lives in
-// carousel.zig; title.zig is purely a thin re-export layer here.
-
-pub fn isCarouselActive() bool { return carousel.isCarouselActive(); }
-
-/// Free all carousel pixmaps.  Call on bar deinit or config reload.
-pub fn deinitCarousel() void   { carousel.deinitCarousel(); }
-
-/// Fast per-tick redraw without Pango / Cairo.
-/// Returns false when no carousel is active (caller falls back to full draw).
-pub fn drawCarouselTick(
-    dc:      *drawing.DrawContext,
-    bg:      u32,
-    height:  u16,
-    x:       u16,
-    avail_w: u16,
-) bool {
-    return carousel.drawCarouselTick(dc, bg, height, x, avail_w);
-}
-
-/// Enable or disable the carousel feature.
-///
-/// When disabled, all title overflow is rendered with ellipsis instead of
-/// scrolling.  Disabling immediately frees any live carousel pixmaps.
-pub fn setCarouselEnabled(enabled: bool) void { carousel.setCarouselEnabled(enabled); }
-
-/// Returns true when the carousel feature is currently enabled.
-pub fn isCarouselEnabled() bool { return carousel.isCarouselEnabled(); }
-
 // draw — main entry point
 
 /// Draw the title segment.
@@ -93,7 +60,7 @@ pub fn isCarouselEnabled() bool { return carousel.isCarouselEnabled(); }
 ///   `focused_title`     — pre-fetched on the main thread in captureIntoSlot;
 ///                         the bar render thread makes zero blocking X11 calls.
 ///   `current_ws_wins`   — window IDs on the current workspace (snapshot copy).
-///   `minimized`         — snapshot of minimized window IDs.
+///   `minimized_set`     — snapshot of minimized window IDs.
 ///   `title_invalidated` — when true, the cached title is stale and must be
 ///                         re-fetched.
 pub fn draw(
@@ -134,7 +101,7 @@ pub fn draw(
 
     if (window_count == 1) {
         const single_win   = current_ws_wins[0];
-        const is_minimized = isMinimizedInSnap(minimized_set, single_win);
+        const is_minimized = minimized_set.contains(single_win);
         const is_focused   = focused_window != null;
 
         const accent = if (is_minimized)
@@ -145,14 +112,17 @@ pub fn draw(
             config.bg;
         dc.fillRect(start_x, 0, width, height, accent);
 
+        // Compute text bounds once; both the minimized and focused branches
+        // use the same inset position for both static draw and carousel blit.
+        const text_x  = start_x + scaled_padding + TITLE_LEAD_PX;
+        const avail_w = width -| scaled_padding * 2 -| TITLE_LEAD_PX;
+
         if (is_minimized) {
             const title = getWindowTitle(conn, single_win, allocator) catch null;
             defer if (title) |t| allocator.free(t);
             if (title) |t| {
-                try drawTitleText(dc, start_x + scaled_padding + TITLE_LEAD_PX, baseline_y,
-                    width -| scaled_padding * 2 -| TITLE_LEAD_PX,
-                    start_x, width,
-                    t, accent, config.fg, single_win, title_invalidated);
+                try carousel.drawOrScrollTitle(dc, text_x, baseline_y, avail_w,
+                    text_x, avail_w, t, accent, config.fg, single_win, title_invalidated);
             }
         } else {
             // focused_title was pre-fetched on the main thread — zero X11 I/O.
@@ -163,10 +133,8 @@ pub fn draw(
                     cached_title_window.* = focused_window;
                 }
                 const fg = if (is_focused) config.selected_fg else config.fg;
-                try drawTitleText(dc, start_x + scaled_padding + TITLE_LEAD_PX, baseline_y,
-                    width -| scaled_padding * 2 -| TITLE_LEAD_PX,
-                    start_x, width,
-                    focused_title, accent, fg, focused_window, title_invalidated);
+                try carousel.drawOrScrollTitle(dc, text_x, baseline_y, avail_w,
+                    text_x, avail_w, focused_title, accent, fg, focused_window, title_invalidated);
             }
         }
     } else {
@@ -176,29 +144,6 @@ pub fn draw(
     }
 
     return start_x + width;
-}
-
-// Private — single-window title rendering
-
-/// Render a window title into `avail_w` pixels starting at (`x`, `y`).
-///
-/// `x`/`avail_w`    — inset text area for overflow check and static draw.
-/// `blit_x`/`blit_w` — full segment bounds for the carousel blit, so the
-///                      scroll covers the entire segment width with no gaps.
-fn drawTitleText(
-    dc:                *drawing.DrawContext,
-    x:                 u16,
-    y:                 u16,
-    avail_w:           u16,
-    blit_x:            u16,
-    blit_w:            u16,
-    text:              []const u8,
-    bg:                u32,
-    fg:                u32,
-    window:            ?u32,
-    title_invalidated: bool,
-) !void {
-    try carousel.drawOrScrollTitle(dc, x, y, avail_w, blit_x, blit_w, text, bg, fg, window, title_invalidated);
 }
 
 // Private — split-view segmented titles
@@ -219,8 +164,8 @@ fn drawSegmentedTitles(
 ) !void {
     if (win_items.len == 0) return;
 
-    // Prune a stale seg-carousel whose window has left the workspace, and reset
-    // the active flag — the loop below re-sets it if a carousel is needed.
+    // Free the single-window carousel (mutually exclusive with segmented) and
+    // prune the seg-carousel if its window has left the workspace.
     carousel.prepareSegCarousel(win_items);
 
     const MAX_WINS: usize = 128;
@@ -230,8 +175,13 @@ fn drawSegmentedTitles(
     const net_atom = atoms.net_wm_name;
     const utf_type = atoms.utf8Type();
 
-    // Phase 1: fire all _NET_WM_NAME cookies AND geometry cookies together so
-    // the server can answer both sets in a single round-trip.
+    // All XCB requests for this pass are fired in Phase 1 before any reply is
+    // read.  XCB queues them into a single TCP segment (or kernel buffer), so
+    // the server can answer all of them after one round-trip instead of one
+    // round-trip per window.  With n windows this reduces latency from O(n)
+    // to O(1) — critical for a bar that redraws on every key event.
+    //
+    // Phase 1: fire _NET_WM_NAME cookies AND geometry cookies together.
     var net_cookies:  [MAX_WINS]xcb.xcb_get_property_cookie_t = undefined;
     var geom_cookies: [MAX_WINS]xcb.xcb_get_geometry_cookie_t = undefined;
     var needs_geom:   [MAX_WINS]bool                          = @splat(false);
@@ -239,7 +189,7 @@ fn drawSegmentedTitles(
     for (win_items[0..n_wins], 0..) |win, i| {
         if (net_atom != 0)
             net_cookies[i] = xcb.xcb_get_property(conn, 0, win, net_atom, utf_type, 0, 8192);
-        if (!isMinimizedInSnap(minimized_set, win)) {
+        if (!minimized_set.contains(win)) {
             geom_cookies[i] = xcb.xcb_get_geometry(conn, win);
             needs_geom[i]   = true;
         }
@@ -338,17 +288,10 @@ fn drawSegmentedTitles(
             const text_fg = if (is_focused_win) config.selected_fg else config.fg;
             const text_w  = dc.textWidth(info.title);
 
-            if (!is_focused_win) {
-                // Non-focused: always ellipsis on overflow, never scroll.
-                if (text_w <= avail_w)
-                    try dc.drawText(text_x, baseline_y, info.title, text_fg)
-                else
-                    try dc.drawTextEllipsis(text_x, baseline_y, info.title, avail_w, text_fg);
-            } else if (carousel.isCarouselEnabled()) {
+            if (is_focused_win and carousel.isCarouselEnabled()) {
                 // Focused + carousel enabled: pass the full segment bounds so
                 // the scroll covers the entire segment width with no static
-                // padding gaps on either side, matching the single-window
-                // carousel behaviour where scrolling spans the full segment.
+                // padding gaps on either side.
                 const scrolled = try carousel.blitSegCarousel(
                     dc, segment_x, baseline_y, segment_width, text_w,
                     info.title, accent, text_fg, info.window, title_invalidated,
@@ -358,7 +301,7 @@ fn drawSegmentedTitles(
                     try dc.drawText(text_x, baseline_y, info.title, text_fg);
                 }
             } else {
-                // Focused + carousel disabled: use ellipsis as fallback.
+                // Non-focused or carousel disabled: ellipsis on overflow, never scroll.
                 if (text_w <= avail_w)
                     try dc.drawText(text_x, baseline_y, info.title, text_fg)
                 else
@@ -368,16 +311,14 @@ fn drawSegmentedTitles(
     }
 }
 
-// Private helpers — minimized check, sorting, title fetching
+// Private helpers — sorting and title fetching
 
-/// O(1) minimized membership check using the pre-built set from BarSnapshot.
-inline fn isMinimizedInSnap(
-    minimized_set: *const std.AutoHashMapUnmanaged(u32, void),
-    win: u32,
-) bool {
-    return minimized_set.contains(win);
-}
-
+/// Sort order for the split-view segment layout:
+///   1. Non-minimized windows before minimized windows (minimized are shown
+///      last/rightmost in the bar, matching their visual demotion in tiling).
+///   2. Within each group, left-to-right by x position, then top-to-bottom by
+///      y position — this preserves the spatial order of tiled windows.
+///   3. Tie-break by window ID for deterministic ordering.
 fn compareWindows(_: void, a: WindowInfo, b: WindowInfo) bool {
     if (a.minimized != b.minimized) return !a.minimized;
     if (a.x != b.x) return a.x < b.x;

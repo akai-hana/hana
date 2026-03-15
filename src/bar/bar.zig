@@ -38,10 +38,9 @@ const DrawOnlyStub = struct {
 const layout_segment     = if (bar_flags.has_layout)     @import("layout")     else DrawOnlyStub;
 const variations_segment = if (bar_flags.has_variations) @import("variations") else DrawOnlyStub;
 
-const prompt = @import("prompt");
+const prompt     = @import("prompt");
 const fullscreen = @import("fullscreen");
 const carousel   = @import("carousel");
-const title_mod  = @import("title"); // fetches focused window title on the main thread
 
 const title_segment = if (bar_flags.has_title) @import("title") else struct {
     pub fn draw(
@@ -164,7 +163,7 @@ const State = struct {
     has_clock_segment:    bool,
     cached_title_x:       u16,
     cached_title_w:       u16,
-    cached_ws_wins:       []u32,
+    cached_ws_wins:       std.ArrayListUnmanaged(u32),
     cached_minimized_set: std.AutoHashMapUnmanaged(u32, void),
     /// Focused window ID cached from the last full draw; used for carousel
     /// partial redraws that need the current focus without a new snapshot.
@@ -214,7 +213,7 @@ const State = struct {
             },
             .cached_title_x       = 0,
             .cached_title_w       = 0,
-            .cached_ws_wins       = &.{},
+            .cached_ws_wins       = .empty,
             .cached_minimized_set = .{},
             .cached_focused_window = null,
             .title_layout_valid   = false,
@@ -237,7 +236,7 @@ const State = struct {
         self.status_text.deinit(self.allocator);
         self.cached_title.deinit(self.allocator);
         self.cached_minimized_set.deinit(self.allocator);
-        self.allocator.free(self.cached_ws_wins);
+        self.cached_ws_wins.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -387,11 +386,14 @@ const State = struct {
 
         // Fast path: if the single-window carousel is active, skip the full
         // title.draw() — no Pango, no cairo_surface_flush, no full-bar blit.
+        // carousel.drawCarouselTick includes its own targeted flushRect, so
+        // the outer dc.flush() at the end of this function is intentionally
+        // skipped when the fast path fires.
         // Use the minimized accent when the sole workspace window is minimized
         // so the gap area (filled by fillRect) matches the pixmap background.
         if (carousel.isCarouselActive()) {
-            const accent: u32 = if (self.cached_ws_wins.len == 1 and
-                self.cached_minimized_set.contains(self.cached_ws_wins[0]))
+            const accent: u32 = if (self.cached_ws_wins.items.len == 1 and
+                self.cached_minimized_set.contains(self.cached_ws_wins.items[0]))
                 self.config.getTitleMinimizedAccent()
             else
                 self.config.getTitleAccent();
@@ -404,20 +406,19 @@ const State = struct {
             self.cached_title_x, self.cached_title_w,
             self.conn, new_focused,
             self.cached_title.items,
-            self.cached_ws_wins, &self.cached_minimized_set,
+            self.cached_ws_wins.items, &self.cached_minimized_set,
             &self.cached_title, &self.cached_title_window,
             false, self.allocator,
         ) catch |e| { debug.warnOnErr(e, "drawTitleOnly"); return; };
         self.dc.flush();
     }
 
-    fn dupeIfChanged(allocator: std.mem.Allocator, cached: *[]u32, fresh: []const u32) void {
-        if (std.mem.eql(u32, cached.*, fresh)) return;
-        if (allocator.dupe(u32, fresh)) |d| { allocator.free(cached.*); cached.* = d; } else |_| {}
-    }
-
     fn updateTitleCache(self: *State, snap: *const BarSnapshot, x: u16, w: u16) void {
-        dupeIfChanged(self.allocator, &self.cached_ws_wins, snap.current_ws_wins.items);
+        // Sync the window list using clearRetainingCapacity + appendSlice so
+        // the buffer grows only when needed, matching the pattern used by all
+        // other cached collections on State.
+        self.cached_ws_wins.clearRetainingCapacity();
+        self.cached_ws_wins.appendSlice(self.allocator, snap.current_ws_wins.items) catch {};
         // Mirror the snapshot's minimized set so drawTitleOnly renders correct
         // segment order and colors without a full redraw.
         self.cached_minimized_set.clearRetainingCapacity();
@@ -449,7 +450,7 @@ fn barThreadFn(s: *State) void {
         while (!g_channel.quit and !g_channel.snap_ready and
                !g_channel.clock_dirty and !g_channel.focus_dirty)
         {
-            if (title_mod.isCarouselActive()) {
+            if (carousel.isCarouselActive()) {
                 // Compute remaining sleep to the next absolute deadline.
                 const now_ns = monoNowNs();
                 if (now_ns >= next_carousel_ns) {
@@ -486,7 +487,7 @@ fn barThreadFn(s: *State) void {
         } else {
             if (do_focus) {
                 s.drawTitleOnly(focus_new_win);
-            } else if (title_mod.isCarouselActive()) {
+            } else if (carousel.isCarouselActive()) {
                 s.drawTitleOnly(s.cached_focused_window);
                 // Advance deadline by exactly one frame interval so cadence is
                 // steady regardless of how long the draw + OS scheduling took.
@@ -568,7 +569,7 @@ fn captureIntoSlot(wm: *defs.WM, s: *State, snap: *BarSnapshot, prev: *const Bar
     // only when the title exceeds the previously allocated capacity.
     snap.focused_title.clearRetainingCapacity();
     if (snap.focused_window) |fw| {
-        title_mod.fetchFocusedTitleInto(wm.conn, fw, &snap.focused_title, allocator) catch {};
+        title_segment.fetchFocusedTitleInto(wm.conn, fw, &snap.focused_title, allocator) catch {};
     }
 
     // Compute per-segment dirty flags by comparing against the previous snapshot.
@@ -813,7 +814,7 @@ pub fn init(wm: *defs.WM) !void {
 pub fn deinit() void {
     stopBarThread();
     if (state) |s| {
-        title_mod.deinitCarousel();
+        carousel.deinitCarousel();
         // Free the buffers grown inside the double-buffer channel slots.
         for (&g_channel.slots) |*slot| slot.deinit(s.allocator);
         _ = xcb.xcb_destroy_window(s.conn, s.window);
