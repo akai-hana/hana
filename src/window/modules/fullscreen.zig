@@ -256,14 +256,6 @@ pub fn enterFullscreen(wm: *WM, win: u32, saved_geom: ?defs.WindowGeometry) void
     const geom = saved_geom orelse fetchWindowGeom(wm, win);
     _ = xcb.xcb_grab_server(wm.conn);
     enterFullscreenCommit(wm, win, ws, geom);
-    // Other windows were pushed offscreen before `win` expanded to fill the
-    // screen. During that brief window, crossing events fire for the
-    // root or for `win`'s pre-fullscreen tiled position — none of which
-    // should redirect hover focus. Suppress them here. This is safe: after
-    // enter, `win` covers the entire screen, so the cursor is always over
-    // the already-focused `win`. The suppression expires on the first mouse
-    // movement, at which point hover-focus state is already correct.
-    focus.setSuppressReason(.tiling_operation);
     _ = xcb.xcb_ungrab_server(wm.conn);
     _ = xcb.xcb_flush(wm.conn);
 }
@@ -276,17 +268,17 @@ pub fn toggleFullscreen(wm: *WM) void {
         if (fs_info.window == win) {
             _ = xcb.xcb_grab_server(wm.conn);
             exitFullscreenCommit(wm, win, current_ws);
-            // Do NOT suppress here. The retile inside exitFullscreenCommit
-            // (via bar.setBarState -> retileCurrentWorkspace) positions
-            // windows back to their tiled slots. If the cursor lands inside
-            // a window B that moved under it, the resulting EnterNotify is
-            // the one and only event that correctly updates hover focus to B.
-            // Suppressing it (the previous behaviour) caused hover focus to
-            // remain stuck on the former fullscreen window indefinitely:
-            // handleMotionNotify would eventually clear the suppress reason,
-            // but by then the cursor was already inside B with no pending
-            // EnterNotify, so hover never updated until the cursor physically
-            // crossed a window boundary.
+            // Do NOT suppress crossing events here.  The retile inside
+            // exitFullscreenCommit moves tiled windows back to their slots.
+            // If the cursor lands inside a window B that moved under it, the
+            // resulting EnterNotify is the one and only event that correctly
+            // updates hover focus to B.  Suppressing it (the previous
+            // behaviour) caused hover focus to stick on the former fullscreen
+            // window indefinitely: handleMotionNotify would eventually clear
+            // the suppress reason, but by then the cursor was already
+            // statically inside B with no new EnterNotify pending, so hover
+            // focus would not update until the cursor physically crossed a
+            // window boundary.
             _ = xcb.xcb_ungrab_server(wm.conn);
             _ = xcb.xcb_flush(wm.conn);
         } else {
@@ -295,12 +287,6 @@ pub fn toggleFullscreen(wm: *WM) void {
             _ = xcb.xcb_grab_server(wm.conn);
             exitFullscreenCommit(wm, fs_info.window, current_ws);
             enterFullscreenCommit(wm, win, current_ws, geom);
-            // The exit retile briefly positions windows on-screen before the
-            // enter pushes them back offscreen, generating transient crossing
-            // events. Suppress them: `win` fills the screen after enter, so
-            // the cursor is always over the focused `win` once the transition
-            // settles. The suppression expires on the first mouse movement.
-            focus.setSuppressReason(.tiling_operation);
             _ = xcb.xcb_ungrab_server(wm.conn);
             _ = xcb.xcb_flush(wm.conn);
         }

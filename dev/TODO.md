@@ -1,6 +1,16 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+{
+* spawning a new window while in a workspace where i was with a single window on carousel mode, doesn't update the bar to split its title segment between these two windows, with the newly spawned one. (it splits, but the carousel single segment window overrides it a frame after).
+* minimizing a window located on the master side of the monitor, then unminimizing it, re-open sit on the stack side instead. please make the positions of windows be consistent. for example, if i were to open a new window where it spawns on mastar, while i minimized the previous master, then it should un-minimize as the first window at the top of the stack, being consistent with how the layout would behave if i never minimized this window to begin with.
+* fullscreening and unfullscreening breaks mouse hover cursor focus
+
+extra problems:
+* when minimizing single window on carousel, the carousel wrapping around is reset back to the beginning of the text. please only update the color, but maintain the current carousel-ing position between minimizing and unminimizing, so the change is seamless and only on the background color, while text is unaffected.
+* having two windows on a workspace, mouse hover switching focus between them, when i switch to one with a title text long enough to carousel, the carousel doesn't get updated. it accidentally gets updated by the other clock widget flushing the bar. otherwise it wouldn't do it by itself. this results in a noticeable visual delay.
+}
+
 after attempting to close a window gracefully, check if it really did close. if it didn't, do the fallback that is currently implemented, but isn't being really executed due to a lack of a system that triggers it.
 
 0117    

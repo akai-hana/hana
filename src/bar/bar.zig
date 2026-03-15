@@ -378,16 +378,17 @@ const State = struct {
         if (prompt.isActive()) return;
         if (!self.title_layout_valid or self.cached_title_w == 0) return;
 
-        // Fast path: if the carousel is active, skip the full title.draw() —
-        // no Pango, no cairo_surface_flush, no full-bar blit.
+        // Keep cached_focused_window current so that carousel ticks fired
+        // after a do_focus draw use the correct focused window.
+        // When called from the carousel tick path new_focused IS already
+        // cached_focused_window, so this is a no-op in the common case.
+        self.cached_focused_window = new_focused;
+
+        // Fast path: if the single-window carousel is active, skip the full
+        // title.draw() — no Pango, no cairo_surface_flush, no full-bar blit.
+        // Use the minimized accent when the sole workspace window is minimized
+        // so the gap area (filled by fillRect) matches the pixmap background.
         if (title_mod.isCarouselActive()) {
-            // When there is exactly one window on the workspace and it is
-            // minimized, the title segment uses the minimized accent, not the
-            // focused accent.  Using the wrong color here causes the gap
-            // between the two virtual text copies (filled by the initial
-            // fillRect in drawCarouselTick) to render in the focused color
-            // even after a minimize/unminimize, requiring a workspace switch
-            // to recover.
             const accent: u32 = if (self.cached_ws_wins.len == 1 and
                 self.cached_minimized_set.contains(self.cached_ws_wins[0]))
                 self.config.getTitleMinimizedAccent()

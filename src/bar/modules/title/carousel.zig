@@ -53,9 +53,11 @@ const CarouselCache = struct {
     /// always restarts from position 0 whenever the carousel is rebuilt after
     /// being hidden (e.g. workspace switch to an empty workspace).
     start_ms: i64,
-    /// Background color baked into the pixmap during the last render() call.
-    /// The pixmap is rebuilt whenever this differs from the current `bg` so
-    /// that minimize/unminimize accent-color changes are reflected immediately.
+    /// Background colour baked into the pixmap during the last render() call.
+    /// When the accent changes (e.g. minimize/unminimize) the pixmap must be
+    /// rebuilt so the old-colour background pixels no longer show through the
+    /// text area.  Unlike a full stale rebuild we preserve start_ms so the
+    /// scroll position is seamless — only the colour changes, not the position.
     last_bg:  u32,
 };
 
@@ -237,27 +239,33 @@ pub fn drawOrScrollTitle(
 
     g_carousel_active = true;
 
-    const stale = g_carousel == null
-        or g_carousel.?.window != window
-        or title_invalidated
-        or g_carousel.?.last_bg != bg;
+    // A full rebuild is needed when the window or title changes — and also
+    // when only the background colour changes (the old colour is baked into
+    // the pixmap pixels, so the text area would bleed through the new fill
+    // if the pixmap is reused).  On a bg-only change we preserve start_ms so
+    // the scroll position is seamless: the user sees only the colour update,
+    // not a jump back to the beginning.
+    const bg_changed = g_carousel != null and g_carousel.?.last_bg != bg;
 
-    if (stale) {
+    const full_stale = g_carousel == null
+        or g_carousel.?.window != window
+        or title_invalidated;
+
+    if (full_stale or bg_changed) {
+        const preserved_start_ms: i64 =
+            if (!full_stale and bg_changed) g_carousel.?.start_ms else nowMs();
+
         if (g_carousel) |*cc| { cc.cp.deinit(); g_carousel = null; }
 
         var cp = try drawing.CarouselPixmap.init(dc, text_w);
         errdefer cp.deinit();
         try cp.render(dc, text, bg, fg, y);
         const cycle_w: u16 = text_w + CAROUSEL_GAP_PX;
-        // Reset start_ms on every rebuild so the scroll always begins from
-        // position 0 — the carousel is never "resumed" mid-scroll after it
-        // was previously hidden (e.g. after switching back from an empty
-        // workspace).
         g_carousel = .{
             .cp       = cp,
             .window   = window,
             .cycle_w  = cycle_w,
-            .start_ms = nowMs(),
+            .start_ms = preserved_start_ms,
             .last_bg  = bg,
         };
     }
@@ -271,12 +279,21 @@ pub fn drawOrScrollTitle(
 
 /// Call at the top of a segmented-titles draw pass.
 ///
-/// If the window that owns the current seg-carousel is no longer in the
-/// workspace window list, the pixmap is freed so we don't blit a title that
-/// is no longer on-screen.
-/// Also resets the `g_seg_carousel_active` flag; the draw loop sets it again
-/// if a carousel is actually needed this frame.
+/// The single-window carousel (g_carousel) is always freed here.  The
+/// single-window and segmented paths are mutually exclusive: entering a
+/// segmented pass means there are >=2 windows, so g_carousel is stale by
+/// definition.  Leaving it alive causes the bar thread's carousel fast path
+/// (drawCarouselTick) to keep blitting the old single-window pixmap over the
+/// full title-segment width every frame, overwriting the correct split render
+/// produced by drawAll immediately after it is drawn.
+///
+/// Also frees the seg-carousel pixmap when its window is no longer in the
+/// workspace window list, and resets g_seg_carousel_active so the draw loop
+/// can set it again if a carousel is actually needed this frame.
 pub fn prepareSegCarousel(win_items: []const u32) void {
+    if (g_carousel) |*cc| { cc.cp.deinit(); g_carousel = null; }
+    g_carousel_active = false;
+
     if (g_seg_carousel) |sc| {
         var still_present = false;
         for (win_items) |w| {
