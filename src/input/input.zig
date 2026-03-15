@@ -290,8 +290,8 @@ fn executeAction(action: *const core.Action) !void {
         .increase_master_count  => tiling.increaseMasterCount(),
         .decrease_master_count  => tiling.decreaseMasterCount(),
 
-        .swap_master            => { tiling.swapWithMaster();          focus.setSuppressReason(.tiling_operation); bar.scheduleRedraw(); },
-        .swap_master_focus_swap => { tiling.swapWithMasterFocusSwap(); focus.setSuppressReason(.tiling_operation); bar.scheduleRedraw(); },
+        .swap_master            => { tiling.swapWithMaster();          focus.syncFocusToPointer(); bar.scheduleRedraw(); },
+        .swap_master_focus_swap => { tiling.swapWithMasterFocusSwap(); focus.syncFocusToPointer(); bar.scheduleRedraw(); },
 
         .minimize_window        => minimize.minimizeWindow(),
         .unminimize_lifo        => minimize.unminimize(.lifo),

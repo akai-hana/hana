@@ -68,17 +68,10 @@ pub const DrawContext = struct {
     /// Cached GC foreground — skips xcb_change_gc when the packed ARGB pixel is unchanged.
     last_gc_color:       ?u32                      = null,
 
-    // Pango layout state cache 
-    // Tracks the current width/ellipsize values set on pango_layout so we can
-    // skip redundant Pango calls when the values haven't changed.
-    // NOTE: pango_layout_get_baseline is intentionally NOT cached here. The
-    // baseline can vary per text run when font fallback is active (e.g. a CJK
-    // glyph falling back to Noto Sans CJK has a different ascent than FiraCode),
+    // NOTE: pango_layout_get_baseline is intentionally NOT cached. The baseline
+    // can vary per text run when font fallback is active (e.g. a CJK glyph
+    // falling back to Noto Sans CJK has a different ascent than FiraCode),
     // so caching it would produce wrong positions for subsequent draws.
-
-    /// Last width set via pango_layout_set_width (-1 = unlimited, the default).
-    last_layout_width:   i32                       = -1,
-    last_ellipsize_mode: c.PangoEllipsizeMode      = .NONE,
 
     // drawTextSized cache 
     // Avoids copying the font description on every indicator-glyph draw when the
@@ -370,33 +363,19 @@ pub const DrawContext = struct {
         self.setPangoText(text);
 
         // Pango re-invalidates its internal layout shaping on every set_width /
-        // set_ellipsize call even when the value is unchanged, so skip the call
-        // when the cached value already matches.
+        // set_ellipsize call even when the value is unchanged. These four calls
+        // are unconditional because the layout is always reset to defaults after
+        // each draw, so a cache would never find a matching value on entry anyway.
         const pango_width: i32 = @as(i32, max_width) * c.PANGO_SCALE;
-        if (self.last_layout_width != pango_width) {
-            c.pango_layout_set_width(self.pango_layout, pango_width);
-            self.last_layout_width = pango_width;
-        }
-        if (self.last_ellipsize_mode != .END) {
-            c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.END);
-            self.last_ellipsize_mode = .END;
-        }
+        c.pango_layout_set_width(self.pango_layout, pango_width);
+        c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.END);
 
         self.setColor(color);
         self.moveToTextBaseline(x, y);
         c.pango_cairo_show_layout(self.ctx, self.pango_layout);
 
-        // Reset layout state so subsequent drawText / textWidth calls see a clean
-        // layout. The guards make these resets free when drawTextEllipsis is not
-        // called again before the next drawText.
-        if (self.last_layout_width != -1) {
-            c.pango_layout_set_width(self.pango_layout, -1);
-            self.last_layout_width = -1;
-        }
-        if (self.last_ellipsize_mode != .NONE) {
-            c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.NONE);
-            self.last_ellipsize_mode = .NONE;
-        }
+        c.pango_layout_set_width(self.pango_layout, -1);
+        c.pango_layout_set_ellipsize(self.pango_layout, c.PangoEllipsizeMode.NONE);
     }
 
     pub fn textWidth(self: *DrawContext, text: []const u8) u16 {
@@ -500,6 +479,7 @@ pub const CarouselPixmap = struct {
     conn:    *core.xcb.xcb_connection_t,
     pixmap:  u32,
     gc:      u32,
+    surface: *c.cairo_surface_t,
     text_w:  u16,
     height:  u16,
 
@@ -514,13 +494,20 @@ pub const CarouselPixmap = struct {
             std.c.free(err);
             return error.GCCreationFailed;
         }
+        errdefer _ = core.xcb.xcb_free_gc(dc.conn, gc);
+
+        const vt = dc.visual_type orelse return error.NoVisualType;
+        const surface = c.cairo_xcb_surface_create(
+            dc.conn, pixmap, vt, @intCast(text_w), @intCast(dc.height),
+        ) orelse return error.CairoSurfaceFailed;
 
         return .{ .conn = dc.conn, .pixmap = pixmap, .gc = gc,
-                   .text_w = text_w, .height = dc.height };
+                   .surface = surface, .text_w = text_w, .height = dc.height };
     }
 
     pub fn deinit(self: *CarouselPixmap) void {
         _ = core.xcb.xcb_free_gc(self.conn, self.gc);
+        c.cairo_surface_destroy(self.surface);
         _ = core.xcb.xcb_free_pixmap(self.conn, self.pixmap);
     }
 
@@ -534,20 +521,14 @@ pub const CarouselPixmap = struct {
         fg:       u32,
         baseline: u16,
     ) !void {
-        // Background fill (XCB, straight-alpha, matches fillRect) 
+        // Background fill (XCB, straight-alpha, matches fillRect)
         const packed_bg = dc.applyTransparency(bg);
         _ = core.xcb.xcb_change_gc(self.conn, self.gc, core.xcb.XCB_GC_FOREGROUND, &[_]u32{packed_bg});
         _ = core.xcb.xcb_poly_fill_rectangle(self.conn, self.pixmap, self.gc, 1,
             &core.xcb.xcb_rectangle_t{ .x = 0, .y = 0, .width = self.text_w, .height = self.height });
 
-        // Text (Cairo + Pango, short-lived context) 
-        const vt = dc.visual_type orelse return error.NoVisualType;
-        const surf = c.cairo_xcb_surface_create(
-            self.conn, self.pixmap, vt, @intCast(self.text_w), @intCast(self.height),
-        ) orelse return error.CairoSurfaceFailed;
-        defer c.cairo_surface_destroy(surf);
-
-        const ctx = c.cairo_create(surf) orelse return error.CairoFailed;
+        // Text (Cairo + Pango — ctx and layout are per-call; surface is persistent)
+        const ctx = c.cairo_create(self.surface) orelse return error.CairoFailed;
         defer c.cairo_destroy(ctx);
 
         const layout = c.pango_cairo_create_layout(ctx) orelse return error.PangoFailed;
@@ -566,7 +547,7 @@ pub const CarouselPixmap = struct {
                  / @as(f64, @floatFromInt(c.PANGO_SCALE));
         c.cairo_move_to(ctx, 0.0, @as(f64, @floatFromInt(baseline)) - bl);
         c.pango_cairo_show_layout(ctx, layout);
-        c.cairo_surface_flush(surf);
+        c.cairo_surface_flush(self.surface);
     }
 
     /// Blit two copies into `dst_pixmap` using `dst_gc`, clipped to the title
@@ -645,6 +626,8 @@ inline fn appendStyle(result: *std.ArrayList(u8), allocator: std.mem.Allocator, 
 /// Returns `xft_name` unchanged when no `:` separator is present.
 /// Results are memoised in `font_conversion_cache`.
 fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const u8 {
+    if (font_conversion_cache == null)
+        font_conversion_cache = std.StringHashMap([]const u8).init(allocator);
     if (font_conversion_cache.?.get(xft_name)) |cached| return cached;
     if (std.mem.indexOfScalar(u8, xft_name, ':') == null) return xft_name;
 
@@ -684,12 +667,9 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     return converted;
 }
 
-/// Initialise the font-name conversion cache. Must be called once before any
-/// DrawContext loads fonts. Idempotent — safe to call on reload.
-pub fn initFontCache(allocator: std.mem.Allocator) void {
-    if (font_conversion_cache == null)
-        font_conversion_cache = std.StringHashMap([]const u8).init(allocator);
-}
+/// No-op — the cache is now lazy-initialized on first font load.
+/// Kept for call-site compatibility.
+pub fn initFontCache(_: std.mem.Allocator) void {}
 
 /// Release the font-name conversion cache. Call once at shutdown.
 pub fn deinitFontCache(allocator: std.mem.Allocator) void {

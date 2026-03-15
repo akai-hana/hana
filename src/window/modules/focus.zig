@@ -302,6 +302,32 @@ inline fn suppressionFor(reason: Reason, current: core.FocusSuppressReason) core
     };
 }
 
+/// After a tiling operation that repositions windows, sync WM focus state to
+/// whichever managed window is currently under the pointer.  This prevents the
+/// `.tiling_operation` suppression from persisting indefinitely when there is no
+/// active pointer grab to deliver MotionNotify events that would normally clear it.
+pub fn syncFocusToPointer() void {
+    const reply = xcb.xcb_query_pointer_reply(
+        core.conn, xcb.xcb_query_pointer(core.conn, core.root), null,
+    ) orelse {
+        g_suppress_reason = .none;
+        return;
+    };
+    defer std.c.free(reply);
+
+    const child = reply.*.child;
+    if (child == 0 or child == core.root or !window.isValidManagedWindow(child)) {
+        g_suppress_reason = .none;
+        return;
+    }
+
+    // Use .mouse_enter so the window is not raised, just focused.
+    // If g_focused_window already equals child, setFocus returns early —
+    // that's fine, we just need the suppression cleared below.
+    setFocus(child, .mouse_enter);
+    g_suppress_reason = .none; // clear regardless of whether setFocus short-circuited
+}
+
 fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
     const reply = xcb.xcb_get_window_attributes_reply(
         conn, xcb.xcb_get_window_attributes(conn, win), null,

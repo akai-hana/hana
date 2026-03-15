@@ -597,6 +597,18 @@ fn resolveLayout(s: *State, ws_state: ?*workspaces.State, ws_idx: u8, global: bo
     return if (ws_idx < wss.workspaces.len) wss.workspaces[ws_idx].layout else s.layout;
 }
 
+/// Returns the master width for `ws_idx` when in per-workspace mode.
+/// Falls back to the current global value for workspaces that have not yet
+/// had their width adjusted (master_width == null).
+inline fn resolveMasterWidth(s: *const State, ws_state: ?*workspaces.State, ws_idx: u8) f32 {
+    if (core.config.tiling.global_layout) return s.master_width;
+    const wss = ws_state orelse return s.master_width;
+    if (ws_idx < wss.workspaces.len) {
+        if (wss.workspaces[ws_idx].master_width) |mw| return mw;
+    }
+    return s.master_width;
+}
+
 inline fn makeLayoutCtx(s: *State) layouts.LayoutCtx {
     return .{ .conn = core.conn, .cache = &s.cache, .allocator = s.allocator };
 }
@@ -658,7 +670,10 @@ pub fn retileAllWorkspaces() void {
         const ws_windows = s.retile_wins[ws_idx * s.max_ws_windows .. ws_idx * s.max_ws_windows + n];
         if (ws_windows.len == 0) continue;
 
+        const saved_width  = s.master_width;
+        s.master_width = resolveMasterWidth(s, ws_state_opt, ws_idx);
         dispatchLayout(resolveLayout(s, ws_state_opt, ws_idx, core.config.tiling.global_layout), &ctx, s, ws_windows, screen);
+        s.master_width = saved_width;
         updateBorders(s, ws_windows);
         markWsGeomValid(s, ws_idx);
     }
@@ -732,6 +747,13 @@ fn retile(screen: utils.Rect, for_ws: ?u8) void {
     if (ws_windows.len == 0) return;
 
     const ctx = makeLayoutCtx(s);
+    // For inactive workspaces (for_ws != null) in per-workspace mode, temporarily
+    // substitute that workspace's saved master width so the layout is computed
+    // correctly. The current workspace's width (s.master_width) was already applied
+    // by syncLayoutFromWorkspace at switch time, so the for_ws == null path is fine.
+    const saved_width = s.master_width;
+    if (for_ws != null) s.master_width = resolveMasterWidth(s, workspaces.getState(), target_ws);
+    defer s.master_width = saved_width;
     dispatchLayout(resolveLayout(s, workspaces.getState(), target_ws, core.config.tiling.global_layout), &ctx, s, ws_windows, screen);
 
     s.last_retile_screen = screen;
