@@ -129,12 +129,20 @@ pub fn perWorkspaceIterator() ?std.AutoHashMap(u8, FullscreenInfo).Iterator {
     return s.per_workspace.iterator();
 }
 
-// Geometry helpers 
+// Geometry helpers
 
-// Fast path: tiled windows have a valid rect in the geometry cache; reading
-// from it avoids the blocking xcb_get_geometry round-trip.
-// Slow path (floating/cache miss): one blocking round-trip, falling back to
-// a centered quarter-screen default if the reply fails or the window is offscreen.
+/// Retrieve the pre-fullscreen geometry for `win` before entering fullscreen.
+///
+/// Fast path — tiled windows: `configureSafe` stores the most recent tiled
+/// rect in the geometry cache after every retile.  Reading from the cache
+/// avoids a blocking xcb_get_geometry round-trip.
+///
+/// Slow path — floating or newly-spawned windows: these are not in the tiling
+/// cache (they were never passed through `configureSafe`), so a blocking
+/// xcb_get_geometry round-trip is unavoidable.  Falls back to a centred
+/// quarter-screen default if the reply fails or the window is offscreen
+/// (x/y below OFFSCREEN_THRESHOLD_MIN), which happens when a window was
+/// spawned but never placed on-screen before the user triggered fullscreen.
 fn fetchWindowGeom(wm: *WM, win: u32) defs.WindowGeometry {
     if (tiling.getWindowGeom(win)) |rect| {
         const bw: u16 = if (tiling.getStateOpt()) |ts| ts.border_width else 0;
@@ -173,7 +181,7 @@ fn fetchWindowGeom(wm: *WM, win: u32) defs.WindowGeometry {
 
 // Commit helpers (XCB-only; caller owns grab/ungrab/flush) 
 
-fn enterFullscreenCommit(wm: *WM, win: u32, ws: u8, geom: defs.WindowGeometry) void {
+inline fn enterFullscreenCommit(wm: *WM, win: u32, ws: u8, geom: defs.WindowGeometry) void {
     setForWorkspace(ws, .{
         .window         = win,
         .saved_geometry = geom,
@@ -210,7 +218,7 @@ fn enterFullscreenCommit(wm: *WM, win: u32, ws: u8, geom: defs.WindowGeometry) v
     tiling.invalidateGeomCache(win);
 }
 
-fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
+inline fn exitFullscreenCommit(wm: *WM, win: u32, ws: u8) void {
     const fs_info = getForWorkspace(ws) orelse return;
     if (fs_info.window != win) return;
 
