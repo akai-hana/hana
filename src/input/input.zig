@@ -101,6 +101,12 @@ inline fn makeHash(mods: u16, keysym: u32) u64 {
 
 // Grab setup
 
+/// Grabs mouse buttons and sets the root window cursor. Call once at startup.
+pub fn setup(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: u32) void {
+    setupGrabs(conn, root);
+    XcbCursor.setupRoot(conn, screen);
+}
+
 /// Grabs Super+Button1/2/3 on the root window.
 /// Button1 = move, Button3 = resize, Button2 = config-driven binds (e.g. toggle_float).
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
@@ -467,3 +473,50 @@ inline fn closePipe(p: [2]c_int) void {
     _ = c.close(p[0]);
     _ = c.close(p[1]);
 }
+
+/// xcb-cursor extern declarations and helpers.
+///
+/// Declared manually instead of using cImport because cImport cannot bind
+/// static inline functions, and xcb_cursor_load_cursor is defined that way.
+const XcbCursor = struct {
+    const Context = opaque {};
+
+    extern fn xcb_cursor_context_new(
+        conn:   *xcb.xcb_connection_t,
+        screen: *xcb.xcb_screen_t,
+        ctx:    *?*Context,
+    ) c_int;
+
+    extern fn xcb_cursor_load_cursor(ctx: *Context, name: [*:0]const u8) u32;
+    extern fn xcb_cursor_context_free(ctx: ?*Context) void;
+
+    /// Makes the user theme's cursor be used by the root window (hovering hana's background wallpaper),
+    /// respecting the user's custom cursor instead of just displaying the default X server's cursor.
+    ///
+    /// Falls back to no change if xcb-cursor fails to load it.
+    fn setupRoot(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
+        var cursor_ctx: ?*Context = null;
+
+        if (xcb_cursor_context_new(conn, screen, &cursor_ctx) < 0)
+            return;
+        defer xcb_cursor_context_free(cursor_ctx);
+
+        const cursor  = xcb_cursor_load_cursor(cursor_ctx.?, "left_ptr"); // Set custom cursor
+        if (cursor == xcb.XCB_NONE) return;                               // Fallback; no settable cursor detected
+
+        // Apply the loaded cursor to the root window.
+        const cookie = xcb.xcb_change_window_attributes_checked(
+            conn, screen.*.root, xcb.XCB_CW_CURSOR, &[_]u32{cursor},
+        );
+
+        if (xcb.xcb_request_check(conn, cookie)) |err| {
+            debug.err("Failed to set custom cursor onto hana's root window: {}", .{err});
+            std.c.free(err);
+        }
+
+        // Release our client-side handle. The server uses reference counting — it keeps
+        // the cursor alive as long as any window still has it set, so this is safe to
+        // call immediately after applying it to the root window.
+        _ = xcb.xcb_free_cursor(conn, cursor);
+    }
+};

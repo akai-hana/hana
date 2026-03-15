@@ -667,6 +667,15 @@ pub fn resolveKeybindings(keybindings: anytype, xkb_state: *xkbcommon.XkbState, 
     }
 }
 
+/// Loads, resolves keybindings, and finalizes config in one call.
+/// This is the canonical entry point for startup and config reload.
+pub fn load(allocator: std.mem.Allocator, screen: *defs.xcb.xcb_screen_t, xkb_state: *xkbcommon.XkbState) !defs.Config {
+    var cfg = try loadConfigDefault(allocator);
+    resolveKeybindings(cfg.keybindings.items, xkb_state, allocator);
+    finalizeConfig(&cfg, screen);
+    return cfg;
+}
+
 // Section parsers
 
 fn parseWorkspaces(doc: *const parser.Document, cfg: *defs.Config) void {
