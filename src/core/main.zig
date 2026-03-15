@@ -33,14 +33,11 @@ pub fn main() !void {
     const x = try connectToX();
     defer xcb.xcb_disconnect(x.conn);
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    core.conn      = x.conn;
-    core.screen    = x.screen;
-    core.root      = x.root;
-    core.alloc = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
-    core.dpi_info  = dpi.detect(x.conn, x.screen);
+    core.conn     = x.conn;
+    core.screen   = x.screen;
+    core.root     = x.root;
+    core.alloc    = std.heap.c_allocator;
+    core.dpi_info = dpi.detect(x.conn, x.screen);
 
     input.setup(x.conn, x.screen, x.root);
     try input.initXkb(x.conn, core.alloc);
