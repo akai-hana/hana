@@ -53,20 +53,33 @@ const KeybindState = struct {
     }
 };
 
-var keybind_state: ?KeybindState     = null;
-var xkb_state:     ?*xkbcommon.XkbState = null;
+var keybind_state: ?KeybindState       = null;
+var xkb_state:     ?xkbcommon.XkbState = null;
 
-/// Returns the XkbState pointer. Used by events.zig for config reload.
-pub fn getXkbState() *xkbcommon.XkbState {
-    return xkb_state.?;
+/// Initializes XKB context, keymap, and key state from the server's current keyboard config.
+/// Must be called before init().
+pub fn initXkb(conn: *xcb.xcb_connection_t, allocator: std.mem.Allocator) !void {
+    xkb_state = try xkbcommon.XkbState.init(conn, allocator);
 }
 
-pub fn init(wm: *WM, xkb: *xkbcommon.XkbState) !void {
+/// Cleans up XKB state. Must be called after deinit().
+pub fn deinitXkb() void {
+    if (xkb_state) |*s| {
+        s.deinit();
+        xkb_state = null;
+    }
+}
+
+/// Returns a pointer to the module-owned XkbState. Used by events.zig for config reload.
+pub fn getXkbState() *xkbcommon.XkbState {
+    return &xkb_state.?;
+}
+
+pub fn init(wm: *WM) !void {
     var state = KeybindState.init(wm.allocator);
     errdefer state.deinit();
     try state.rebuild(wm);
     keybind_state = state;
-    xkb_state     = xkb;
 }
 
 pub fn deinit() void {

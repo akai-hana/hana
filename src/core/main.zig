@@ -20,7 +20,6 @@ const defs    = @import("defs");
 
 // input/
 const input     = @import("input");
-const xkbcommon = @import("xkbcommon");
 const focus     = @import("focus");
 
 // tiling/
@@ -85,21 +84,16 @@ pub fn main() !void {
     debug.info("DPI Detection - DPI: {d:.1}, Scale: {d:.2}x",
              .{ dpi_info.dpi, dpi_info.scale_factor });
 
-    // Heap-allocate XKB's state, so it can be accessed globally with a stable address.
-    // XKB state is needed anywhere keyboard input is handled, so rather than passing it down
-    // through every function call, hana's modules can just hold onto a pointer to it directly.
-    const xkb_state = try allocator.create(xkbcommon.XkbState);
-    defer allocator.destroy(xkb_state);
-
-    // Load XKB's state: context, keymap, and key state, from the server's current keyboard config.
-    xkb_state.* = try xkbcommon.XkbState.init(conn, allocator);
-    defer xkb_state.deinit();
+    // Initialize XKB context, keymap, and key state from the server's current keyboard config.
+    // Owned by input; heap-free, stable pointer exposed via input.getXkbState().
+    try input.initXkb(conn, allocator);
+    defer input.deinitXkb();
 
     // Load user config
     var user_config = try config.loadConfigDefault(allocator);
 
     // Translate user configured binds into server keycodes, using the active XKB keymap.
-    config.resolveKeybindings(user_config.keybindings.items, xkb_state, allocator);
+    config.resolveKeybindings(user_config.keybindings.items, input.getXkbState(), allocator);
     config.finalizeConfig(&user_config, screen);
 
     // hana's central states container
@@ -130,7 +124,7 @@ pub fn main() !void {
     try events.grabKeybindings(&wm);
 
     // Initialize event-handling modules (layout, focus, hotkey dispatch...)
-    try events.initModules(&wm, xkb_state);
+    try events.initModules(&wm);
     defer events.deinitModules();
 
     // Initialize bar (if it isn't disabled or removed)

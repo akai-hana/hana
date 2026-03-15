@@ -19,8 +19,7 @@ const defs    = @import("defs");
 const debug = @import("debug");
 
 // input/
-const input     = @import("input");
-const xkbcommon = @import("xkbcommon");
+const input = @import("input");
 
 // window/
 const window         = @import("window");
@@ -85,8 +84,8 @@ pub inline fn dispatch(event_type: u8, event: *anyopaque, wm: *WM) void {
 
 // Module lifecycle
 
-pub fn initModules(wm: *WM, xkb_state: *xkbcommon.XkbState) !void {
-    try input.init(wm, xkb_state);
+pub fn initModules(wm: *WM) !void {
+    try input.init(wm);
     fullscreen.init(wm);
     workspaces.init(wm);
     try tiling.init(wm);
