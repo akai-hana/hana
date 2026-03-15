@@ -340,15 +340,16 @@ fn drawSegmentedTitles(
                 else
                     try dc.drawTextEllipsis(text_x, baseline_y, info.title, avail_w, text_fg);
             } else if (carousel.isCarouselEnabled()) {
-                // Focused + carousel enabled: delegate to carousel module —
-                // it decides whether to scroll or draw normally based on
-                // text_w vs avail_w.
+                // Focused + carousel enabled: pass the full segment bounds so
+                // the scroll covers the entire segment width with no static
+                // padding gaps on either side, matching the single-window
+                // carousel behaviour where scrolling spans the full segment.
                 const scrolled = try carousel.blitSegCarousel(
-                    dc, text_x, baseline_y, avail_w, text_w,
+                    dc, segment_x, baseline_y, segment_width, text_w,
                     info.title, accent, text_fg, info.window, title_invalidated,
                 );
                 if (!scrolled) {
-                    // Text fits in the available width — draw it directly.
+                    // Text fits — draw it inset with normal padding.
                     try dc.drawText(text_x, baseline_y, info.title, text_fg);
                 }
             } else {
