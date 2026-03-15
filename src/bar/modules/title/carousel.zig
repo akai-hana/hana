@@ -181,10 +181,10 @@ pub fn drawCarouselTick(
     // Fill the full segment area (background + the gap between text copies).
     dc.fillRect(x, 0, avail_w, height, bg);
     const offset = carouselOffset(e.start_ms, e.cycle_w);
-    // Use the *inset* text coords stored in the entry so this path and
-    // drawOrScrollTitle both compute draw_x = clip_x - offset with the same
-    // clip_x, keeping the text position identical between the two paths.
-    e.cp.blitFrame(dc.drawable, dc.gc, e.text_x, e.text_avail_w, offset, e.cycle_w);
+    // x/avail_w are the full segment coords passed by bar.zig, matching the
+    // blit_x/blit_w stored in the cache by drawOrScrollTitle — both paths
+    // compute the same draw_x = clip_x - offset, so the text never jumps.
+    e.cp.blitFrame(dc.drawable, dc.gc, x, avail_w, offset, e.cycle_w);
     dc.flushRect(x, avail_w);
     return true;
 }
@@ -192,6 +192,17 @@ pub fn drawCarouselTick(
 // Public API — single-window title rendering
 
 /// Render `text` into `avail_w` pixels starting at (`x`, `y`).
+///
+/// `x` / `avail_w`      — inset text area: used for the overflow check, for
+///                         static text that fits, and for ellipsis on overflow
+///                         when the carousel is disabled.
+/// `blit_x` / `blit_w`  — full segment bounds: used as the carousel clip
+///                         coordinates so the scroll covers the entire segment
+///                         width with no static padding gaps on either side.
+///                         Must equal the values passed to drawCarouselTick so
+///                         both paths compute the same draw_x = clip_x - offset,
+///                         preventing any positional stutter when start_ms is
+///                         preserved across a bg-only rebuild.
 ///
 /// If the text fits it is drawn normally via Pango/Cairo.
 /// If it overflows and the carousel is enabled, a CarouselPixmap is built (or
@@ -202,6 +213,8 @@ pub fn drawOrScrollTitle(
     x:                 u16,
     y:                 u16,
     avail_w:           u16,
+    blit_x:            u16,
+    blit_w:            u16,
     text:              []const u8,
     bg:                u32,
     fg:                u32,
@@ -249,14 +262,17 @@ pub fn drawOrScrollTitle(
             .cycle_w      = text_w + CAROUSEL_GAP_PX,
             .start_ms     = preserved_start_ms,
             .last_bg      = bg,
-            .text_x       = x,
-            .text_avail_w = avail_w,
+            // Store the full segment blit coords so drawCarouselTick uses the
+            // same clip_x, keeping draw_x = clip_x - offset identical between
+            // the two paths.
+            .text_x       = blit_x,
+            .text_avail_w = blit_w,
         };
     }
 
     const e      = g_carousel.?;
     const offset = carouselOffset(e.start_ms, e.cycle_w);
-    e.cp.blitFrame(dc.drawable, dc.gc, x, avail_w, offset, e.cycle_w);
+    e.cp.blitFrame(dc.drawable, dc.gc, blit_x, blit_w, offset, e.cycle_w);
 }
 
 // Public API — split-view segmented carousel

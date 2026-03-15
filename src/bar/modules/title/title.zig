@@ -151,6 +151,7 @@ pub fn draw(
             if (title) |t| {
                 try drawTitleText(dc, start_x + scaled_padding + TITLE_LEAD_PX, baseline_y,
                     width -| scaled_padding * 2 -| TITLE_LEAD_PX,
+                    start_x, width,
                     t, accent, config.fg, single_win, title_invalidated);
             }
         } else {
@@ -164,6 +165,7 @@ pub fn draw(
                 const fg = if (is_focused) config.selected_fg else config.fg;
                 try drawTitleText(dc, start_x + scaled_padding + TITLE_LEAD_PX, baseline_y,
                     width -| scaled_padding * 2 -| TITLE_LEAD_PX,
+                    start_x, width,
                     focused_title, accent, fg, focused_window, title_invalidated);
             }
         }
@@ -180,20 +182,23 @@ pub fn draw(
 
 /// Render a window title into `avail_w` pixels starting at (`x`, `y`).
 ///
-/// Delegates all carousel state and scroll logic to carousel.zig.
-/// When the carousel feature is disabled, overflow is rendered with ellipsis.
+/// `x`/`avail_w`    — inset text area for overflow check and static draw.
+/// `blit_x`/`blit_w` — full segment bounds for the carousel blit, so the
+///                      scroll covers the entire segment width with no gaps.
 fn drawTitleText(
     dc:                *drawing.DrawContext,
     x:                 u16,
     y:                 u16,
     avail_w:           u16,
+    blit_x:            u16,
+    blit_w:            u16,
     text:              []const u8,
     bg:                u32,
     fg:                u32,
     window:            ?u32,
     title_invalidated: bool,
 ) !void {
-    try carousel.drawOrScrollTitle(dc, x, y, avail_w, text, bg, fg, window, title_invalidated);
+    try carousel.drawOrScrollTitle(dc, x, y, avail_w, blit_x, blit_w, text, bg, fg, window, title_invalidated);
 }
 
 // Private — split-view segmented titles
