@@ -13,7 +13,8 @@ const std        = @import("std");
 const core = @import("core");
 const xcb        = core.xcb;
 const utils      = @import("utils");
-const tiling     = @import("tiling");
+const build_options = @import("build_options");
+const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
 const workspaces = @import("workspaces");
 const focus    = @import("focus");
 const bar        = @import("bar");
@@ -114,10 +115,12 @@ pub fn perWorkspaceIterator() ?std.AutoHashMap(u8, FullscreenInfo).Iterator {
 /// (x/y below OFFSCREEN_THRESHOLD_MIN), which happens when a window was
 /// spawned but never placed on-screen before the user triggered fullscreen.
 fn fetchWindowGeom(win: u32) core.WindowGeometry {
-    if (tiling.getWindowGeom(win)) |rect| {
-        // Fast path: tiled windows have a cached rect from the last retile.
-        const bw: u16 = if (tiling.getStateOpt()) |ts| ts.border_width else 0;
-        return rectToGeom(rect, bw);
+    if (comptime build_options.has_tiling) {
+        if (tiling.getWindowGeom(win)) |rect| {
+            // Fast path: tiled windows have a cached rect from the last retile.
+            const bw: u16 = if (tiling.getStateOpt()) |ts| ts.border_width else 0;
+            return rectToGeom(rect, bw);
+        }
     }
 
     // Slow path: floating or newly-spawned windows are not in the tiling cache
@@ -177,7 +180,7 @@ inline fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) voi
             _ = xcb.xcb_configure_window(core.conn, other_win,
                 xcb.XCB_CONFIG_WINDOW_X,
                 &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
-            tiling.invalidateGeomCache(other_win);
+            if (comptime build_options.has_tiling) tiling.invalidateGeomCache(other_win);
         }
     }
 
@@ -196,7 +199,7 @@ inline fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) voi
     // Evict the fullscreen window itself; its cache still holds the pre-fullscreen
     // tiled rect. On exit retile would compute the same rect, get a hit, and skip
     // configure_window, leaving the window stuck at fullscreen dimensions.
-    tiling.invalidateGeomCache(win);
+    if (comptime build_options.has_tiling) tiling.invalidateGeomCache(win);
 }
 
 inline fn exitFullscreenCommit(win: u32, ws: u8) void {
@@ -209,7 +212,8 @@ inline fn exitFullscreenCommit(win: u32, ws: u8) void {
 
     bar.setBarState(.show_fullscreen);
 
-    if (tiling.isWindowTiled(win)) {
+    const win_is_tiled = if (comptime build_options.has_tiling) tiling.isWindowTiled(win) else false;
+    if (win_is_tiled) {
         _ = xcb.xcb_configure_window(core.conn, win,
             xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{saved.border_width});
     } else {
@@ -227,11 +231,13 @@ inline fn exitFullscreenCommit(win: u32, ws: u8) void {
         }
     }
 
-    _ = xcb.xcb_change_window_attributes(core.conn, win,
-        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{
-            if (focus.getFocused() == win) core.config.tiling.border_focused
-            else core.config.tiling.border_unfocused,
-        });
+    if (comptime build_options.has_tiling) {
+        _ = xcb.xcb_change_window_attributes(core.conn, win,
+            xcb.XCB_CW_BORDER_PIXEL, &[_]u32{
+                if (focus.getFocused() == win) core.config.tiling.border_focused
+                else core.config.tiling.border_unfocused,
+            });
+    }
 }
 
 // Public actions 

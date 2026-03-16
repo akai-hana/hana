@@ -27,7 +27,13 @@ const window         = @import("window");
     const workspaces = @import("workspaces");
 
 // tiling/
-const tiling = @import("tiling");
+const has_tiling = @import("build_options").has_tiling;
+const tiling = if (has_tiling) @import("tiling") else struct {
+    pub fn init() !void {}
+    pub fn deinit() void {}
+    pub fn reloadConfig() void {}
+    pub fn retileIfDirty() void {}
+};
 
 // bar/
 const bar        = @import("bar");

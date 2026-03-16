@@ -7,7 +7,8 @@ const xcb        = core.xcb;
 const utils      = @import("utils");
 const constants  = @import("constants");
 const focus      = @import("focus");
-const tiling     = @import("tiling");
+const build_options = @import("build_options");
+const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
 const bar        = @import("bar");
 const workspaces = @import("workspaces");
 const drag       = @import("drag");
@@ -293,9 +294,11 @@ fn commitWindowToScreen(win: u32, on_current_workspace: bool) void {
     // when the window is mapped.  Retiling here (which also pushes background
     // monocle windows offscreen) means the compositor never sees the new
     // window at its default X position or background windows still on-screen.
-    if (core.config.tiling.enabled) {
-        tiling.addWindow(win);
-        if (on_current_workspace) tiling.retileCurrentWorkspace();
+    if (comptime build_options.has_tiling) {
+        if (core.config.tiling.enabled) {
+            tiling.addWindow(win);
+            if (on_current_workspace) tiling.retileCurrentWorkspace();
+        }
     }
 
     if (on_current_workspace) {
@@ -372,23 +375,31 @@ fn unmanageWindow(win: u32) void {
     _ = xcb.xcb_grab_server(core.conn);
 
     // Notify each module in order inside the server grab.
-    if (core.config.tiling.enabled) tiling.removeWindow(win);
-    tiling.evictSizeHints(win);
+    if (comptime build_options.has_tiling) {
+        if (core.config.tiling.enabled) tiling.removeWindow(win);
+        tiling.evictSizeHints(win);
+    }
     minimize.forceUntrack(win);
     workspaces.removeWindow(win);
 
     if (was_fullscreen) bar.setBarState(.show_fullscreen);
 
     if (was_focused) {
-        if (core.config.tiling.enabled) tiling.retileIfDirty();
+        if (comptime build_options.has_tiling) {
+            if (core.config.tiling.enabled) tiling.retileIfDirty();
+        }
         focus.clearFocus();
         focusWindowUnderPointer(ptr_cookie.?);
-    } else if (!was_fullscreen and core.config.tiling.enabled) {
-        if (window_workspace) |ws| {
-            if (current_ws == ws) {
-                tiling.retileIfDirty();
-            } else {
-                tiling.retileInactiveWorkspace(ws);
+    } else if (!was_fullscreen) {
+        if (comptime build_options.has_tiling) {
+            if (core.config.tiling.enabled) {
+                if (window_workspace) |ws| {
+                    if (current_ws == ws) {
+                        tiling.retileIfDirty();
+                    } else {
+                        tiling.retileInactiveWorkspace(ws);
+                    }
+                }
             }
         }
     }
@@ -477,13 +488,15 @@ fn sendConfigureNotify(win: u32, geom: WindowGeometry) void {
 
 fn sendSyntheticConfigureNotify(win: u32) void {
     // Fast path: serve the geometry from the tiling cache — zero round-trips.
-    if (tiling.getWindowGeom(win)) |rect| {
-        const border: u16 = if (tiling.getStateOpt()) |s| s.border_width else 0;
-        sendConfigureNotify(win, .{
-            .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height,
-            .border_width = border,
-        });
-        return;
+    if (comptime build_options.has_tiling) {
+        if (tiling.getWindowGeom(win)) |rect| {
+            const border: u16 = if (tiling.getStateOpt()) |s| s.border_width else 0;
+            sendConfigureNotify(win, .{
+                .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height,
+                .border_width = border,
+            });
+            return;
+        }
     }
 
     // Slow path: fullscreen windows or a cache miss. One blocking round-trip.
@@ -499,7 +512,8 @@ fn sendSyntheticConfigureNotify(win: u32) void {
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) void {
     const win = event.window;
-    if (tiling.isWindowActiveTiled(win) or fullscreen.isFullscreen(win)) {
+    const is_tiled = if (comptime build_options.has_tiling) tiling.isWindowActiveTiled(win) else false;
+    if (is_tiled or fullscreen.isFullscreen(win)) {
         sendSyntheticConfigureNotify(win);
         return;
     }
@@ -611,5 +625,6 @@ fn parseSizeHintsIntoCache(
         min_height = @max(min_height, @as(u16, @intCast(@min(fields[16], std.math.maxInt(u16)))));
     }
 
-    tiling.cacheSizeHints(core.alloc, win, .{ .min_width = min_width, .min_height = min_height });
+    if (comptime build_options.has_tiling)
+        tiling.cacheSizeHints(core.alloc, win, .{ .min_width = min_width, .min_height = min_height });
 }
