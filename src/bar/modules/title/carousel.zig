@@ -63,19 +63,17 @@ const CarouselBase = struct {
 ///                 from the requested bg the pixmap is rebuilt (with start_ms
 ///                 preserved) so accent changes are reflected immediately.
 /// `text_x` /
-/// `text_avail_w`— Full-segment clip coords passed to blitFrame.  The blit
-///                 covers the entire title segment so the scroll fills edge
-///                 to edge, matching the segmented-carousel behaviour.
-/// `phase_px`    — Initial offset phase that positions the text at the static
-///                 draw position at time zero.  Equal to cycle_w - lead_px,
-///                 where lead_px = (static text x) - (blit left edge).
+/// `text_avail_w`— Blit clip coords stored at build time and reused by
+///                 drawCarouselTick.  blit_x is set to the static text draw
+///                 position so offset=0 places text identically to the static
+///                 path.  blit_w extends from that point to the full right edge
+///                 of the segment so the scroll fills edge-to-edge.
 const SingleEntry = struct {
     base:         CarouselBase,
     window:       ?u32,
     last_bg:      u32,
     text_x:       u16,
     text_avail_w: u16,
-    phase_px:     u16,
 };
 
 /// Segmented (split-view) carousel entry.
@@ -196,13 +194,9 @@ pub fn drawCarouselTick(
 ) bool {
     const e = g_carousel orelse return false;
     // fillRect and flushRect use the full segment coords (x/avail_w) to cover
-    // the background including padding gaps.
+    // the background including the left padding gap.
     dc.fillRect(x, 0, avail_w, height, bg);
-    const raw_offset = carouselOffset(e.base.start_ms, e.base.cycle_w);
-    // Apply phase_px so the text starts at the static draw position at time
-    // zero and scrolls smoothly left from there without a visible jump.
-    const offset = @as(u16, @intCast(
-        (@as(u32, raw_offset) + e.phase_px) % e.base.cycle_w));
+    const offset = carouselOffset(e.base.start_ms, e.base.cycle_w);
     e.base.cp.blitFrame(dc.drawable, dc.gc, e.text_x, e.text_avail_w, offset, e.base.cycle_w);
     dc.flushRect(x, avail_w);
     return true;
@@ -214,12 +208,11 @@ pub fn drawCarouselTick(
 ///
 /// `x` / `avail_w`      — inset text area: used for the overflow check, for
 ///                         static text that fits, and for ellipsis fallback.
-/// `blit_x` / `blit_w`  — full-segment clip coords for the carousel blit.
-///                         Should be the segment's left edge and full width so
-///                         the scroll covers edge to edge.  The gap between
-///                         `blit_x` and `x` (the lead) is absorbed into the
-///                         carousel's phase so the text starts at the same
-///                         visual position as the static draw at time zero.
+/// `blit_x` / `blit_w`  — clip coords for the carousel blit.  Pass the same
+///                         x as the static draw position so offset=0 places
+///                         the carousel text identically to the static path —
+///                         no phase shift needed.  Extend blit_w rightward to
+///                         the full segment edge so the scroll fills to the right.
 ///
 /// If the text fits it is drawn normally via Pango/Cairo.
 /// If it overflows and the carousel is enabled, a pixmap is built (or reused)
@@ -272,15 +265,6 @@ pub fn drawOrScrollTitle(
 
         const cycle_w = text_w + CAROUSEL_GAP_PX;
 
-        // phase_px positions the text at the static draw position (x) on the
-        // first frame, eliminating the jump when the carousel first activates.
-        // lead_px is the distance from the blit left edge to the static text x.
-        // At time zero carouselOffset returns 0; adding phase_px = cycle_w - lead_px
-        // makes display_offset = cycle_w - lead_px, which places the second
-        // leapfrog copy at blit_x + lead_px = x — identical to the static draw.
-        const lead_px: u16 = if (x > blit_x) x - blit_x else 0;
-        const phase_px: u16 = if (lead_px > 0 and lead_px < cycle_w) cycle_w - lead_px else 0;
-
         var cp = try drawing.CarouselPixmap.init(dc, text_w);
         errdefer cp.deinit();
         try cp.render(dc, text, bg, fg, y);
@@ -290,14 +274,11 @@ pub fn drawOrScrollTitle(
             .last_bg      = bg,
             .text_x       = blit_x,
             .text_avail_w = blit_w,
-            .phase_px     = phase_px,
         };
     }
 
-    const e         = g_carousel.?;
-    const raw_offset = carouselOffset(e.base.start_ms, e.base.cycle_w);
-    const offset     = @as(u16, @intCast(
-        (@as(u32, raw_offset) + e.phase_px) % e.base.cycle_w));
+    const e      = g_carousel.?;
+    const offset = carouselOffset(e.base.start_ms, e.base.cycle_w);
     e.base.cp.blitFrame(dc.drawable, dc.gc, blit_x, blit_w, offset, e.base.cycle_w);
 }
 
