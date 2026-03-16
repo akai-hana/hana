@@ -697,7 +697,7 @@ fn createBarWindow(height: u16, y_pos: i16) BarWindowSetup {
     return .{ .window = window, .visual_id = visual_id, .has_argb = want_transparency, .colormap = colormap };
 }
 
-fn loadBarFonts(dc: *drawing.DrawContext) !void {
+fn loadBarFonts(dc: anytype) !void {
     const cfg         = core.config.bar;
     const alloc       = core.alloc;
     const scaled_size = core.config.bar.scaled_font_size;
@@ -741,14 +741,14 @@ fn resolvePercentageFontSize(bar_height: u16) ?u16 {
     core.config.bar.scaled_font_size = TRIAL_PT;
     defer core.config.bar.scaled_font_size = saved_size;
 
-    const temp_dc = drawing.DrawContext.initOffscreen(core.alloc, core.conn, core.dpi_info.dpi) catch |e| {
-        debug.warnOnErr(e, "DrawContext.initOffscreen in resolvePercentageFontSize");
+    var mc = drawing.MeasureContext.init(core.alloc, core.dpi_info.dpi) catch |e| {
+        debug.warnOnErr(e, "MeasureContext.init in resolvePercentageFontSize");
         return null;
     };
-    defer temp_dc.deinit();
-    loadBarFonts(temp_dc) catch return null;
+    defer mc.deinit();
+    loadBarFonts(&mc) catch return null;
 
-    const asc, const desc = temp_dc.getMetrics();
+    const asc, const desc = mc.getMetrics();
     const px_per_pt: f32  = @as(f32, @floatFromInt(@max(1, asc + desc))) / @as(f32, @floatFromInt(TRIAL_PT));
     const max_size_pt     = @as(f32, @floatFromInt(bar_height)) / px_per_pt;
     return @max(1, @as(u16, @intFromFloat(@round(max_size_pt * (core.config.bar.font_size.value / 100.0)))));
@@ -764,17 +764,17 @@ fn calculateBarHeight() !u16 {
         return height;
     }
 
-    const temp_dc = drawing.DrawContext.initOffscreen(core.alloc, core.conn, core.dpi_info.dpi) catch |e| {
-        debug.warnOnErr(e, "DrawContext.initOffscreen in calculateBarHeight");
+    var mc = drawing.MeasureContext.init(core.alloc, core.dpi_info.dpi) catch |e| {
+        debug.warnOnErr(e, "MeasureContext.init in calculateBarHeight");
         return DEFAULT_BAR_HEIGHT;
     };
-    defer temp_dc.deinit();
-    loadBarFonts(temp_dc) catch {
+    defer mc.deinit();
+    loadBarFonts(&mc) catch {
         debug.warn("Failed to load fonts for height calculation, using default", .{});
         return DEFAULT_BAR_HEIGHT;
     };
 
-    const asc, const desc = temp_dc.getMetrics();
+    const asc, const desc = mc.getMetrics();
     return @intCast(std.math.clamp(@as(u32, @intCast(asc + desc)), MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
 }
 
