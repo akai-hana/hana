@@ -52,6 +52,9 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
         .start_win_height = geom.height,
     };
     focus.setFocus(win, .user_command);
+    _ = xcb.xcb_configure_window(core.conn, win,
+        xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+    _ = xcb.xcb_flush(core.conn);
     // Float conversion is deferred to the first motion event.
     // Record whether the window needs it so updateDrag can act on first move.
     g_pending_float = if (comptime build_options.has_tiling) tiling.isWindowTiled(win) else false;

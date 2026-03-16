@@ -25,7 +25,6 @@ const tiling = if (has_tiling) @import("tiling") else struct {
     pub fn syncLayoutFromWorkspace(_: anytype) void {}
     pub fn restoreWorkspaceGeom() bool { return false; }
     pub fn retileCurrentWorkspace() void {}
-    pub fn updateWindowFocus(_: anytype, _: anytype) void {}
 };
 const Tracking   = @import("tracking").Tracking;
 const constants  = @import("constants");
@@ -511,7 +510,7 @@ fn applyPostSwitchFocus(new_ws: u8, new_ws_obj: *const Workspace, ptr_cookie: xc
     const old_focused = focus.getFocused();
     focus.setFocused(focus_target);
 
-    tiling.updateWindowFocus(old_focused, focus.getFocused());
+    window.updateFocusBorders(old_focused, focus.getFocused());
 
     if (old_focused) |old_win| window.grabButtons(old_win, false);
 
