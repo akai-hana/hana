@@ -122,7 +122,7 @@ pub fn draw(
             defer if (title) |t| allocator.free(t);
             if (title) |t| {
                 try carousel.drawOrScrollTitle(dc, text_x, baseline_y, avail_w,
-                    text_x, avail_w, t, accent, config.fg, single_win, title_invalidated);
+                    start_x, width, t, accent, config.fg, single_win, title_invalidated);
             }
         } else {
             // focused_title was pre-fetched on the main thread — zero X11 I/O.
@@ -134,7 +134,7 @@ pub fn draw(
                 }
                 const fg = if (is_focused) config.selected_fg else config.fg;
                 try carousel.drawOrScrollTitle(dc, text_x, baseline_y, avail_w,
-                    text_x, avail_w, focused_title, accent, fg, focused_window, title_invalidated);
+                    start_x, width, focused_title, accent, fg, focused_window, title_invalidated);
             }
         }
     } else {
