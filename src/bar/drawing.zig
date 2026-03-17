@@ -625,7 +625,7 @@ fn getDefaultVisualType(screen: *core.xcb.xcb_screen_t) *core.xcb.xcb_visualtype
     unreachable;
 }
 
-inline fn appendStyle(result: *std.ArrayList(u8), allocator: std.mem.Allocator, token: []const u8) !void {
+inline fn appendStyle(result: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, token: []const u8) !void {
     try result.append(allocator, ' ');
     try result.appendSlice(allocator, token);
 }
@@ -639,7 +639,7 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     if (font_conversion_cache.?.get(xft_name)) |cached| return cached;
     if (std.mem.indexOfScalar(u8, xft_name, ':') == null) return xft_name;
 
-    var result = std.ArrayList(u8){};
+    var result: std.ArrayListUnmanaged(u8) = .empty;
     try result.ensureTotalCapacity(allocator, xft_name.len);
     errdefer result.deinit(allocator);
 

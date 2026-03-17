@@ -36,7 +36,7 @@ const hertz   = @import("hertz");
 
 /// Horizontal scroll speed in pixels per second (≈ 150 px/s).
 /// Divided by the monitor Hz to get pixels-per-frame at detection time.
-pub const CAROUSEL_PX_PER_S: f64 = 150.0;
+pub const CAROUSEL_PX_PER_S: f64 = 1.0;
 
 /// Pixel gap between the end of one text copy and the start of the next.
 pub const CAROUSEL_GAP_PX: u16 = 60;
@@ -364,7 +364,11 @@ pub fn blitSegCarousel(
 // Internal helpers
 
 fn nowMs() i64 {
-    const ts = std.posix.clock_gettime(.MONOTONIC) catch return 0;
+    var ts: std.os.linux.timespec = undefined;
+    switch (std.posix.errno(std.os.linux.clock_gettime(.MONOTONIC, &ts))) {
+        .SUCCESS => {},
+        else     => return 0,
+    }
     return ts.sec * 1000 + @divTrunc(ts.nsec, 1_000_000);
 }
 
