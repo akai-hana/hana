@@ -99,6 +99,19 @@ pub fn blinkTick() void {
     g.blink_visible = !g.blink_visible;
 }
 
+/// Set by handleKeyPress, activate, and deactivate to notify the bar that the
+/// prompt area needs to be redrawn.  Consumed (read + cleared) by bar.updateIfDirty
+/// to avoid a circular import between prompt ↔ bar.
+var redraw_pending: bool = false;
+
+/// Returns true and clears the flag if a prompt-driven redraw is outstanding.
+/// Call once per event-loop iteration from bar.updateIfDirty.
+pub fn consumeRedrawRequest() bool {
+    const v = redraw_pending;
+    redraw_pending = false;
+    return v;
+}
+
 pub fn init(allocator: std.mem.Allocator, conn: *xcb.xcb_connection_t) !void {
     if (g.vim.buf.len != 0) return; // already initialised
     g.allocator   = allocator;
@@ -141,6 +154,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
     if (ctrl_held) {
         const action = vim.handleCtrl(&g.vim, sym);
         handleAction(action);
+        redraw_pending = true;
         return true;
     }
 
@@ -154,6 +168,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
             }
         }
         g.blink_visible = true;
+        redraw_pending = true;
         return true;
     }
 
@@ -167,6 +182,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
     handleAction(action);
     updateGhost();
     g.blink_visible = true;
+    redraw_pending = true;
     return true;
 }
 
@@ -265,6 +281,7 @@ fn activate() void {
         return;
     }
     _ = xcb.xcb_flush(core.conn);
+    redraw_pending = true;
 }
 
 fn deactivate() void {
@@ -274,6 +291,7 @@ fn deactivate() void {
     vim.resetNormalSub(&g.vim);
     _ = xcb.xcb_ungrab_keyboard(core.conn, xcb.XCB_CURRENT_TIME);
     _ = xcb.xcb_flush(core.conn);
+    redraw_pending = true;
 }
 
 // PATH completion 

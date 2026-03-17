@@ -619,6 +619,7 @@ fn captureIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot) !voi
         snap.ws_current != prev.ws_current or
         !std.mem.eql(bool, snap.ws_has_windows.items, prev.ws_has_windows.items);
     snap.dirty_title =
+        prompt.isActive() or
         snap.focused_window != prev.focused_window or
         snap.title_invalidated or
         !std.mem.eql(u8,  snap.focused_title.items,  prev.focused_title.items)   or
@@ -1038,6 +1039,7 @@ pub fn setBarState(action: BarAction) void {
 pub fn updateIfDirty() !void {
     const s = state orelse return;
     if (!s.visible) return;
+    if (prompt.consumeRedrawRequest()) s.setDirty();
     if (s.dirty) {
         submitDraw(false);
         s.dirty = false;
