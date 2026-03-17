@@ -252,7 +252,18 @@ fn activate() void {
         core.conn, 0, core.root, xcb.XCB_CURRENT_TIME,
         xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC,
     );
-    xcb.xcb_discard_reply(core.conn, cookie.sequence);
+    const grab_reply = xcb.xcb_grab_keyboard_reply(core.conn, cookie, null);
+    if (grab_reply == null) {
+        debug.warn("drun: xcb_grab_keyboard_reply returned null — aborting activation", .{});
+        g.active = false;
+        return;
+    }
+    defer std.c.free(grab_reply);
+    if (grab_reply.*.status != xcb.XCB_GRAB_STATUS_SUCCESS) {
+        debug.warn("drun: keyboard grab failed (status {}) — aborting activation", .{grab_reply.*.status});
+        g.active = false;
+        return;
+    }
     _ = xcb.xcb_flush(core.conn);
 }
 
@@ -304,7 +315,7 @@ fn loadCompletions() void {
 
     // Sort for O(log n) binary search in updateGhost.
     const SLOT = MAX_COMP_LEN + 1;
-    const entries = @as([*][SLOT]u8, @ptrCast(&g.comp_names))[0..g.comp_count];
+    const entries = @as([*][SLOT]u8, @ptrCast(g.comp_names.ptr))[0..g.comp_count];
     std.sort.pdq([SLOT]u8, entries, {}, struct {
         fn lt(_: void, a: [SLOT]u8, b: [SLOT]u8) bool {
             return std.mem.order(u8, std.mem.sliceTo(&a, 0), std.mem.sliceTo(&b, 0)) == .lt;
