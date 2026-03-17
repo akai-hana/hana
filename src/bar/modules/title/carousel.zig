@@ -36,7 +36,7 @@ const hertz   = @import("hertz");
 
 /// Horizontal scroll speed in pixels per second (≈ 150 px/s).
 /// Divided by the monitor Hz to get pixels-per-frame at detection time.
-pub const CAROUSEL_PX_PER_S: f64 = 1.0;
+pub const CAROUSEL_PX_PER_S: f64 = 125.0;
 
 /// Pixel gap between the end of one text copy and the start of the next.
 pub const CAROUSEL_GAP_PX: u16 = 60;
