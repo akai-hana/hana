@@ -36,7 +36,7 @@ const hertz   = @import("hertz");
 
 /// Horizontal scroll speed in pixels per second (≈ 150 px/s).
 /// Divided by the monitor Hz to get pixels-per-frame at detection time.
-pub const CAROUSEL_PX_PER_S: f64 = 125.0;
+pub const CAROUSEL_PX_PER_S: f64 = 1.0;
 
 /// Pixel gap between the end of one text copy and the start of the next.
 pub const CAROUSEL_GAP_PX: u16 = 60;
@@ -197,7 +197,7 @@ pub fn drawCarouselTick(
     // the background including the left padding gap.
     dc.fillRect(x, 0, avail_w, height, bg);
     const offset = carouselOffset(e.base.start_ms, e.base.cycle_w);
-    e.base.cp.blitFrame(dc.drawable, dc.gc, e.text_x, e.text_avail_w, offset, e.base.cycle_w);
+    e.base.cp.blitFrame(dc.drawable, dc.gc, e.text_x, x, avail_w, offset, e.base.cycle_w);
     dc.flushRect(x, avail_w);
     return true;
 }
@@ -225,6 +225,8 @@ pub fn drawOrScrollTitle(
     avail_w:           u16,
     blit_x:            u16,
     blit_w:            u16,
+    seg_x:             u16,
+    seg_w:             u16,
     text:              []const u8,
     bg:                u32,
     fg:                u32,
@@ -279,7 +281,7 @@ pub fn drawOrScrollTitle(
 
     const e      = g_carousel.?;
     const offset = carouselOffset(e.base.start_ms, e.base.cycle_w);
-    e.base.cp.blitFrame(dc.drawable, dc.gc, blit_x, blit_w, offset, e.base.cycle_w);
+    e.base.cp.blitFrame(dc.drawable, dc.gc, blit_x, seg_x, seg_w, offset, e.base.cycle_w);
 }
 
 // Public API — split-view segmented carousel
@@ -320,6 +322,8 @@ pub fn blitSegCarousel(
     text_x:            u16,
     baseline_y:        u16,
     avail_w:           u16,
+    seg_x:             u16,
+    seg_w:             u16,
     text_w:            u16,
     text:              []const u8,
     accent:            u32,
@@ -357,7 +361,7 @@ pub fn blitSegCarousel(
 
     const e      = g_seg_carousel.?;
     const offset = carouselOffset(e.base.start_ms, e.base.cycle_w);
-    e.base.cp.blitFrame(dc.drawable, dc.gc, text_x, avail_w, offset, e.base.cycle_w);
+    e.base.cp.blitFrame(dc.drawable, dc.gc, text_x, seg_x, seg_w, offset, e.base.cycle_w);
     return true;
 }
 
