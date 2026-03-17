@@ -1,6 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+under the grid.zig layout, when i focus on window 1 (upper left corner) and then window 3 (bottom right corner), with windows 2 and 4 untouched, and then i do mod+tab, window 1 (the previous window i focused) gets swapped to the upper left corner, no matter what, and the window 3 gets moved to the right. the correct behavior would be for the two windows to simply swap their geometries. could you please do that? make it so that they swap geometries no matter what, so that it also works on any other layout, as well as floating mode potentially.
+
 could you reinforce the window killing system, checking if it really did get closed? right now it only uses graceful closing, but the window may be unresponsive and ignore it; on these cases, i want you to forcefully kill the window (maybe sending a kill signal, or some other way).
 
 improve fallback defaults
