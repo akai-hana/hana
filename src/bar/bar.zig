@@ -1039,7 +1039,7 @@ pub fn setBarState(action: BarAction) void {
 pub fn updateIfDirty() !void {
     const s = state orelse return;
     if (!s.visible) return;
-    if (prompt.consumeRedrawRequest()) s.setDirty();
+    if (prompt.consumeRedrawRequest()) { g_channel.force_dirty_all = true; s.setDirty(); }
     if (s.dirty) {
         submitDraw(false);
         s.dirty = false;
