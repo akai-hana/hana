@@ -278,13 +278,35 @@ const State = struct {
     fn drawRightSegments(self: *State, snap: *const BarSnapshot, segments: []const core.BarSegment) !void {
         var right_x          = self.width;
         const scaled_spacing = self.config.scaledSpacing(self.height);
+        // pending_gap: when true the segment to our right drew something and
+        // "earned" a gap — we emit it only if the current segment also draws,
+        // so gaps only appear between two non-empty neighbours.
+        var pending_gap = false;
         var i = segments.len;
         while (i > 0) {
             i -= 1;
             right_x -= self.calculateSegmentWidth(snap, segments[i]);
             if (segments[i] == .clock) self.cached_clock_x = right_x;
-            _ = try self.drawSegment(snap, segments[i], right_x, null);
-            if (i > 0) right_x -= scaled_spacing;
+            const drew_to = try self.drawSegment(snap, segments[i], right_x, null);
+            const drew = drew_to != right_x;
+            if (drew and pending_gap) {
+                // Both neighbours are non-empty: paint the gap between them.
+                // It sits immediately to the right of this segment's allocated width.
+                const gap_x = right_x + self.calculateSegmentWidth(snap, segments[i]);
+                self.dc.fillRect(gap_x, 0, scaled_spacing, self.height, self.config.bg);
+                right_x -= scaled_spacing;
+            } else if (!drew and pending_gap) {
+                // Right neighbour drew but we are empty: close the gap that was
+                // tentatively opened — move right_x back so the next leftward
+                // segment doesn't inherit phantom spacing.
+                // (no fillRect needed; dirty_all redraws handle the stale pixels)
+            } else if (drew and !pending_gap and i < segments.len - 1) {
+                // We drew but the right neighbour was empty: subtract spacing so
+                // the next segment is spaced from us correctly.
+                right_x -= scaled_spacing;
+                self.dc.fillRect(right_x, 0, scaled_spacing, self.height, self.config.bg);
+            }
+            pending_gap = drew;
         }
     }
 
@@ -312,16 +334,33 @@ const State = struct {
                 .left => for (layout.segments.items) |seg| {
                     const seg_w = self.calculateSegmentWidth(snap, seg);
                     if (seg == .title) { title_seg_x = x; title_seg_w = seg_w; }
-                    if (segmentSkip(snap, seg)) { x += seg_w; } else { x = try self.drawSegment(snap, seg, x, null); }
-                    x += scaled_spacing;
+                    if (segmentSkip(snap, seg)) {
+                        x += seg_w + scaled_spacing;
+                    } else {
+                        const x_before = x;
+                        x = try self.drawSegment(snap, seg, x, null);
+                        if (x != x_before) {
+                            self.dc.fillRect(x, 0, scaled_spacing, self.height, self.config.bg);
+                            x += scaled_spacing;
+                        }
+                    }
                 },
                 .center => {
                     const remaining = @max(100, self.width -| x -| right_total -| scaled_spacing);
                     for (layout.segments.items) |seg| {
                         const w = if (seg == .title) remaining else self.calculateSegmentWidth(snap, seg);
                         if (seg == .title) { title_seg_x = x; title_seg_w = w; }
-                        if (segmentSkip(snap, seg)) { x += w; } else { x = try self.drawSegment(snap, seg, x, w); }
-                        if (seg != .title) x += scaled_spacing;
+                        if (segmentSkip(snap, seg)) {
+                            x += w;
+                            if (seg != .title) x += scaled_spacing;
+                        } else {
+                            const x_before = x;
+                            x = try self.drawSegment(snap, seg, x, w);
+                            if (seg != .title and x != x_before) {
+                                self.dc.fillRect(x, 0, scaled_spacing, self.height, self.config.bg);
+                                x += scaled_spacing;
+                            }
+                        }
                     }
                 },
                 .right => try self.drawRightSegments(snap, layout.segments.items),
