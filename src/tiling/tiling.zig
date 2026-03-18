@@ -671,7 +671,7 @@ inline fn calculateScreenArea() utils.Rect {
 
 pub fn retileAllWorkspaces() void {
     const s = getState();
-    if (!s.enabled) return;
+    if (!s.enabled or s.layout == .floating) return;
 
     const screen     = calculateScreenArea();
     const ws_count   = workspaces.getWorkspaceCount();
@@ -716,19 +716,18 @@ pub fn retileAllWorkspaces() void {
 
 pub fn retileIfDirty() void {
     const s = getState();
-    if (!s.enabled or !s.dirty) return;
+    if (!s.enabled or s.layout == .floating or !s.dirty) return;
     retileCurrentWorkspace();
 }
 
 pub fn retileCurrentWorkspace() void {
     const s = getState();
-    if (!s.enabled) {
-        // Tiling is disabled at runtime but windows are still tracked in
-        // s.windows.  The workspace switcher routes them through this function
-        // for restore, so we must bring them back to their last known on-screen
-        // positions via the geometry cache instead of running the layout engine.
-        // restoreWorkspaceGeom is a no-op when the cache is missing or stale,
-        // so there is no risk of clobbering an already-correct state.
+    if (!s.enabled or s.layout == .floating) {
+        // Tiling is disabled or floating: windows are either managed outside
+        // the layout engine (floating) or disabled entirely.  The workspace
+        // switcher still routes through here for restore, so replay the last
+        // known on-screen positions from cache without running the layout engine.
+        // restoreWorkspaceGeom is a no-op when the cache is missing or stale.
         _ = restoreWorkspaceGeom();
         return;
     }
@@ -743,7 +742,7 @@ pub fn retileCurrentWorkspace() void {
 /// their on-screen positions.
 pub fn retileInactiveWorkspace(ws_idx: u8) void {
     const s = getState();
-    if (!s.enabled) return;
+    if (!s.enabled or s.layout == .floating) return;
 
     const ws_state = workspaces.getState() orelse return;
 
