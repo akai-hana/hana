@@ -1,7 +1,7 @@
 //! Tiling window management: delegates to layout modules.
 
 const std        = @import("std");
-const core = @import("core");
+const core       = @import("core");
 const xcb        = core.xcb;
 const utils      = @import("utils");
 const constants  = @import("constants");
@@ -34,9 +34,7 @@ const fullscreen = @import("fullscreen");
 
 const MAX_MASTER_WIDTH: f32 = 0.95;
 const DEFAULT_MAX_WS_WINDOWS: usize = 128;  // default per-retile window list capacity
-const DEFAULT_MAX_WS: usize         = 64;   // default workspace limit; matches u64 ws_geom_valid bitmask
-
-inline fn wsBit(ws_idx: anytype) u64 { return @as(u64, 1) << @intCast(ws_idx); }
+const DEFAULT_MAX_WS: usize = 64;   // default per-retile workspace capacity
 
 const ZERO_RECT: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
 
@@ -146,14 +144,14 @@ pub const State = struct {
     enabled_layouts:     [4]Layout,
     enabled_layouts_len: u8,
 
-    /// Per-workspace geometry validity bitmask (64 bits -> up to 64 workspaces).
+    /// Per-workspace geometry validity set (unbounded, heap-backed).
     ///
     /// Bit N is set when workspace N's geometry has been pre-computed and the
     /// cache holds correct on-screen positions for all its windows.
     ///
     /// Cleared by: addWindow, removeWindow, adjustMasterWidth, syncLayoutFromWorkspace.
     /// Set by the retile call that immediately follows each of those.
-    ws_geom_valid:    u64,
+    ws_geom_valid:    std.DynamicBitSet,
 
     /// Screen area used in the most recent retile call. restoreWorkspaceGeom
     /// rejects the cache when this differs from the current area (e.g. after a
@@ -193,6 +191,7 @@ pub const State = struct {
     pub fn deinit(self: *State) void {
         self.windows.deinit();
         self.cache.deinit(self.allocator);
+        self.ws_geom_valid.deinit();
         self.allocator.free(self.retile_lens);
         self.allocator.free(self.retile_wins);
         self.allocator.free(self.scratch_rects);
@@ -297,7 +296,7 @@ fn buildState(reuse_scratch: ?ScratchBuffers) !State {
         .border_unfocused = core.config.tiling.border_unfocused,
         .windows          = .{ .allocator = alloc },
         .dirty            = false,
-        .ws_geom_valid    = 0,
+        .ws_geom_valid    = try std.DynamicBitSet.initEmpty(alloc, max_ws),
         .last_retile_screen = ZERO_RECT,
         .cache            = .{},
         .max_ws_windows   = max_ws_windows,
@@ -343,11 +342,13 @@ pub fn reloadConfig() void {
         .retile_wins   = s.retile_wins,
         .retile_lens   = s.retile_lens,
     };
+    var old_ws_geom_valid = s.ws_geom_valid;
 
     var new_state = buildState(saved_scratch) catch |err| {
         // buildState failed before overwriting g_state — restore what we saved.
         s.cache   = saved_cache;
         s.windows = saved_windows;
+        s.ws_geom_valid = old_ws_geom_valid;
         debug.err("tiling: out of memory during reload: {}", .{err});
         return;
     };
@@ -357,6 +358,7 @@ pub fn reloadConfig() void {
     new_state.cache   = saved_cache;
 
     g_state = new_state;
+    old_ws_geom_valid.deinit();
     const ns = &g_state;
 
     // Reset all workspace layouts and master widths to the new config defaults
@@ -404,7 +406,7 @@ pub fn addWindow(window_id: u32) void {
     if (workspaces.getWorkspaceForWindow(window_id)) |ws_idx|
         invalidateWsGeomBit(@intCast(ws_idx))
     else
-        s.ws_geom_valid = 0;
+        s.ws_geom_valid.setRangeValue(.{ .start = 0, .end = s.ws_geom_valid.capacity() }, false);
 
     const border_color = s.borderColor(window_id);
     _ = xcb.xcb_change_window_attributes(core.conn, window_id,
@@ -426,7 +428,7 @@ pub fn removeWindow(window_id: u32) void {
         if (workspaces.getWorkspaceForWindow(window_id)) |ws_idx|
             invalidateWsGeomBit(@intCast(ws_idx))
         else
-            s.ws_geom_valid = 0;
+            s.ws_geom_valid.setRangeValue(.{ .start = 0, .end = s.ws_geom_valid.capacity() }, false);
         _ = s.cache.remove(window_id);
     }
 }
@@ -568,7 +570,7 @@ pub fn invalidateGeomCache(window_id: u32) void {
 /// for an inactive workspace without touching the current one.
 pub inline fn invalidateWsGeomBit(ws_idx: u8) void {
     const s = getState();
-    if (ws_idx < s.max_ws) s.ws_geom_valid &= ~wsBit(ws_idx);
+    if (ws_idx < s.ws_geom_valid.capacity()) s.ws_geom_valid.unset(ws_idx);
 }
 
 pub inline fn dirty() void {
@@ -587,8 +589,8 @@ pub fn restoreWorkspaceGeom() bool {
     if (ws_windows.len == 0) return true;
 
     const current_ws = workspaces.getCurrentWorkspace() orelse return false;
-    if (current_ws >= s.max_ws) return false;
-    if (s.ws_geom_valid & wsBit(current_ws) == 0) return false;
+    if (current_ws >= s.ws_geom_valid.capacity()) return false;
+    if (!s.ws_geom_valid.isSet(current_ws)) return false;
 
     const current_screen = calculateScreenArea();
     if (!layouts.rectsEqual(current_screen, s.last_retile_screen)) return false;
@@ -922,7 +924,7 @@ pub fn syncLayoutFromWorkspace(ws: *const workspaces.Workspace) void {
     }
     if (needs_retile) {
         s.dirty = true;
-        s.ws_geom_valid = 0;
+        s.ws_geom_valid.setRangeValue(.{ .start = 0, .end = s.ws_geom_valid.capacity() }, false);
     }
 }
 
@@ -967,11 +969,11 @@ pub fn adjustMasterWidth(delta: f32) void {
     }
     s.dirty = true;
     if (core.config.tiling.global_layout) {
-        s.ws_geom_valid = 0;
+        s.ws_geom_valid.setRangeValue(.{ .start = 0, .end = s.ws_geom_valid.capacity() }, false);
     } else if (workspaces.getCurrentWorkspace()) |ws_idx| {
         invalidateWsGeomBit(@intCast(ws_idx));
     } else {
-        s.ws_geom_valid = 0; // conservative fallback
+        s.ws_geom_valid.setRangeValue(.{ .start = 0, .end = s.ws_geom_valid.capacity() }, false); // conservative fallback
     }
     retileCurrentWorkspace();
 }
@@ -1013,7 +1015,11 @@ pub fn cycleLayoutVariation() void {
 }
 
 inline fn markWsGeomValid(s: *State, ws_idx: anytype) void {
-    if (ws_idx < s.max_ws) s.ws_geom_valid |= wsBit(ws_idx);
+    const idx: usize = @intCast(ws_idx);
+    if (idx >= s.ws_geom_valid.capacity()) {
+        s.ws_geom_valid.resize(idx + 1, false) catch return;
+    }
+    s.ws_geom_valid.set(idx);
 }
 
 // Collect windows belonging to the target workspace into buf.
