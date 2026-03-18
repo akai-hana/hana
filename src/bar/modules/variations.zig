@@ -34,9 +34,7 @@ pub fn getIndicator(s: *const tiling.State) []const u8 {
             .relaxed => "[~]",
         },
         .fibonacci => &s.fibonacci_indicator,
-        // Floating has no variations; this arm is unreachable in practice
-        // because draw() returns early when the layout is .floating.
-        .floating => "",
+        .floating => "NUL",
     };
 }
 
