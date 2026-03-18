@@ -8,7 +8,7 @@ const drawing = @import("drawing");
 const has_tiling = @import("build_options").has_tiling;
 const tiling = if (has_tiling) @import("tiling") else struct {
     pub const State = struct {
-        layout: enum { master, monocle, grid, fibonacci } = .master,
+        layout: enum { master, monocle, grid, fibonacci, floating } = .master,
         layout_variations: struct {
             master:  enum { lifo, fifo }          = .lifo,
             monocle: enum { gapless, gaps }        = .gapless,
@@ -34,11 +34,16 @@ pub fn getIndicator(s: *const tiling.State) []const u8 {
             .relaxed => "[~]",
         },
         .fibonacci => &s.fibonacci_indicator,
+        // Floating has no variations; this arm is unreachable in practice
+        // because draw() returns early when the layout is .floating.
+        .floating => "",
     };
 }
 
 pub fn draw(dc: *drawing.DrawContext, config: core.BarConfig, height: u16, start_x: u16) !u16 {
     const t_state = tiling.getStateOpt() orelse return start_x;
+    // Floating layout has no variation indicator — hide this segment entirely.
+    if (t_state.layout == .floating) return start_x;
     const indicator = getIndicator(t_state);
     return dc.drawSegment(start_x, height, indicator, config.scaledSegmentPadding(height), config.bg, config.fg);
 }

@@ -184,27 +184,27 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !core.Config {
     const xdg_config_home = std.c.getenv("XDG_CONFIG_HOME");
     const config_home     = if (xdg_config_home) |ch|
         std.mem.span(ch)
-    else
-        try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
-    defer if (xdg_config_home == null) allocator.free(config_home);
-    const xdg_dir = try std.fs.path.join(allocator, &.{ config_home, "hana" });
-    defer allocator.free(xdg_dir);
-    if (loadConfigFromDir(allocator, xdg_dir)) |cfg| return cfg else |_| {}
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    _ = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse return error.CurrentWorkingDirectoryUnlinked;
-    const cwd = try allocator.dupe(u8, std.mem.sliceTo(&cwd_buf, 0));
-    defer allocator.free(cwd);
-    const local_dir = try std.fs.path.join(allocator, &.{ cwd, "config" });
-    defer allocator.free(local_dir);
-    if (loadConfigFromDir(allocator, local_dir)) |cfg| return cfg else |_| {}
-    const xdg_path = try std.fs.path.join(allocator, &.{ xdg_dir, "config.toml" });
-    defer allocator.free(xdg_path);
-    if (loadConfig(allocator, xdg_path)) |cfg| return cfg else |_| {}
-    const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
-    defer allocator.free(local);
-    if (loadConfig(allocator, local)) |cfg| return cfg else |_| {}
-    debug.info("No config found, using fallback with auto-detection", .{});
-    return try loadFallbackConfig(allocator);
+        else
+            try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
+        defer if (xdg_config_home == null) allocator.free(config_home);
+        const xdg_dir = try std.fs.path.join(allocator, &.{ config_home, "hana" });
+        defer allocator.free(xdg_dir);
+        if (loadConfigFromDir(allocator, xdg_dir)) |cfg| return cfg else |_| {}
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        _ = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse return error.CurrentWorkingDirectoryUnlinked;
+        const cwd = try allocator.dupe(u8, std.mem.sliceTo(&cwd_buf, 0));
+        defer allocator.free(cwd);
+        const local_dir = try std.fs.path.join(allocator, &.{ cwd, "config" });
+        defer allocator.free(local_dir);
+        if (loadConfigFromDir(allocator, local_dir)) |cfg| return cfg else |_| {}
+        const xdg_path = try std.fs.path.join(allocator, &.{ xdg_dir, "config.toml" });
+        defer allocator.free(xdg_path);
+        if (loadConfig(allocator, xdg_path)) |cfg| return cfg else |_| {}
+        const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
+        defer allocator.free(local);
+        if (loadConfig(allocator, local)) |cfg| return cfg else |_| {}
+        debug.info("No config found, using fallback with auto-detection", .{});
+        return try loadFallbackConfig(allocator);
 }
 
 /// Reads, parses, and returns the config at `path` (single-file entry point).
@@ -327,8 +327,8 @@ const ACTION_MAP = std.StaticStringMap(core.Action).initComptime(.{
     .{ "unminimize_all",         .unminimize_all         },
     .{ "cycle_layout_variation", .cycle_layout_variation },
     .{ "cycle_variation",        .cycle_layout_variation },
-    .{ "prompt_toggle",          .prompt_toggle            },
-    .{ "drun",                   .prompt_toggle            },
+    .{ "prompt_toggle",          .prompt_toggle          },
+    .{ "drun",                   .prompt_toggle          },
     .{ "toggle_float",           .toggle_float           },
     .{ "float",                  .toggle_float           },
 });
@@ -373,7 +373,7 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
             var c = t[0];
             const end = t[2];
             while (c <= end) : (c += 1)
-                try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, c, suffix }));
+                                try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, c, suffix }));
         } else {
             try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ prefix, t, suffix }));
         }
@@ -398,19 +398,19 @@ const WORKSPACE_ACTION_BASES = std.StaticStringMap(void).initComptime(.{
 fn resolveAndParseAction(allocator: std.mem.Allocator, cmd: []const u8, ws_idx: u8, kill_placeholder: ?[]const u8) !core.Action {
     const ws_str: ?[]u8 = if (ws_idx > 0 and WORKSPACE_ACTION_BASES.has(cmd))
         try std.fmt.allocPrint(allocator, "{s}_{d}", .{ cmd, ws_idx })
-    else
-        null;
-    defer if (ws_str) |s| allocator.free(s);
-    const after_ws = ws_str orelse cmd;
-    const final: []const u8 = if (kill_placeholder) |kp|
-        if (std.mem.indexOf(u8, after_ws, "{kill}") != null)
-            try std.mem.replaceOwned(u8, allocator, after_ws, "{kill}", kp)
         else
-            after_ws
-    else
-        after_ws;
-    defer if (final.ptr != after_ws.ptr) allocator.free(final);
-    return try parseAction(allocator, final);
+            null;
+        defer if (ws_str) |s| allocator.free(s);
+        const after_ws = ws_str orelse cmd;
+        const final: []const u8 = if (kill_placeholder) |kp|
+            if (std.mem.indexOf(u8, after_ws, "{kill}") != null)
+                try std.mem.replaceOwned(u8, allocator, after_ws, "{kill}", kp)
+            else
+                after_ws
+                    else
+                        after_ws;
+                    defer if (final.ptr != after_ws.ptr) allocator.free(final);
+                    return try parseAction(allocator, final);
 }
 
 fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *core.Config) !void {
@@ -432,47 +432,47 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, c
                     try std.fmt.allocPrint(allocator, "{s}+{s}", .{ mod, ge.key["Mod+".len..] })
                 else
                     ge.key
-            else
-                ge.key;
-            defer if (keybind_str.ptr != ge.key.ptr) allocator.free(keybind_str);
-            const action: core.Action = act: {
-                if (entry.value_ptr.*.asArray()) |arr| {
-                    var acts: std.ArrayList(core.Action) = .empty;
-                    errdefer {
-                        for (acts.items) |*a| a.deinit(allocator);
-                        acts.deinit(allocator);
-                    }
-                    for (arr) |elem| {
-                        const cmd = elem.asString() orelse continue;
-                        try acts.append(allocator, try resolveAndParseAction(allocator, cmd, ge.ws_idx, kill_placeholder));
-                    }
-                    if (acts.items.len == 0) { acts.deinit(allocator); continue; }
-                    if (acts.items.len == 1) {
-                        const only = acts.items[0];
-                        acts.deinit(allocator);
-                        break :act only;
-                    }
-                    break :act .{ .sequence = try acts.toOwnedSlice(allocator) };
-                } else if (entry.value_ptr.*.asString()) |command| {
-                    break :act try resolveAndParseAction(allocator, command, ge.ws_idx, kill_placeholder);
-                } else continue;
-            };
-            const bind = parseBindString(keybind_str) catch |err| {
-                debug.warn("Failed to parse keybind '{s}': {}", .{ keybind_str, err });
-                continue;
-            };
-            switch (bind) {
-                .mouse => |mb| try cfg.mouse_bindings.append(allocator, .{
-                    .modifiers = mb.modifiers,
-                    .button    = mb.button,
-                    .action    = action,
-                }),
-                .keyboard => |kb| try cfg.keybindings.append(allocator, .{
-                    .modifiers = kb.modifiers,
-                    .keysym    = kb.keysym,
-                    .action    = action,
-                }),
-            }
+                        else
+                            ge.key;
+                        defer if (keybind_str.ptr != ge.key.ptr) allocator.free(keybind_str);
+                        const action: core.Action = act: {
+                            if (entry.value_ptr.*.asArray()) |arr| {
+                                var acts: std.ArrayList(core.Action) = .empty;
+                                errdefer {
+                                    for (acts.items) |*a| a.deinit(allocator);
+                                    acts.deinit(allocator);
+                                }
+                                for (arr) |elem| {
+                                    const cmd = elem.asString() orelse continue;
+                                    try acts.append(allocator, try resolveAndParseAction(allocator, cmd, ge.ws_idx, kill_placeholder));
+                                }
+                                if (acts.items.len == 0) { acts.deinit(allocator); continue; }
+                                if (acts.items.len == 1) {
+                                    const only = acts.items[0];
+                                    acts.deinit(allocator);
+                                    break :act only;
+                                }
+                                break :act .{ .sequence = try acts.toOwnedSlice(allocator) };
+                            } else if (entry.value_ptr.*.asString()) |command| {
+                                break :act try resolveAndParseAction(allocator, command, ge.ws_idx, kill_placeholder);
+                            } else continue;
+                        };
+                        const bind = parseBindString(keybind_str) catch |err| {
+                            debug.warn("Failed to parse keybind '{s}': {}", .{ keybind_str, err });
+                            continue;
+                        };
+                        switch (bind) {
+                            .mouse => |mb| try cfg.mouse_bindings.append(allocator, .{
+                                .modifiers = mb.modifiers,
+                                .button    = mb.button,
+                                .action    = action,
+                            }),
+                            .keyboard => |kb| try cfg.keybindings.append(allocator, .{
+                                .modifiers = kb.modifiers,
+                                .keysym    = kb.keysym,
+                                .action    = action,
+                            }),
+                        }
         }
     }
 }
@@ -588,14 +588,15 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
     }
 
     const aesthetic_src = doc.getSection("tiling.aesthetics") orelse section;
-    cfg.tiling.gap_width    = aesthetic_src.getScalable("gap_width")    orelse parser.ScalableValue.absolute(10.0);
+
+    cfg.tiling.gap_width = aesthetic_src.getScalable("gap_width")    orelse parser.ScalableValue.absolute(10.0);
     cfg.tiling.border_width = aesthetic_src.getScalable("border_width") orelse parser.ScalableValue.absolute(2.0);
-    cfg.tiling.border_focused   = getColor(aesthetic_src, "border_focused",   0x5294E2);
+    cfg.tiling.border_focused = getColor(aesthetic_src, "border_focused",   0x5294E2);
     cfg.tiling.border_unfocused = getColor(aesthetic_src, "border_unfocused", 0x383C4A);
     const master_src = doc.getSection("tiling.layouts.master-stack") orelse section;
-    const dedicated  = master_src != section; // true when [tiling.layouts.master-stack] exists
+    const dedicated = master_src != section; // true when [tiling.layouts.master-stack] exists
     cfg.tiling.master_count = get(u8, master_src, if (dedicated) "count" else "master_count", 1, 1, null);
-    if (master_src.getString(if (dedicated) "side"  else "master_side"))  |s| cfg.tiling.master_side  = core.MasterSide.fromStringWithAlias(s) orelse .left;
+    if (master_src.getString(if (dedicated) "side"  else "master_side"))  |s| cfg.tiling.master_side = core.MasterSide.fromStringWithAlias(s) orelse .left;
     cfg.tiling.master_width = master_src.getScalable(if (dedicated) "width" else "master_width") orelse parser.ScalableValue.percentage(50.0);
     parseTilingVariations(doc, cfg);
     cfg.tiling.global_layout = get(bool, section, "global_layout", false, null, null);
@@ -682,9 +683,9 @@ fn parseLayoutVariation(layout_name: []const u8, variation_str: []const u8) ?cor
     if (layout_name.len > buf.len) return null;
     const lower_layout = std.ascii.lowerString(buf[0..layout_name.len], layout_name);
     const typed_layouts = .{
-        .{ "master-stack", core.MasterVariation,  "master"   },
-        .{ "monocle",      core.MonocleVariation, "monocle"  },
-        .{ "grid",         core.GridVariation,    "grid"     },
+        .{ "master-stack", core.MasterVariation,  "master"  },
+        .{ "monocle",      core.MonocleVariation, "monocle" },
+        .{ "grid",         core.GridVariation,    "grid"    },
     };
     inline for (typed_layouts) |entry| {
         if (std.mem.eql(u8, lower_layout, entry[0])) {
@@ -847,10 +848,10 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *cor
     if (section.get("indicator_padding")) |val| {
         const f: f32 = if (val.asScalable()) |sv|
             if (sv.is_percentage) sv.value / 100.0 else sv.value
-        else if (val.asInt()) |i|
-            @as(f32, @floatFromInt(i)) / 100.0
-        else
-            0.1;
+            else if (val.asInt()) |i|
+                @as(f32, @floatFromInt(i)) / 100.0
+            else
+                0.1;
         cfg.bar.indicator_padding = std.math.clamp(f, 0.0, 1.0);
     }
     // indicator_focused/unfocused: if only one is set, the other mirrors it.
@@ -880,9 +881,9 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *cor
     };
     inline for (ACCENT_FIELDS) |f|
         @field(cfg.bar, f.field) = if (colors) |c|
-            getColor(c, f.key, @field(cfg.bar, f.fallback))
-        else
-            @field(cfg.bar, f.fallback);
+        getColor(c, f.key, @field(cfg.bar, f.fallback))
+    else
+        @field(cfg.bar, f.fallback);
     if (colors) |c| {
         if (c.get("drun_bg"))           |_| cfg.bar.drun_bg           = getColor(c, "drun_bg",           cfg.bar.bg);
         if (c.get("drun_fg"))           |_| cfg.bar.drun_fg           = getColor(c, "drun_fg",           cfg.bar.fg);
@@ -891,10 +892,10 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *cor
     // Carousel: enabled flag, scroll_speed (px/s, min 1), carousel_refresh_rate (Hz, 0 = auto-detect via RandR).
     carousel.setCarouselEnabled(get(bool, section, "carousel_enabled", true, null, null));
     carousel.setScrollSpeed(@as(f64, @floatFromInt(
-        get(u16, section, "scroll_speed", 125, 1, null)
+                get(u16, section, "scroll_speed", 125, 1, null)
     )));
     carousel.setRefreshRateOverride(@as(f64, @floatFromInt(
-        get(u16, section, "carousel_refresh_rate", 0, null, null)
+                get(u16, section, "carousel_refresh_rate", 0, null, null)
     )));
 }
 
@@ -980,14 +981,14 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *c
         const name   = entry.key_ptr.*;
         const ws_str = if (std.mem.startsWith(u8, name, "workspace.rules."))
             name["workspace.rules.".len..]
-        else if (std.mem.startsWith(u8, name, "rules."))
-            name["rules.".len..]
-        else
-            continue;
-        const ws_num = std.fmt.parseInt(usize, ws_str, 10) catch continue;
-        if (!validateWorkspace(ws_num, cfg.workspaces.count, name)) continue;
-        var iter = entry.value_ptr.pairs.iterator();
-        while (iter.next()) |class_entry|
-            try addRule(allocator, cfg, class_entry.key_ptr.*, ws_num);
+            else if (std.mem.startsWith(u8, name, "rules."))
+                name["rules.".len..]
+                    else
+                        continue;
+                    const ws_num = std.fmt.parseInt(usize, ws_str, 10) catch continue;
+                    if (!validateWorkspace(ws_num, cfg.workspaces.count, name)) continue;
+                    var iter = entry.value_ptr.pairs.iterator();
+                    while (iter.next()) |class_entry|
+                        try addRule(allocator, cfg, class_entry.key_ptr.*, ws_num);
     }
 }
