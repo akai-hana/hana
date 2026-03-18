@@ -49,7 +49,7 @@ pub const Layout = enum {
     grid,
     fibonacci,
     /// Windows are left at their current positions; no tiling is applied.
-    /// Entered and exited via toggleTiling(); never part of the normal cycle.
+    /// Entered and exited via toggleFloating(); never part of the normal cycle.
     floating,
 };
 
@@ -140,7 +140,7 @@ pub const State = struct {
     enabled:          bool,
     layout:           Layout,
     /// The layout active before floating mode was entered.
-    /// Restored by toggleTiling() when switching back from floating.
+    /// Restored by toggleFloating() when switching back from floating.
     /// Defaults to the first entry in LAYOUT_CYCLE.
     prev_layout:      Layout,
     layout_variations: LayoutVariations,
@@ -905,7 +905,7 @@ pub fn swapWithMasterFocusSwap() void {
 ///
 /// When floating is active: restores the layout that was active before
 /// floating was entered and triggers a full retile.
-pub fn toggleTiling() void {
+pub fn toggleFloating() void {
     const s = getState();
     if (s.layout == .floating) {
         // Exit floating — restore the saved layout and retile.
@@ -960,8 +960,10 @@ fn applyLayout(s: *State, layout: Layout) void {
     // so that switching workspaces and back does not resurrect floating mode.
     if (layout != .floating and !core.config.tiling.global_layout)
         if (workspaces.getCurrentWorkspaceObject()) |ws| { ws.layout = layout; };
-    retileCurrentWorkspace();
-    bar.scheduleRedraw();
+    // Entering floating: leave windows exactly where the tiler placed them.
+    // Exiting floating (or cycling tiling layouts): retile to apply new geometry.
+    if (layout != .floating) retileCurrentWorkspace();
+    bar.scheduleFullRedraw();
     debug.info("Layout: {s}", .{@tagName(layout)});
 }
 

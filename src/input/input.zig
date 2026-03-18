@@ -257,7 +257,7 @@ fn executeAction(action: *const core.Action) !void {
         .exec                   => |cmd| try executeShellCommand(cmd),
         .dump_state             => dumpState(),
 
-        .toggle_tiling          => if (comptime build_options.has_tiling) tiling.toggleTiling(),
+        .toggle_floating         => if (comptime build_options.has_tiling) tiling.toggleFloating(),
         .toggle_float           => { if (comptime build_options.has_tiling) { if (focus.getFocused()) |win| tiling.toggleWindowFloat(win); } },
         .toggle_layout          => { if (comptime build_options.has_tiling) { tiling.toggleLayout();        bar.scheduleRedraw(); } },
         .toggle_layout_reverse  => { if (comptime build_options.has_tiling) { tiling.toggleLayoutReverse(); bar.scheduleRedraw(); } },

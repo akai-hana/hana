@@ -839,6 +839,15 @@ pub fn isBarInitialized() bool    { return state != null; }
 pub fn hasClockSegment() bool     { return if (state) |s| s.has_clock_segment else false; }
 /// Schedules a full bar redraw, coalesced via updateIfDirty. Zero X11 I/O on caller.
 pub fn scheduleRedraw() void        { if (state) |s| if (s.visible) s.setDirty(); }
+/// Like scheduleRedraw but forces a full bar clear+redraw regardless of dirty flags.
+/// Use when a segment's presence or width changes (e.g. layout switch) so stale
+/// pixels from the previous render are guaranteed to be erased.
+pub fn scheduleFullRedraw() void {
+    if (state) |s| if (s.visible) {
+        g_channel.force_dirty_all = true;
+        s.setDirty();
+    };
+}
 pub fn isVisible() bool             { return if (state) |s| s.visible else false; }
 pub fn getGlobalVisibility() bool   { return if (state) |s| s.global_visible else false; }
 pub fn setGlobalVisibility(visible: bool) void { if (state) |s| s.global_visible = visible; }
