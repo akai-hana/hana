@@ -429,7 +429,7 @@ pub fn removeWindow(window_id: u32) void {
 /// Returns null when tiling is disabled or `win` is not in the tiling list.
 pub fn getWindowFilteredIndex(win: u32) ?usize {
     const s = getStateOpt() orelse return null;
-    if (!s.enabled or s.layout == .floating) return null;
+    if (!s.enabled) return null;
     // Only windows on the current workspace have a meaningful filtered index.
     // minimizeWindow always minimizes a focused window on the current workspace,
     // so this assertion documents and enforces the expected call-site contract.
@@ -512,7 +512,7 @@ fn moveWindowToFilteredSlot(s: *State, win: u32, target: usize) void {
 /// while the floating layout is active, since all windows are already unconstrained.
 pub fn toggleWindowFloat(window_id: u32) void {
     const s = getState();
-    if (!s.enabled or s.layout == .floating) return;
+    if (!s.enabled) return;
 
     if (s.windows.contains(window_id)) {
         removeWindow(window_id);
@@ -609,20 +609,16 @@ pub inline fn isFloatingLayout() bool {
     return s.layout == .floating;
 }
 
-/// Returns true only when the window is managed by the tiler AND the current
-/// layout is not the floating layout.  When floating, configure requests from
-/// windows must not be suppressed so they can move and resize themselves freely.
+/// Returns true only when tiling is *actively running* (runtime toggle on) AND
+/// the window is managed by the tiler. Use this in handleConfigureRequest instead
+/// of `core.config.tiling.enabled and isWindowTiled(win)` so that toggling tiling
+/// off at runtime actually frees applications to reposition themselves.
 pub inline fn isWindowActiveTiled(window_id: u32) bool {
     const s = getStateOpt() orelse return false;
-    return s.layout != .floating and s.windows.contains(window_id);
+    return s.enabled and s.windows.contains(window_id);
 }
 
 fn resolveLayout(s: *State, ws_state: ?*workspaces.State, ws_idx: u8, global: bool) Layout {
-    // Floating overrides everything: it is a global transient state that must
-    // not be bypassed by per-workspace layout resolution.  Without this guard
-    // the per-workspace branch below reads the workspace's stored tiling layout
-    // and returns it instead of .floating, causing the real engine to run.
-    if (s.layout == .floating) return .floating;
     if (global) return s.layout;
     const wss = ws_state orelse return s.layout;
     return if (ws_idx < wss.workspaces.len) wss.workspaces[ws_idx].layout else s.layout;
@@ -671,7 +667,7 @@ inline fn calculateScreenArea() utils.Rect {
 
 pub fn retileAllWorkspaces() void {
     const s = getState();
-    if (!s.enabled or s.layout == .floating) return;
+    if (!s.enabled) return;
 
     const screen     = calculateScreenArea();
     const ws_count   = workspaces.getWorkspaceCount();
@@ -716,18 +712,19 @@ pub fn retileAllWorkspaces() void {
 
 pub fn retileIfDirty() void {
     const s = getState();
-    if (!s.enabled or s.layout == .floating or !s.dirty) return;
+    if (!s.enabled or !s.dirty) return;
     retileCurrentWorkspace();
 }
 
 pub fn retileCurrentWorkspace() void {
     const s = getState();
-    if (!s.enabled or s.layout == .floating) {
-        // Tiling is disabled or floating: windows are either managed outside
-        // the layout engine (floating) or disabled entirely.  The workspace
-        // switcher still routes through here for restore, so replay the last
-        // known on-screen positions from cache without running the layout engine.
-        // restoreWorkspaceGeom is a no-op when the cache is missing or stale.
+    if (!s.enabled) {
+        // Tiling is disabled at runtime but windows are still tracked in
+        // s.windows.  The workspace switcher routes them through this function
+        // for restore, so we must bring them back to their last known on-screen
+        // positions via the geometry cache instead of running the layout engine.
+        // restoreWorkspaceGeom is a no-op when the cache is missing or stale,
+        // so there is no risk of clobbering an already-correct state.
         _ = restoreWorkspaceGeom();
         return;
     }
@@ -742,7 +739,7 @@ pub fn retileCurrentWorkspace() void {
 /// their on-screen positions.
 pub fn retileInactiveWorkspace(ws_idx: u8) void {
     const s = getState();
-    if (!s.enabled or s.layout == .floating) return;
+    if (!s.enabled) return;
 
     const ws_state = workspaces.getState() orelse return;
 
@@ -896,24 +893,35 @@ pub fn swapWithMasterFocusSwap() void {
 
 /// Toggle the floating layout.
 ///
-/// When tiling is active: saves the current layout in State.prev_layout,
-/// then switches to .floating.  The dispatch no-op in dispatchLayout means
-/// all windows stay at their current tiled positions, ready to be moved
-/// freely.  New windows opened while floating are still tracked so they are
-/// retiled correctly on exit.
+/// Entering floating: sets s.enabled = false so every existing !s.enabled
+/// guard throughout the codebase (retile*, addWindow, isWindowActiveTiled,
+/// the workspace-switch tiling block in workspaces.zig, etc.) fires
+/// automatically — no additional per-call floating checks needed.
+/// s.layout is set to .floating purely for bar display.
 ///
-/// When floating is active: restores the layout that was active before
-/// floating was entered and triggers a full retile.
+/// Exiting floating: re-enables the tiling engine, restores the correct
+/// layout (from the current workspace in per-workspace mode, or from
+/// prev_layout in global mode), and retiles.
 pub fn toggleFloating() void {
     const s = getState();
     if (s.layout == .floating) {
-        // Exit floating — restore the saved layout and retile.
-        applyLayout(s, s.prev_layout);
-        debug.info("Floating disabled, restored layout: {s}", .{@tagName(s.prev_layout)});
+        s.enabled = true;
+        // In per-workspace mode read the layout from the workspace we are
+        // currently on, so the bar stays correct even if the user switched
+        // workspaces while floating.  Fall back to prev_layout in global mode.
+        const restore: Layout = if (!core.config.tiling.global_layout)
+            if (workspaces.getCurrentWorkspaceObject()) |ws| ws.layout else s.prev_layout
+        else
+            s.prev_layout;
+        s.layout = restore;
+        retileCurrentWorkspace();
+        bar.scheduleFullRedraw();
+        debug.info("Floating disabled, restored layout: {s}", .{@tagName(restore)});
     } else {
-        // Enter floating — save current layout and switch to no-op.
         s.prev_layout = s.layout;
-        applyLayout(s, .floating);
+        s.layout      = .floating;
+        s.enabled     = false;
+        bar.scheduleFullRedraw();
         debug.info("Floating enabled (was: {s})", .{@tagName(s.prev_layout)});
     }
 }
@@ -921,17 +929,6 @@ pub fn toggleFloating() void {
 pub fn syncLayoutFromWorkspace(ws: *const workspaces.Workspace) void {
     const s = getState();
     const layout = ws.layout;
-
-    if (s.layout == .floating) {
-        // Floating mode is workspace-global and must not be interrupted by a
-        // workspace switch.  Record the incoming layout in prev_layout so that
-        // exiting floating restores the correct layout for the new workspace,
-        // but leave s.layout as .floating so the tiler stays a no-op.
-        s.prev_layout = layout;
-        if (ws.master_width) |mw| s.master_width = mw;
-        return;
-    }
-
     const needs_retile = s.layout != layout or ws.variation != null;
     s.layout = layout;
     // Apply the workspace-pinned master width when present; fall back to the
@@ -955,13 +952,9 @@ pub fn syncLayoutFromWorkspace(ws: *const workspaces.Workspace) void {
 
 fn applyLayout(s: *State, layout: Layout) void {
     s.layout = layout;
-    // .floating is a transient state — never persist it to the workspace slot
-    // so that switching workspaces and back does not resurrect floating mode.
-    if (layout != .floating and !core.config.tiling.global_layout)
+    if (!core.config.tiling.global_layout)
         if (workspaces.getCurrentWorkspaceObject()) |ws| { ws.layout = layout; };
-    // Entering floating: leave windows exactly where the tiler placed them.
-    // Exiting floating (or cycling tiling layouts): retile to apply new geometry.
-    if (layout != .floating) retileCurrentWorkspace();
+    retileCurrentWorkspace();
     bar.scheduleFullRedraw();
     debug.info("Layout: {s}", .{@tagName(layout)});
 }

@@ -50,15 +50,15 @@ const bar_flags = @import("bar_flags");
 
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 const build_options = @import("build_options");
-const drawing    = @import("drawing");
-const tiling     = if (build_options.has_tiling) @import("tiling") else struct {};
-const drag       = @import("drag");
-const utils      = @import("utils");
-const workspaces = @import("workspaces");
-const focus    = @import("focus");
-const constants  = @import("constants");
-const minimize   = @import("minimize");
-const dpi_mod    = @import("dpi");
+const drawing       = @import("drawing");
+const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
+const drag          = @import("drag");
+const utils         = @import("utils");
+const workspaces    = @import("workspaces");
+const focus         = @import("focus");
+const constants     = @import("constants");
+const minimize      = @import("minimize");
+const dpi_mod       = @import("dpi");
 
 const workspaces_segment = if (bar_flags.has_tags) @import("tags") else struct {
     pub fn draw(_: *drawing.DrawContext, _: core.BarConfig, _: u16, x: u16, _: u8, _: []const bool) !u16 { return x; }
