@@ -1,7 +1,7 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-when i switch to another tab inside my browser, from one that's long enough to trigger carousel mode to one that's short enough to fit statically, the carousel of the previous tab stops, but it stays stuck there for a bit, until 
+in floating layout, make windows spawn in the middle of the screen, not on the upper left corner.
 
 d$ and d^ motions don't work on the vim mode of the prompt. i don't know whether they're not implemented, or implemented wrongly. either way, these motions are not working, please fix or add support for these.
 
