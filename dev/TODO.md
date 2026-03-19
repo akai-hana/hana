@@ -1,6 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+when i switch to another tab inside my browser, from one that's long enough to trigger carousel mode to one that's short enough to fit statically, the carousel of the previous tab stops, but it stays stuck there for a bit, until 
+
 d$ and d^ motions don't work on the vim mode of the prompt. i don't know whether they're not implemented, or implemented wrongly. either way, these motions are not working, please fix or add support for these.
 
 when i write a long prompt that doesn't completely fit in the bar, and i enter normal mode, as i go towards the right, the ellipsis in view will move one char to the right, kind of clipping on the "[NORMAL]" indicator. as i go more to the right, a sort of tiny gap to the left of the selected character inside my cursor's box will be in view, something that doesn't happen anywhere else but as i go towards the right of a prompt text that doesn't completely fit inside the segment's view. can you please fix these two minor bugs?

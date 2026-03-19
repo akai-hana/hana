@@ -732,6 +732,26 @@ pub fn retileCurrentWorkspace() void {
     s.dirty = false;
 }
 
+/// Compute and apply tiled geometry for the current workspace without the
+/// !s.enabled guard.  Called by the workspace switcher when floating mode is
+/// active and the geometry cache is stale (it was zeroed when we last left this
+/// workspace while tiling was still active).  This restores correct tiled
+/// positions to the cache so the subsequent float-restore path in
+/// restoreWorkspaceWindows can use getWindowGeom instead of falling back to the
+/// default float position.
+///
+/// The layout is temporarily set to prev_layout for the duration of the retile
+/// so that resolveLayout dispatches the real tiling algorithm (not the floating
+/// no-op) and actually computes positions.
+pub fn retileForRestore() void {
+    const s = &g_state;
+    const saved = s.layout;
+    s.layout = s.prev_layout;
+    retile(calculateScreenArea(), null);
+    s.layout = saved;
+    s.dirty = false;
+}
+
 /// Retile a specific inactive workspace so its geometry cache is correct before
 /// the user switches to it.
 ///
