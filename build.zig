@@ -124,26 +124,15 @@ pub fn build(b: *std.Build) void {
         std.process.exit(1);
     };
 
+    // Layout flags: moved into build_options so they are accessible project-wide
+    // (e.g. input.zig can gate master-specific actions) rather than being confined
+    // to the tiling subsystem via the old layout_flags module.
+    build_options.addOption(bool, "has_master",    all_modules.contains("master"));
+    build_options.addOption(bool, "has_monocle",   all_modules.contains("monocle"));
+    build_options.addOption(bool, "has_grid",      all_modules.contains("grid"));
+    build_options.addOption(bool, "has_fibonacci", all_modules.contains("fibonacci"));
+
     const build_options_module = build_options.createModule();
-
-    const layout_flags_src = std.fmt.allocPrint(alloc,
-        \\pub const has_master    = {};
-        \\pub const has_monocle   = {};
-        \\pub const has_grid      = {};
-        \\pub const has_fibonacci = {};
-        \\
-    , .{
-        all_modules.contains("master"),
-        all_modules.contains("monocle"),
-        all_modules.contains("grid"),
-        all_modules.contains("fibonacci"),
-    }) catch @panic("OOM");
-
-    const layout_flags_module = b.createModule(.{
-        .root_source_file = b.addWriteFiles().add("layout_flags.zig", layout_flags_src),
-        .target   = target,
-        .optimize = optimize,
-    });
 
     const has_any_segment = all_modules.contains("tags")       or
                             all_modules.contains("layout")     or
@@ -178,11 +167,10 @@ pub fn build(b: *std.Build) void {
     });
 
     root_module.addImport("build_options", build_options_module);
-    root_module.addImport("layout_flags",  layout_flags_module);
     root_module.addImport("bar_flags",     bar_flags_module);
 
     wireModules(b, root_module, &all_modules,
-        build_options_module, layout_flags_module, bar_flags_module,
+        build_options_module, bar_flags_module,
         optimize, alloc);
 
     if (all_modules.get("defs")) |defs_entry| {
@@ -212,7 +200,6 @@ fn wireModules(
     root:                 *std.Build.Module,
     all_modules:          *std.StringHashMap(ModuleEntry),
     build_options_module: *std.Build.Module,
-    layout_flags_module:  *std.Build.Module,
     bar_flags_module:     *std.Build.Module,
     optimize:             std.builtin.OptimizeMode,
     allocator:            std.mem.Allocator,
@@ -223,7 +210,6 @@ fn wireModules(
         if (optimize != .Debug) mod.strip = true;
 
         mod.addImport("build_options", build_options_module);
-        mod.addImport("layout_flags",  layout_flags_module);
         mod.addImport("bar_flags",     bar_flags_module);
 
         const imports = findModuleImports(b, allocator, entry.value_ptr.source_path, all_modules);
