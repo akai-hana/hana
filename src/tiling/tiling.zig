@@ -911,6 +911,119 @@ pub fn swapWithMasterFocusSwap() void {
     if (other_win) |win| focus.setFocus(win, .tiling_operation);
 }
 
+/// Swap the on-screen positions of the currently focused window and the most
+/// recently previously focused window.
+///
+/// In tiling mode both windows exchange their slots in the tracking list so the
+/// layout engine places each one exactly where the other was — a true two-way
+/// swap rather than a move-to-master.  This is correct for every tiling layout
+/// (grid, master-stack, fibonacci, monocle, …).
+///
+/// In floating mode (layout == .floating or individually floated windows) there
+/// is no tracking-list order to manipulate, so the function exchanges the actual
+/// X11 geometries directly via configure_window and keeps the geometry cache in
+/// sync so workspace-switch restore sees the updated positions.
+pub fn swapFocusedWithPrevious() void {
+    const s = getState();
+    const focused = focus.getFocused() orelse return;
+    const history = focus.historyItems();
+    if (history.len == 0) return;
+    const prev = history[0];
+    if (prev == focused) return;
+
+    // Both windows must be on the current workspace.
+    if (!workspaces.isOnCurrentWorkspace(focused)) return;
+    if (!workspaces.isOnCurrentWorkspace(prev)) return;
+
+    const focused_tiled = s.enabled and s.windows.contains(focused);
+    const prev_tiled    = s.enabled and s.windows.contains(prev);
+
+    if (focused_tiled and prev_tiled) {
+        // Both are under tiler control: swap their positions in the tracking
+        // list so the next retile assigns each window to the other's cell.
+        const all = s.windows.items();
+        var idx_focused: ?usize = null;
+        var idx_prev:    ?usize = null;
+        for (all, 0..) |win, i| {
+            if (win == focused) idx_focused = i;
+            if (win == prev)    idx_prev    = i;
+            if (idx_focused != null and idx_prev != null) break;
+        }
+        const if_ = idx_focused orelse return;
+        const ip  = idx_prev    orelse return;
+        swapWindowsInList(s, if_, ip);
+        retileCurrentWorkspace();
+    } else {
+        // One or both windows are floating: exchange their on-screen geometries
+        // directly without touching the tiling list.
+        swapWindowGeometriesDirectly(s, focused, prev);
+        _ = xcb.xcb_flush(core.conn);
+    }
+}
+
+/// Swap the two elements at `idx_a` and `idx_b` inside the tracking list.
+/// Uses scratch_wins as a temporary buffer — same pattern as moveWindowToIndex.
+fn swapWindowsInList(s: *State, idx_a: usize, idx_b: usize) void {
+    if (idx_a == idx_b) return;
+    const current = s.windows.items();
+    if (current.len > s.scratch_wins.len) {
+        debug.warn("swapWindowsInList: too many windows ({})", .{current.len});
+        return;
+    }
+    @memcpy(s.scratch_wins[0..current.len], current);
+    const tmp               = s.scratch_wins[idx_a];
+    s.scratch_wins[idx_a]   = s.scratch_wins[idx_b];
+    s.scratch_wins[idx_b]   = tmp;
+    s.windows.reorder(s.scratch_wins[0..current.len]);
+}
+
+/// Query the current geometry of `win` from the X server.
+/// Returns null when the window no longer exists or the server returns an error.
+fn queryWindowRect(win: u32) ?utils.Rect {
+    const cookie = xcb.xcb_get_geometry(core.conn, win);
+    const reply  = xcb.xcb_get_geometry_reply(core.conn, cookie, null) orelse return null;
+    defer std.c.free(reply);
+    return .{
+        .x      = reply.*.x,
+        .y      = reply.*.y,
+        .width  = reply.*.width,
+        .height = reply.*.height,
+    };
+}
+
+/// Write `rect` into the geometry cache for `win`, allocating a fresh entry if
+/// one does not already exist.  Preserves the existing border color.
+fn updateCacheRect(s: *State, win: u32, rect: utils.Rect) void {
+    const gop = s.cache.getOrPut(s.allocator, win) catch return;
+    gop.value_ptr.rect = rect;
+    if (!gop.found_existing) gop.value_ptr.border = 0;
+}
+
+/// Exchange the on-screen positions of `win_a` and `win_b` by sending
+/// configure_window requests and updating the geometry cache.  Geometry is
+/// sourced from the cache when available; an XCB get_geometry round-trip is
+/// used as a fallback for windows that have never been through a retile pass
+/// (e.g. individually floated windows whose cache entry was evicted).
+fn swapWindowGeometriesDirectly(s: *State, win_a: u32, win_b: u32) void {
+    const rect_a: utils.Rect = blk: {
+        if (s.cache.get(win_a)) |wd| if (wd.hasValidRect()) break :blk wd.rect;
+        break :blk queryWindowRect(win_a) orelse return;
+    };
+    const rect_b: utils.Rect = blk: {
+        if (s.cache.get(win_b)) |wd| if (wd.hasValidRect()) break :blk wd.rect;
+        break :blk queryWindowRect(win_b) orelse return;
+    };
+
+    if (layouts.rectsEqual(rect_a, rect_b)) return; // nothing to do
+
+    utils.configureWindow(core.conn, win_a, rect_b);
+    utils.configureWindow(core.conn, win_b, rect_a);
+
+    // Keep the cache coherent so workspace-switch restore replays correct positions.
+    updateCacheRect(s, win_a, rect_b);
+    updateCacheRect(s, win_b, rect_a);
+}
+
 /// Toggle the floating layout.
 ///
 /// Entering floating: sets s.enabled = false so every existing !s.enabled
@@ -941,7 +1054,6 @@ pub fn toggleFloating() void {
         s.prev_layout = s.layout;
         s.layout      = .floating;
         s.enabled     = false;
-        bar.scheduleFullRedraw();
         debug.info("Floating enabled (was: {s})", .{@tagName(s.prev_layout)});
     }
 }
@@ -1001,7 +1113,9 @@ pub fn adjustMasterCount(delta: i8) void {
     retileCurrentWorkspace();
 }
 
-pub inline fn increaseMasterCount() void { adjustMasterCount( 1); }
+pub inline fn increaseMasterCount() void {
+    adjustMasterCount(1);
+}
 pub inline fn decreaseMasterCount() void { adjustMasterCount(-1); }
 
 pub fn adjustMasterWidth(delta: f32) void {
@@ -1054,7 +1168,6 @@ pub fn cycleLayoutVariation() void {
         },
     }
     retileCurrentWorkspace();
-    bar.scheduleRedraw();
 }
 
 inline fn markWsGeomValid(s: *State, ws_idx: anytype) void {

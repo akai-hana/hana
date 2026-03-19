@@ -334,7 +334,7 @@ pub fn enterFullscreen(win: u32, saved_geom: ?core.WindowGeometry) void {
     _ = xcb.xcb_flush(core.conn);
 }
 
-pub fn toggleFullscreen() void {
+pub fn toggle() void {
     const win        = focus.getFocused() orelse return;
     const current_ws = workspaces.getCurrentWorkspace() orelse return;
 
