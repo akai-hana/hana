@@ -466,15 +466,15 @@ pub fn addWindowAtFilteredIndex(win: u32, target_filtered_idx: usize) void {
 ///   When `from` lies after `to` no shift occurs.
 ///
 /// Example (global list [A B C D], workspace = all, target = 1 = "B's slot"):
-///   addWindow appended win W → [A B C D W], from_global = 4
-///   target window at filtered[1] = B → to_global = 1
-///   from(4) > to(1) → effective_to = 1, no shift
-///   moveWindowToIndex(4, 1) → [A W B C D]  ✓  filtered[1] = W
+///   addWindow appended win W -> [A B C D W], from_global = 4
+///   target window at filtered[1] = B -> to_global = 1
+///   from(4) > to(1) -> effective_to = 1, no shift
+///   moveWindowToIndex(4, 1) -> [A W B C D]  ✓  filtered[1] = W
 ///
-/// Example (FIFO: addFront prepended W → [W A B C D], from_global = 0):
-///   target window at filtered[1] = B → to_global = 2
-///   from(0) < to(2) → effective_to = 2 - 1 = 1
-///   moveWindowToIndex(0, 1) → [A W B C D]  ✓  filtered[1] = W
+/// Example (FIFO: addFront prepended W -> [W A B C D], from_global = 0):
+///   target window at filtered[1] = B -> to_global = 2
+///   from(0) < to(2) -> effective_to = 2 - 1 = 1
+///   moveWindowToIndex(0, 1) -> [A W B C D]  ✓  filtered[1] = W
 fn moveWindowToFilteredSlot(s: *State, win: u32, target: usize) void {
     const items = s.windows.items();
 

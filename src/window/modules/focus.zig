@@ -288,9 +288,9 @@ inline fn suppressionFor(reason: Reason, current: core.FocusSuppressReason) core
     // Without this, the sequence:
     //   setSuppressReason(.window_spawn)        ← fullscreen exit
     //   setFocus(win, .tiling_operation)         ← restores focus
-    //     → suppressionFor(.tiling_operation) returned .none
-    //     → g_suppress_reason clobbered to .none before the EnterNotify arrives
-    //     → spurious EnterNotify is no longer suppressed, focus goes to the wrong
+    //     -> suppressionFor(.tiling_operation) returned .none
+    //     -> g_suppress_reason clobbered to .none before the EnterNotify arrives
+    //     -> spurious EnterNotify is no longer suppressed, focus goes to the wrong
     //       window; or if setFocus hit the g_focused_window == win early-return,
     //       suppression was never cleared and all subsequent hover events are
     //       silently swallowed until the user clicks.

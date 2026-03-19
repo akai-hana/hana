@@ -577,7 +577,7 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
 // single field read and integer comparison — it short-circuits the entire chain
 // for the common case of a window re-entering while already focused (e.g. mouse
 // jitter). The original ordering ran `isOnCurrentWorkspace` first, which chains
-// through isValidManagedWindow → bar.isBarWindow + getWorkspaceForWindow on
+// through isValidManagedWindow -> bar.isBarWindow + getWorkspaceForWindow on
 // every enter/leave event before reaching the cheapest possible check.
 inline fn maybeFocusWindow(win: u32) void {
     if (focus.getFocused() == win) return;

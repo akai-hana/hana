@@ -7,15 +7,15 @@ const builtin = @import("builtin");
 //
 // The Zig stdlib branches on `link_libc` to decide who owns getauxval:
 //
-//   link_libc = false  →  stdlib weakly exports its own getauxvalImpl.
+//   link_libc = false  ->  stdlib weakly exports its own getauxvalImpl.
 //                          Adding a second export here would trigger Zig's
 //                          compile-time "exported symbol collision" error.
 //
-//   link_libc = true   →  stdlib assumes libc supplies getauxval and emits
+//   link_libc = true   ->  stdlib assumes libc supplies getauxval and emits
 //                          *no* export of its own.  Old musl doesn't have it,
 //                          so we must provide a weak fallback ourselves.
 //
-// Weak linkage means a strong getauxval in libc (musl ≥ 1.1, glibc) wins at
+// Weak linkage means a strong getauxval in libc (musl >= 1.1, glibc) wins at
 // link time; the stub is only used when libc has no definition.  Returning 0
 // safely disables the VDSO fast-path — syscalls fall back to the normal kernel
 // entry point, which is correct and only marginally slower.
@@ -31,7 +31,7 @@ comptime {
 /// Root source directory. Change this one constant to relocate the entire source tree.
 const ROOT_DIR = "src/";
 
-// ── Optional subsystems ───────────────────────────────────────────────────────
+// Optional subsystems
 // To make any module or directory optional, add one entry here and guard its
 // usage in source with a comptime conditional import:
 //
@@ -51,7 +51,7 @@ const OptionalSubsystem = struct {
     gate_dir:    ?[]const u8 = null,
 };
 
-// ▼ Add new optional subsystems here ▼
+// Add new optional subsystems here
 const optional_subsystems = [_]OptionalSubsystem{
     .{
         .name        = "bar",
@@ -109,17 +109,13 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
-    if (optimize != .Debug) root_module.strip = true;
+    if (optimize == .ReleaseFast or optimize == .ReleaseSmall) root_module.strip = true;
 
     const exe = b.addExecutable(.{ .name = "hana", .root_module = root_module });
 
-    var arena = std.heap.ArenaAllocator.init(b.allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+    var all_modules = std.StringHashMap(ModuleEntry).init(b.allocator);
 
-    var all_modules = std.StringHashMap(ModuleEntry).init(alloc);
-
-    discoverModules(b, ROOT_DIR, target, optimize, alloc, &all_modules) catch |err| {
+    discoverModules(b, ROOT_DIR, target, optimize, b.allocator, &all_modules) catch |err| {
         std.debug.print("Fatal: failed to discover modules: {}\n", .{err});
         std.process.exit(1);
     };
@@ -141,7 +137,7 @@ pub fn build(b: *std.Build) void {
                             all_modules.contains("clock")      or
                             all_modules.contains("status");
 
-    const bar_flags_src = std.fmt.allocPrint(alloc,
+    const bar_flags_src = std.fmt.allocPrint(b.allocator,
         \\pub const has_tags        = {};
         \\pub const has_layout      = {};
         \\pub const has_variations  = {};
@@ -171,7 +167,7 @@ pub fn build(b: *std.Build) void {
 
     wireModules(b, root_module, &all_modules,
         build_options_module, bar_flags_module,
-        optimize, alloc);
+        optimize, b.allocator);
 
     if (all_modules.get("defs")) |defs_entry| {
         var it = all_modules.iterator();
@@ -207,7 +203,7 @@ fn wireModules(
     var iter = all_modules.iterator();
     while (iter.next()) |entry| {
         const mod = entry.value_ptr.module;
-        if (optimize != .Debug) mod.strip = true;
+        if (optimize == .ReleaseFast or optimize == .ReleaseSmall) mod.strip = true;
 
         mod.addImport("build_options", build_options_module);
         mod.addImport("bar_flags",     bar_flags_module);
@@ -232,11 +228,21 @@ fn findModuleImports(
         b.graph.io, source_path, allocator, .limited(1024 * 1024),
     ) catch return &.{};
 
-    var results: std.ArrayList([]const u8) = .empty;
+    var results: std.ArrayListUnmanaged([]const u8) = .empty;
     const needle = "@import(\"";
     var pos: usize = 0;
     while (std.mem.indexOf(u8, source[pos..], needle)) |rel| {
-        pos += rel + needle.len;
+        const abs = pos + rel;
+
+        // Skip if this @import is on a comment line.
+        const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..abs], '\n')) |n| n + 1 else 0;
+        const line_prefix = std.mem.trimStart(u8, source[line_start..abs], " \t");
+        if (std.mem.startsWith(u8, line_prefix, "//")) {
+            pos = abs + needle.len;
+            continue;
+        }
+
+        pos = abs + needle.len;
         const end = std.mem.indexOfScalar(u8, source[pos..], '"') orelse continue;
         const name = source[pos .. pos + end];
         pos += end + 1;
@@ -282,6 +288,8 @@ fn discoverModules(
     var iter = dir.iterate();
     while (try iter.next(b.graph.io)) |entry| {
         if (entry.kind == .directory) {
+            if (entry.name[0] == '.') continue;
+
             // Skip gated directories whose entry-point file is absent.
             const skip = blk: {
                 for (optional_subsystems) |sys| {

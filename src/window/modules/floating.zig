@@ -6,14 +6,14 @@
 //! retiles all tracked windows immediately.
 //!
 //! Interface
-//! ─────────
+//! 
 //! floating follows the same tileWithOffset interface as every other layout
 //! module.  Windows that have already been positioned (x or y ≠ 0) are left
 //! untouched.  Windows still at the X default origin (0, 0) — i.e. freshly
 //! spawned while floating was active — are centred on the screen.
 //!
 //! Prev-layout state
-//! ─────────────────
+//! 
 //! The layout to restore when floating is exited is stored in tiling.State
 //! (State.prev_layout) rather than here, so this module stays free of a
 //! circular dependency with tiling.zig.

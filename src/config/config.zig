@@ -339,7 +339,7 @@ const GlobEntry = struct {
     owned:  bool, // true when key was heap-allocated and must be freed by the caller
 };
 
-/// Expands `{…}` glob patterns in a keybind key (e.g. `Mod+{1-4,Q}` → 5 entries,
+/// Expands `{…}` glob patterns in a keybind key (e.g. `Mod+{1-4,Q}` -> 5 entries,
 /// comma-separated tokens and single-char ranges supported).  Workspace actions get a
 /// 1-based index appended; other actions are replicated unchanged.
 /// Returns a single unowned entry when no glob is present.
