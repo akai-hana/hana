@@ -9,9 +9,12 @@
 
 </div>
 
+> [!NOTE]
+> hana is on a very early development phase. it is already fully functioning, but some of the details mentioned in this `README.md` may only be planned features for now; a "`#TODO`" comment will be visible on such cases.
+
 ---
 
-### Quick anchor links
+### Quick anchors
 
 - [Installation](#Installation)
 <!-- TODO: documentation -->
@@ -27,11 +30,10 @@ It supports tiling/floating window management, and includes a bar/prompt integra
 
 It is designed with the objective to be comfortable to use, highly configurable and easily modifiable.
 
-> hana is on a very early development phase. it is already fully functioning, but some of the details mentioned in this `README.md` may only be planned features for now; a "`#TODO`" comment will be visible on such cases.
 
 ---
 
-hana's main strength is its ability to be molded like Play-Doh™ (not sponsored). <span style="color:blue">some *blue* text</span>
+hana's main strength is its ability to be molded like Play-Doh™ (not sponsored).
 
 In specific, hana's main offerings are the following:
 
@@ -60,6 +62,8 @@ src
 `core/`, `window/`, `config/` and `input/` are the four directory categories essential to hana's workings. `tiling/`, `bar/` and `debug/` are optional, and can be entirely removed if wished.
 
 On the first level of directories there's the essential files to that specific category. Some directories contain a `modules/` sub-directory, containing single-role files/directories that extend their category, modularly adding one feature each. This way, the user can choose to keep and discard any combination of modules at preference.
+
+`window/` includes a `window/management/`, sub-directory, where both `tiling/` and `floating/` can be found. Both are included by default, making hana a dynamic window manager. At minimum, either one of them must be included in order to compile hana. 
 
 `# TODO: mention codebase encapsulation`
 
@@ -114,28 +118,6 @@ zig build
 - xkbcommon (keyboard input handling library)
 
 `# TODO: maybe i missed some dependency. will revise later`
-
----
-
-# Status
-
-it'll be three months since i started developing hana. it is still very much on an alpha. Completely functional, minus some minor visual bugs, and a serious lack of polish on its config file and codebase.
-
-i'll keep working on this for the time being. expect a first stable release in, say, two more months? or three? hopefully so.
-
-
-
-
-
----
-
-## Codebase
-
-hana's codebase is distributed modularly, in individual files with a single responsibility each, sorted purely decoratively in (sub)directories; these serve no other purpose than organization, and hana will work in any set dir configuration: one could forgo dirs entirely and place all files directly in `src/` if they wanted to.
-
-Modules which are essential to hana working are placed inside `core/`. Any dirs outside it are non-essential, and can be entirely removed if wanted (one of tiling/floating, or just individual layouts; bar, or any of its widgets; inline command prompt, or just its vim mode; debugging).
-
-Don't like something in specific? Just remove it! As long as it's a non-essential module, hana is made to work with missing files. Alternatively, you can just disable them through the config.
 
 ---
 
