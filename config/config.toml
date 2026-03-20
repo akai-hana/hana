@@ -152,7 +152,7 @@ Mod+space       = "toggle_layout"          # Cycle layouts forward
 Mod+Shift+space = "toggle_layout_reverse"  # Cycle layouts backward
 Mod+Alt+space   = "cycle_layout_variation" # Cycle current layout's variation (Super+V)
 Mod+Tab         = "swap_focused_previous"  # Swap focused window with the previously focused window
-Mod+grave       = "prompt_toggle"
+Mod+grave       = "toggle_prompt"
 Mod+MiddleClick = "toggle_float"           # Toggle clicked window between tiled and floating
 
 # Layouts
@@ -169,7 +169,7 @@ Mod+{1-4,Q,W,E,R} = "workspace" #TODO: rename to "switch_to_workspace"
 
 ## Workspace window sending
 Mod+Shift+{1-4,Q,W,E,R} = "move_to_workspace"
-Mod+Alt+{1-4,Q,W,E,R} = "tag_toggle" #TODO: rename to toggle_to_workspace
+Mod+Alt+{1-4,Q,W,E,R} = "toggle_tag" #TODO: rename to toggle_to_workspace
 
 # Bar
 Mod+B       = "toggle_bar_visibility"  # shown/hidden
