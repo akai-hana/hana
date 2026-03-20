@@ -11,6 +11,96 @@
 
 ---
 
+### Quick anchor links
+
+- [Installation](#Installation)
+<!-- TODO: documentation -->
+
+---
+
+# About 花
+
+**hana** is an _(optionally)_ dynamic window manager for X11, written in Zig.
+
+It supports tiling/floating window management, and includes a bar/prompt integrated to the WM.
+<!-- TODO: do widgets, like volume -->
+
+It is designed with the objective to be comfortable to use, highly configurable and easily modifiable.
+
+> hana is on a very early development phase. it is already fully functioning, but some of the details mentioned in this `README.md` may only be planned features for now; a "`#TODO`" comment will be visible on such cases.
+
+---
+
+hana's main strength is its ability to be molded like Play-Doh™ (not sponsored). <span style="color:blue">some *blue* text</span>
+
+In specific, hana's main offerings are the following:
+
+## Architecture 
+
+hana counts with a modular codebase architecture, split into single-responsibility code files, written with the goal of being easily extendable and trimmable by any user.
+
+Don't want hana's bar? Simply remove `src/bar/`. Don't want tiling/floating? Remove `src/tiling/` or `src/window/modules/floating.zig`. Want the bar's command prompt, but without vim motions? Keep `src/bar/modules/prompt/prompt.zig` and remove `src/bar/modules/prompt/vim.zig`.
+
+By default, hana's codebase is categorized into directories and sub-directories, although these only serve a purely decorative function; the user is free to re-organize the files in any way they see fit.
+
+The main directory categories are: 
+
+```bash
+$ tree src -L 1
+src
+├── bar
+├── config
+├── core
+├── debug
+├── input
+├── tiling
+└── window
+```
+
+`core/`, `window/`, `config/` and `input/` are the four directory categories essential to hana's workings. `tiling/`, `bar/` and `debug/` are optional, and can be entirely removed if wished.
+
+On the first level of directories there's the essential files to that specific category. Some directories contain a `modules/` sub-directory, containing single-role files/directories that extend their category, modularly adding one feature each. This way, the user can choose to keep and discard any combination of modules at preference.
+
+`# TODO: mention codebase encapsulation`
+
+## Configuration
+
+hana has dedicated, hot-reloadable config files, written in TOML.
+
+Configuration can be self-contained on any arrangement of one or more `config/<any-name>.toml` file(s). By default, hana provides a configuration split into two segments: **functional** and **visual**.
+
+**Functional** configuration can be done through `config/config.toml`, while different **visual** configurations (both color palette and other visual details) can be written (also on TOML) and placed on `themes/`, then selected from the config. This means general behavior is separated from visual appearance, allowing different themes to be written and swapped around from the config, while retaining functional preferences, like tiling behavior, keybindings, workspace rules, etc.
+
+Selecting a file from the config simply merges the contents from that TOML file with `config/config.toml`. This means the user is free to divide their configuration into any layout of files they want: from one with an individual keybinds vocab file, color palette, visual aspects, tiling config, etc, to just placing everything inside this single `config.toml`.
+
+By default, hana ships a red theme, `config/themes/akai.toml`. When hana is ran, both TOML files' contents are joined, then read through with a custom config parser. This means it's very easy for a user to further divide the config into different files, or just place everything inside a single .toml file.
+
+hana automatically reads all `.toml` files inside `config/.`, meaning the name of the `.toml` file doesn't really matter. Likewise, multiple `.toml` files can be placed inside `config/.`, and they'll be joined automatically. Any sub-directories within `config/` are ignored, and instead must be manually joined through a `.toml` file in the `config/` level. This is in the case the user wants to store multiple TOML files but doesn't necessarily want to use all of them at the same time; think the previous example, of different themes that can be swapped around in the config.
+
+> BTW, pull requests with custom themes are very much welcome. :-)
+
+## Features
+
+Here's the full set of features/characteristics hana offers by default.
+
+- Various window layouts by default: master-stack, monocle, grid, fibonacci, floating
+- Per-window tiling/floating _(togglable AND configurable)_ `# TODO: configurable pending; togglable ready`
+- Fullscreening/Minimizing
+- Workspaces _(window tags, multi-workspace tagging)_
+- Per-program window rules `# TODO: not entirely done yet`
+- Per-workspace configurations & window rules `# TODO: no workspace-specific window rules yet`
+- Modular bar _(inspired by dwm)_
+- Various bar widgets _(workspace/layout indicators, window status, clock)_ `# TODO: Add system status, volume display & manager widgets`
+- Carousel 
+- Inline bar command prompt, vim-modal motions
+- TOML Config file & file joining _(split config across multiple files)_
+- Advanced binding: Ranged-key & array bindings, multi-action keybindings, keybind nesting
+- WM scaling across any display resolution `# TODO: working, but pending to finish/polish`
+
+
+---
+
+
 # Installation
 ```sh
 zig build
@@ -23,7 +113,7 @@ zig build
 - xcb-util-cursor (for custom cursor support)
 - xkbcommon (keyboard input handling library)
 
-`#TODO: maybe i missed some dependency. will revise later`
+`# TODO: maybe i missed some dependency. will revise later`
 
 ---
 
@@ -33,47 +123,9 @@ it'll be three months since i started developing hana. it is still very much on 
 
 i'll keep working on this for the time being. expect a first stable release in, say, two more months? or three? hopefully so.
 
----
 
-# About 花
 
-hana is a window manager for X11, written in Zig. It includes its own bar with an integrated inline command prompt.
 
-<!-- TODO: do widgets, like volume -->
-
-Functionality-wise, hana offers:
-
-- Tiling/floating window management
-- Various tiling layouts: master-stack, monocle, grid, fibonacci
-- Floating layout
-- Per-window floating/dragging
-- Fullscreening
-- Minimizing
-- Workspaces; window tags, multi-tagging
-- Per-program window rules
-- Per-workspace configurations & window rules
-- Modular bar
-- Various bar widgets (workspace/layout indicators, window status, clock) `# TODO: System status, volume display & manager`
-- Inline bar command prompt, vim-modal motions
-- TOML Config file & file joining
-- Visual ratios to root window
-- Ranged-key & array bindings, multi-action keybindings, keybind nesting
-
----
-
-## Configuration
-
-`# TODO: most of the information on this section isn't true (yet), and are instead planned features.`
-
-Functional configuration can be done through `config.toml`, while different visual configurations (both color palette and other visual details) can be written (also on TOML) and placed on `themes/`, then selected from the config. This means general behavior is separated from visual appearance, allowing different themes to be written and swapped around from the config, while retaining functional preferences, like tiling behavior, keybindings, workspace rules, etc.
-
-Selecting a file from the config simply merges the contents from that TOML file with `config/config.toml`. This means the user is free to divide their configuration into any layout of files they want: from one with an individual keybinds vocab file, color palette, visual aspects, tiling config, etc, to just placing everything inside this single `config.toml`.
-
-By default, hana ships a red theme, `config/themes/akai.toml`. When hana is ran, both TOML files' contents are joined, then read through with a custom config parser. This means it's very easy for a user to further divide the config into different files, or just place everything inside a single .toml file.
-
-hana automatically reads all `.toml` files inside `config/.`, meaning the name of the `.toml` file doesn't really matter. Likewise, multiple `.toml` files can be placed inside `config/.`, and they'll be joined automatically. Any sub-directories within `config/` are ignored, and instead must be manually joined through a `.toml` file in the `config/` level. This is in the case the user wants to store multiple TOML files but doesn't necessarily want to use all of them at the same time; think the previous example, of different themes that can be swapped around in the config.
-
-> BTW, pull requests with custom themes are very much welcome. :-)
 
 ---
 
