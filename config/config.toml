@@ -227,8 +227,8 @@ Mod+Shift+Escape = "emergency_recover" #TODO: remove. this is hacky and assumes 
 # ```
 
 [workspace.rules.1] # browser
+firefox
 Navigator
-Firefox
 
 [workspace.rules.2] # socials
 discord
