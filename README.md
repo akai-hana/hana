@@ -1,7 +1,7 @@
 <div align="center">
 
 # hana【花】
-###### A simple, light, and performant X11 window manager. 🪷
+###### An idyllic X11 Window Manager written in Zig.
 
 ![](https://raw.githubusercontent.com/akai-hana/assets/main/flower-banner.png)
 
