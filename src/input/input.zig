@@ -427,15 +427,12 @@ fn dumpState() void {
     debug.info("Total windows: {}",     .{win_count});
     debug.info("Suppress focus: {s}",   .{@tagName(focus.getSuppressReason())});
 
-    var maybe_fullscreen_it = fullscreen.perWorkspaceIterator();
-    var found_fullscreen = false;
-    if (maybe_fullscreen_it) |*it| {
-        while (it.next()) |entry| {
-            debug.info("Fullscreen on workspace {}: {x}", .{ entry.key_ptr.*, entry.value_ptr.window });
-            found_fullscreen = true;
+    fullscreen.forEachFullscreen(struct {
+        fn cb(ws: u8, info: fullscreen.FullscreenInfo) void {
+            debug.info("Fullscreen on workspace {}: {x}", .{ ws, info.window });
         }
-    }
-    if (!found_fullscreen) debug.info("Fullscreen: none", .{});
+    }.cb);
+    if (!fullscreen.hasAnyFullscreen()) debug.info("Fullscreen: none", .{});
     debug.info("Drag active: {}", .{drag.isDragging()});
 
     if (workspaces.getState()) |ws_state| {
