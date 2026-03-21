@@ -18,6 +18,7 @@ const xcb    = core.xcb;
 const input = @import("input");
 
 // window/
+const window     = @import("window");
 const focus      = @import("focus");
 const fullscreen = @import("fullscreen");
 const minimize   = @import("minimize");
@@ -144,7 +145,9 @@ fn initBar() void {
 /// Initializes all WM modules that require explicit lifecycle management.
 fn initModules() !void {
     fullscreen.init();
+    tiling.init();      // must precede workspaces.init(): workspaces.init() calls tiling.getState()
     workspaces.init();
+    window.init();      // populates atom cache required by handleMapRequest
     try minimize.init();
     try prompt.init(core.alloc, core.conn);
 }
@@ -154,6 +157,7 @@ fn deinitModules() void {
     // minimize state is owned by WM.deinit — no separate deinit here.
     prompt.deinit();
     workspaces.deinit();
+    tiling.deinit();
     fullscreen.deinit();
 }
 
