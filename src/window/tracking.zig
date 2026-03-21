@@ -15,11 +15,7 @@ pub const Tracking = struct {
     buf: [capacity]u32 = undefined,
     len: u8            = 0,
 
-    /// No allocator needed. Zero-initialise with `.{}` or `Tracking{}`.
-    pub fn init() Tracking {
-        return .{};
-    }
-
+    // No init needed — zero-initialise with `.{}` or `Tracking{}`.
     // No deinit — nothing to free.
 
     pub fn contains(self: *const Tracking, win: u32) bool {
@@ -87,13 +83,5 @@ pub const Tracking = struct {
 
     pub fn items(self: *const Tracking) []const u32 {
         return self.buf[0..self.len];
-    }
-
-    pub fn count(self: *const Tracking) usize {
-        return self.len;
-    }
-
-    pub fn isEmpty(self: *const Tracking) bool {
-        return self.len == 0;
     }
 };

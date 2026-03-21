@@ -49,8 +49,7 @@ const SpawnQueue = struct {
     }
 
     /// Removes the entry at index i, shifting later entries left, and returns
-    /// its workspace. Single write path for all removal sites — no caller
-    /// should touch self.len directly.
+    /// its workspace.
     fn consume(self: *SpawnQueue, i: usize) u8 {
         const ws = self.buf[i].workspace;
         std.mem.copyForwards(SpawnEntry, self.buf[i .. self.len - 1], self.buf[i + 1 .. self.len]);
@@ -179,13 +178,6 @@ fn findClassRuleWorkspace(win: u32) ?u8 {
     return findWorkspaceRuleByClass(cookie);
 }
 
-/// Delegates to SpawnQueue.consume so all removal sites share a single
-/// write path and no caller touches spawn_queue.len directly.
-inline fn consumeSpawnEntry(entries: []SpawnEntry, i: usize) u8 {
-    _ = entries; // slice is only for call-site readability; index is into spawn_queue.buf
-    return spawn_queue.consume(i);
-}
-
 /// Phase 2 of workspace resolution: matches the window against the spawn queue.
 /// Tries exact PID match, then daemon-mode (pid==0) match, then falls back to
 /// the oldest pending entry — the correct heuristic when an app re-execs or
@@ -207,14 +199,14 @@ fn findSpawnQueueWorkspace(c_net_wm_pid: ?xcb.xcb_get_property_cookie_t) ?u8 {
     // Exact PID match.
     if (win_pid != 0) {
         for (entries, 0..) |e, i| {
-            if (e.pid == win_pid) return consumeSpawnEntry(entries, i);
+            if (e.pid == win_pid) return spawn_queue.consume(i);
         }
     }
 
     // Daemon match (pid == 0 in both window and queue entry).
     if (win_pid == 0) {
         for (entries, 0..) |e, i| {
-            if (e.pid == 0) return consumeSpawnEntry(entries, i);
+            if (e.pid == 0) return spawn_queue.consume(i);
         }
     }
 
@@ -223,7 +215,7 @@ fn findSpawnQueueWorkspace(c_net_wm_pid: ?xcb.xcb_get_property_cookie_t) ?u8 {
     // The queue is provably non-empty here: this function is only entered when
     // c_net_wm_pid is non-null, which firePropertyCookies guarantees only when
     // spawn_queue.len > 0, and no branch above removes an entry without returning.
-    return consumeSpawnEntry(entries, 0);
+    return spawn_queue.consume(0);
 }
 
 /// Resolves the target workspace for a newly mapped window.
@@ -651,7 +643,7 @@ fn parseSizeHintsIntoCache(
     }
 
     if (comptime build_options.has_tiling)
-        tiling.cacheSizeHints(core.alloc, win, .{ .min_width = min_width, .min_height = min_height });
+        tiling.cacheSizeHints(win, .{ .min_width = min_width, .min_height = min_height });
 }
 
 // Window borders

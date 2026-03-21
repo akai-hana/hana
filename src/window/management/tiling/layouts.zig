@@ -1,6 +1,5 @@
 //! Common layout interface and utilities shared by all layout modules.
 
-const std = @import("std");
 const utils = @import("utils");
 const debug = @import("debug");
 const core = @import("core");
@@ -16,8 +15,6 @@ const xcb = core.xcb;
 // (10–80) make a HashMap's O(1) lookup theoretical rather than measurable:
 // a linear scan over a handful of cache lines is faster in practice and
 // carries zero allocation overhead, no deinit, and no partial-failure states.
-// The allocator parameter on cacheSizeHints / deinitSizeHintsCache is kept
-// for call-site API compatibility but is no longer used.
 
 pub const SizeHints = struct {
     min_width: u16 = 0,
@@ -29,7 +26,7 @@ const HintEntry = struct { win: u32, hints: SizeHints };
 var g_hints_buf: [MAX_HINT_ENTRIES]HintEntry = undefined;
 var g_hints_len: usize = 0;
 
-pub fn cacheSizeHints(_: std.mem.Allocator, win: u32, hints: SizeHints) void {
+pub fn cacheSizeHints(win: u32, hints: SizeHints) void {
     if (hints.min_width == 0 and hints.min_height == 0) return;
     // Update in-place when an entry already exists.
     for (g_hints_buf[0..g_hints_len]) |*e| {
@@ -53,10 +50,6 @@ pub fn evictSizeHints(win: u32) void {
         }
     }
 }
-
-/// No-op; retained for call-site API compatibility. The flat-array cache
-/// requires no heap allocation and therefore needs no teardown.
-pub fn deinitSizeHintsCache(_: std.mem.Allocator) void {}
 
 // Per-window combined cache entry
 //
@@ -97,6 +90,15 @@ pub const WindowData = struct {
 
 const CACHE_CAPACITY: usize = 256;
 
+// Overflow sentinel for getOrPut when the hard cap is exceeded.
+//
+// Returning a pointer to this throwaway slot lets every call-site proceed
+// without a null-check while guaranteeing no real cache entry is corrupted.
+// Writes to the sentinel are discarded on the next cache operation; the
+// affected window simply misses the dedup check and receives a redundant
+// configure_window on the next retile — an unconditionally correct outcome.
+var g_overflow_sentinel: WindowData = .{};
+
 pub const CacheMap = struct {
     const Entry = struct { win: u32, data: WindowData };
 
@@ -109,9 +111,10 @@ pub const CacheMap = struct {
     len: usize = 0,
 
     /// Locate the entry for `win`, creating one if absent. Always succeeds —
-    /// no allocator, no error union. When the buffer is full the last slot is
-    /// recycled and a debug error is logged; this is a hard-cap violation that
-    /// should never occur in normal use.
+    /// no allocator, no error union. When the buffer is full the write is
+    /// routed to a module-level sentinel (no live entry is corrupted) and a
+    /// debug error is logged; this is a hard-cap violation that should never
+    /// occur in normal use.
     pub fn getOrPut(self: *CacheMap, win: u32) GetOrPutResult {
         for (self.buf[0..self.len]) |*e| {
             if (e.win == win) return .{ .found_existing = true, .value_ptr = &e.data };
@@ -122,11 +125,14 @@ pub const CacheMap = struct {
             self.len += 1;
             return .{ .found_existing = false, .value_ptr = vp };
         }
-        // Hard cap exceeded: recycle the last slot rather than silently
-        // corrupting an unrelated entry or returning a dangling pointer.
-        debug.err("CacheMap: capacity exceeded, recycling slot for 0x{x}", .{win});
-        self.buf[CACHE_CAPACITY - 1] = .{ .win = win, .data = .{} };
-        return .{ .found_existing = false, .value_ptr = &self.buf[CACHE_CAPACITY - 1].data };
+        // Hard cap exceeded: route the write to the module-level sentinel so
+        // no live cache entry is corrupted.  The sentinel is reset on every
+        // overflow hit so stale data from a previous victim cannot leak.
+        // The affected window misses the dedup check and gets a redundant
+        // configure_window on the next retile — correct, just not optimal.
+        debug.err("CacheMap: capacity exceeded, dropping cache for 0x{x}", .{win});
+        g_overflow_sentinel = .{};
+        return .{ .found_existing = false, .value_ptr = &g_overflow_sentinel };
     }
 
     pub fn get(self: *const CacheMap, win: u32) ?WindowData {
@@ -154,9 +160,6 @@ pub const CacheMap = struct {
         }
     }
 
-    /// No-op; retained for call-site API compatibility.
-    pub fn deinit(_: *CacheMap, _: std.mem.Allocator) void {}
-
     /// Reset the cache to empty. The backing buffer is left untouched;
     /// only the fill counter is zeroed. O(1).
     pub fn clearRetainingCapacity(self: *CacheMap) void {
@@ -176,7 +179,6 @@ pub const LayoutCtx = struct {
     conn: *xcb.xcb_connection_t,
     /// Pointer into tiling.State.cache. Always non-null during a retile pass.
     cache: *CacheMap,
-    allocator: std.mem.Allocator,
 };
 
 /// Compares two Rects by value across all four fields.
