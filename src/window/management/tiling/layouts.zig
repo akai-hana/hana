@@ -12,41 +12,58 @@ const xcb = core.xcb;
 // configureSafe clamps every rect to stored minimums so terminals always
 // receive a geometry they can render.
 //
-// g_hints lives here as a module global rather than in tiling.State because
-// threading the allocator through evictSizeHints would require changes to
-// window.zig. The trade-off is that this map is not rebuilt on reloadConfig,
-// so cached hints persist across reloads (harmless in practice: hints are
-// window-level properties that do not change with config).
+// Implemented as a flat array with a linear scan. Realistic window counts
+// (10–80) make a HashMap's O(1) lookup theoretical rather than measurable:
+// a linear scan over a handful of cache lines is faster in practice and
+// carries zero allocation overhead, no deinit, and no partial-failure states.
+// The allocator parameter on cacheSizeHints / deinitSizeHintsCache is kept
+// for call-site API compatibility but is no longer used.
 
 pub const SizeHints = struct {
     min_width: u16 = 0,
     min_height: u16 = 0,
 };
 
-var g_hints: std.AutoHashMapUnmanaged(u32, SizeHints) = .{};
+const MAX_HINT_ENTRIES: usize = 256;
+const HintEntry = struct { win: u32, hints: SizeHints };
+var g_hints_buf: [MAX_HINT_ENTRIES]HintEntry = undefined;
+var g_hints_len: usize = 0;
 
-pub fn cacheSizeHints(allocator: std.mem.Allocator, win: u32, hints: SizeHints) void {
+pub fn cacheSizeHints(_: std.mem.Allocator, win: u32, hints: SizeHints) void {
     if (hints.min_width == 0 and hints.min_height == 0) return;
-    g_hints.put(allocator, win, hints) catch |err| {
-        debug.err("cacheSizeHints: failed to cache hints for 0x{x}: {}", .{ win, err });
-    };
+    // Update in-place when an entry already exists.
+    for (g_hints_buf[0..g_hints_len]) |*e| {
+        if (e.win == win) { e.hints = hints; return; }
+    }
+    if (g_hints_len >= MAX_HINT_ENTRIES) {
+        debug.err("cacheSizeHints: hint table full, dropping hints for 0x{x}", .{win});
+        return;
+    }
+    g_hints_buf[g_hints_len] = .{ .win = win, .hints = hints };
+    g_hints_len += 1;
 }
 
 pub fn evictSizeHints(win: u32) void {
-    _ = g_hints.remove(win);
+    for (g_hints_buf[0..g_hints_len], 0..) |e, i| {
+        if (e.win == win) {
+            // Swap-and-decrement: O(1), order-independent.
+            g_hints_buf[i] = g_hints_buf[g_hints_len - 1];
+            g_hints_len -= 1;
+            return;
+        }
+    }
 }
 
-/// Free the entire size-hints map. Call once at WM shutdown.
-pub fn deinitSizeHintsCache(allocator: std.mem.Allocator) void {
-    g_hints.deinit(allocator);
-}
+/// No-op; retained for call-site API compatibility. The flat-array cache
+/// requires no heap allocation and therefore needs no teardown.
+pub fn deinitSizeHintsCache(_: std.mem.Allocator) void {}
 
 // Per-window combined cache entry
 //
-// A single AutoHashMapUnmanaged keyed by window ID, storing both geometry and
-// border color. configureSafe writes only `.rect`; tiling.sendBorderColor
-// writes only `.border`. Both use getOrPut so a single hash probe handles
-// both the "found / skip if unchanged" and "insert" cases.
+// Stores the last-applied geometry and border color per window.
+// configureSafe writes only `.rect`; sendBorderColor writes only `.border`.
+// Both fields live in the same entry, located by a single linear scan, so
+// there is no "two write paths that must stay in sync" liability.
 
 pub const WindowData = struct {
     /// A zeroed rect is used as a sentinel for "not yet computed / stale cache
@@ -63,13 +80,97 @@ pub const WindowData = struct {
     }
 };
 
-pub const CacheMap = std.AutoHashMapUnmanaged(u32, WindowData);
+// Per-window geometry and border-color cache.
+//
+// Implemented as a fixed-size flat array with a linear scan.
+//
+// Why not AutoHashMap?
+//   n is bounded by open windows — realistic: 10–80; hard cap: CACHE_CAPACITY.
+//   At that scale a linear scan over contiguous memory is faster than a hash
+//   probe (cache locality beats asymptotic complexity). More importantly, the
+//   flat array eliminates every structural cost the HashMap carried:
+//     - No heap allocation; no deinit; no error path in getOrPut.
+//     - getOrPut is infallible: callers drop their `catch` blocks entirely.
+//     - reloadConfig reduces to clearRetainingCapacity() (sets len = 0).
+//     - No allocation-failure fallback paths that leave the cache partially
+//       populated.
+
+const CACHE_CAPACITY: usize = 256;
+
+pub const CacheMap = struct {
+    const Entry = struct { win: u32, data: WindowData };
+
+    pub const GetOrPutResult = struct {
+        found_existing: bool,
+        value_ptr: *WindowData,
+    };
+
+    buf: [CACHE_CAPACITY]Entry = undefined,
+    len: usize = 0,
+
+    /// Locate the entry for `win`, creating one if absent. Always succeeds —
+    /// no allocator, no error union. When the buffer is full the last slot is
+    /// recycled and a debug error is logged; this is a hard-cap violation that
+    /// should never occur in normal use.
+    pub fn getOrPut(self: *CacheMap, win: u32) GetOrPutResult {
+        for (self.buf[0..self.len]) |*e| {
+            if (e.win == win) return .{ .found_existing = true, .value_ptr = &e.data };
+        }
+        if (self.len < CACHE_CAPACITY) {
+            self.buf[self.len] = .{ .win = win, .data = .{} };
+            const vp = &self.buf[self.len].data;
+            self.len += 1;
+            return .{ .found_existing = false, .value_ptr = vp };
+        }
+        // Hard cap exceeded: recycle the last slot rather than silently
+        // corrupting an unrelated entry or returning a dangling pointer.
+        debug.err("CacheMap: capacity exceeded, recycling slot for 0x{x}", .{win});
+        self.buf[CACHE_CAPACITY - 1] = .{ .win = win, .data = .{} };
+        return .{ .found_existing = false, .value_ptr = &self.buf[CACHE_CAPACITY - 1].data };
+    }
+
+    pub fn get(self: *const CacheMap, win: u32) ?WindowData {
+        for (self.buf[0..self.len]) |e| {
+            if (e.win == win) return e.data;
+        }
+        return null;
+    }
+
+    pub fn getPtr(self: *CacheMap, win: u32) ?*WindowData {
+        for (self.buf[0..self.len]) |*e| {
+            if (e.win == win) return &e.data;
+        }
+        return null;
+    }
+
+    /// Swap-and-decrement removal: O(1), order-independent.
+    pub fn remove(self: *CacheMap, win: u32) void {
+        for (self.buf[0..self.len], 0..) |e, i| {
+            if (e.win == win) {
+                self.buf[i] = self.buf[self.len - 1];
+                self.len -= 1;
+                return;
+            }
+        }
+    }
+
+    /// No-op; retained for call-site API compatibility.
+    pub fn deinit(_: *CacheMap, _: std.mem.Allocator) void {}
+
+    /// Reset the cache to empty. The backing buffer is left untouched;
+    /// only the fill counter is zeroed. O(1).
+    pub fn clearRetainingCapacity(self: *CacheMap) void {
+        self.len = 0;
+    }
+};
 
 // Layout context
 //
 // Every layout module receives a *const LayoutCtx; configureSafe reads the
 // cache from it rather than from a module-level global, making the dependency
 // explicit and eliminating hidden call-site ordering requirements.
+// `allocator` is retained for layout modules that may need it; configureSafe
+// itself no longer requires one.
 
 pub const LayoutCtx = struct {
     conn: *xcb.xcb_connection_t,
@@ -78,9 +179,6 @@ pub const LayoutCtx = struct {
     allocator: std.mem.Allocator,
 };
 
-/// Returns true if two rects are identical via a single 64-bit comparison.
-/// utils.Rect is `extern struct { i16, i16, u16, u16 }` — 8 bytes, no padding.
-/// A single 64-bit comparison compiles to one instruction on all targets versus
 /// Compares two Rects by value across all four fields.
 pub inline fn rectsEqual(a: utils.Rect, b: utils.Rect) bool {
     return a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height;
@@ -94,13 +192,18 @@ pub fn configureSafe(
     win: u32,
     rect: utils.Rect,
 ) void {
-    // Clamp to WM_NORMAL_HINTS minimums.
-    const effective: utils.Rect = if (g_hints.get(win)) |h| .{
-        .x = rect.x,
-        .y = rect.y,
-        .width = @max(rect.width, h.min_width),
-        .height = @max(rect.height, h.min_height),
-    } else rect;
+    // Clamp to WM_NORMAL_HINTS minimums via linear scan over the flat hint table.
+    const effective: utils.Rect = blk: {
+        for (g_hints_buf[0..g_hints_len]) |e| {
+            if (e.win == win) break :blk .{
+                .x      = rect.x,
+                .y      = rect.y,
+                .width  = @max(rect.width,  e.hints.min_width),
+                .height = @max(rect.height, e.hints.min_height),
+            };
+        }
+        break :blk rect;
+    };
 
     if (!effective.isValid()) {
         debug.err("Invalid rect for window 0x{x}: {}x{} at {},{}",
@@ -108,11 +211,8 @@ pub fn configureSafe(
         return;
     }
 
-    const gop = ctx.cache.getOrPut(ctx.allocator, win) catch {
-        // Allocation failure: send the XCB call without caching.
-        utils.configureWindow(ctx.conn, win, effective);
-        return;
-    };
+    // getOrPut is infallible: no allocator, no catch block.
+    const gop = ctx.cache.getOrPut(win);
     if (gop.found_existing) {
         if (rectsEqual(gop.value_ptr.rect, effective)) return; // geometry unchanged
         gop.value_ptr.rect = effective; // update rect; preserve existing border

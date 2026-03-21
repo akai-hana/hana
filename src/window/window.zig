@@ -48,6 +48,16 @@ const SpawnQueue = struct {
         self.len += 1;
     }
 
+    /// Removes the entry at index i, shifting later entries left, and returns
+    /// its workspace. Single write path for all removal sites — no caller
+    /// should touch self.len directly.
+    fn consume(self: *SpawnQueue, i: usize) u8 {
+        const ws = self.buf[i].workspace;
+        std.mem.copyForwards(SpawnEntry, self.buf[i .. self.len - 1], self.buf[i + 1 .. self.len]);
+        self.len -= 1;
+        return ws;
+    }
+
     fn slice(self: *SpawnQueue) []SpawnEntry { return self.buf[0..self.len]; }
 };
 
@@ -169,14 +179,11 @@ fn findClassRuleWorkspace(win: u32) ?u8 {
     return findWorkspaceRuleByClass(cookie);
 }
 
-/// Removes the spawn entry at index `i`, shifting later entries left.
-/// Extracted from the three match branches in findSpawnQueueWorkspace that
-/// all performed this identical remove-and-return idiom.
+/// Delegates to SpawnQueue.consume so all removal sites share a single
+/// write path and no caller touches spawn_queue.len directly.
 inline fn consumeSpawnEntry(entries: []SpawnEntry, i: usize) u8 {
-    const ws = entries[i].workspace;
-    std.mem.copyForwards(SpawnEntry, entries[i .. entries.len - 1], entries[i + 1 ..]);
-    spawn_queue.len -= 1;
-    return ws;
+    _ = entries; // slice is only for call-site readability; index is into spawn_queue.buf
+    return spawn_queue.consume(i);
 }
 
 /// Phase 2 of workspace resolution: matches the window against the spawn queue.

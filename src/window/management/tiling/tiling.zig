@@ -204,7 +204,6 @@ pub const State = struct {
     }
 
     pub fn deinit(self: *State) void {
-        self.windows.deinit();
         self.cache.deinit(self.allocator);
         self.allocator.free(self.retile_lens);
         self.allocator.free(self.retile_wins);
@@ -278,7 +277,7 @@ fn buildState() !State {
         .border_width     = scale.scaleBorderWidth(core.config.tiling.border_width, screen_height),
         .border_focused   = core.config.tiling.border_focused,
         .border_unfocused = core.config.tiling.border_unfocused,
-        .windows          = Tracking{ .allocator = alloc },
+        .windows          = .{},
         .dirty            = false,
         .ws_geom_valid    = 0,
         .last_retile_screen = ZERO_RECT,
@@ -308,15 +307,11 @@ pub fn reloadConfig() void {
 
     const saved_windows = s.windows;
 
-    // Clear the combined cache in-place, retaining the allocated capacity so
-    // the next retile does not pay for a fresh heap allocation. The old data
-    // is intentionally discarded: config changes (gaps, border width, colors)
-    // make every cached rect and border color stale.
-    var saved_cache = s.cache;
-    saved_cache.clearRetainingCapacity();
-    // Disown before buildState overwrites g_state; s is a dangling pointer
-    // from this point forward and must not be used.
-    s.cache = .{};
+    // The flat-array CacheMap is a plain value type (no heap). Config changes
+    // (gaps, border width, colors) make every cached rect and border color
+    // stale, so we want a fresh empty cache after reload. buildState already
+    // initialises cache to .{} (len = 0); nothing needs to be saved or
+    // restored here. s is a dangling pointer once g_state is overwritten below.
 
     // Save scratch buffers: buildState allocates fresh ones, but we reuse the
     // existing allocations (same capacity) to avoid needless churn.
@@ -326,8 +321,8 @@ pub fn reloadConfig() void {
     const saved_retile_lens   = s.retile_lens;
 
     var new_state = buildState() catch |err| {
-        // buildState failed before overwriting g_state — restore what we saved.
-        s.cache   = saved_cache;
+        // buildState failed before overwriting g_state — the existing state
+        // (including its flat-array cache) is still fully intact.
         s.windows = saved_windows;
         debug.err("tiling: out of memory during reload: {}", .{err});
         return;
@@ -346,7 +341,6 @@ pub fn reloadConfig() void {
     new_state.retile_lens   = saved_retile_lens;
     // Discard the empty Tracking allocated by buildState (no items, no heap).
     new_state.windows = saved_windows;
-    new_state.cache   = saved_cache;
 
     g_state = new_state;
     const ns = &g_state;
@@ -387,11 +381,10 @@ pub fn addWindow(window_id: u32) void {
     const s = getState();
     if (!s.enabled) return;
 
-    const result = if (s.layout == .master and s.layout_variations.master == .fifo)
+    if (s.layout == .master and s.layout_variations.master == .fifo)
         s.windows.addFront(window_id)
     else
         s.windows.add(window_id);
-    result catch |err| { debug.logError(err, window_id); return; };
     s.dirty = true;
     s.ws_geom_valid = 0;
 
@@ -402,8 +395,8 @@ pub fn addWindow(window_id: u32) void {
         xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{s.border_width});
 
     // Pre-populate the cache so the immediately-following retile does not
-    // re-send the border pixel.
-    const gop = s.cache.getOrPut(s.allocator, window_id) catch return;
+    // re-send the border pixel. getOrPut is infallible on the flat-array cache.
+    const gop = s.cache.getOrPut(window_id);
     gop.value_ptr.border = border_color;
     if (!gop.found_existing) gop.value_ptr.rect = ZERO_RECT;
 }
@@ -526,7 +519,7 @@ pub fn toggleWindowFloat(window_id: u32) void {
 /// floating windows can be restored to their exact position on return.
 pub fn saveWindowGeom(window_id: u32, rect: utils.Rect) void {
     const s = getState();
-    const gop = s.cache.getOrPut(s.allocator, window_id) catch return;
+    const gop = s.cache.getOrPut(window_id);
     gop.value_ptr.rect = rect;
     if (!gop.found_existing) gop.value_ptr.border = 0;
 }
@@ -808,10 +801,7 @@ fn retile(screen: utils.Rect, for_ws: ?u8) void {
 
 // Send border pixel only if color changed since last send.
 fn sendBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u32) void {
-    const gop = s.cache.getOrPut(s.allocator, win) catch {
-        _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
-        return;
-    };
+    const gop = s.cache.getOrPut(win);
     if (gop.found_existing and gop.value_ptr.border == color) return;
     gop.value_ptr.border = color;
     if (!gop.found_existing) gop.value_ptr.rect = ZERO_RECT;
@@ -990,7 +980,7 @@ fn queryWindowRect(win: u32) ?utils.Rect {
 /// Write `rect` into the geometry cache for `win`, allocating a fresh entry if
 /// one does not already exist.  Preserves the existing border color.
 fn updateCacheRect(s: *State, win: u32, rect: utils.Rect) void {
-    const gop = s.cache.getOrPut(s.allocator, win) catch return;
+    const gop = s.cache.getOrPut(win);
     gop.value_ptr.rect = rect;
     if (!gop.found_existing) gop.value_ptr.border = 0;
 }
