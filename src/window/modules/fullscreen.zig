@@ -21,6 +21,7 @@ const bar        = @import("bar");
 const constants  = @import("constants");
 const debug      = @import("debug");
 const minimize   = @import("minimize");
+const window     = @import("window");
 
 // Fullscreen types
 
@@ -255,8 +256,7 @@ fn restoreFloatingWindows(skip_win: u32) void {
         //   1. saved float geometry (exact pre-fullscreen position)
         //   2. tiling cache (last known tiled rect)
         //   3. null -> fall through to default placement below
-        const rect: ?utils.Rect = getSavedFloatGeom(w) orelse
-            if (comptime build_options.has_tiling) tiling.getWindowGeom(w) else null;
+        const rect: ?utils.Rect = getSavedFloatGeom(w) orelse window.getWindowGeom(w);
 
         if (rect) |r| {
             utils.configureWindow(core.conn, w, r);

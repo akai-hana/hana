@@ -397,7 +397,7 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
         if (fi < float_n and float_wins[fi] == win) {
             if (xcb.xcb_get_geometry_reply(core.conn, float_cookies[fi], null)) |geom| {
                 defer std.c.free(geom);
-                if (has_tiling) tiling.saveWindowGeom(win, .{
+                window.saveWindowGeom(win, .{
                     .x = geom.*.x, .y = geom.*.y,
                     .width = geom.*.width, .height = geom.*.height,
                 });
@@ -450,11 +450,9 @@ fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8) void {
             !isWindowOnWorkspace(win, old_ws))
         {
             var restored = false;
-            if (has_tiling) {
-                if (tiling.getWindowGeom(win)) |rect| {
-                    utils.configureWindow(core.conn, win, rect);
-                    restored = true;
-                }
+            if (window.getWindowGeom(win)) |rect| {
+                utils.configureWindow(core.conn, win, rect);
+                restored = true;
             }
             if (!restored) {
                 _ = xcb.xcb_configure_window(core.conn, win,
