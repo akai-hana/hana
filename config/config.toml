@@ -99,7 +99,7 @@ variants = "relaxed"
 # indicator = "FIB"
 
 [drag]
-snap_distance = 32 
+snap_distance = 16
 
 [bar]
 enabled  = true
