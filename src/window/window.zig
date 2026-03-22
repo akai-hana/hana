@@ -814,6 +814,7 @@ pub fn updateFocusBorders(old_focused: ?u32, new_focused: ?u32) void {
 /// Called after a retile pass: layout changes can implicitly shift which
 /// window is fullscreen or focused, making cached colors stale.
 pub fn updateWorkspaceBorders() void {
+    if (comptime !build_options.has_workspaces) return;
     const ws = wsGetCurrentWorkspaceObject() orelse return;
     for (ws.windows.items()) |win|
         _ = xcb.xcb_change_window_attributes(core.conn, win,

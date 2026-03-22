@@ -744,6 +744,7 @@ pub fn retileInactiveWorkspace(ws_idx: u8) void {
     const s = getState();
     if (!s.enabled) return;
 
+    if (comptime !build_options.has_workspaces) return;
     const ws_state = wsGetState() orelse return;
 
     if (ws_idx == ws_state.current) {
