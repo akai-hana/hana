@@ -22,11 +22,18 @@ pub const Tracking = struct {
         return std.mem.indexOfScalar(u32, self.buf[0..self.len], win) != null;
     }
 
+    /// Returns false if win is already tracked or capacity is exhausted.
+    /// Asserts capacity is not exceeded — callers must not add beyond 64 windows.
+    fn prepareAdd(self: *Tracking, win: u32) bool {
+        if (self.contains(win)) return false;
+        std.debug.assert(self.len < capacity);
+        return true;
+    }
+
     /// Appends win to the back. Asserts capacity is not exceeded.
     /// Infallible — no allocator, no OOM path.
     pub fn add(self: *Tracking, win: u32) void {
-        if (self.contains(win)) return;
-        std.debug.assert(self.len < capacity);
+        if (!self.prepareAdd(win)) return;
         self.buf[self.len] = win;
         self.len += 1;
     }
@@ -34,8 +41,7 @@ pub const Tracking = struct {
     /// Prepends win to the front, shifting existing entries right.
     /// Infallible — no allocator, no OOM path.
     pub fn addFront(self: *Tracking, win: u32) void {
-        if (self.contains(win)) return;
-        std.debug.assert(self.len < capacity);
+        if (!self.prepareAdd(win)) return;
         // Shift right from the end to avoid clobbering elements.
         std.mem.copyBackwards(u32, self.buf[1 .. self.len + 1], self.buf[0..self.len]);
         self.buf[0] = win;

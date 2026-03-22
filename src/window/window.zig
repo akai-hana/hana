@@ -107,8 +107,7 @@ pub inline fn isOnCurrentWorkspace(win: u32) bool {
     // Deliberate: single probe on window_to_workspaces covers both the
     // "is managed" and "is on current workspace" checks, avoiding two
     // lookups on the same key on every EnterNotify hot path.
-    if (win == 0 or win == core.root) return false;
-    if (bar.isBarWindow(win)) return false;
+    if (win == 0 or win == core.root or bar.isBarWindow(win)) return false;
     const s = workspaces.getState() orelse return false;
     const mask = s.window_to_workspaces.get(win) orelse return false;
     return (mask >> @intCast(s.current)) & 1 != 0;
@@ -333,6 +332,13 @@ fn commitWindowToScreen(win: u32, on_current_workspace: bool) void {
     _ = xcb.xcb_flush(core.conn);
 }
 
+fn discardPropertyCookies(cookies: PropertyCookies) void {
+    xcb.xcb_discard_reply(core.conn, cookies.protocols.sequence);
+    xcb.xcb_discard_reply(core.conn, cookies.hints.sequence);
+    xcb.xcb_discard_reply(core.conn, cookies.normal_hints.sequence);
+    if (cookies.net_wm_pid) |c| xcb.xcb_discard_reply(core.conn, c.sequence);
+}
+
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t) void {
     const win        = event.window;
     const current_ws = workspaces.getCurrentWorkspace() orelse 0;
@@ -347,11 +353,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t) void {
 
     workspaces.moveWindowTo(win, target_ws) catch |err| {
         debug.logError(err, win);
-        xcb.xcb_discard_reply(core.conn, cookies.protocols.sequence);
-        xcb.xcb_discard_reply(core.conn, cookies.hints.sequence);
-        xcb.xcb_discard_reply(core.conn, cookies.normal_hints.sequence);
-        if (cookies.net_wm_pid) |c|
-            xcb.xcb_discard_reply(core.conn, c.sequence);
+        discardPropertyCookies(cookies);
         _ = xcb.xcb_flush(core.conn);
         return;
     };
@@ -406,15 +408,10 @@ fn unmanageWindow(win: u32) void {
         if (tilingActive()) tiling.retileIfDirty();
         focus.clearFocus();
         focusWindowUnderPointer(ptr_cookie.?);
-    } else if (!was_fullscreen) {
-        if (tilingActive()) {
-            if (window_workspace) |ws| {
-                if (current_ws == ws) {
-                    tiling.retileIfDirty();
-                } else {
-                    tiling.retileInactiveWorkspace(ws);
-                }
-            }
+    } else if (!was_fullscreen and tilingActive()) {
+        if (window_workspace) |ws| {
+            if (current_ws == ws) tiling.retileIfDirty()
+            else tiling.retileInactiveWorkspace(ws);
         }
     }
 
@@ -713,15 +710,8 @@ pub fn updateWorkspaceBorders() void {
 /// workspaces. Called on config reload so color and width changes take effect
 /// immediately on all windows, not just those on the current workspace.
 pub fn reloadBorders() void {
-    const width = getBorderWidth();
+    if (getBorderWidth() == 0) return;
     const ws_state = workspaces.getState() orelse return;
-    for (ws_state.workspaces) |*ws| {
-        for (ws.windows.items()) |win| {
-            if (width > 0)
-                _ = xcb.xcb_configure_window(core.conn, win,
-                    xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{width});
-            _ = xcb.xcb_change_window_attributes(core.conn, win,
-                xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(win)});
-        }
-    }
+    for (ws_state.workspaces) |*ws|
+        for (ws.windows.items()) |win| applyBorder(win);
 }

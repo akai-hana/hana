@@ -111,11 +111,8 @@ pub inline fn isMinimized(win: u32) bool {
 }
 
 inline fn hideWindow(win: u32) void {
-    _ = xcb.xcb_configure_window(
-        core.conn, win,
-        xcb.XCB_CONFIG_WINDOW_X,
-        &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))},
-    );
+    _ = xcb.xcb_configure_window(core.conn, win,
+        xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
 }
 
 pub fn focusBestAvailable() void {
@@ -133,21 +130,13 @@ pub fn focusBestAvailable() void {
 /// Undo a partially-completed minimizeWindow call.
 /// Called only on hash-map allocation failure; restores tiling and fullscreen
 /// state so the window remains visible and the WM stays consistent.
-inline fn rollbackMinimize(
-    win:             u32,
-    was_fullscreen:  bool,
-    fs_ws:           ?u8,
-    saved_fs:        ?core.WindowGeometry,
-) void {
+inline fn rollbackMinimize(win: u32, fs_ws: ?u8, saved_fs: ?core.WindowGeometry) void {
     if (core.config.tiling.enabled) {
         tiling.addWindow(win);
         tiling.retileCurrentWorkspace();
     }
-    if (was_fullscreen) {
-        fullscreen.setForWorkspace(fs_ws.?, .{
-            .window         = win,
-            .saved_geometry = saved_fs.?,
-        });
+    if (saved_fs) |geom| {
+        fullscreen.setForWorkspace(fs_ws.?, .{ .window = win, .saved_geometry = geom });
     }
 }
 
@@ -162,16 +151,10 @@ pub fn minimizeWindow() void {
     var saved_fs: ?core.WindowGeometry = null;
     var fs_ws_for_rollback: ?u8 = null;
     if (fullscreen.workspaceFor(win)) |fs_ws| {
-        if (fullscreen.getForWorkspace(fs_ws)) |info| {
-            saved_fs = info.saved_geometry;
-            fs_ws_for_rollback = fs_ws;
-            fullscreen.removeForWorkspace(fs_ws);
-        }
+        saved_fs = fullscreen.getForWorkspace(fs_ws).?.saved_geometry;
+        fs_ws_for_rollback = fs_ws;
+        fullscreen.removeForWorkspace(fs_ws);
     }
-    const was_fullscreen = saved_fs != null;
-
-    // Capture the workspace-filtered position BEFORE removeWindow evicts the
-    // window, so restoreWindowImpl can put it back at the same master/stack slot.
     const tiling_index = tiling.getWindowFilteredIndex(win);
 
     if (core.config.tiling.enabled) tiling.removeWindow(win);
@@ -184,7 +167,7 @@ pub fn minimizeWindow() void {
         .tiling_index  = tiling_index,
     }) catch {
         debug.err("minimize: allocation failure tracking window 0x{x} -- rolling back", .{win});
-        rollbackMinimize(win, was_fullscreen, fs_ws_for_rollback, saved_fs);
+        rollbackMinimize(win, fs_ws_for_rollback, saved_fs);
         return;
     };
     s.next_timestamp = ts + 1;
@@ -192,7 +175,7 @@ pub fn minimizeWindow() void {
     _ = xcb.xcb_grab_server(core.conn);
     hideWindow(win);
     focusBestAvailable();
-    if (was_fullscreen) {
+    if (saved_fs != null) {
         bar.setBarState(.show_fullscreen);
     } else if (core.config.tiling.enabled) {
         tiling.retileCurrentWorkspace();
@@ -230,11 +213,9 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
         tiling.retileCurrentWorkspace();
     } else {
         const pos = utils.floatDefaultPos();
-        _ = xcb.xcb_configure_window(
-            core.conn, win,
+        _ = xcb.xcb_configure_window(core.conn, win,
             xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
-            &[_]u32{ pos.x, pos.y },
-        );
+            &[_]u32{ pos.x, pos.y });
     }
 
     focus.setFocus(win, .window_spawn);
@@ -313,10 +294,8 @@ pub fn unminimizeAll() void {
     }.lt);
 
     // After sorting, all plain entries precede all fullscreen entries.
-    // Find the boundary using indexOfScalar on the is_fs field.
-    const plain_end: usize = for (entries[0..count], 0..) |e, i| {
-        if (e.is_fs) break i;
-    } else count;
+    var plain_end: usize = 0;
+    while (plain_end < count and !entries[plain_end].is_fs) plain_end += 1;
     const plain_wins = entries[0..plain_end];
     const fs_wins    = entries[plain_end..count];
 

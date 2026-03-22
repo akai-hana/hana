@@ -19,20 +19,13 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
     // configured lazily when brought to top, keeping cost O(1).
     const top_win = windows[windows.len - 1];
 
-    const gap2b = gap * 2 + border2;
-    const rect: utils.Rect = switch (state.layout_variations.monocle) {
-        .gapless => .{
-            .x      = 0,
-            .y      = @intCast(y_offset),
-            .width  = if (screen_w > border2) screen_w - border2 else constants.MIN_WINDOW_DIM,
-            .height = if (screen_h > border2) screen_h - border2 else constants.MIN_WINDOW_DIM,
-        },
-        .gaps => .{
-            .x      = @intCast(gap),
-            .y      = @intCast(y_offset +| gap),
-            .width  = if (screen_w > gap2b) screen_w - gap2b else constants.MIN_WINDOW_DIM,
-            .height = if (screen_h > gap2b) screen_h - gap2b else constants.MIN_WINDOW_DIM,
-        },
+    const inset: u16 = if (state.layout_variations.monocle == .gaps) gap else 0;
+    const total_margin = border2 + inset * 2;
+    const rect: utils.Rect = .{
+        .x      = @intCast(inset),
+        .y      = @intCast(y_offset +| inset),
+        .width  = if (screen_w > total_margin) screen_w - total_margin else constants.MIN_WINDOW_DIM,
+        .height = if (screen_h > total_margin) screen_h - total_margin else constants.MIN_WINDOW_DIM,
     };
 
     layouts.configureSafe(ctx, top_win, rect);
@@ -46,6 +39,6 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
         _ = xcb.xcb_configure_window(ctx.conn, win,
             xcb.XCB_CONFIG_WINDOW_X,
             &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
-        if (ctx.cache.getPtr(win)) |wd| wd.rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        if (ctx.cache.getPtr(win)) |wd| wd.rect = tiling.ZERO_RECT;
     }
 }

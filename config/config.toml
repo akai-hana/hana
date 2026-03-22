@@ -153,7 +153,7 @@ Mod+Shift+space = "toggle_layout_reverse"  # Cycle layouts backward
 Mod+Alt+space   = "cycle_layout_variation" # Cycle current layout's variation (Super+V)
 Mod+Tab         = "swap_focused_previous"  # Swap focused window with the previously focused window
 Mod+grave       = "toggle_prompt"
-Mod+MiddleClick = "toggle_float"           # Toggle clicked window between tiled and floating
+Mod+Middle_click = "toggle_float"           # Toggle clicked window between tiled and floating
 
 # Layouts
 ## Master-stack

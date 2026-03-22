@@ -88,6 +88,13 @@ inline fn pushOffscreen(conn: *xcb.xcb_connection_t, win: u32) void {
         &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
 }
 
+/// Push `win` offscreen and evict its geometry cache entry.
+/// Used when a window leaves the current workspace.
+inline fn evictWindow(win: u32) void {
+    pushOffscreen(core.conn, win);
+    tiling.invalidateGeomCache(win);
+}
+
 /// Resolves a layout name (e.g. "master-stack", "monocle") to tiling.Layout.
 fn layoutFromName(name: []const u8) tiling.Layout {
     return if (std.mem.eql(u8, name, "master-stack")) .master
@@ -185,10 +192,9 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
 
     if (minimize.isMinimized(win)) minimize.moveToWorkspace(win, target_ws);
 
-    pushOffscreen(core.conn, win);
+    evictWindow(win);
     if (focus.getFocused() == win) focus.clearFocus();
     if (core.config.tiling.enabled) tiling.dirty();
-    tiling.invalidateGeomCache(win);
     bar.scheduleRedraw();
 }
 
@@ -229,8 +235,7 @@ pub fn moveWindowExclusive(win: u32, target_ws: u8) void {
     setWindowMask(s, win, workspaceBit(target_ws));
 
     if (target_ws != s.current) {
-        pushOffscreen(core.conn, win);
-        tiling.invalidateGeomCache(win);
+        evictWindow(win);
         if (focus.getFocused() == win) focus.clearFocus();
     }
 
@@ -257,8 +262,7 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
         if (@popCount(mask) <= 1) return; // last workspace — protect
         setWindowMask(s, win, mask & ~tbit);
         if (target_ws == current) {
-            pushOffscreen(core.conn, win);
-            tiling.invalidateGeomCache(win);
+            evictWindow(win);
             if (core.config.tiling.enabled) tiling.retileCurrentWorkspace();
         } else {
             tiling.invalidateWsGeomBit(target_ws);
@@ -449,15 +453,10 @@ fn applyPostSwitchFocus(new_ws: u8, new_ws_obj: *const Workspace, ptr_cookie: xc
         const ptr = xcb.xcb_query_pointer_reply(core.conn, ptr_cookie, null)
             orelse break :blk lastFocusedOrFirst(new_ws_obj);
         defer std.c.free(ptr);
-
         const child = ptr.*.child;
-        if (child != 0 and child != core.root and
-            isWindowOnWorkspace(child, new_ws) and
-            !minimize.isMinimized(child))
-        {
-            break :blk child;
-        }
-        break :blk lastFocusedOrFirst(new_ws_obj);
+        break :blk if (child != 0 and child != core.root and
+            isWindowOnWorkspace(child, new_ws) and !minimize.isMinimized(child))
+            child else lastFocusedOrFirst(new_ws_obj);
     };
 
     const old_focused = focus.getFocused();

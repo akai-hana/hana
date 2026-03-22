@@ -110,6 +110,11 @@ pub const CacheMap = struct {
     buf: [CACHE_CAPACITY]Entry = undefined,
     len: usize = 0,
 
+    fn findEntry(self: *CacheMap, win: u32) ?*Entry {
+        for (self.buf[0..self.len]) |*e| if (e.win == win) return e;
+        return null;
+    }
+
     /// Locate the entry for `win`, creating one if absent. Always succeeds —
     /// no allocator, no error union. When the buffer is full the write is
     /// routed to a module-level sentinel (no live entry is corrupted) and a
@@ -136,17 +141,11 @@ pub const CacheMap = struct {
     }
 
     pub fn get(self: *const CacheMap, win: u32) ?WindowData {
-        for (self.buf[0..self.len]) |e| {
-            if (e.win == win) return e.data;
-        }
-        return null;
+        return if (@constCast(self).findEntry(win)) |e| e.data else null;
     }
 
     pub fn getPtr(self: *CacheMap, win: u32) ?*WindowData {
-        for (self.buf[0..self.len]) |*e| {
-            if (e.win == win) return &e.data;
-        }
-        return null;
+        return if (self.findEntry(win)) |e| &e.data else null;
     }
 
     /// Swap-and-decrement removal: O(1), order-independent.
@@ -215,11 +214,7 @@ pub fn configureSafe(
 
     // getOrPut is infallible: no allocator, no catch block.
     const gop = ctx.cache.getOrPut(win);
-    if (gop.found_existing) {
-        if (rectsEqual(gop.value_ptr.rect, effective)) return; // geometry unchanged
-        gop.value_ptr.rect = effective; // update rect; preserve existing border
-    } else {
-        gop.value_ptr.* = .{ .rect = effective, .border = 0 };
-    }
+    if (gop.found_existing and rectsEqual(gop.value_ptr.rect, effective)) return;
+    gop.value_ptr.rect = effective;
     utils.configureWindow(ctx.conn, win, effective);
 }
