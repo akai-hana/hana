@@ -1,16 +1,16 @@
 //! Window dragging and resizing via pointer button grabs.
 
-const std           = @import("std");
-const constants     = @import("constants");
-const core          = @import("core");
-const xcb           = core.xcb;
-const utils         = @import("utils");
-const focus         = @import("focus");
+const std        = @import("std");
+const constants  = @import("constants");
+const core       = @import("core");
+const xcb        = core.xcb;
+const utils      = @import("utils");
+const focus      = @import("focus");
 const build_options = @import("build_options");
 const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
-const bar           = @import("bar");
-const fullscreen    = @import("fullscreen");
-const window        = @import("window");
+const bar        = @import("bar");
+const fullscreen = @import("fullscreen");
+const window     = @import("window");
 
 /// Resolve snap_distance from config against screen width.
 /// Percentage values are relative to screen width (the primary drag axis).
@@ -34,13 +34,17 @@ fn workArea() struct { left: i32, right: i32, top: i32, bottom: i32 } {
     const sw: i32  = core.screen.width_in_pixels;
     const sh: i32  = core.screen.height_in_pixels;
     const bh: i32  = if (bar.isVisible()) bar.getBarHeight() else 0;
-    const bw: i32  = window.getBorderWidth();
+    const bw2: i32 = @as(i32, window.getBorderWidth()) * 2;
     const bar_at_bottom = core.config.bar.vertical_position == .bottom;
+    // Near edges: x,y is the outer border corner, so no offset needed —
+    // the outer border sits flush with the boundary at 0 / bar_height.
+    // Far edges: total footprint = pos + dim + 2*border_width, so to align
+    // the outer border with the far boundary we subtract 2*border_width.
     return .{
-        .left   = bw,
-        .right  = sw - bw,
-        .top    = (if (bar_at_bottom) 0 else bh) + bw,
-        .bottom = (if (bar_at_bottom) sh - bh else sh) - bw,
+        .left   = 0,
+        .right  = sw - bw2,
+        .top    = if (bar_at_bottom) 0 else bh,
+        .bottom = (if (bar_at_bottom) sh - bh else sh) - bw2,
     };
 }
 
