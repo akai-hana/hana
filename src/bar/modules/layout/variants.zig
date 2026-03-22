@@ -16,8 +16,10 @@ pub fn draw(dc: *drawing.DrawContext, config: core.BarConfig, height: u16, start
     return dc.drawSegment(start_x, height, indicator, config.scaledSegmentPadding(height), config.bg, config.fg);
 }
 
-/// Accessor for the icon of each layout's variantss
-pub fn getIndicator(s: *const tiling.State) []const u8 {
+/// Accessor for the icon of each layout's variants.
+/// Uses anytype so this function is only instantiated when tiling is present,
+/// keeping the no-tiling build from trying to resolve tiling.State.
+pub fn getIndicator(s: anytype) []const u8 {
     return switch (s.layout) {
         .master => switch (s.layout_variants.master) {
             .lifo => "[N]",
