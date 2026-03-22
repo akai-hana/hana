@@ -1,20 +1,20 @@
 //! Workspace management — creation, window assignment, and workspace switching.
 
-const std        = @import("std");
-const fullscreen = @import("fullscreen");
-const core = @import("core");
-const xcb        = core.xcb;
-const utils      = @import("utils");
-const focus      = @import("focus");
-const window     = @import("window");
-const bar        = @import("bar");
-const has_tiling = @import("build_options").has_tiling;
+const std          = @import("std");
+const fullscreen   = @import("fullscreen");
+const core         = @import("core");
+const xcb          = core.xcb;
+const utils        = @import("utils");
+const focus        = @import("focus");
+const window       = @import("window");
+const bar          = @import("bar");
+const has_tiling   = @import("build_options").has_tiling;
 const tiling       = if (has_tiling) @import("tiling") else struct {};
 const TilingLayout = if (has_tiling) tiling.Layout else u0;
-const Tracking   = @import("tracking").Tracking;
-const constants  = @import("constants");
-const debug      = @import("debug");
-const minimize   = @import("minimize");
+const Tracking     = @import("tracking").Tracking;
+const constants    = @import("constants");
+const debug        = @import("debug");
+const minimize     = @import("minimize");
 
 // Comptime-generated workspace name strings ("1".."20"), never heap-allocated.
 const WORKSPACE_NAMES = blk: {
@@ -235,6 +235,14 @@ pub fn moveWindowExclusive(win: u32, target_ws: u8) void {
     const mask = s.window_to_workspaces.get(win) orelse return;
     if (mask == workspaceBit(target_ws)) return; // already exclusively on target — no-op
 
+    // Transfer fullscreen record to the target workspace so the window
+    // remains fullscreen wherever it lands, not just on the source workspace.
+    if (fullscreen.workspaceFor(win)) |src_ws| {
+        const info = fullscreen.getForWorkspace(src_ws).?;
+        fullscreen.removeForWorkspace(src_ws);
+        fullscreen.setForWorkspace(target_ws, info);
+    }
+
     setWindowMask(s, win, workspaceBit(target_ws));
 
     if (target_ws != s.current) {
@@ -265,6 +273,18 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
         if (@popCount(mask) <= 1) return; // last workspace — protect
         setWindowMask(s, win, mask & ~tbit);
         if (target_ws == current) {
+            // Window is leaving the current workspace; if it was fullscreen here
+            // transfer the record to whichever workspace it still belongs to.
+            if (fullscreen.workspaceFor(win)) |src_ws| {
+                if (src_ws == current) {
+                    const info = fullscreen.getForWorkspace(src_ws).?;
+                    fullscreen.removeForWorkspace(src_ws);
+                    // Land on the lowest-set-bit workspace still in the new mask.
+                    const new_mask = mask & ~tbit;
+                    const dst: u8 = @intCast(@ctz(new_mask));
+                    fullscreen.setForWorkspace(dst, info);
+                }
+            }
             evictWindow(win);
             if (has_tiling and core.config.tiling.enabled) tiling.retileCurrentWorkspace();
         } else {

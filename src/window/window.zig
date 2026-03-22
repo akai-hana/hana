@@ -373,6 +373,16 @@ fn commitWindowToScreen(win: u32, on_current_workspace: bool) void {
     if (tilingActive()) {
         tiling.addWindow(win);
         if (on_current_workspace) tiling.retileCurrentWorkspace();
+    } else if (on_current_workspace) {
+        // Without tiling, retileCurrentWorkspace() never runs, so we must
+        // manually push the new window offscreen when fullscreen is active —
+        // otherwise it maps on top of the fullscreen window and appears to
+        // immediately vanish when the fullscreen window is raised above it.
+        if (fullscreen.hasAnyFullscreen()) {
+            _ = xcb.xcb_configure_window(core.conn, win,
+                xcb.XCB_CONFIG_WINDOW_X,
+                &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+        }
     }
 
     // Apply border width and initial color before mapping so the compositor
