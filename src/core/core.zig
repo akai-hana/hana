@@ -419,9 +419,9 @@ pub const Config = struct {
     workspaces:  WorkspaceConfig = .{},
     bar:         BarConfig       = .{},
 
-    /// Pixels within which a dragged window edge snaps to a monitor/bar boundary.
-    /// Set to 0 to disable snapping entirely.
-    snap_distance: u8 = 8,
+    /// How close (in px or %) a window edge must be to a monitor/bar boundary
+    /// before it snaps. Set to 0 to disable. Percentage is relative to screen width.
+    snap_distance: parser.ScalableValue = parser.ScalableValue.absolute(8.0),
 
     // Ownership sentinels for string fields that have static defaults.
     //
