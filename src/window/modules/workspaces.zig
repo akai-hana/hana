@@ -15,7 +15,13 @@ const TilingLayout = if (has_tiling) tiling.Layout else u0;
 const Tracking     = @import("tracking").Tracking;
 const constants    = @import("constants");
 const debug        = @import("debug");
-const minimize     = @import("minimize");
+const minimize     = if (build_options.has_minimize) @import("minimize") else struct {};
+
+/// Shim so call-sites don't need to repeat the has_minimize comptime guard.
+/// Returns false when minimize is absent — windows are never considered minimized.
+inline fn isMinimized(win: u32) bool {
+    return if (comptime build_options.has_minimize) minimize.isMinimized(win) else false;
+}
 
 // Comptime-generated workspace name strings ("1".."20"), never heap-allocated.
 const WORKSPACE_NAMES = blk: {
@@ -194,7 +200,9 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
     s.workspaces[target_ws].windows.add(win);
     s.window_to_workspaces.getPtr(win).?.* = new_mask;
 
-    if (minimize.isMinimized(win)) minimize.moveToWorkspace(win, target_ws);
+    if (isMinimized(win)) {
+        if (comptime build_options.has_minimize) minimize.moveToWorkspace(win, target_ws);
+    }
 
     evictWindow(win);
     if (focus.getFocused() == win) focus.clearFocus();
@@ -231,7 +239,7 @@ fn setWindowMask(s: *State, win: u32, new_mask: u64) void {
 pub fn moveWindowExclusive(win: u32, target_ws: u8) void {
     const s = getState() orelse return;
     if (target_ws >= s.workspaces.len) return;
-    if (minimize.isMinimized(win)) return;
+    if (isMinimized(win)) return;
 
     const mask = s.window_to_workspaces.get(win) orelse return;
     if (mask == workspaceBit(target_ws)) return; // already exclusively on target — no-op
@@ -265,7 +273,7 @@ pub fn moveWindowExclusive(win: u32, target_ws: u8) void {
 pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
     const s = getState() orelse return;
     if (target_ws >= s.workspaces.len) return;
-    if (minimize.isMinimized(win)) return;
+    if (isMinimized(win)) return;
 
     const current = s.current;
     const mask = s.window_to_workspaces.get(win) orelse return;
@@ -343,7 +351,7 @@ pub inline fn isWindowOnWorkspace(win: u32, ws_idx: u8) bool {
 /// Returns the first non-minimized window in `windows`, or null if all are minimized.
 pub inline fn firstNonMinimized(windows: []const u32) ?u32 {
     for (windows) |win| {
-        if (!minimize.isMinimized(win)) return win;
+        if (!isMinimized(win)) return win;
     }
     return null;
 }
@@ -351,7 +359,7 @@ pub inline fn firstNonMinimized(windows: []const u32) ?u32 {
 // Prefer the workspace's remembered focus target; fall back to firstNonMinimized.
 inline fn lastFocusedOrFirst(ws: *const Workspace) ?u32 {
     if (ws.last_focused) |win|
-        if (!minimize.isMinimized(win)) return win;
+        if (!isMinimized(win)) return win;
     return firstNonMinimized(ws.windows.items());
 }
 
@@ -371,7 +379,7 @@ pub inline fn isOnCurrentWorkspace(win: u32) bool {
 /// and post-minimize focus recovery.  Combining the two checks into one
 /// function lets it serve as a typed *const fn(u32) bool without a closure.
 pub fn isOnCurrentWorkspaceAndVisible(win: u32) bool {
-    return isOnCurrentWorkspace(win) and !minimize.isMinimized(win);
+    return isOnCurrentWorkspace(win) and !isMinimized(win);
 }
 
 pub inline fn getCurrentWorkspaceObject() ?*Workspace {
@@ -406,7 +414,7 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
 
     for (ws.windows.items()) |win| {
         if (isWindowOnWorkspace(win, new_ws)) continue; // stays visible
-        if ((!has_tiling or !tiling.isWindowActiveTiled(win)) and !minimize.isMinimized(win)) {
+        if ((!has_tiling or !tiling.isWindowActiveTiled(win)) and !isMinimized(win)) {
             if (float_n < MAX_FLOAT) {
                 float_wins[float_n]    = win;
                 float_cookies[float_n] = xcb.xcb_get_geometry(core.conn, win);
@@ -471,7 +479,7 @@ fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8) void {
     const pos = utils.floatDefaultPos();
     for (ws.windows.items()) |win| {
         _ = xcb.xcb_map_window(core.conn, win);
-        if ((!has_tiling or !tiling.isWindowActiveTiled(win)) and !minimize.isMinimized(win) and
+        if ((!has_tiling or !tiling.isWindowActiveTiled(win)) and !isMinimized(win) and
             !isWindowOnWorkspace(win, old_ws))
         {
             var restored = false;
@@ -499,7 +507,7 @@ fn applyPostSwitchFocus(new_ws: u8, new_ws_obj: *const Workspace, ptr_cookie: xc
         defer std.c.free(ptr);
         const child = ptr.*.child;
         break :blk if (child != 0 and child != core.root and
-            isWindowOnWorkspace(child, new_ws) and !minimize.isMinimized(child))
+            isWindowOnWorkspace(child, new_ws) and !isMinimized(child))
             child else lastFocusedOrFirst(new_ws_obj);
     };
 

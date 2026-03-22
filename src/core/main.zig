@@ -24,7 +24,7 @@ const input = @import("input");
 const window     = @import("window");
 const focus      = @import("focus");
 const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
-const minimize   = @import("minimize");
+const minimize   = if (build_options.has_minimize) @import("minimize") else struct {};
 const workspaces = @import("workspaces");
 
 // tiling/
@@ -150,7 +150,7 @@ fn initModules() !void {
     if (build_options.has_tiling) tiling.init(); // must precede workspaces.init(): workspaces.init() calls tiling.getState()
     if (build_options.has_fullscreen) fullscreen.init();
     workspaces.init();
-    minimize.init();
+    if (build_options.has_minimize) minimize.init();
     try prompt.init(core.alloc, core.conn);
 }
 

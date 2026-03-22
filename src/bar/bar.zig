@@ -57,7 +57,7 @@ const utils      = @import("utils");
 const workspaces = @import("workspaces");
 const focus      = @import("focus");
 const constants  = @import("constants");
-const minimize   = @import("minimize");
+const minimize   = if (build_options.has_minimize) @import("minimize") else struct {};
 const scale      = @import("scale");
 
 const workspaces_segment = if (build_options.has_tags) @import("tags") else struct {
@@ -504,7 +504,8 @@ fn captureIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot) !voi
     snap.status_text.clearRetainingCapacity();
     try snap.status_text.appendSlice(allocator, s.status_text.items);
     snap.minimized_set.clearRetainingCapacity();
-    try minimize.populateSet(&snap.minimized_set, allocator);
+    if (comptime build_options.has_minimize)
+        try minimize.populateSet(&snap.minimized_set, allocator);
 
     const ws_state = workspaces.getState() orelse return;
     snap.ws_count   = @intCast(ws_state.workspaces.len);

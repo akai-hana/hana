@@ -15,7 +15,7 @@ const workspaces    = @import("workspaces");
 const drag          = @import("drag");
 const scale         = @import("scale");
 const debug         = @import("debug");
-const minimize      = @import("minimize");
+const minimize      = if (build_options.has_minimize) @import("minimize") else struct {};
 const fullscreen    = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
 
 // XSizeHints flags (ICCCM §4.1.2.3)
@@ -481,7 +481,7 @@ fn unmanageWindow(win: u32) void {
         tiling.removeWindow(win);
         tiling.evictSizeHints(win);
     }
-    minimize.forceUntrack(win);
+    if (comptime build_options.has_minimize) minimize.forceUntrack(win);
     workspaces.removeWindow(win);
 
     if (was_fullscreen) bar.setBarState(.show_fullscreen);
@@ -520,8 +520,12 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t) void {
 /// pointer-position reply is pre-fired before the server grab to overlap the
 /// round-trip.
 fn focusWindowUnderPointer(ptr_cookie: xcb.xcb_query_pointer_cookie_t) void {
+    const fallback: ?*const fn () void = if (comptime build_options.has_minimize)
+        minimize.focusMasterOrFirst
+    else
+        null;
     const reply = xcb.xcb_query_pointer_reply(core.conn, ptr_cookie, null) orelse {
-        focus.focusBestAvailable(.tiling_operation, workspaces.isOnCurrentWorkspaceAndVisible, minimize.focusMasterOrFirst);
+        focus.focusBestAvailable(.tiling_operation, workspaces.isOnCurrentWorkspaceAndVisible, fallback);
         return;
     };
     defer std.c.free(reply);
@@ -530,7 +534,7 @@ fn focusWindowUnderPointer(ptr_cookie: xcb.xcb_query_pointer_cookie_t) void {
         focus.setFocus(child, .mouse_enter);
         return;
     }
-    focus.focusBestAvailable(.tiling_operation, workspaces.isOnCurrentWorkspaceAndVisible, minimize.focusMasterOrFirst);
+    focus.focusBestAvailable(.tiling_operation, workspaces.isOnCurrentWorkspaceAndVisible, fallback);
 }
 
 // Configure request
@@ -634,7 +638,9 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
 inline fn maybeFocusWindow(win: u32) void {
     if (focus.getFocused() == win) return;
     if (!isOnCurrentWorkspace(win)) return;
-    if (minimize.isMinimized(win)) return;
+    if (comptime build_options.has_minimize) {
+        if (minimize.isMinimized(win)) return;
+    }
     focus.setFocus(win, .mouse_enter);
 }
 

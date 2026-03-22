@@ -20,7 +20,7 @@ const focus         = @import("focus");
 const bar           = @import("bar");
 const constants     = @import("constants");
 const debug         = @import("debug");
-const minimize      = @import("minimize");
+const minimize      = if (build_options.has_minimize) @import("minimize") else struct {};
 const window        = @import("window");
 
 // Fullscreen types

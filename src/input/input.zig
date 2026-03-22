@@ -16,7 +16,7 @@ const fullscreen    = if (build_options.has_fullscreen) @import("fullscreen") el
 const bar           = if (build_options.has_bar) @import("bar") else struct {};
 const window        = @import("window");
 const debug         = @import("debug");
-const minimize      = @import("minimize");
+const minimize      = if (build_options.has_minimize) @import("minimize") else struct {};
 const prompt        = @import("prompt");
 const xcb           = core.xcb;
 
@@ -256,10 +256,18 @@ fn executeAction(action: *const core.Action) !void {
             }
         },
 
-        .minimize_window => minimize.minimizeWindow(),
-        .unminimize_lifo => minimize.unminimize(.lifo),
-        .unminimize_fifo => minimize.unminimize(.fifo),
-        .unminimize_all  => minimize.unminimizeAll(),
+        .minimize_window,
+        .unminimize_lifo,
+        .unminimize_fifo,
+        .unminimize_all  => if (comptime build_options.has_minimize) {
+            switch (action.*) {
+                .minimize_window => minimize.minimizeWindow(),
+                .unminimize_lifo => minimize.unminimize(.lifo),
+                .unminimize_fifo => minimize.unminimize(.fifo),
+                .unminimize_all  => minimize.unminimizeAll(),
+                else => unreachable,
+            }
+        },
         .switch_workspace  => |ws| workspaces.switchTo(ws),
         .move_to_workspace => |ws| { if (focus.getFocused()) |win| workspaces.moveWindowTo(win, ws) catch |e| debug.warnOnErr(e, "move_to_workspace"); },
         .move_window       => |ws| { if (focus.getFocused()) |win| workspaces.moveWindowExclusive(win, ws); },

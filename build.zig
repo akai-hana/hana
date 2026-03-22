@@ -86,6 +86,15 @@ const optional_subsystems = [_]OptionalSubsystem{
         .name        = "layouts",
         .entry_point = ROOT_DIR ++ "window/modules/tiling/layouts.zig",
     },
+    .{
+        .name        = "fullscreen",
+        .entry_point = ROOT_DIR ++ "window/modules/fullscreen/fullscreen.zig",
+        .gate_dir    = "fullscreen",
+    },
+    .{
+        .name        = "minimize",
+        .entry_point = ROOT_DIR ++ "window/modules/minimize.zig",
+    },
 };
 // FIX #1 — Removed the duplicate "Add new optional subsystems here" comment
 //           that previously appeared here after the closing brace.
@@ -94,7 +103,7 @@ const optional_subsystems = [_]OptionalSubsystem{
 // Adding a new layout or segment now only requires adding its name here;
 // the has_<name> build_option and has_any_segment flag are derived automatically.
 const layout_modules = [_][]const u8{
-    "master", "monocle", "grid", "fibonacci", "fullscreen",
+    "master", "monocle", "grid", "fibonacci",
 };
 
 const segment_modules = [_][]const u8{
