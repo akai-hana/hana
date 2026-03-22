@@ -88,7 +88,7 @@ const optional_subsystems = [_]OptionalSubsystem{
     },
     .{
         .name        = "fullscreen",
-        .entry_point = ROOT_DIR ++ "window/modules/fullscreen/fullscreen.zig",
+        .entry_point = ROOT_DIR ++ "window/modules/fullscreen.zig",
         .gate_dir    = "fullscreen",
     },
     .{
