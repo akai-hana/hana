@@ -11,17 +11,19 @@ const build_options = @import("build_options");
 const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
 const layouts       = @import("layouts");
 const bar           = @import("bar");
-const workspaces    = if (build_options.has_workspaces) @import("workspaces") else struct {};
-const WsState     = if (build_options.has_workspaces) workspaces.State     else struct {};
+const tracking    = @import("tracking");
+const workspaces  = if (build_options.has_workspaces) @import("workspaces") else struct {};
 const WsWorkspace = if (build_options.has_workspaces) workspaces.Workspace else struct {};
-fn wsGetState() ?*WsState                                { return if (comptime build_options.has_workspaces) workspaces.getState()                       else null;  }
-inline fn wsGetCurrentWorkspace() ?u8                   { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspace()            else null;  }
-fn wsGetCurrentWorkspaceObject() ?*WsWorkspace          { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspaceObject()      else null;  }
-inline fn wsGetWorkspaceForWindow(win: u32) ?u8         { return if (comptime build_options.has_workspaces) workspaces.getWorkspaceForWindow(win)       else null;  }
-fn wsIsManaged(win: u32) bool                           { return if (comptime build_options.has_workspaces) workspaces.isManaged(win)                   else false; }
-fn wsIsOnCurrentWorkspaceAndVisible(win: u32) bool      { return if (comptime build_options.has_workspaces) workspaces.isOnCurrentWorkspaceAndVisible(win) else false; }
-inline fn wsMoveWindowTo(win: u32, ws_arg: u8) !void   {        if (comptime build_options.has_workspaces) try workspaces.moveWindowTo(win, ws_arg);                }
-inline fn wsRemoveWindow(win: u32) void                 {        if (comptime build_options.has_workspaces) workspaces.removeWindow(win);                           }
+fn wsGetState() ?*workspaces.State             { return if (comptime build_options.has_workspaces) workspaces.getState()                 else null; }
+fn wsGetCurrentWorkspaceObject() ?*WsWorkspace { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspaceObject() else null; }
+inline fn wsMoveWindowTo(win: u32, ws: u8) !void {
+    if (comptime build_options.has_workspaces) try workspaces.moveWindowTo(win, ws)
+    else try tracking.registerWindow(win, 0);
+}
+inline fn wsRemoveWindow(win: u32) void {
+    if (comptime build_options.has_workspaces) workspaces.removeWindow(win)
+    else tracking.removeWindow(win);
+}
 const drag          = @import("drag");
 const scale         = @import("scale");
 const debug         = @import("debug");
@@ -157,18 +159,12 @@ pub inline fn isValidManagedWindow(win: u32) bool {
     return win != 0 and
            win != core.root and
            !bar.isBarWindow(win) and
-           wsGetWorkspaceForWindow(win) != null;
+           tracking.isManaged(win);
 }
 
 pub inline fn isOnCurrentWorkspace(win: u32) bool {
-    // Deliberate: single probe on window_to_workspaces covers both the
-    // "is managed" and "is on current workspace" checks, avoiding two
-    // lookups on the same key on every EnterNotify hot path.
     if (win == 0 or win == core.root or bar.isBarWindow(win)) return false;
-    if (comptime !build_options.has_workspaces) return false;
-    const s = wsGetState() orelse return false;
-    const mask = s.window_to_workspaces.get(win) orelse return false;
-    return (mask >> @intCast(s.current)) & 1 != 0;
+    return tracking.isOnCurrentWorkspace(win);
 }
 
 // Button grab management
@@ -188,9 +184,7 @@ pub fn grabButtons(win: u32, focused: bool) void {
 
 /// Returns `target` if it is a valid workspace index, otherwise `fallback`.
 inline fn clampToValidWorkspace(target: u8, fallback: u8) u8 {
-    if (comptime !build_options.has_workspaces) return fallback;
-    const s = wsGetState() orelse return fallback;
-    return if (target < s.workspaces.len) target else fallback;
+    return if (target < tracking.getWorkspaceCount()) target else fallback;
 }
 
 /// Resolves a pre-fired WM_CLASS property cookie against workspace rules.
@@ -433,7 +427,7 @@ fn discardPropertyCookies(cookies: PropertyCookies) void {
 
 pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t) void {
     const win        = event.window;
-    const current_ws = wsGetCurrentWorkspace() orelse 0;
+    const current_ws: u8 = @intCast(tracking.getCurrentWorkspace() orelse 0);
 
     _ = xcb.xcb_change_window_attributes(
         core.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{constants.EventMasks.MANAGED_WINDOW},
@@ -472,8 +466,8 @@ fn unmanageWindow(win: u32) void {
 
     const was_focused = (focus.getFocused() == win);
 
-    const window_workspace = wsGetWorkspaceForWindow(win);
-    const current_ws       = wsGetCurrentWorkspace();
+    const window_workspace = tracking.getWorkspaceForWindow(win);
+    const current_ws       = tracking.getCurrentWorkspace();
 
     utils.uncacheWindowFocusProps(win);
 
@@ -537,16 +531,16 @@ fn focusWindowUnderPointer(ptr_cookie: xcb.xcb_query_pointer_cookie_t) void {
     else
         null;
     const reply = xcb.xcb_query_pointer_reply(core.conn, ptr_cookie, null) orelse {
-        focus.focusBestAvailable(.tiling_operation, wsIsOnCurrentWorkspaceAndVisible, fallback);
+        focus.focusBestAvailable(.tiling_operation, tracking.isOnCurrentWorkspaceAndVisible, fallback);
         return;
     };
     defer std.c.free(reply);
     const child = reply.*.child;
-    if (wsIsOnCurrentWorkspaceAndVisible(child)) {
+    if (tracking.isOnCurrentWorkspaceAndVisible(child)) {
         focus.setFocus(child, .mouse_enter);
         return;
     }
-    focus.focusBestAvailable(.tiling_operation, wsIsOnCurrentWorkspaceAndVisible, fallback);
+    focus.focusBestAvailable(.tiling_operation, tracking.isOnCurrentWorkspaceAndVisible, fallback);
 }
 
 // Configure request
@@ -673,7 +667,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
         event.child
     else
         event.event;
-    maybeFocusWindow(utils.findManagedWindow(core.conn, win, wsIsManaged));
+    maybeFocusWindow(utils.findManagedWindow(core.conn, win, tracking.isManaged));
 }
 
 pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t) void {
@@ -820,7 +814,6 @@ pub fn updateFocusBorders(old_focused: ?u32, new_focused: ?u32) void {
 /// Called after a retile pass: layout changes can implicitly shift which
 /// window is fullscreen or focused, making cached colors stale.
 pub fn updateWorkspaceBorders() void {
-    if (comptime !build_options.has_workspaces) return;
     const ws = wsGetCurrentWorkspaceObject() orelse return;
     for (ws.windows.items()) |win|
         _ = xcb.xcb_change_window_attributes(core.conn, win,
@@ -834,6 +827,6 @@ pub fn reloadBorders() void {
     if (getBorderWidth() == 0) return;
     if (comptime !build_options.has_workspaces) return;
     const ws_state = wsGetState() orelse return;
-    for (ws_state.workspaces) |*ws|
+    if (comptime build_options.has_workspaces) for (ws_state.workspaces) |*ws|
         for (ws.windows.items()) |win| applyBorder(win);
 }

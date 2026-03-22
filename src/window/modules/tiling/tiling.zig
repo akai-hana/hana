@@ -5,17 +5,12 @@ const core       = @import("core");
 const xcb        = core.xcb;
 const utils      = @import("utils");
 const constants  = @import("constants");
-const workspaces = if (build_options.has_workspaces) @import("workspaces") else struct {};
+const tracking    = @import("tracking");
+const workspaces  = if (build_options.has_workspaces) @import("workspaces") else struct {};
 const WsState     = if (build_options.has_workspaces) workspaces.State     else struct {};
 const WsWorkspace = if (build_options.has_workspaces) workspaces.Workspace else struct {};
-
-fn wsGetState() ?*WsState                                { return if (comptime build_options.has_workspaces) workspaces.getState()                  else null;  }
-inline fn wsGetCurrentWorkspace() ?u8                   { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspace()       else null;  }
-fn wsGetCurrentWorkspaceObject() ?*WsWorkspace          { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspaceObject() else null;  }
-inline fn wsGetWorkspaceCount() usize                   { return if (comptime build_options.has_workspaces) workspaces.getWorkspaceCount()         else 0;     }
-inline fn wsGetWorkspaceForWindow(win: u32) ?u8         { return if (comptime build_options.has_workspaces) workspaces.getWorkspaceForWindow(win)  else null;  }
-inline fn wsIsOnCurrentWorkspace(win: u32) bool         { return if (comptime build_options.has_workspaces) workspaces.isOnCurrentWorkspace(win)   else false; }
-inline fn wsIsWindowOnWorkspace(win: u32, idx: u8) bool { return if (comptime build_options.has_workspaces) workspaces.isWindowOnWorkspace(win, idx) else false; }
+fn wsGetState() ?*WsState                              { return if (comptime build_options.has_workspaces) workspaces.getState()                 else null; }
+fn wsGetCurrentWorkspaceObject() ?*WsWorkspace         { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspaceObject() else null; }
 
 const bar        = @import("bar");
 const focus      = @import("focus");
@@ -402,11 +397,11 @@ pub fn getWindowFilteredIndex(win: u32) ?usize {
     // Only windows on the current workspace have a meaningful filtered index.
     // minimizeWindow always minimizes a focused window on the current workspace,
     // so this assertion documents and enforces the expected call-site contract.
-    std.debug.assert(wsIsOnCurrentWorkspace(win));
+    std.debug.assert(tracking.isOnCurrentWorkspace(win));
     var filtered_idx: usize = 0;
     for (s.windows.items()) |w| {
         if (w == win) return filtered_idx;
-        if (wsIsOnCurrentWorkspace(w)) filtered_idx += 1;
+        if (tracking.isOnCurrentWorkspace(w)) filtered_idx += 1;
     }
     return null;
 }
@@ -463,7 +458,7 @@ fn moveWindowToFilteredSlot(s: *State, win: u32, target: usize) void {
     var to_global: ?usize = null;
     for (items, 0..) |w, i| {
         if (w == win) continue;
-        if (!wsIsOnCurrentWorkspace(w)) continue;
+        if (!tracking.isOnCurrentWorkspace(w)) continue;
         if (filtered_count == target) { to_global = i; break; }
         filtered_count += 1;
     }
@@ -543,7 +538,7 @@ pub fn restoreWorkspaceGeom() bool {
     const ws_windows = s.scratch_wins[0..ws_count];
     if (ws_windows.len == 0) return true;
 
-    const current_ws = wsGetCurrentWorkspace() orelse return false;
+    const current_ws = tracking.getCurrentWorkspace() orelse return false;
     if (current_ws >= DEFAULT_MAX_WS) return false;
     if (s.ws_geom_valid & wsBit(current_ws) == 0) return false;
 
@@ -658,8 +653,8 @@ pub fn retileAllWorkspaces() void {
     if (!s.enabled) return;
 
     const screen     = calculateScreenArea();
-    const ws_count   = wsGetWorkspaceCount();
-    const current_ws = wsGetCurrentWorkspace() orelse return;
+    const ws_count   = tracking.getWorkspaceCount();
+    const current_ws = tracking.getCurrentWorkspace() orelse return;
 
     const ws_state_opt = if (!core.config.tiling.global_layout) wsGetState() else null;
 
@@ -670,7 +665,7 @@ pub fn retileAllWorkspaces() void {
     @memset(s.retile_lens[0..effective_ws], 0);
 
     for (s.windows.items()) |win| {
-        const ws_idx = wsGetWorkspaceForWindow(win) orelse continue;
+        const ws_idx = tracking.getWorkspaceForWindow(win) orelse continue;
         if (ws_idx >= effective_ws) continue;
         if (s.retile_lens[ws_idx] < DEFAULT_MAX_WS_WINDOWS) {
             s.retile_wins[ws_idx * DEFAULT_MAX_WS_WINDOWS + s.retile_lens[ws_idx]] = win;
@@ -775,7 +770,7 @@ fn retile(screen: utils.Rect, for_ws: ?u8) void {
     const s = getState();
 
     const target_ws: u8 = for_ws orelse
-        @intCast(wsGetCurrentWorkspace() orelse return);
+        @intCast(tracking.getCurrentWorkspace() orelse return);
 
     if (comptime build_options.has_fullscreen) {
         if (fullscreen.getForWorkspace(target_ws)) |_| return;
@@ -851,14 +846,14 @@ fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
 const FocusMasterPos = struct { fp: usize, mp: usize, all: []const u32 };
 fn findFocusMasterPos(s: *State) ?FocusMasterPos {
     const focused = focus.getFocused() orelse return null;
-    if (!s.windows.contains(focused) or !wsIsOnCurrentWorkspace(focused)) return null;
+    if (!s.windows.contains(focused) or !tracking.isOnCurrentWorkspace(focused)) return null;
     const all = s.windows.items();
     if (all.len < 2) return null;
     var fp: ?usize = null;
     var mp: ?usize = null;
     for (all, 0..) |win, i| {
         if (win == focused) fp = i;
-        if (mp == null and wsIsOnCurrentWorkspace(win)) mp = i;
+        if (mp == null and tracking.isOnCurrentWorkspace(win)) mp = i;
         if (fp != null and mp != null) break;
     }
     return .{ .fp = fp orelse return null, .mp = mp orelse return null, .all = all };
@@ -871,7 +866,7 @@ fn doSwapWithMaster(s: *State, pos: FocusMasterPos) ?u32 {
     if (pos.fp == pos.mp) {
         // Focused is already master — promote the next workspace window.
         for (pos.all[pos.mp + 1..], pos.mp + 1..) |win, i| {
-            if (wsIsOnCurrentWorkspace(win)) {
+            if (tracking.isOnCurrentWorkspace(win)) {
                 moveWindowToIndex(s, i, pos.mp);
                 return win;
             }
@@ -920,8 +915,8 @@ pub fn swapFocusedWithPrevious() void {
     if (prev == focused) return;
 
     // Both windows must be on the current workspace.
-    if (!wsIsOnCurrentWorkspace(focused)) return;
-    if (!wsIsOnCurrentWorkspace(prev)) return;
+    if (!tracking.isOnCurrentWorkspace(focused)) return;
+    if (!tracking.isOnCurrentWorkspace(prev)) return;
 
     const focused_tiled = s.enabled and s.windows.contains(focused);
     const prev_tiled    = s.enabled and s.windows.contains(prev);
@@ -1145,9 +1140,9 @@ fn filterWorkspaceWindows(s: *State, buf: []u32, for_ws: ?u8) usize {
     for (s.windows.items()) |win| {
         if (n >= buf.len) break;
         const on_ws = if (for_ws) |idx|
-            wsIsWindowOnWorkspace(win, idx)
+            tracking.isWindowOnWorkspace(win, idx)
         else
-            wsIsOnCurrentWorkspace(win);
+            tracking.isOnCurrentWorkspace(win);
         if (on_ws) { buf[n] = win; n += 1; }
     }
     return n;

@@ -36,11 +36,10 @@ const tiling        = if (has_tiling) @import("tiling") else struct {
     pub fn getWindowFilteredIndex(_: u32) ?usize { return null; }
 };
 const window        = @import("window");
-const workspaces    = if (build_options.has_workspaces) @import("workspaces") else struct {};
+const tracking    = @import("tracking");
+const workspaces  = if (build_options.has_workspaces) @import("workspaces") else struct {};
 const WsWorkspace = if (build_options.has_workspaces) workspaces.Workspace else struct {};
-inline fn wsGetCurrentWorkspace() ?u8          { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspace()      else null;  }
-fn wsGetCurrentWorkspaceObject() ?*WsWorkspace { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspaceObject() else null;  }
-inline fn wsFirstNonMinimized(wins: []const u32) ?u32 { return if (comptime build_options.has_workspaces) workspaces.firstNonMinimized(wins) else null; }
+fn wsGetCurrentWorkspaceObject() ?*WsWorkspace { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspaceObject() else null; }
 
 const build_options = @import ("build_options");
 const fullscreen    = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
@@ -145,7 +144,7 @@ inline fn hideWindow(win: u32) void {
 /// to tiling fallback (master or first slave).
 pub fn focusMasterOrFirst() void {
     if (wsGetCurrentWorkspaceObject()) |ws| {
-        if (wsFirstNonMinimized(ws.windows.items())) |win| {
+        if (tracking.firstNonMinimized(ws.windows.items())) |win| {
             focus.setFocus(win, .tiling_operation);
             return;
         }
@@ -172,7 +171,7 @@ inline fn rollbackMinimize(win: u32, fs_ws: ?u8, saved_fs: ?core.WindowGeometry)
 
 pub fn minimizeWindow() void {
     const win    = focus.getFocused()               orelse return;
-    const ws_idx = wsGetCurrentWorkspace() orelse return;
+    const ws_idx = tracking.getCurrentWorkspace() orelse return;
 
     if (isMinimized(win)) return;
 
@@ -281,7 +280,7 @@ inline fn restoreWindow(win: u32) void {
 pub const RestoreOrder = enum { lifo, fifo };
 
 pub fn unminimize(order: RestoreOrder) void {
-    const ws_idx = wsGetCurrentWorkspace() orelse return;
+    const ws_idx = tracking.getCurrentWorkspace() orelse return;
 
     // Resolve the comparison direction once — `order` is a loop-invariant
     // constant and the branch would otherwise be re-evaluated on every entry.
@@ -310,7 +309,7 @@ pub fn unminimize(order: RestoreOrder) void {
 }
 
 pub fn unminimizeAll() void {
-    const ws_idx = wsGetCurrentWorkspace() orelse return;
+    const ws_idx = tracking.getCurrentWorkspace() orelse return;
 
     // Collect all windows minimized on the current workspace.
     // saved_fs is included so fullscreen windows can be restored directly

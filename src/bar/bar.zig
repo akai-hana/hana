@@ -54,12 +54,11 @@ const drawing    = @import("drawing");
 const tiling     = if (build_options.has_tiling) @import("tiling") else struct {};
 const drag       = @import("drag");
 const utils      = @import("utils");
+const tracking   = @import("tracking");
 const workspaces = if (build_options.has_workspaces) @import("workspaces") else struct {};
-const WsState     = if (build_options.has_workspaces) workspaces.State     else struct {};
-const WsWorkspace = if (build_options.has_workspaces) workspaces.Workspace else struct {};
-fn wsGetState()            ?*WsState { return if (comptime build_options.has_workspaces) workspaces.getState()            else null; }
-inline fn wsGetCurrentWorkspace() ?u8     { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspace() else null; }
-inline fn wsSwitchTo(ws_arg: u8) void     {        if (comptime build_options.has_workspaces) workspaces.switchTo(ws_arg);                }
+const WsState    = if (build_options.has_workspaces) workspaces.State else struct {};
+fn wsGetState() ?*WsState              { return if (comptime build_options.has_workspaces) workspaces.getState() else null; }
+inline fn wsSwitchTo(ws_arg: u8) void  { if (comptime build_options.has_workspaces) workspaces.switchTo(ws_arg); }
 const focus      = @import("focus");
 const constants  = @import("constants");
 const minimize   = if (build_options.has_minimize) @import("minimize") else struct {};
@@ -807,7 +806,7 @@ pub fn toggleBarPosition() void {
     _ = xcb.xcb_grab_server(core.conn);
     _ = xcb.xcb_configure_window(core.conn, s.window, xcb.XCB_CONFIG_WINDOW_Y,
         &[_]u32{@as(u32, @bitCast(@as(i32, new_y)))});
-    const current_ws = wsGetCurrentWorkspace() orelse {
+    const current_ws = tracking.getCurrentWorkspace() orelse {
         ungrabAndFlush();
         return;
     };
@@ -867,7 +866,7 @@ pub fn raiseBar() void {
 pub fn setBarState(action: BarAction) void {
     const s = state orelse return;
     if (action == .toggle) s.global_visible = !s.global_visible;
-    const current_ws    = wsGetCurrentWorkspace() orelse 0;
+    const current_ws    = tracking.getCurrentWorkspace() orelse 0;
     const is_fullscreen = action != .hide_fullscreen and
         (comptime build_options.has_fullscreen) and fullscreen.getForWorkspace(current_ws) != null;
     const show = !is_fullscreen and s.global_visible and action != .hide_fullscreen;

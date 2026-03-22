@@ -23,6 +23,7 @@ const input = @import("input");
 // window/
 const window     = @import("window");
 const focus      = @import("focus");
+const tracking   = @import("tracking");
 const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
 const minimize   = if (build_options.has_minimize) @import("minimize") else struct {};
 const workspaces = if (build_options.has_workspaces) @import("workspaces") else struct {};
@@ -164,6 +165,7 @@ fn deinitModules() void {
 
 /// Initializes global WM state: X atom cache, focus property cache, and focus tracking.
 fn initGlobalState(conn_: *xcb.xcb_connection_t, alloc: std.mem.Allocator) !void {
+    tracking.init(alloc);
     try utils.initAtomCache(conn_);   // Intern frequently used X atoms
     utils.initInputModelCache();      // Build per-window focus property cache (no allocator — static array)
     focus.init(alloc);
@@ -173,4 +175,5 @@ fn initGlobalState(conn_: *xcb.xcb_connection_t, alloc: std.mem.Allocator) !void
 fn deinitGlobalState() void {
     utils.deinitInputModelCache();
     focus.deinit();
+    tracking.deinit();
 }
