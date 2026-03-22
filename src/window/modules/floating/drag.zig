@@ -10,6 +10,43 @@ const build_options = @import("build_options");
 const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
 const bar       = @import("bar");
 
+/// Pixels within which a window edge snaps to a monitor edge.
+/// Push the window past this distance to break the snap.
+const SNAP_DISTANCE: i32 = 8;
+
+/// Compute the work area edges, accounting for bar height and position.
+/// The bar's inner edge (facing the desktop) is treated as a hard boundary.
+fn workArea() struct { left: i32, right: i32, top: i32, bottom: i32 } {
+    const sw: i32 = core.screen.width_in_pixels;
+    const sh: i32 = core.screen.height_in_pixels;
+    const bh: i32 = if (bar.isVisible()) bar.getBarHeight() else 0;
+    const bar_at_bottom = core.config.bar.vertical_position == .bottom;
+    return .{
+        .left   = 0,
+        .right  = sw,
+        .top    = if (bar_at_bottom) 0 else bh,
+        .bottom = if (bar_at_bottom) sh - bh else sh,
+    };
+}
+
+/// Snap a window position on one axis.
+///
+/// Snapping engages when a window edge comes within SNAP_DISTANCE of a
+/// work-area boundary. It disengages as soon as the raw position would
+/// push the window edge past the boundary in that direction — the user is
+/// intentionally crossing it. This gives the feel of magnetic edges that
+/// you can escape with a deliberate push rather than a hard clamp.
+///
+/// `pos`  — raw window origin on this axis
+/// `dim`  — window size on this axis (width or height)
+/// `near` — work-area near boundary (left or top)
+/// `far`  — work-area far boundary (right or bottom)
+inline fn snapAxis(pos: i32, dim: i32, near: i32, far: i32) i32 {
+    if (@abs(pos - near) < SNAP_DISTANCE) return near;
+    if (@abs((pos + dim) - far) < SNAP_DISTANCE) return far - dim;
+    return pos;
+}
+
 // Apply an i16 delta to a u16 dimension, clamped to [MIN_WINDOW_DIM, u16_MAX].
 // Without the upper clamp, base=65535 + delta=32767 = 98302 overflows u16 and
 // panics in safe builds.
@@ -98,11 +135,18 @@ pub fn updateDrag(x: i16, y: i16) void {
     const dx = x - drag.start_x;
     const dy = y - drag.start_y;
     const rect = switch (drag.mode) {
-        .move => utils.Rect{
-            .x      = drag.start_win_x + dx,
-            .y      = drag.start_win_y + dy,
-            .width  = drag.start_win_width,
-            .height = drag.start_win_height,
+        .move => blk: {
+            const raw_x: i32 = @as(i32, drag.start_win_x) + @as(i32, dx);
+            const raw_y: i32 = @as(i32, drag.start_win_y) + @as(i32, dy);
+            const wa = workArea();
+            const win_w: i32 = drag.start_win_width;
+            const win_h: i32 = drag.start_win_height;
+            break :blk utils.Rect{
+                .x      = @intCast(snapAxis(raw_x, win_w, wa.left, wa.right)),
+                .y      = @intCast(snapAxis(raw_y, win_h, wa.top,  wa.bottom)),
+                .width  = drag.start_win_width,
+                .height = drag.start_win_height,
+            };
         },
         // Resize anchors to the window's top-left: position is fixed while
         // width and height grow with the drag delta.
