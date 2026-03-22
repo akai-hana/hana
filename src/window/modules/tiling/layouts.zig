@@ -1,9 +1,9 @@
 //! Common layout interface and utilities shared by all layout modules.
 
+const core  = @import("core");
+const xcb   = core.xcb;
 const utils = @import("utils");
 const debug = @import("debug");
-const core = @import("core");
-const xcb = core.xcb;
 
 // WM_NORMAL_HINTS size hint cache
 //
