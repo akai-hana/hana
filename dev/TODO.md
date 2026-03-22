@@ -1,6 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+make a new bind that enables all workspaces at once. while mod+1-4,q,w,e,r are 8 workspaces, mod+5 should be all workspaces at once. this also means i could send a window to all workspaces by doing mod+shift+5.
+
 when i'm in the monocle layout, and i tab between windows, the bar title segment partition of the window that i'm currently focused on is on the left of the other segment partition of the unfocused window that's behind. i'd expect this to be the opposite case, for the focused window to be on the left, and the unfocused on the right, if both of the windows' coordinates and geometries are identical. could you look more into detail as to what's happening here?
  
 make layout cycling not make mouse hovering steal focus

@@ -38,9 +38,9 @@ const tiling        = if (has_tiling) @import("tiling") else struct {
 const window        = @import("window");
 const workspaces    = if (build_options.has_workspaces) @import("workspaces") else struct {};
 const WsWorkspace = if (build_options.has_workspaces) workspaces.Workspace else struct {};
-inline fn wsGetCurrentWorkspace() ?u8          { return if (comptime build_options.has_workspaces) wsGetCurrentWorkspace()      else null;  }
-fn wsGetCurrentWorkspaceObject() ?*WsWorkspace { return if (comptime build_options.has_workspaces) wsGetCurrentWorkspaceObject() else null;  }
-inline fn wsFirstNonMinimized(wins: []const u32) ?u32 { return if (comptime build_options.has_workspaces) wsFirstNonMinimized(wins) else null; }
+inline fn wsGetCurrentWorkspace() ?u8          { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspace()      else null;  }
+fn wsGetCurrentWorkspaceObject() ?*WsWorkspace { return if (comptime build_options.has_workspaces) workspaces.getCurrentWorkspaceObject() else null;  }
+inline fn wsFirstNonMinimized(wins: []const u32) ?u32 { return if (comptime build_options.has_workspaces) workspaces.firstNonMinimized(wins) else null; }
 
 const build_options = @import ("build_options");
 const fullscreen    = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
