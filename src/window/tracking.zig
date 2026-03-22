@@ -125,7 +125,7 @@ pub fn removeWindow(win: u32) void {
 /// tag and move operations; keeps the hashmap in sync with workspace arrays.
 pub fn setWindowMask(win: u32, mask: u64) void {
     std.debug.assert(mask != 0);
-    if (g_map) |*m| if (m.getPtr(win)) |p| p.* = mask;
+    if (g_map) |*m| if (m.getPtr(win)) |p| { p.* = mask; };
 }
 
 // ── Query predicates ─────────────────────────────────────────────────────────
