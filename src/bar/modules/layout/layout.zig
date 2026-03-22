@@ -16,6 +16,7 @@ pub fn getIcon(layout: anytype) []const u8 {
         .grid      => "[+]",
         .fibonacci => "[@]",
         .floating  => "><>",
+        else       => unreachable,
     };
 }
 
@@ -25,5 +26,5 @@ pub fn draw(dc: *drawing.DrawContext, config: core.BarConfig, height: u16, start
         const icon    = getIcon(t_state.layout);
         return dc.drawSegment(start_x, height, icon, config.scaledSegmentPadding(height), config.bg, config.fg);
     }
-    return start_x;
+    return dc.drawSegment(start_x, height, getIcon(.floating), config.scaledSegmentPadding(height), config.bg, config.fg);
 }
