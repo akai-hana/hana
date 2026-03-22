@@ -139,15 +139,15 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "has_fibonacci", all_modules.contains("fibonacci"));
 
     // Bar segment flags consolidated into build_options (no separate bar_flags module needed).
-    const has_any_segment = all_modules.contains("tags")       or
-                            all_modules.contains("layout")     or
-                            all_modules.contains("variations") or
-                            all_modules.contains("title")      or
-                            all_modules.contains("clock")      or
+    const has_any_segment = all_modules.contains("tags")     or
+                            all_modules.contains("layout")   or
+                            all_modules.contains("variants") or
+                            all_modules.contains("title")    or
+                            all_modules.contains("clock")    or
                             all_modules.contains("status");
     build_options.addOption(bool, "has_tags",        all_modules.contains("tags"));
     build_options.addOption(bool, "has_layout",      all_modules.contains("layout"));
-    build_options.addOption(bool, "has_variations",  all_modules.contains("variations"));
+    build_options.addOption(bool, "has_variants",    all_modules.contains("variants"));
     build_options.addOption(bool, "has_title",       all_modules.contains("title"));
     build_options.addOption(bool, "has_clock",       all_modules.contains("clock"));
     build_options.addOption(bool, "has_status",      all_modules.contains("status"));

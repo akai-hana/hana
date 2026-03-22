@@ -327,8 +327,8 @@ const ACTION_MAP = std.StaticStringMap(core.Action).initComptime(.{
     .{ "unminimize_lifo",        .unminimize_lifo        },
     .{ "unminimize_fifo",        .unminimize_fifo        },
     .{ "unminimize_all",         .unminimize_all         },
-    .{ "cycle_layout_variation", .cycle_layout_variation },
-    .{ "cycle_variation",        .cycle_layout_variation },
+    .{ "cycle_layout_variants", .cycle_layout_variants },
+    .{ "cycle_variants",        .cycle_layout_variants },
     .{ "toggle_prompt",          .toggle_prompt          },
     .{ "drun",                   .toggle_prompt          },
     .{ "toggle_float",           .toggle_floating        },
@@ -593,12 +593,12 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
     cfg.tiling.master_count = get(u8, master_src, if (dedicated) "count" else "master_count", 1, 1, null);
     if (master_src.getString(if (dedicated) "side"  else "master_side"))  |s| cfg.tiling.master_side = core.MasterSide.fromStringWithAlias(s) orelse .left;
     cfg.tiling.master_width = master_src.getScalable(if (dedicated) "width" else "master_width") orelse parser.ScalableValue.percentage(50.0);
-    parseTilingVariations(doc, cfg);
+    parseTilingVariants(doc, cfg);
     cfg.tiling.global_layout = get(bool, section, "global_layout", false, null, null);
 }
 
 /// Reads `variation` from `section` into `field`; warns on unknown values.
-inline fn tryParseVariation(
+inline fn tryParseVariant(
     comptime T:   type,
     section:      *const parser.Section,
     layout_name:  []const u8,
@@ -615,13 +615,13 @@ inline fn tryParseIndicator(section: *const parser.Section, field: *?[3]u8) void
     if (section.getString("indicator")) |raw| field.* = parseIndicator(raw);
 }
 
-fn parseTilingVariations(doc: *const parser.Document, cfg: *core.Config) void {
+fn parseTilingVariants(doc: *const parser.Document, cfg: *core.Config) void {
     inline for (.{
-        .{ "tiling.layouts.master-stack", core.MasterVariation,  "master-stack", "master_variation",  "master_indicator"  },
-        .{ "tiling.layouts.monocle",      core.MonocleVariation, "monocle",      "monocle_variation", "monocle_indicator" },
-        .{ "tiling.layouts.grid",         core.GridVariation,    "grid",         "grid_variation",    "grid_indicator"    },
+        .{ "tiling.layouts.master-stack", core.MasterVariant,  "master-stack", "master_variant",  "master_indicator"  },
+        .{ "tiling.layouts.monocle",      core.MonocleVariant, "monocle",      "monocle_variant", "monocle_indicator" },
+        .{ "tiling.layouts.grid",         core.GridVariant,    "grid",         "grid_variant",    "grid_indicator"    },
     }) |e| if (doc.getSection(e[0])) |ms| {
-        tryParseVariation(e[1], ms, e[2], &@field(cfg.tiling, e[3]));
+        tryParseVariant(e[1], ms, e[2], &@field(cfg.tiling, e[3]));
         tryParseIndicator(ms, &@field(cfg.tiling, e[4]));
     };
 }
@@ -665,16 +665,16 @@ inline fn canonicalLayout(name: []const u8, buf: []u8) []const u8 {
     return lower;
 }
 
-/// Parses a variation string for the given layout name into a LayoutVariationOverride.
+/// Parses a variation string for the given layout name into a LayoutVariantOverride.
 /// Returns null and emits a warning when the string is not valid for that layout.
-fn parseLayoutVariation(layout_name: []const u8, variation_str: []const u8) ?core.LayoutVariationOverride {
+fn parseLayoutVariant(layout_name: []const u8, variation_str: []const u8) ?core.LayoutVariantOverride {
     var buf: [32]u8 = undefined;
     if (layout_name.len > buf.len) return null;
     const lower_layout = std.ascii.lowerString(buf[0..layout_name.len], layout_name);
     const typed_layouts = .{
-        .{ "master-stack", core.MasterVariation,  "master"  },
-        .{ "monocle",      core.MonocleVariation, "monocle" },
-        .{ "grid",         core.GridVariation,    "grid"    },
+        .{ "master-stack", core.MasterVariant,  "master"  },
+        .{ "monocle",      core.MonocleVariant, "monocle" },
+        .{ "grid",         core.GridVariant,    "grid"    },
     };
     inline for (typed_layouts) |entry| {
         if (std.mem.eql(u8, lower_layout, entry[0])) {
@@ -682,11 +682,9 @@ fn parseLayoutVariation(layout_name: []const u8, variation_str: []const u8) ?cor
                 debug.warn("Unknown {s} variation '{s}' in layouts array, ignoring", .{ entry[0], variation_str });
                 return null;
             };
-            return @unionInit(core.LayoutVariationOverride, entry[2], v);
+            return @unionInit(core.LayoutVariantOverride, entry[2], v);
         }
     }
-    if (std.mem.eql(u8, lower_layout, "fibonacci"))
-        debug.warn("fibonacci does not support variations; '{s}' in layouts array ignored", .{variation_str});
     return null;
 }
 
@@ -713,7 +711,7 @@ fn parseLayoutsArray(
         }
         const layout_idx: u8 = @intCast(cfg.tiling.layouts.items.len);
         try cfg.tiling.layouts.append(allocator, try allocator.dupe(u8, canonical));
-        var variation: ?core.LayoutVariationOverride = null;
+        var variation: ?core.LayoutVariantOverride = null;
         var ws_list_str: ?[]const u8 = null;
         if (i + 1 < arr.len) {
             if (arr[i + 1].asString()) |peek| {
@@ -722,7 +720,7 @@ fn parseLayoutsArray(
                         ws_list_str = peek;
                         i += 1;
                     } else {
-                        variation = parseLayoutVariation(canonical, peek);
+                        variation = parseLayoutVariant(canonical, peek);
                         i += 1;
                         if (i + 1 < arr.len) if (arr[i + 1].asString()) |peek2|
                             if (isWorkspaceList(peek2)) { ws_list_str = peek2; i += 1; };
@@ -748,7 +746,7 @@ fn parseLayoutsArray(
                 try cfg.tiling.workspace_layout_overrides.append(allocator, .{
                     .workspace_idx = ws_idx,
                     .layout_idx    = layout_idx,
-                    .variation     = variation,
+                    .variant       = variation,
                 });
             }
         }

@@ -32,7 +32,7 @@ pub const Workspace = struct {
     layout:    tiling.Layout,
     // Optional layout variation override set via the layouts array in config.
     // Applied on every workspace switch; null means use the global defaults.
-    variation: ?core.LayoutVariationOverride = null,
+    variation: ?core.LayoutVariantOverride = null,
     // Per-workspace master width override (master-stack layout).
     // null = use the global default from tiling state.
     // Set when the user adjusts master width in per-workspace layout mode;
@@ -119,19 +119,19 @@ pub fn init() void {
         // Apply any workspace-specific layout + variation override from the
         // layouts array (e.g. `"monocle", "gapless", "4,8"` in config.toml).
         var ws_layout    = default_layout;
-        var ws_variation: ?core.LayoutVariationOverride = null;
+        var ws_variant: ?core.LayoutVariantOverride = null;
         for (cfg_tiling.workspace_layout_overrides.items) |override| {
             if (override.workspace_idx == id) {
                 if (override.layout_idx < cfg_tiling.layouts.items.len) {
                     ws_layout = layoutFromName(cfg_tiling.layouts.items[override.layout_idx]);
                 }
-                ws_variation = override.variation;
+                ws_variant = override.variant;
                 break;
             }
         }
 
         ws.* = Workspace.init(id, name, ws_layout);
-        ws.variation = ws_variation;
+        ws.variation = ws_variant;
     }
 
     var w2ws = std.AutoHashMap(u32, u64).init(core.alloc);
@@ -304,7 +304,11 @@ pub inline fn getWindowWorkspaceMask(win: u32) ?u64 {
 /// True when workspace `ws_idx` is set in `win`'s tag bitmask.
 pub inline fn isWindowOnWorkspace(win: u32, ws_idx: u8) bool {
     const mask = getWindowWorkspaceMask(win) orelse return false;
-    std.debug.assert(ws_idx < 64); // cap is 20; ≥64 is unreachable
+    // ws_idx must be a valid workspace index, not just any value < 64.
+    // The shift itself is safe (workspace count is always <= 20 < 64) but
+    // catching an out-of-range index here is far more informative than
+    // silently returning false for a bit that was never allocated.
+    std.debug.assert(ws_idx < getWorkspaceCount());
     return (mask >> @intCast(ws_idx)) & 1 != 0;
 }
 
@@ -331,6 +335,15 @@ pub inline fn getCurrentWorkspace() ?u8 {
 pub inline fn isOnCurrentWorkspace(win: u32) bool {
     const s = getState() orelse return false;
     return isWindowOnWorkspace(win, s.current);
+}
+
+/// Returns true when `win` is on the current workspace and is not minimized.
+///
+/// The combined predicate used by focus.focusBestAvailable for post-unmanage
+/// and post-minimize focus recovery.  Combining the two checks into one
+/// function lets it serve as a typed *const fn(u32) bool without a closure.
+pub fn isOnCurrentWorkspaceAndVisible(win: u32) bool {
+    return isOnCurrentWorkspace(win) and !minimize.isMinimized(win);
 }
 
 pub inline fn getCurrentWorkspaceObject() ?*Workspace {

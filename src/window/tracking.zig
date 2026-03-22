@@ -22,16 +22,18 @@ pub const Tracking = struct {
         return std.mem.indexOfScalar(u32, self.buf[0..self.len], win) != null;
     }
 
-    /// Returns false if win is already tracked or capacity is exhausted.
-    /// Asserts capacity is not exceeded — callers must not add beyond 64 windows.
+    /// Returns false if win is already tracked or if the buffer is full.
+    /// The capacity check is an explicit runtime guard in all build modes —
+    /// not an assert — so a full buffer silently drops the add rather than
+    /// corrupting the length field in release builds.
     fn prepareAdd(self: *Tracking, win: u32) bool {
         if (self.contains(win)) return false;
-        std.debug.assert(self.len < capacity);
+        if (self.len >= capacity) return false;
         return true;
     }
 
-    /// Appends win to the back. Asserts capacity is not exceeded.
-    /// Infallible — no allocator, no OOM path.
+    /// Appends win to the back. No-op if win is already present or the
+    /// buffer is full. Infallible — no allocator, no OOM path.
     pub fn add(self: *Tracking, win: u32) void {
         if (!self.prepareAdd(win)) return;
         self.buf[self.len] = win;
@@ -39,6 +41,7 @@ pub const Tracking = struct {
     }
 
     /// Prepends win to the front, shifting existing entries right.
+    /// No-op if win is already present or the buffer is full.
     /// Infallible — no allocator, no OOM path.
     pub fn addFront(self: *Tracking, win: u32) void {
         if (!self.prepareAdd(win)) return;

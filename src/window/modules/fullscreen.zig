@@ -97,8 +97,10 @@ pub fn getForWorkspace(ws: u8) ?FullscreenInfo {
 }
 
 /// Returns the workspace index that `win` is fullscreen on, or null.
+/// O(workspace_count) — scans only the live slots, not the full 256-entry array.
 pub fn workspaceFor(win: u32) ?u8 {
-    for (&g_slots, 0..) |slot, i|
+    const count = workspaces.getWorkspaceCount();
+    for (g_slots[0..count], 0..) |slot, i|
         if (slot) |info| if (info.window == win) return @intCast(i);
     return null;
 }
@@ -116,14 +118,16 @@ pub fn clear() void {
 }
 
 pub fn hasAnyFullscreen() bool {
-    for (&g_slots) |slot| if (slot != null) return true;
+    const count = workspaces.getWorkspaceCount();
+    for (g_slots[0..count]) |slot| if (slot != null) return true;
     return false;
 }
 
 /// Iterate over occupied slots. Diagnostics only.
 /// Calls `cb` with (workspace_index, FullscreenInfo) for every non-null slot.
 pub fn forEachFullscreen(cb: fn (u8, FullscreenInfo) void) void {
-    for (&g_slots, 0..) |slot, i|
+    const count = workspaces.getWorkspaceCount();
+    for (g_slots[0..count], 0..) |slot, i|
         if (slot) |info| cb(@intCast(i), info);
 }
 

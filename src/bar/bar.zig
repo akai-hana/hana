@@ -65,11 +65,11 @@ const workspaces_segment = if (build_options.has_tags) @import("tags") else stru
     pub fn getCachedWorkspaceWidth() u16 { return 0; }
 };
 
-const DrawOnlyStub = struct {
+const drawStub = struct {
     pub fn draw(_: *drawing.DrawContext, _: core.BarConfig, _: u16, x: u16) !u16 { return x; }
 };
-const layout_segment     = if (build_options.has_layout)     @import("layout")     else DrawOnlyStub;
-const variations_segment = if (build_options.has_variations) @import("variations") else DrawOnlyStub;
+const layout_segment   = if (build_options.has_layout)   @import("layout")   else drawStub;
+const variants_segment = if (build_options.has_variants) @import("variants") else drawStub;
 
 const prompt     = @import("prompt");
 const fullscreen = @import("fullscreen");
@@ -239,9 +239,9 @@ const State = struct {
                 @intCast(snap.ws_count * workspaces_segment.getCachedWorkspaceWidth())
             else
                 FALLBACK_WORKSPACES_WIDTH,
-            .layout, .variations => LAYOUT_SEGMENT_WIDTH,
-            .title      => TITLE_SEGMENT_MIN_WIDTH,
-            .clock      => self.cached_clock_width,
+            .layout, .variants => LAYOUT_SEGMENT_WIDTH,
+            .title             => TITLE_SEGMENT_MIN_WIDTH,
+            .clock             => self.cached_clock_width,
         };
     }
 
@@ -251,9 +251,9 @@ const State = struct {
             .workspaces => try workspaces_segment.draw(
                 self.dc, self.config, self.height, x,
                 snap.ws_current, snap.ws_has_windows.items),
-            .layout     => try layout_segment.draw(self.dc, self.config, self.height, x),
-            .variations => try variations_segment.draw(self.dc, self.config, self.height, x),
-            .title      => try prompt.draw(
+            .layout   => try layout_segment.draw(self.dc, self.config, self.height, x),
+            .variants => try variants_segment.draw(self.dc, self.config, self.height, x),
+            .title    => try prompt.draw(
                 self.dc, self.config, self.height, x, width orelse 100,
                 self.conn, snap.focused_window,
                 snap.focused_title.items,
@@ -503,11 +503,7 @@ fn captureIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot) !voi
     snap.status_text.clearRetainingCapacity();
     try snap.status_text.appendSlice(allocator, s.status_text.items);
     snap.minimized_set.clearRetainingCapacity();
-    if (minimize.getStateOpt()) |ms| {
-        try snap.minimized_set.ensureTotalCapacity(allocator, ms.minimized_info.count());
-        var it = ms.minimized_info.keyIterator();
-        while (it.next()) |key| snap.minimized_set.putAssumeCapacity(key.*, {});
-    }
+    try minimize.populateSet(&snap.minimized_set, allocator);
 
     const ws_state = workspaces.getState() orelse return;
     snap.ws_count   = @intCast(ws_state.workspaces.len);

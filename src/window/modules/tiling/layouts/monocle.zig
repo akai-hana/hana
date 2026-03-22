@@ -32,13 +32,20 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
     _ = xcb.xcb_configure_window(ctx.conn, top_win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
     // Push non-top windows offscreen so they never show through a transparent
-    // top window. Their cached rects are zeroed so restoreWorkspaceGeom won't
-    // replay stale on-screen positions — it will fall back to a full retile,
-    // which repeats this offscreen push correctly.
+    // top window.
+    //
+    // Optimization: if the cache entry for a window has already been zeroed
+    // (either by a previous monocle pass or by a workspace-switch push), the
+    // window is already offscreen and sending another configure_window is
+    // redundant. We still zero any valid cached rect so restoreWorkspaceGeom
+    // does not replay a stale on-screen position for background windows.
     for (windows[0 .. windows.len - 1]) |win| {
+        if (ctx.cache.getPtr(win)) |wd| {
+            if (!wd.hasValidRect()) continue; // already offscreen — skip the round-trip
+            wd.rect = tiling.ZERO_RECT;       // invalidate before sending
+        }
         _ = xcb.xcb_configure_window(ctx.conn, win,
             xcb.XCB_CONFIG_WINDOW_X,
             &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
-        if (ctx.cache.getPtr(win)) |wd| wd.rect = tiling.ZERO_RECT;
     }
 }

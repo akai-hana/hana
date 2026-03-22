@@ -127,16 +127,16 @@ inline fn stepCycle(s: *const State, current: Layout, comptime forward: bool) La
     return cycle[0]; // current not in list (layout disabled at reload) — jump to first
 }
 
-// Variation enums are defined in core.zig to allow config.zig to parse them
+// Variant enums are defined in core.zig to allow config.zig to parse them
 // without a circular import. Re-exported here for convenience.
-pub const MasterVariation  = core.MasterVariation;
-pub const MonocleVariation = core.MonocleVariation;
-pub const GridVariation    = core.GridVariation;
+pub const MasterVariant  = core.MasterVariant;
+pub const MonocleVariant = core.MonocleVariant;
+pub const GridVariant    = core.GridVariant;
 
-pub const LayoutVariations = struct {
-    master:  MasterVariation  = .lifo,
-    monocle: MonocleVariation = .gapless,
-    grid:    GridVariation    = .rigid,
+pub const LayoutVariants = struct {
+    master:  MasterVariant  = .lifo,
+    monocle: MonocleVariant = .gapless,
+    grid:    GridVariant    = .rigid,
 };
 
 pub const State = struct {
@@ -146,7 +146,7 @@ pub const State = struct {
     /// Restored by toggleFloating() when switching back from floating.
     /// Defaults to the first entry in LAYOUT_CYCLE.
     prev_layout:      Layout,
-    layout_variations: LayoutVariations,
+    layout_variations: LayoutVariants,
     master_side:      core.MasterSide,
     master_width:     f32,
     master_count:     u8,
@@ -249,9 +249,9 @@ fn buildState() State {
         .enabled_layouts     = el.arr,
         .enabled_layouts_len = el.len,
         .layout_variations = .{
-            .master  = core.config.tiling.master_variation,
-            .monocle = core.config.tiling.monocle_variation,
-            .grid    = core.config.tiling.grid_variation,
+            .master  = core.config.tiling.master_variant,
+            .monocle = core.config.tiling.monocle_variant,
+            .grid    = core.config.tiling.grid_variant,
         },
         .master_side      = core.config.tiling.master_side,
         .master_width     = computeMasterWidth(),
@@ -333,14 +333,25 @@ pub const evictSizeHints = layouts.evictSizeHints;
 pub fn addWindow(window_id: u32) void {
     std.debug.assert(window_id != 0);
     const s = getState();
-    if (!s.enabled) return;
 
-    if (s.layout == .master and s.layout_variations.master == .fifo)
+    // Always add to the tracking list, even when the floating layout is active
+    // (s.enabled == false). Windows opened during floating mode must be tracked
+    // so they enter the tiling pool when toggleFloating() restores a tiling
+    // layout. Without this, they become permanent orphans that never get tiled.
+    //
+    // Use prev_layout to resolve FIFO/LIFO when the current layout is .floating,
+    // so new windows land in the correct slot once floating is exited.
+    const effective_layout = if (s.layout == .floating) s.prev_layout else s.layout;
+    if (effective_layout == .master and s.layout_variations.master == .fifo)
         s.windows.addFront(window_id)
     else
         s.windows.add(window_id);
     s.dirty = true;
     s.ws_geom_valid = 0;
+
+    // Skip X protocol operations while the tiling engine is disabled. Border
+    // width and color will be applied on the first retile after floating exits.
+    if (!s.enabled) return;
 
     const border_color = s.borderColor(window_id);
     _ = xcb.xcb_change_window_attributes(core.conn, window_id,
@@ -393,7 +404,7 @@ pub fn getWindowFilteredIndex(win: u32) ?usize {
 /// before the window is removed.
 ///
 /// Works correctly for both LIFO (default, addWindow appends to end) and
-/// FIFO (addFront prepends to front) layout variations.
+/// FIFO (addFront prepends to front) layout variants.
 pub fn addWindowAtFilteredIndex(win: u32, target_filtered_idx: usize) void {
     addWindow(win);
     moveWindowToFilteredSlot(getState(), win, target_filtered_idx);
@@ -534,6 +545,10 @@ pub fn restoreWorkspaceGeom() bool {
     for (ws_windows, rects) |win, rect| {
         utils.configureWindow(core.conn, win, rect);
     }
+    // updateBorders is intentionally kept here: restoreWorkspaceGeom replays
+    // cached positions via utils.configureWindow directly, bypassing
+    // configureSafe and its get_border_color callback. Border colors must
+    // therefore be applied as a separate pass on this fast path.
     updateBorders(s, ws_windows);
     return true;
 }
@@ -576,8 +591,23 @@ inline fn resolveMasterWidth(s: *const State, ws_state: ?*workspaces.State, ws_i
     return s.master_width;
 }
 
+/// Stable function-pointer target for LayoutCtx.get_border_color.
+/// Retrieves the correct border color for `win` from the live tiling state
+/// (focused vs unfocused, fullscreen override). Called by configureSafe once
+/// per window per retile, merged into the existing CacheMap scan so no
+/// additional linear search is needed.
+fn borderColorCallback(win: u32) u32 {
+    return getState().borderColor(win);
+}
+
 inline fn makeLayoutCtx(s: *State) layouts.LayoutCtx {
-    return .{ .conn = core.conn, .cache = &s.cache };
+    return .{
+        .conn             = core.conn,
+        .cache            = &s.cache,
+        // Wire the border-color provider so configureSafe handles both rect
+        // dedup and border emission in a single CacheMap scan per window.
+        .get_border_color = borderColorCallback,
+    };
 }
 
 fn dispatchLayout(layout: Layout, ctx: *const layouts.LayoutCtx, s: *State, wins: []const u32, screen: utils.Rect) void {
@@ -643,7 +673,7 @@ pub fn retileAllWorkspaces() void {
         s.master_width = resolveMasterWidth(s, ws_state_opt, ws_idx);
         defer s.master_width = saved_width;
         dispatchLayout(resolveLayout(s, ws_state_opt, ws_idx, core.config.tiling.global_layout), &ctx, s, ws_windows, screen);
-        updateBorders(s, ws_windows);
+        // Border colors handled by configureSafe via get_border_color callback.
         markWsGeomValid(s, ws_idx);
     }
 
@@ -746,7 +776,8 @@ fn retile(screen: utils.Rect, for_ws: ?u8) void {
     dispatchLayout(resolveLayout(s, workspaces.getState(), target_ws, core.config.tiling.global_layout), &ctx, s, ws_windows, screen);
 
     s.last_retile_screen = screen;
-    updateBorders(s, ws_windows);
+    // Border colors are now emitted by configureSafe via the get_border_color
+    // callback set in makeLayoutCtx — no separate updateBorders pass needed.
     markWsGeomValid(s, target_ws);
 }
 
@@ -878,10 +909,18 @@ pub fn swapFocusedWithPrevious() void {
     if (focused_tiled and prev_tiled) {
         // Both are under tiler control: swap their positions in the tracking
         // list so the next retile assigns each window to the other's cell.
+        //
+        // Single-pass scan: find both indices simultaneously rather than
+        // calling findWinIdx twice (two O(n) passes over the same slice).
         const all = s.windows.items();
-        const if_ = findWinIdx(all, focused) orelse return;
-        const ip  = findWinIdx(all, prev)    orelse return;
-        swapWindowsInList(s, if_, ip);
+        var idx_focused: ?usize = null;
+        var idx_prev:    ?usize = null;
+        for (all, 0..) |w, i| {
+            if (w == focused) idx_focused = i;
+            if (w == prev)    idx_prev    = i;
+            if (idx_focused != null and idx_prev != null) break;
+        }
+        swapWindowsInList(s, idx_focused orelse return, idx_prev orelse return);
         retileCurrentWorkspace();
     } else {
         // One or both windows are floating: exchange their on-screen geometries
@@ -991,8 +1030,8 @@ pub fn syncLayoutFromWorkspace(ws: *const workspaces.Workspace) void {
     // Apply the workspace-pinned master width when present; fall back to the
     // current global value so unvisited workspaces inherit the config default.
     if (ws.master_width) |mw| s.master_width = mw;
-    // Apply the workspace-pinned variation override when present. A null
-    // variation means "use the global default", so leave layout_variations alone.
+    // Apply the workspace-pinned variant override when present. A null
+    // Variants means "use the global default", so leave layout_variations alone.
     if (ws.variation) |v| {
         switch (v) {
             .master  => |mv| s.layout_variations.master  = mv,
@@ -1061,7 +1100,7 @@ inline fn toggleEnum(v: anytype) void {
     v.* = @enumFromInt((@intFromEnum(v.*) + 1) % std.meta.fields(T).len);
 }
 
-pub fn cycleLayoutVariation() void {
+pub fn cycleLayoutVariants() void {
     const s = getState();
     switch (s.layout) {
         .master  => { toggleEnum(&s.layout_variations.master);
