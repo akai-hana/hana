@@ -16,7 +16,17 @@ const bar        = @import("bar");
 const focus      = @import("focus");
 const Tracking   = @import("tracking").Tracking;
 const debug      = @import("debug");
-const scale      = @import("scale");
+const scale      = if (build_options.has_scale) @import("scale") else struct {
+    pub fn scaleMasterWidth(value: anytype) f32 {
+        return if (value.is_percentage) value.value / 100.0 else -value.value;
+    }
+    pub fn scaleBorderWidth(value: anytype, reference_dimension: u16) u16 {
+        if (value.is_percentage) {
+            const dim_f: f32 = @floatFromInt(reference_dimension);
+            return @intFromFloat(@max(0.0, @round((value.value / 100.0) * 0.5 * dim_f)));
+        } else return @intFromFloat(@max(0.0, @round(value.value)));
+    }
+};
 const layouts    = @import("layouts");
 
 const build_options = @import("build_options");

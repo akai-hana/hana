@@ -345,8 +345,14 @@ inline fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) voi
         }
     }
 
-    bar.setBarState(.hide_fullscreen);
-
+    // Configure the fullscreen window and raise it BEFORE calling setBarState.
+    // setBarState(.hide_fullscreen) triggers tiling.retileCurrentWorkspace() when
+    // tiling is active. If setBarState ran first, the retile would pull the other
+    // windows back to their tiled on-screen positions, undoing the offscreen push
+    // above. By configuring and raising the fullscreen window first, the retile
+    // that fires inside setBarState sees a fully-committed fullscreen state and
+    // skips (or correctly handles) the fullscreen window, leaving everything else
+    // offscreen where we placed it.
     utils.configureWindowGeom(core.conn, win, .{
         .x            = 0,
         .y            = 0,
@@ -361,6 +367,8 @@ inline fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) voi
     // tiled rect. On exit retile would compute the same rect, get a hit, and skip
     // configure_window, leaving the window stuck at fullscreen dimensions.
     if (comptime build_options.has_tiling) tiling.invalidateGeomCache(win);
+
+    bar.setBarState(.hide_fullscreen);
 
     // Advertise fullscreen state via EWMH so external tools (e.g. compositor
     // scripts) can detect it with xprop / xev.
