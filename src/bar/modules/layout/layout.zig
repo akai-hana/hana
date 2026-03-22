@@ -25,5 +25,6 @@ pub fn draw(dc: *drawing.DrawContext, config: core.BarConfig, height: u16, start
         const icon    = getIcon(t_state.layout);
         return dc.drawSegment(start_x, height, icon, config.scaledSegmentPadding(height), config.bg, config.fg);
     }
-    return dc.drawSegment(start_x, height, getIcon(.floating), config.scaledSegmentPadding(height), config.bg, config.fg);
+    // Without tiling all windows are floating by definition.
+    return dc.drawSegment(start_x, height, "><>", config.scaledSegmentPadding(height), config.bg, config.fg);
 }
