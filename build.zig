@@ -88,12 +88,16 @@ const optional_subsystems = [_]OptionalSubsystem{
     },
     .{
         .name        = "fullscreen",
-        .entry_point = ROOT_DIR ++ "window/modules/fullscreen.zig",
+        .entry_point = ROOT_DIR ++ "window/modules/fullscreen/fullscreen.zig",
         .gate_dir    = "fullscreen",
     },
     .{
         .name        = "minimize",
         .entry_point = ROOT_DIR ++ "window/modules/minimize.zig",
+    },
+    .{
+        .name        = "workspaces",
+        .entry_point = ROOT_DIR ++ "window/modules/workspaces.zig",
     },
 };
 // FIX #1 — Removed the duplicate "Add new optional subsystems here" comment

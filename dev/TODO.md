@@ -1,6 +1,10 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+when i'm in the monocle layout, and i tab between windows, the bar title segment partition of the window that i'm currently focused on is on the left of the other segment partition of the unfocused window that's behind. i'd expect this to be the opposite case, for the focused window to be on the left, and the unfocused on the right, if both of the windows' coordinates and geometries are identical. could you look more into detail as to what's happening here?
+ 
+make layout cycling not make mouse hovering steal focus
+
 per worspace layout also include per workspace master count
 
 when doing toggle_float (mod+middle_click), i want the window to be tiled to the area where it is closest to. what this means is that, if there's already another window tiled, and i do toggle_float with the floating window located onto the left half of the screen, then it should be tiled onto the left. if it's to the right, then tiled to the right. you should take its middle/center of the floating window to be tiled, and decide where to tile it based off of that coordinates. it should work on any tiling layout. 
