@@ -521,6 +521,11 @@ fn captureIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot) !voi
         snap.current_ws_wins.clearRetainingCapacity();
         if (ws_state.current < ws_state.workspaces.len)
             try snap.current_ws_wins.appendSlice(allocator, ws_state.workspaces[ws_state.current].windows.items());
+    } else {
+        // No workspace subsystem — treat as single workspace so ws_count
+        // differs from prev.ws_count (0) on the first draw, ensuring dirty_all
+        // fires and the background is cleared before any segments are drawn.
+        snap.ws_count = 1;
     }
     snap.focused_window = focus.getFocused();
     snap.title_invalidated = s.title_invalidated;
