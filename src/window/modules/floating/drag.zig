@@ -12,7 +12,11 @@ const bar       = @import("bar");
 
 /// Pixels within which a window edge snaps to a monitor edge.
 /// Push the window past this distance to break the snap.
-const SNAP_DISTANCE: i32 = 8;
+/// Configured via `snap_distance` in the `[drag]` section of config.toml.
+/// Returns 0 when snapping is disabled.
+inline fn snapDistance() i32 {
+    return core.config.snap_distance;
+}
 
 /// Compute the work area edges, accounting for bar height and position.
 /// The bar's inner edge (facing the desktop) is treated as a hard boundary.
@@ -42,8 +46,10 @@ fn workArea() struct { left: i32, right: i32, top: i32, bottom: i32 } {
 /// `near` — work-area near boundary (left or top)
 /// `far`  — work-area far boundary (right or bottom)
 inline fn snapAxis(pos: i32, dim: i32, near: i32, far: i32) i32 {
-    if (@abs(pos - near) < SNAP_DISTANCE) return near;
-    if (@abs((pos + dim) - far) < SNAP_DISTANCE) return far - dim;
+    const snap = snapDistance();
+    if (snap == 0) return pos;
+    if (@abs(pos - near) < snap) return near;
+    if (@abs((pos + dim) - far) < snap) return far - dim;
     return pos;
 }
 

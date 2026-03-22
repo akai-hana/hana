@@ -419,6 +419,10 @@ pub const Config = struct {
     workspaces:  WorkspaceConfig = .{},
     bar:         BarConfig       = .{},
 
+    /// Pixels within which a dragged window edge snaps to a monitor/bar boundary.
+    /// Set to 0 to disable snapping entirely.
+    snap_distance: u8 = 8,
+
     // Ownership sentinels for string fields that have static defaults.
     //
     // Some fields (e.g. bar.font, bar.clock_format) point to string literals by default
