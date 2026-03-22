@@ -30,9 +30,9 @@ pub const Workspace = struct {
     // Initialized from config; updated when the user switches layouts
     // in per-workspace mode.
     layout:    tiling.Layout,
-    // Optional layout variation override set via the layouts array in config.
+    // Optional layout variants override set via the layouts array in config.
     // Applied on every workspace switch; null means use the global defaults.
-    variation: ?core.LayoutVariantOverride = null,
+    variants: ?core.LayoutVariantOverride = null,
     // Per-workspace master width override (master-stack layout).
     // null = use the global default from tiling state.
     // Set when the user adjusts master width in per-workspace layout mode;
@@ -116,7 +116,7 @@ pub fn init() void {
         const id: u8 = @intCast(i);
         const name   = if (i < WORKSPACE_NAMES.len) WORKSPACE_NAMES[i] else "?";
 
-        // Apply any workspace-specific layout + variation override from the
+        // Apply any workspace-specific layout + variants override from the
         // layouts array (e.g. `"monocle", "gapless", "4,8"` in config.toml).
         var ws_layout    = default_layout;
         var ws_variant: ?core.LayoutVariantOverride = null;
@@ -131,7 +131,7 @@ pub fn init() void {
         }
 
         ws.* = Workspace.init(id, name, ws_layout);
-        ws.variation = ws_variant;
+        ws.variants = ws_variant;
     }
 
     var w2ws = std.AutoHashMap(u32, u64).init(core.alloc);

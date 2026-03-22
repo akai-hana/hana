@@ -597,16 +597,16 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
     cfg.tiling.global_layout = get(bool, section, "global_layout", false, null, null);
 }
 
-/// Reads `variation` from `section` into `field`; warns on unknown values.
+/// Reads `variants` from `section` into `field`; warns on unknown values.
 inline fn tryParseVariant(
     comptime T:   type,
     section:      *const parser.Section,
     layout_name:  []const u8,
     field:        *T,
 ) void {
-    const v = section.getString("variation") orelse return;
+    const v = section.getString("variants") orelse return;
     field.* = std.meta.stringToEnum(T, v) orelse {
-        debug.warn("Unknown {s} variation '{s}', using default", .{ layout_name, v });
+        debug.warn("Unknown {s} variants '{s}', using default", .{ layout_name, v });
         return;
     };
 }
@@ -665,9 +665,9 @@ inline fn canonicalLayout(name: []const u8, buf: []u8) []const u8 {
     return lower;
 }
 
-/// Parses a variation string for the given layout name into a LayoutVariantOverride.
+/// Parses a variants string for the given layout name into a LayoutVariantOverride.
 /// Returns null and emits a warning when the string is not valid for that layout.
-fn parseLayoutVariant(layout_name: []const u8, variation_str: []const u8) ?core.LayoutVariantOverride {
+fn parseLayoutVariant(layout_name: []const u8, variants_str: []const u8) ?core.LayoutVariantOverride {
     var buf: [32]u8 = undefined;
     if (layout_name.len > buf.len) return null;
     const lower_layout = std.ascii.lowerString(buf[0..layout_name.len], layout_name);
@@ -678,8 +678,8 @@ fn parseLayoutVariant(layout_name: []const u8, variation_str: []const u8) ?core.
     };
     inline for (typed_layouts) |entry| {
         if (std.mem.eql(u8, lower_layout, entry[0])) {
-            const v = std.meta.stringToEnum(entry[1], variation_str) orelse {
-                debug.warn("Unknown {s} variation '{s}' in layouts array, ignoring", .{ entry[0], variation_str });
+            const v = std.meta.stringToEnum(entry[1], variants_str) orelse {
+                debug.warn("Unknown {s} variants '{s}' in layouts array, ignoring", .{ entry[0], variants_str });
                 return null;
             };
             return @unionInit(core.LayoutVariantOverride, entry[2], v);
@@ -689,8 +689,8 @@ fn parseLayoutVariant(layout_name: []const u8, variation_str: []const u8) ?core.
 }
 
 /// Parses the `layouts` TOML array.  A known layout name starts a new group; the
-/// optional next element is a variation word or a workspace list ("1,3,5"); a third
-/// may follow as a workspace list when the second was a variation.
+/// optional next element is a variants word or a workspace list ("1,3,5"); a third
+/// may follow as a workspace list when the second was a variants.
 /// Plain single-name format ("master-stack") is fully backward-compatible.
 fn parseLayoutsArray(
     allocator: std.mem.Allocator,
@@ -711,7 +711,7 @@ fn parseLayoutsArray(
         }
         const layout_idx: u8 = @intCast(cfg.tiling.layouts.items.len);
         try cfg.tiling.layouts.append(allocator, try allocator.dupe(u8, canonical));
-        var variation: ?core.LayoutVariantOverride = null;
+        var variants: ?core.LayoutVariantOverride = null;
         var ws_list_str: ?[]const u8 = null;
         if (i + 1 < arr.len) {
             if (arr[i + 1].asString()) |peek| {
@@ -720,7 +720,7 @@ fn parseLayoutsArray(
                         ws_list_str = peek;
                         i += 1;
                     } else {
-                        variation = parseLayoutVariant(canonical, peek);
+                        variants = parseLayoutVariant(canonical, peek);
                         i += 1;
                         if (i + 1 < arr.len) if (arr[i + 1].asString()) |peek2|
                             if (isWorkspaceList(peek2)) { ws_list_str = peek2; i += 1; };
@@ -746,7 +746,7 @@ fn parseLayoutsArray(
                 try cfg.tiling.workspace_layout_overrides.append(allocator, .{
                     .workspace_idx = ws_idx,
                     .layout_idx    = layout_idx,
-                    .variant       = variation,
+                    .variant       = variants,
                 });
             }
         }

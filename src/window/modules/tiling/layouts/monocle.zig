@@ -19,7 +19,7 @@ pub fn tileWithOffset(ctx: *const layouts.LayoutCtx, state: *State, windows: []c
     // configured lazily when brought to top, keeping cost O(1).
     const top_win = windows[windows.len - 1];
 
-    const inset: u16 = if (state.layout_variations.monocle == .gaps) gap else 0;
+    const inset: u16 = if (state.layout_variants.monocle == .gaps) gap else 0;
     const total_margin = border2 + inset * 2;
     const rect: utils.Rect = .{
         .x      = @intCast(inset),

@@ -146,7 +146,7 @@ pub const State = struct {
     /// Restored by toggleFloating() when switching back from floating.
     /// Defaults to the first entry in LAYOUT_CYCLE.
     prev_layout:      Layout,
-    layout_variations: LayoutVariants,
+    layout_variants: LayoutVariants,
     master_side:      core.MasterSide,
     master_width:     f32,
     master_count:     u8,
@@ -248,7 +248,7 @@ fn buildState() State {
         .prev_layout         = LAYOUT_CYCLE[0],
         .enabled_layouts     = el.arr,
         .enabled_layouts_len = el.len,
-        .layout_variations = .{
+        .layout_variants = .{
             .master  = core.config.tiling.master_variant,
             .monocle = core.config.tiling.monocle_variant,
             .grid    = core.config.tiling.grid_variant,
@@ -342,7 +342,7 @@ pub fn addWindow(window_id: u32) void {
     // Use prev_layout to resolve FIFO/LIFO when the current layout is .floating,
     // so new windows land in the correct slot once floating is exited.
     const effective_layout = if (s.layout == .floating) s.prev_layout else s.layout;
-    if (effective_layout == .master and s.layout_variations.master == .fifo)
+    if (effective_layout == .master and s.layout_variants.master == .fifo)
         s.windows.addFront(window_id)
     else
         s.windows.add(window_id);
@@ -1025,18 +1025,18 @@ pub fn toggleFloating() void {
 pub fn syncLayoutFromWorkspace(ws: *const workspaces.Workspace) void {
     const s = getState();
     const layout = ws.layout;
-    const needs_retile = s.layout != layout or ws.variation != null;
+    const needs_retile = s.layout != layout or ws.variants != null;
     s.layout = layout;
     // Apply the workspace-pinned master width when present; fall back to the
     // current global value so unvisited workspaces inherit the config default.
     if (ws.master_width) |mw| s.master_width = mw;
     // Apply the workspace-pinned variant override when present. A null
-    // Variants means "use the global default", so leave layout_variations alone.
-    if (ws.variation) |v| {
+    // Variants means "use the global default", so leave layout_variants alone.
+    if (ws.variants) |v| {
         switch (v) {
-            .master  => |mv| s.layout_variations.master  = mv,
-            .monocle => |mv| s.layout_variations.monocle = mv,
-            .grid    => |gv| s.layout_variations.grid    = gv,
+            .master  => |mv| s.layout_variants.master  = mv,
+            .monocle => |mv| s.layout_variants.monocle = mv,
+            .grid    => |gv| s.layout_variants.grid    = gv,
         }
     }
     if (needs_retile) {
@@ -1103,13 +1103,13 @@ inline fn toggleEnum(v: anytype) void {
 pub fn cycleLayoutVariants() void {
     const s = getState();
     switch (s.layout) {
-        .master  => { toggleEnum(&s.layout_variations.master);
-                      debug.info("Master variation: {s}",  .{@tagName(s.layout_variations.master)}); },
-        .monocle => { toggleEnum(&s.layout_variations.monocle);
-                      debug.info("Monocle variation: {s}", .{@tagName(s.layout_variations.monocle)}); },
-        .grid    => { toggleEnum(&s.layout_variations.grid);
-                      debug.info("Grid variation: {s}",    .{@tagName(s.layout_variations.grid)}); },
-        else     => { debug.info("{s} has no variations",  .{@tagName(s.layout)}); return; },
+        .master  => { toggleEnum(&s.layout_variants.master);
+                      debug.info("Master variants: {s}",  .{@tagName(s.layout_variants.master)}); },
+        .monocle => { toggleEnum(&s.layout_variants.monocle);
+                      debug.info("Monocle variants: {s}", .{@tagName(s.layout_variants.monocle)}); },
+        .grid    => { toggleEnum(&s.layout_variants.grid);
+                      debug.info("Grid variants: {s}",    .{@tagName(s.layout_variants.grid)}); },
+        else     => { debug.info("{s} has no variantss",  .{@tagName(s.layout)}); return; },
     }
     retileCurrentWorkspace();
 }
