@@ -526,6 +526,11 @@ fn captureIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot) !voi
         // differs from prev.ws_count (0) on the first draw, ensuring dirty_all
         // fires and the background is cleared before any segments are drawn.
         snap.ws_count = 1;
+        snap.current_ws_wins.clearRetainingCapacity();
+        if (tracking.allWindowsIterator()) |it| {
+            var iter = it;
+            while (iter.next()) |wp| try snap.current_ws_wins.append(allocator, wp.*);
+        }
     }
     snap.focused_window = focus.getFocused();
     snap.title_invalidated = s.title_invalidated;
