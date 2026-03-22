@@ -55,7 +55,7 @@ layouts = [                                 # ("default"/"alternative")
 	"master-stack",                     # "lifo"/"fifo"
 	"monocle",      "gaps",    "5",     # "gapless"/"gaps"
 	"grid",         "relaxed", "6,8",   # "rigid"/"relaxed"
-	# "fibonacci",                      # no variantss
+	# "fibonacci",                      # no variants
 ]
 
 [tiling.layouts.master-stack]
@@ -94,7 +94,7 @@ variants = "relaxed"
 # indicator = "GRD"
 
 [tiling.layouts.fibonacci]
-# Fibonacci has no behavioral variantss.
+# Fibonacci has no behavioral variants.
 # Optionally override the 3-character indicator shown in the bar for this layout.
 # indicator = "FIB"
 
@@ -109,7 +109,7 @@ position = "bottom" # can be switched on runtime
 # Bar layout
 # Anchors: left/center/right
 [bar.layout.left]
-segments = ["workspaces", "layout", "variantss"]
+segments = ["workspaces", "layout", "variants"]
 
 [bar.layout.center]
 segments = ["title"]
