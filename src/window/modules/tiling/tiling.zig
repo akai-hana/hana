@@ -31,7 +31,8 @@ const fibonacci_layout = if (build_options.has_fibonacci) @import("fibonacci") e
 // floating is always present — it is a first-class built-in, not an optional
 // disk-discovered layout, so it does not go through the layout_flags mechanism.
 const floating_layout = @import("floating");
-const fullscreen = @import("fullscreen");
+const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
+
 
 const MAX_MASTER_WIDTH: f32 = 0.95;
 const DEFAULT_MAX_WS_WINDOWS: usize = 128;  // default per-retile window list capacity
@@ -202,7 +203,9 @@ pub const State = struct {
     }
 
     pub inline fn borderColor(self: *const State, win: u32) u32 {
-        if (fullscreen.isFullscreen(win)) return 0;
+        if (comptime build_options.has_fullscreen) {
+            if (fullscreen.isFullscreen(win)) return 0;
+        }
         return if (focus.getFocused() == win) self.border_focused else self.border_unfocused;
     }
 
@@ -759,7 +762,9 @@ fn retile(screen: utils.Rect, for_ws: ?u8) void {
     const target_ws: u8 = for_ws orelse
         @intCast(workspaces.getCurrentWorkspace() orelse return);
 
-    if (fullscreen.getForWorkspace(target_ws)) |_| return;
+    if (comptime build_options.has_fullscreen) {
+        if (fullscreen.getForWorkspace(target_ws)) |_| return;
+    }
 
     const ws_count = filterWorkspaceWindows(s, &s.scratch_wins, for_ws);
     const ws_windows = s.scratch_wins[0..ws_count];

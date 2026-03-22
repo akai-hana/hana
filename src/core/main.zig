@@ -23,7 +23,7 @@ const input = @import("input");
 // window/
 const window     = @import("window");
 const focus      = @import("focus");
-const fullscreen = @import("fullscreen");
+const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
 const minimize   = @import("minimize");
 const workspaces = @import("workspaces");
 
@@ -148,7 +148,7 @@ fn initBar() void {
 fn initModules() !void {
     window.init(); // populates atom cache required by handleMapRequest
     if (build_options.has_tiling) tiling.init(); // must precede workspaces.init(): workspaces.init() calls tiling.getState()
-    fullscreen.init();
+    if (build_options.has_fullscreen) fullscreen.init();
     workspaces.init();
     minimize.init();
     try prompt.init(core.alloc, core.conn);
@@ -157,7 +157,7 @@ fn initModules() !void {
 /// Tears down all WM modules in reverse init order.
 fn deinitModules() void {
     if (build_options.has_tiling) tiling.deinit();
-    fullscreen.deinit();
+    if (build_options.has_fullscreen) fullscreen.deinit();
     workspaces.deinit();
     prompt.deinit();
 }

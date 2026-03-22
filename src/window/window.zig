@@ -16,7 +16,7 @@ const drag          = @import("drag");
 const scale         = @import("scale");
 const debug         = @import("debug");
 const minimize      = @import("minimize");
-const fullscreen    = @import("fullscreen");
+const fullscreen    = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
 
 // XSizeHints flags (ICCCM §4.1.2.3)
 const XSIZE_HINTS_P_MIN_SIZE:   u32 = 0x10;
@@ -378,10 +378,12 @@ fn commitWindowToScreen(win: u32, on_current_workspace: bool) void {
         // manually push the new window offscreen when fullscreen is active —
         // otherwise it maps on top of the fullscreen window and appears to
         // immediately vanish when the fullscreen window is raised above it.
-        if (fullscreen.hasAnyFullscreen()) {
-            _ = xcb.xcb_configure_window(core.conn, win,
-                xcb.XCB_CONFIG_WINDOW_X,
-                &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+        if (comptime build_options.has_fullscreen) {
+            if (fullscreen.hasAnyFullscreen()) {
+                _ = xcb.xcb_configure_window(core.conn, win,
+                    xcb.XCB_CONFIG_WINDOW_X,
+                    &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+            }
         }
     }
 
@@ -450,9 +452,11 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t) void {
 // Unmap / destroy
 
 fn unmanageWindow(win: u32) void {
-    const fs_ws = fullscreen.workspaceFor(win);
-    if (fs_ws) |ws| fullscreen.removeForWorkspace(ws);
-    const was_fullscreen = fs_ws != null;
+    const was_fullscreen = if (comptime build_options.has_fullscreen) blk: {
+        const fs_ws = fullscreen.workspaceFor(win);
+        if (fs_ws) |ws| fullscreen.removeForWorkspace(ws);
+        break :blk fs_ws != null;
+    } else false;
 
     const was_focused = (focus.getFocused() == win);
 
@@ -590,7 +594,8 @@ fn sendSyntheticConfigureNotify(win: u32) void {
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) void {
     const win = event.window;
     const is_tiled = tilingActive() and tiling.isWindowActiveTiled(win);
-    if (is_tiled or fullscreen.isFullscreen(win)) {
+    const is_fullscreen = if (comptime build_options.has_fullscreen) fullscreen.isFullscreen(win) else false;
+    if (is_tiled or is_fullscreen) {
         sendSyntheticConfigureNotify(win);
         return;
     }
@@ -764,7 +769,9 @@ pub inline fn getBorderWidth() u16 {
 ///   border_focused  — the currently focused window
 ///   border_unfocused — everything else
 inline fn borderColor(win: u32) u32 {
-    if (fullscreen.isFullscreen(win)) return 0;
+    if (comptime build_options.has_fullscreen) {
+        if (fullscreen.isFullscreen(win)) return 0;
+    }
     const cfg = &core.config.tiling;
     return if (focus.getFocused() == win) cfg.border_focused else cfg.border_unfocused;
 }

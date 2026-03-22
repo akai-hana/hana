@@ -1,7 +1,8 @@
 //! Workspace management — creation, window assignment, and workspace switching.
 
 const std          = @import("std");
-const fullscreen   = @import("fullscreen");
+const build_options = @import("build_options");
+const fullscreen   = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
 const core         = @import("core");
 const xcb          = core.xcb;
 const utils        = @import("utils");
@@ -237,10 +238,12 @@ pub fn moveWindowExclusive(win: u32, target_ws: u8) void {
 
     // Transfer fullscreen record to the target workspace so the window
     // remains fullscreen wherever it lands, not just on the source workspace.
-    if (fullscreen.workspaceFor(win)) |src_ws| {
-        const info = fullscreen.getForWorkspace(src_ws).?;
-        fullscreen.removeForWorkspace(src_ws);
-        fullscreen.setForWorkspace(target_ws, info);
+    if (comptime build_options.has_fullscreen) {
+        if (fullscreen.workspaceFor(win)) |src_ws| {
+            const info = fullscreen.getForWorkspace(src_ws).?;
+            fullscreen.removeForWorkspace(src_ws);
+            fullscreen.setForWorkspace(target_ws, info);
+        }
     }
 
     setWindowMask(s, win, workspaceBit(target_ws));
@@ -275,14 +278,16 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
         if (target_ws == current) {
             // Window is leaving the current workspace; if it was fullscreen here
             // transfer the record to whichever workspace it still belongs to.
-            if (fullscreen.workspaceFor(win)) |src_ws| {
-                if (src_ws == current) {
-                    const info = fullscreen.getForWorkspace(src_ws).?;
-                    fullscreen.removeForWorkspace(src_ws);
-                    // Land on the lowest-set-bit workspace still in the new mask.
-                    const new_mask = mask & ~tbit;
-                    const dst: u8 = @intCast(@ctz(new_mask));
-                    fullscreen.setForWorkspace(dst, info);
+            if (comptime build_options.has_fullscreen) {
+                if (fullscreen.workspaceFor(win)) |src_ws| {
+                    if (src_ws == current) {
+                        const info = fullscreen.getForWorkspace(src_ws).?;
+                        fullscreen.removeForWorkspace(src_ws);
+                        // Land on the lowest-set-bit workspace still in the new mask.
+                        const new_mask = mask & ~tbit;
+                        const dst: u8 = @intCast(@ctz(new_mask));
+                        fullscreen.setForWorkspace(dst, info);
+                    }
                 }
             }
             evictWindow(win);
@@ -521,7 +526,7 @@ fn applyPostSwitchFocus(new_ws: u8, new_ws_obj: *const Workspace, ptr_cookie: xc
 fn executeSwitch(old_ws: u8, new_ws: u8) void {
     const s          = getState().?;
     const new_ws_obj = &s.workspaces[new_ws];
-    const fs_info    = fullscreen.getForWorkspace(new_ws);
+    const fs_info    = if (comptime build_options.has_fullscreen) fullscreen.getForWorkspace(new_ws) else null;
 
     focus.setSuppressReason(.none);
     s.workspaces[old_ws].last_focused = focus.getFocused();

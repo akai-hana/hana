@@ -12,7 +12,7 @@ const build_options = @import("build_options");
 const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
 const workspaces    = @import("workspaces");
 const drag          = @import("drag");
-const fullscreen    = @import("fullscreen");
+const fullscreen    = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
 const bar           = if (build_options.has_bar) @import("bar") else struct {};
 const window        = @import("window");
 const debug         = @import("debug");
@@ -213,7 +213,7 @@ fn closeWindow(win: u32) void {
 
 fn executeAction(action: *const core.Action) !void {
     switch (action.*) {
-        .toggle_fullscreen => fullscreen.toggle(),
+        .toggle_fullscreen => if (comptime build_options.has_fullscreen) fullscreen.toggle(),
         .close_window      => if (focus.getFocused()) |win| closeWindow(win),
         .reload_config     => utils.reload(),
         // Runs each action in the list in order. Stops and propagates the
@@ -392,12 +392,14 @@ fn dumpState() void {
     debug.info("Total windows: {}",     .{win_count});
     debug.info("Suppress focus: {s}",   .{@tagName(focus.getSuppressReason())});
 
-    fullscreen.forEachFullscreen(struct {
-        fn cb(ws: u8, info: fullscreen.FullscreenInfo) void {
-            debug.info("Fullscreen on workspace {}: {x}", .{ ws, info.window });
-        }
-    }.cb);
-    if (!fullscreen.hasAnyFullscreen()) debug.info("Fullscreen: none", .{});
+    if (comptime build_options.has_fullscreen) {
+        fullscreen.forEachFullscreen(struct {
+            fn cb(ws: u8, info: fullscreen.FullscreenInfo) void {
+                debug.info("Fullscreen on workspace {}: {x}", .{ ws, info.window });
+            }
+        }.cb);
+        if (!fullscreen.hasAnyFullscreen()) debug.info("Fullscreen: none", .{});
+    } else debug.info("Fullscreen: none", .{});
     debug.info("Drag active: {}", .{drag.isDragging()});
 
     if (workspaces.getState()) |ws_state| {
