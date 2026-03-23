@@ -255,6 +255,10 @@ fn handleConfigReload() !void {
     window.reloadBorders();
     bar.updateTimerState();
     bar.reload();
+    // Unconditional flush: ensures border and tiling commands from reloadBorders()
+    // and reloadConfig() are sent even when bar.reload() takes an early-return path
+    // (e.g. bar disabled) that does not call its own ungrabAndFlush().
+    _ = xcb.xcb_flush(core.conn);
     debug.info("Reload complete", .{});
 }
 
