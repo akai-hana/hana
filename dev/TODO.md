@@ -1,6 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+akaihanatsundeee: i still cannot fullscreen into windows
+
 what does core.zig do? between main.zig, utils.zig and events.zig, i struggle to see what core.zig's purpose is. 
 
 make layout cycling not make mouse hovering steal focus
