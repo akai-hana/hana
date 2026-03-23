@@ -311,7 +311,7 @@ pub fn run() !void {
                 dispatch(@as(*u8, @ptrCast(event)).*, event);
             }
             if (build_options.has_tiling) tiling.retileIfDirty();
-            window.updateWorkspaceBorders();
+            window.updateWorkspaceBordersIfNeeded();
             bar.updateIfDirty() catch |err| debug.err("Failed to update bar: {}", .{err});
             _ = xcb.xcb_flush(core.conn);
         }

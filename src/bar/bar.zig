@@ -910,7 +910,6 @@ pub fn setBarState(action: BarAction) void {
         } else {
             _ = xcb.xcb_unmap_window(core.conn, s.window);
         }
-        _ = xcb.xcb_flush(core.conn);
         if (comptime build_options.has_tiling) tiling.retileCurrentWorkspace();
     }
 
