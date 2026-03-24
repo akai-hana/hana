@@ -145,6 +145,80 @@ pub fn draw(
     return start_x + width;
 }
 
+/// Draw the title segment using already-cached state.
+///
+/// Called from the bar thread's fast-path redraw (focus-only or carousel tick).
+/// Unlike draw(), this function:
+///   - takes `cached_title` as a read-only slice instead of a mutable ArrayList,
+///     eliminating the aliasing that occurs when the caller passes the same buffer
+///     as both the source slice and the write-back destination.
+///   - never updates the title cache (the drawAll path via draw() is responsible
+///     for keeping it current).
+///   - always passes title_invalidated=false to carousel, since this path only
+///     re-renders existing state.
+pub fn drawCached(
+    dc:              *drawing.DrawContext,
+    config:          core.BarConfig,
+    height:          u16,
+    start_x:         u16,
+    width:           u16,
+    conn:            *xcb.xcb_connection_t,
+    focused_window:  ?u32,
+    cached_title:    []const u8,
+    current_ws_wins: []const u32,
+    minimized_set:   *const std.AutoHashMapUnmanaged(u32, void),
+    allocator:       std.mem.Allocator,
+) !u16 {
+    carousel.ensureDetected(conn);
+
+    const window_count = current_ws_wins.len;
+
+    if (window_count == 0) {
+        carousel.deinitCarousel();
+        dc.fillRect(start_x, 0, width, height, config.bg);
+        return start_x + width;
+    }
+
+    const scaled_padding = config.scaledSegmentPadding(height);
+    const baseline_y     = dc.baselineY(height);
+
+    if (window_count == 1) {
+        const single_win   = current_ws_wins[0];
+        const is_minimized = minimized_set.contains(single_win);
+        const is_focused   = focused_window != null;
+
+        const accent = if (is_minimized)
+            config.title_minimized_accent
+        else if (is_focused)
+            config.title_accent_color
+        else
+            config.bg;
+        dc.fillRect(start_x, 0, width, height, accent);
+
+        const text_x  = start_x + scaled_padding + TITLE_LEAD_PX;
+        const avail_w = width -| scaled_padding * 2 -| TITLE_LEAD_PX;
+
+        if (is_minimized) {
+            const title = getWindowTitle(conn, single_win, allocator) catch null;
+            defer if (title) |t| allocator.free(t);
+            if (title) |t| {
+                try carousel.drawOrScrollTitle(dc, text_x, baseline_y, avail_w,
+                    text_x, start_x + width - text_x, start_x, width, t, accent, config.fg, single_win, false);
+            }
+        } else if (cached_title.len > 0) {
+            const fg = if (is_focused) config.selected_fg else config.fg;
+            try carousel.drawOrScrollTitle(dc, text_x, baseline_y, avail_w,
+                text_x, start_x + width - text_x, start_x, width, cached_title, accent, fg, focused_window, false);
+        }
+    } else {
+        try drawSegmentedTitles(dc, config, height, start_x, width,
+            conn, focused_window, current_ws_wins, minimized_set, allocator,
+            scaled_padding, false);
+    }
+
+    return start_x + width;
+}
+
 // Private — split-view segmented titles
 
 fn drawSegmentedTitles(

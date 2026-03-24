@@ -1,11 +1,13 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-akaihanatsundeee: i still cannot fullscreen into windows
+6f6e: 2 PENDING file refactors
+89sh: 1 PENDING file bug resolution
+pork: 2 PENDING file refactors
 
-what does core.zig do? between main.zig, utils.zig and events.zig, i struggle to see what core.zig's purpose is. 
+in debug.zig, drop "info:" messages, and just display the [<name>] tags in place. make these tags have the same color that "info:" currently does.
 
-make layout cycling not make mouse hovering steal focus
+when i cycle between layouts using toggleLayout/toggleLayoutReverse (core.zig, config.zig, input.zig), please make it so that mouse hovering doesn't steal focus at windows being re-positioned, if it was previously positioned on one window but the layout cycling made it touch a different one. (focus.zig, window.zig, tracking.zig)
 
 per worspace layout also include per workspace master count
 
