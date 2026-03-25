@@ -1,13 +1,25 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-after fullscreening out of a window, it for some reason goes from being previously tiled to now floating. i have to manually toggle float onto the window to make it tiling again.
+0117 (PENDING self-healing): this self-healing is nice, but i think it'd be better if no healing needed to take place in the first place; i feel like the solution you provided doesn't tackle the root issue, but rather provides a solution that serves as a band-aid to the symptoms that the root issue cause. what are your thoughts about this? do you think you could maybe provide a solution that is solid enough to not ever need self-healing?
+
+prompt {
+(tsunde) i still see the issue.
+ 
+When i go to the right of the prompt enough to make the text scroll, this message is spammed on the terminal. Is this some issue going on inside the window manager that could be fixed, or what?
+(process:14841): Pango-WARNING **: 12:43:28.603: Invalid UTF-8 string passed to pango_layout_set_text()
+
+
+add the ability to do two basic vim motions: ":w" and ":q". ":q" acts as cancel, while ":w" sends the command through the prompt. ":w" alone doesn't cancel the prompt: it sends the current command, but keeps the prompt open so that the user can write a different prompt; to send a command AND close the prompt inline bar, the user must either do ":wq" or ":x". 
+}
 
 how to switch to floating layout? (><>)
 
 title/carousel done
 6f6e: 2 PENDING file refactors
-89sh: 1 PENDING file bug resolution
+
+89sh: (PENDING slow spawn window) finish doing this.
+
 pork: 2 PENDING file refactors
 
 in debug.zig, drop "info:" messages, and just display the [<name>] tags in place. make these tags have the same color that "info:" currently does.
@@ -19,7 +31,7 @@ per worspace layout also include per workspace master count
 when doing toggle_float (mod+middle_click), i want the window to be tiled to the area where it is closest to. what this means is that, if there's already another window tiled, and i do toggle_float with the floating window located onto the left half of the screen, then it should be tiled onto the left. if it's to the right, then tiled to the right. you should take its middle/center of the floating window to be tiled, and decide where to tile it based off of that coordinates. it should work on any tiling layout. 
 opening a window bound to a specific workspace from a different workspace, while the workspace it is bound to contains a fullscreened window, switching to this workspace and un-fullscreening this window makes it so that there's a gap where the spawned bound window should be, but actually isn't: all there is, is only a blank gap where it would be tiled. switching workspaces back and forth re-triggers a tiling event, which fixes this and makes the bound window appear correctly. could you please fix this minor bug?
 
-when i write a long prompt that doesn't completely fit in the bar, and i enter normal mode, as i go towards the right, the ellipsis in view will move one char to the right, kind of clipping on the "[NORMAL]" indicator. as i go more to the right, a sort of tiny gap to the left of the selected character inside my cursor's box will be in view, something that doesn't happen anywhere else but as i go towards the right of a prompt text that doesn't completely fit inside the segment's view. can you please fix these two minor bugs?
+when i write a long prompt that doesn't completely fit in the bar, when i hit the top and the prompt text starts to move to the left to accomodate the new text, the cursor line moves one character to the right. why is this?
 
 could you reinforce the window killing system, checking if it really did get closed? right now it only uses graceful closing, but the window may be unresponsive and ignore it; on these cases, i want you to forcefully kill the window (maybe sending a kill signal, or some other way).
 
