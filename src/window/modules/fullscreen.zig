@@ -464,6 +464,48 @@ fn exitFullscreenCommit(win: u32, ws: u8) void {
 
 // Public actions
 
+/// Cleans up fullscreen side-effects when a fullscreen window is being moved
+/// to a different workspace.  Specifically, this handles what exitFullscreenCommit
+/// would have done on the source workspace — without restoring the window's
+/// geometry, since the caller is responsible for repositioning it on the target.
+///
+/// Concretely:
+///   - Shows the bar again on the source workspace.
+///   - Restores any floating windows that were pushed offscreen during enter.
+///   - Restores the window's border width (zeroed on enter) and re-applies the
+///     border colour via window.applyBorder.
+///   - Clears the EWMH _NET_WM_STATE_FULLSCREEN property on the window.
+///
+/// The fullscreen record for `src_ws` must still be present when this is called.
+/// The caller is responsible for removing/transferring the record afterward.
+pub fn cleanupFullscreenForMove(win: u32, src_ws: u8) void {
+    const fs_info = getForWorkspace(src_ws) orelse return;
+    if (fs_info.window != win) return;
+
+    // Restore the bar on the source workspace.
+    bar.setBarState(.show_fullscreen);
+
+    // Bring back floating windows that were pushed offscreen during enter.
+    // restoreFloatingWindows also clears g_float_saves_len.
+    restoreFloatingWindows(win);
+
+    // Restore the border width that was zeroed by enterFullscreenCommit.
+    _ = xcb.xcb_configure_window(core.conn, win,
+        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{fs_info.saved_geometry.border_width});
+    window.applyBorder(win);
+
+    // Clear the EWMH fullscreen property so external tools (compositors, etc.)
+    // see the window is no longer fullscreen.
+    if (g_net_wm_state != xcb.XCB_ATOM_NONE and g_net_wm_state_fullscreen != xcb.XCB_ATOM_NONE) {
+        _ = xcb.xcb_change_property(
+            core.conn, xcb.XCB_PROP_MODE_REPLACE,
+            win, g_net_wm_state,
+            xcb.XCB_ATOM_ATOM, 32,
+            0, null,
+        );
+    }
+}
+
 /// Enter fullscreen for `win` on the current workspace.
 /// Pass a pre-computed geometry in `saved_geom` (e.g. when restoring a
 /// minimized fullscreen window); pass null to fetch it from the tiling cache

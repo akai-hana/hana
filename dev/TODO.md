@@ -1,31 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-<<<<<<< HEAD
-0117 {
-src/input/xkbcommon.zig:108:18: error: root source file struct 'posix' has no member named 'nanosleep'
-
-        std.posix.nanosleep(ms / std.time.ms_per_s, (ms % std.time.ms_per_s) * std.time.ns_per_ms);
-
-        ~~~~~~~~~^~~~~~~~~~
-
-/root/.zvm/master/lib/std/posix.zig:1:1: note: struct declared here
-
-//! POSIX API layer.
-
-^~~~~~~~~~~~~~~~~~~~
-
-src/input/xkbcommon.zig:122:19: note: called inline here
-
-        retryDelay(@intCast(i));
-
-        ~~~~~~~~~~^~~~~~~~~~~~~
-
-error: 1 compilation errors
-} + cp posix.zig
-=======
 when in a workspace full-screening over a window, and then sending it to a different workspace that has a different tiling layout, it goes from full-screend to windowed, and loses its window borders. sending it back to the original workspace that it was fullscreend on, makes it go back to fullscreened, and if i un-fullscreen it has its borders like normal. why is this?
->>>>>>> 150d8b8 (automated sync)
+a
 
 0117 (PENDING self-healing): this self-healing is nice, but i think it'd be better if no healing needed to take place in the first place; i feel like the solution you provided doesn't tackle the root issue, but rather provides a solution that serves as a band-aid to the symptoms that the root issue cause. what are your thoughts about this? do you think you could maybe provide a solution that is solid enough to not ever need self-healing?
 
