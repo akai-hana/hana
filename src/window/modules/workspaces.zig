@@ -234,14 +234,16 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
     }
 
     // If this window is fullscreen on the current workspace, clean up the
-    // fullscreen side-effects (bar, floating windows, border) before evicting
-    // it. Without this the bar stays hidden, floating peers stay offscreen,
-    // and the window loses its border on the target workspace.
+    // fullscreen side-effects on the source workspace (bar, floating windows,
+    // border) and transfer the record to target_ws so the window is still
+    // fullscreen when you switch there.
     if (comptime build_options.has_fullscreen) {
         if (fullscreen.workspaceFor(win)) |src_ws| {
             if (src_ws == s.current) {
+                const info = fullscreen.getForWorkspace(src_ws).?;
                 fullscreen.cleanupFullscreenForMove(win, src_ws);
                 fullscreen.removeForWorkspace(src_ws);
+                fullscreen.setForWorkspace(target_ws, info);
             }
         }
     }
