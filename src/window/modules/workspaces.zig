@@ -412,7 +412,7 @@ pub fn switchToAll() void {
     const s = getState() orelse return;
 
     if (s.all_view_temp_wins.items.len > 0) {
-        // ── Exit all-workspaces view ─────────────────────────────────────────
+        // Exit all-workspaces view 
         const ptr_cookie = xcb.xcb_query_pointer(core.conn, core.root);
         _ = xcb.xcb_grab_server(core.conn);
 
@@ -425,7 +425,7 @@ pub fn switchToAll() void {
         _ = xcb.xcb_ungrab_server(core.conn);
         _ = xcb.xcb_flush(core.conn);
     } else {
-        // ── Enter all-workspaces view ────────────────────────────────────────
+        // Enter all-workspaces view 
         _ = xcb.xcb_grab_server(core.conn);
 
         for (s.workspaces) |*ws| {
