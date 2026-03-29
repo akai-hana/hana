@@ -3,6 +3,7 @@
 
 const std     = @import("std");
 const core    = @import("core");
+const types   = @import("types");
 const drawing = @import("drawing");
 const bar     = @import("bar");
 const debug   = @import("debug");
@@ -41,7 +42,7 @@ pub fn pollTimeoutMs() i32 {
     return @intCast((ns_remaining + 999_999) / 1_000_000);
 }
 
-pub fn draw(dc: *drawing.DrawContext, config: core.BarConfig, height: u16, start_x: u16) !u16 {
+pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, start_x: u16) !u16 {
     // Derive seconds from clock_gettime(REALTIME); sub-second precision is not needed for display.
     var now_ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(.REALTIME, &now_ts);

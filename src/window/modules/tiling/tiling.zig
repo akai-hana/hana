@@ -1,10 +1,11 @@
 //! Tiling window management: delegates to layout modules.
 
-const std        = @import("std");
-const core       = @import("core");
-const xcb        = core.xcb;
-const utils      = @import("utils");
-const constants  = @import("constants");
+const std         = @import("std");
+const core        = @import("core");
+const types       = @import("types");
+const xcb         = core.xcb;
+const utils       = @import("utils");
+const constants   = @import("constants");
 const tracking    = @import("tracking");
 const workspaces  = if (build_options.has_workspaces) @import("workspaces") else struct {};
 const WsState     = if (build_options.has_workspaces) workspaces.State     else struct {};
@@ -151,9 +152,9 @@ inline fn stepCycle(s: *const State, current: Layout, comptime forward: bool) La
 
 // Variant enums are defined in core.zig to allow config.zig to parse them
 // without a circular import. Re-exported here for convenience.
-pub const MasterVariant  = core.MasterVariant;
-pub const MonocleVariant = core.MonocleVariant;
-pub const GridVariant    = core.GridVariant;
+pub const MasterVariant  = types.MasterVariant;
+pub const MonocleVariant = types.MonocleVariant;
+pub const GridVariant    = types.GridVariant;
 
 pub const LayoutVariants = struct {
     master:  MasterVariant  = .lifo,
@@ -169,7 +170,7 @@ pub const State = struct {
     /// Defaults to the first entry in LAYOUT_CYCLE.
     prev_layout:      Layout,
     layout_variants: LayoutVariants,
-    master_side:      core.MasterSide,
+    master_side:      types.MasterSide,
     master_width:     f32,
     master_count:     u8,
     gap_width:        u16,

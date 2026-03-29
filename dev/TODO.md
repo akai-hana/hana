@@ -1,6 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+remember a251366
+
 remember dev/PROMPT.md
 
 poruko: you couldn't generate your response fully. Please continue and finish what you were doing.

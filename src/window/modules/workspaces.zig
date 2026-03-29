@@ -1,27 +1,28 @@
 //! Workspace management — creation, window assignment, and workspace switching.
 
-const std          = @import("std");
-const tracking     = @import("tracking");
+const std           = @import("std");
+const tracking      = @import("tracking");
 const build_options = @import("build_options");
-const fullscreen   = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
-const core         = @import("core");
-const xcb          = core.xcb;
-const utils        = @import("utils");
-const focus        = @import("focus");
-const window       = @import("window");
-const bar          = if (build_options.has_bar) @import("bar") else struct {
+const fullscreen    = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
+const core          = @import("core");
+const types         = @import("types");
+const xcb           = core.xcb;
+const utils         = @import("utils");
+const focus         = @import("focus");
+const window        = @import("window");
+const bar           = if (build_options.has_bar) @import("bar") else struct {
     pub fn scheduleRedraw() void {}
     pub fn raiseBar() void {}
     pub fn redrawInsideGrab() void {}
     pub fn setBarState(_: anytype) void {}
 };
-const has_tiling   = @import("build_options").has_tiling;
-const tiling       = if (has_tiling) @import("tiling") else struct {};
-const TilingLayout = if (has_tiling) tiling.Layout else u0;
-const Tracking     = @import("tracking").Tracking;
-const constants    = @import("constants");
-const debug        = @import("debug");
-const minimize     = if (build_options.has_minimize) @import("minimize") else struct {};
+const has_tiling    = @import("build_options").has_tiling;
+const tiling        = if (has_tiling) @import("tiling") else struct {};
+const TilingLayout  = if (has_tiling) tiling.Layout else u0;
+const Tracking      = @import("tracking").Tracking;
+const constants     = @import("constants");
+const debug         = @import("debug");
+const minimize      = if (build_options.has_minimize) @import("minimize") else struct {};
 
 /// Shim so call-sites don't need to repeat the has_minimize comptime guard.
 /// Returns false when minimize is absent — windows are never considered minimized.
@@ -46,7 +47,7 @@ pub const Workspace = struct {
     layout: TilingLayout,
     // Optional layout variants override set via the layouts array in config.
     // Applied on every workspace switch; null means use the global defaults.
-    variants: ?core.LayoutVariantOverride = null,
+    variants: ?types.LayoutVariantOverride = null,
     // Per-workspace master width override (master-stack layout).
     // null = use the global default from tiling state.
     // Set when the user adjusts master width in per-workspace layout mode;
@@ -137,7 +138,7 @@ pub fn init() !void {
     const MAX_WS = 64;
     const OverrideLookup = struct {
         layout_idx: usize,
-        variant:    ?core.LayoutVariantOverride,
+        variant:    ?types.LayoutVariantOverride,
     };
     var override_lookup: [MAX_WS]?OverrideLookup = .{null} ** MAX_WS;
     if (has_tiling) {
@@ -157,7 +158,7 @@ pub fn init() !void {
         // Apply any workspace-specific layout + variants override from the
         // layouts array (e.g. `"monocle", "gapless", "4,8"` in config.toml).
         var ws_layout   = default_layout;
-        var ws_variant: ?core.LayoutVariantOverride = null;
+        var ws_variant: ?types.LayoutVariantOverride = null;
         if (has_tiling) {
             if (override_lookup[id]) |o| {
                 if (o.layout_idx < cfg_tiling.layouts.items.len)

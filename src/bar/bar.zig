@@ -17,6 +17,7 @@
 //! - Cache-update failures leave the cache stale, never empty (see syncTitleCache).
 const std        = @import("std");
 const core       = @import("core");
+const types      = @import("types");
 const xcb        = core.xcb;
 const debug      = @import("debug");
 const windowTest = @import("window");
@@ -92,11 +93,11 @@ const scale      = if (build_options.has_scale) @import("scale") else struct {
 
 /// When workspaces are disabled, all workspace-segment calls are no-ops.
 const DisabledSegment = struct {
-    pub fn draw(_: *drawing.DrawContext, _: core.BarConfig, _: u16, x: u16) !u16 { return x; }
+    pub fn draw(_: *drawing.DrawContext, _: types.BarConfig, _: u16, x: u16) !u16 { return x; }
 };
 
 const workspacesSegment = if (build_options.has_tags) @import("tags") else struct {
-    pub fn draw(_: *drawing.DrawContext, _: core.BarConfig, _: u16, x: u16, _: u8, _: []const bool, _: bool) !u16 { return x; }
+    pub fn draw(_: *drawing.DrawContext, _: types.BarConfig, _: u16, x: u16, _: u8, _: []const bool, _: bool) !u16 { return x; }
     pub fn invalidate() void {}
     pub fn getCachedWorkspaceWidth() u16 { return 0; }
 };
@@ -110,7 +111,7 @@ const carousel   = @import("carousel");
 
 const titleSegment = if (build_options.has_title) @import("title") else struct {
     pub fn draw(
-        _: *drawing.DrawContext, _: core.BarConfig, _: u16,
+        _: *drawing.DrawContext, _: types.BarConfig, _: u16,
         x: u16, w: u16,
         _: *xcb.xcb_connection_t, _: ?u32,
         _: []const u32, _: []const u32,
@@ -121,7 +122,7 @@ const titleSegment = if (build_options.has_title) @import("title") else struct {
 
 const clockSegment = if (build_options.has_clock) @import("clock") else struct {
     pub const SAMPLE_STRING: []const u8 = "";
-    pub fn draw(_: *drawing.DrawContext, _: core.BarConfig, _: u16, x: u16) !u16 { return x; }
+    pub fn draw(_: *drawing.DrawContext, _: types.BarConfig, _: u16, x: u16) !u16 { return x; }
     pub fn setTimerFd(_: i32) void {}
     pub fn updateTimerState() void {}
     pub fn pollTimeoutMs() i32 { return -1; }
@@ -247,7 +248,7 @@ const WindowCtx = struct {
 /// Cairo/Pango drawing context plus bar configuration.
 const RenderCtx = struct {
     dc:        *drawing.DrawContext,
-    config:    core.BarConfig,
+    config:    types.BarConfig,
     width:     u16,
     height:    u16,
     allocator: std.mem.Allocator,
@@ -302,7 +303,7 @@ const State = struct {
         width:     u16,
         height:    u16,
         dc:        *drawing.DrawContext,
-        config:    core.BarConfig,
+        config:    types.BarConfig,
     ) !*State {
         const s = try allocator.create(State);
         s.* = .{
@@ -348,7 +349,7 @@ const State = struct {
         self.layout_cache.clock_x = null;
     }
 
-    fn measureSegmentWidth(self: *State, snap: *const BarSnapshot, segment: core.BarSegment) u16 {
+    fn measureSegmentWidth(self: *State, snap: *const BarSnapshot, segment: types.BarSegment) u16 {
         return switch (segment) {
             .workspaces => if (snap.workspace_count > 0)
                 @intCast(snap.workspace_count * workspacesSegment.getCachedWorkspaceWidth())
@@ -360,7 +361,7 @@ const State = struct {
         };
     }
 
-    fn drawSegment(self: *State, snap: *const BarSnapshot, segment: core.BarSegment, x: u16, width: ?u16) !u16 {
+    fn drawSegment(self: *State, snap: *const BarSnapshot, segment: types.BarSegment, x: u16, width: ?u16) !u16 {
         if (segment == .workspaces) self.layout_cache.workspace_x = x;
         return switch (segment) {
             .workspaces => try workspacesSegment.draw(
@@ -381,7 +382,7 @@ const State = struct {
 
     /// Returns true when `seg` should be skipped because its data has not changed
     /// since the last frame and a full redraw is not required.
-    inline fn shouldSkipSegment(snap: *const BarSnapshot, seg: core.BarSegment) bool {
+    inline fn shouldSkipSegment(snap: *const BarSnapshot, seg: types.BarSegment) bool {
         if (snap.is_full_redraw) return false;
         return switch (seg) {
             .workspaces => !snap.is_workspace_dirty,
@@ -390,7 +391,7 @@ const State = struct {
         };
     }
 
-    fn drawRightSegments(self: *State, snap: *const BarSnapshot, segments: []const core.BarSegment) !void {
+    fn drawRightSegments(self: *State, snap: *const BarSnapshot, segments: []const types.BarSegment) !void {
         var right_x          = self.render.width;
         const scaled_spacing = self.render.config.scaledSpacing(self.render.height);
         // pending_gap: when true the segment to our right drew something and
