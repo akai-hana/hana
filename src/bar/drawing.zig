@@ -23,13 +23,11 @@ pub const VisualInfo = struct {
 pub fn findVisualByDepth(screen: *core.xcb.xcb_screen_t, depth: u8) VisualInfo {
     var depth_iter = core.xcb.xcb_screen_allowed_depths_iterator(screen);
     while (depth_iter.rem > 0) : (core.xcb.xcb_depth_next(&depth_iter)) {
-        if (depth_iter.data.*.depth == depth) {
-            var visual_iter = core.xcb.xcb_depth_visuals_iterator(depth_iter.data);
-            if (visual_iter.rem > 0) {
-                const vt = visual_iter.data;
-                return .{ .visual_type = vt, .visual_id = vt.*.visual_id };
-            }
-        }
+        if (depth_iter.data.*.depth != depth) continue;
+        var visual_iter = core.xcb.xcb_depth_visuals_iterator(depth_iter.data);
+        if (visual_iter.rem == 0) continue;
+        const vt = visual_iter.data;
+        return .{ .visual_type = vt, .visual_id = vt.*.visual_id };
     }
     return .{ .visual_type = null, .visual_id = screen.root_visual };
 }

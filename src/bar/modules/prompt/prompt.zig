@@ -165,12 +165,10 @@ pub fn handlePromptKeypress(
     bound_action: ?*const core.Action,
 ) bool {
     if (!g.active) return false;
-    if (bound_action) |action| {
-        if (action.* == .close_window) {
-            deactivate();
-            return true;
-        }
-    }
+    if (bound_action) |action| if (action.* == .close_window) {
+        deactivate();
+        return true;
+    };
     return handleKeyPress(event);
 }
 
@@ -228,12 +226,12 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
 
     // Tab: accept ghost completion 
     if (sym == vim.XK_Tab and g.vim.mode == .insert) {
-        if (g.ghost_len > 0 and g.vim.cursor == g.vim.len) {
-            const n = @min(g.ghost_len, g.vim.max_input - 1 - g.vim.len);
-            if (n > 0) {
-                vim.insertSlice(&g.vim, g.ghost_buf[0..n]);
-                g.ghost_len = 0;
-            }
+        const n_ghost: usize = if (g.ghost_len > 0 and g.vim.cursor == g.vim.len)
+            @min(g.ghost_len, g.vim.max_input - 1 - g.vim.len)
+        else 0;
+        if (n_ghost > 0) {
+            vim.insertSlice(&g.vim, g.ghost_buf[0..n_ghost]);
+            g.ghost_len = 0;
         }
         g.blink_visible = true;
         redraw_pending = true;
@@ -273,31 +271,29 @@ pub fn draw(
     title_invalidated:   bool,
     allocator:           std.mem.Allocator,
 ) !u16 {
-    if (!g.active) {
-        return title.draw(
-            .{
-                .dc      = dc,
-                .config  = config,
-                .height  = height,
-                .start_x = start_x,
-                .width   = width,
-                .conn    = conn,
-            },
-            .{
-                .focused_window  = focused_window,
-                .focused_title   = focused_title,
-                .minimized_title = "",
-                .current_ws_wins = current_ws_wins,
-                .minimized_set   = minimized_set,
-            },
-            .{
-                .cached_title        = cached_title,
-                .cached_title_window = cached_title_window,
-            },
-            allocator,
-            title_invalidated,
-        );
-    }
+    if (!g.active) return title.draw(
+        .{
+            .dc      = dc,
+            .config  = config,
+            .height  = height,
+            .start_x = start_x,
+            .width   = width,
+            .conn    = conn,
+        },
+        .{
+            .focused_window  = focused_window,
+            .focused_title   = focused_title,
+            .minimized_title = "",
+            .current_ws_wins = current_ws_wins,
+            .minimized_set   = minimized_set,
+        },
+        .{
+            .cached_title        = cached_title,
+            .cached_title_window = cached_title_window,
+        },
+        allocator,
+        title_invalidated,
+    );
     return drawActive(dc, config, height, start_x, width);
 }
 

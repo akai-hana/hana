@@ -407,13 +407,13 @@ const State = struct {
                     if (seg == .title) { title_seg_x = x; title_seg_w = seg_w; }
                     if (segmentSkip(snap, seg)) {
                         x += seg_w + scaled_spacing;
-                    } else {
-                        const x_before = x;
-                        x = try self.drawSegment(snap, seg, x, null);
-                        if (x != x_before) {
-                            self.render.dc.createRectangle(x, 0, scaled_spacing, self.render.height, self.render.config.bg);
-                            x += scaled_spacing;
-                        }
+                        continue;
+                    }
+                    const x_before = x;
+                    x = try self.drawSegment(snap, seg, x, null);
+                    if (x != x_before) {
+                        self.render.dc.createRectangle(x, 0, scaled_spacing, self.render.height, self.render.config.bg);
+                        x += scaled_spacing;
                     }
                 },
                 .center => {
@@ -424,13 +424,13 @@ const State = struct {
                         if (segmentSkip(snap, seg)) {
                             x += w;
                             if (seg != .title) x += scaled_spacing;
-                        } else {
-                            const x_before = x;
-                            x = try self.drawSegment(snap, seg, x, w);
-                            if (seg != .title and x != x_before) {
-                                self.render.dc.createRectangle(x, 0, scaled_spacing, self.render.height, self.render.config.bg);
-                                x += scaled_spacing;
-                            }
+                            continue;
+                        }
+                        const x_before = x;
+                        x = try self.drawSegment(snap, seg, x, w);
+                        if (seg != .title and x != x_before) {
+                            self.render.dc.createRectangle(x, 0, scaled_spacing, self.render.height, self.render.config.bg);
+                            x += scaled_spacing;
                         }
                     }
                 },
@@ -523,10 +523,9 @@ fn barThreadFn(s: *State) void {
                 const remaining = next_carousel_ns - now_ns;
                 g_bar.channel.work_cond.timedWait(&g_bar.channel.mutex, remaining) catch {};
                 break;
-            } else {
-                next_carousel_ns = 0;
-                g_bar.channel.work_cond.wait(&g_bar.channel.mutex);
             }
+            next_carousel_ns = 0;
+            g_bar.channel.work_cond.wait(&g_bar.channel.mutex);
         }
         if (g_bar.channel.work.kind == .quit) { g_bar.channel.mutex.unlock(); return; }
         // Snapshot the pending work and clear it atomically under the mutex.
@@ -1052,18 +1051,17 @@ pub fn monitorFocusedWindow() void {
 }
 
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
-    if (g_bar.state) |s| if (event.event == s.win.window) {
-        if (comptime !build_options.has_workspaces) return;
-        const ws_state = wsGetState() orelse return;
-        const ws_w     = workspaces_segment.getCachedWorkspaceWidth();
-        if (ws_w == 0) return;
-        const click_x           = @max(0, event.event_x - s.layout.workspace_x);
-        const clicked_ws: usize = @intCast(@divFloor(click_x, ws_w));
-        if (clicked_ws < ws_state.workspaces.len) {
-            wsSwitchTo(clicked_ws);
-            s.setDirty();
-        }
-    };
+    const s = g_bar.state orelse return;
+    if (event.event != s.win.window) return;
+    if (comptime !build_options.has_workspaces) return;
+    const ws_state = wsGetState() orelse return;
+    const ws_w     = workspaces_segment.getCachedWorkspaceWidth();
+    if (ws_w == 0) return;
+    const click_x           = @max(0, event.event_x - s.layout.workspace_x);
+    const clicked_ws: usize = @intCast(@divFloor(click_x, ws_w));
+    if (clicked_ws >= ws_state.workspaces.len) return;
+    wsSwitchTo(clicked_ws);
+    s.setDirty();
 }
 
 /// Returns true when tiling is both globally enabled and currently active.
@@ -1086,10 +1084,10 @@ fn retileAllWorkspaces() void {
         if (comptime build_options.has_fullscreen) {
             if (fullscreen.getForWorkspace(@intCast(idx)) != null) continue;
         }
-        if (@as(u8, @intCast(idx)) == ws_state.current) {
-            tiling.retileCurrentWorkspace();
-        } else {
+        if (@as(u8, @intCast(idx)) != ws_state.current) {
             tiling.retileInactiveWorkspace(@intCast(idx));
+            continue;
         }
+        tiling.retileCurrentWorkspace();
     }
 }

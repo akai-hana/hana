@@ -232,30 +232,32 @@ fn drawSingleWindow(
     if (is_minimized) {
         // Pre-fetched on the main thread via fetchWindowTitleInto — zero X11
         // I/O here, upholding the render-thread threading contract.
-        if (snapshot.minimized_title.len > 0) {
+        if (snapshot.minimized_title.len > 0)
             try carousel.drawOrScrollTitle(
                 ctx.dc, baseline_y, geom,
                 snapshot.minimized_title, accent, ctx.config.fg,
                 single_win, false,
             );
-        }
-    } else if (snapshot.focused_title.len > 0) {
-        // Update the bar slot's title cache for the next drawCached() tick.
-        // Only the draw() path passes a non-null cache.
-        if (cache) |c| {
-            if (title_invalidated or c.cached_title_window.* != snapshot.focused_window) {
-                c.cached_title.clearRetainingCapacity();
-                c.cached_title.appendSlice(allocator, snapshot.focused_title) catch {};
-                c.cached_title_window.* = snapshot.focused_window;
-            }
-        }
-        const fg = if (is_focused) ctx.config.selected_fg else ctx.config.fg;
-        try carousel.drawOrScrollTitle(
-            ctx.dc, baseline_y, geom,
-            snapshot.focused_title, accent, fg,
-            snapshot.focused_window, title_invalidated,
-        );
+        return;
     }
+
+    if (snapshot.focused_title.len == 0) return;
+
+    // Update the bar slot's title cache for the next drawCached() tick.
+    // Only the draw() path passes a non-null cache.
+    if (cache) |c| {
+        if (title_invalidated or c.cached_title_window.* != snapshot.focused_window) {
+            c.cached_title.clearRetainingCapacity();
+            c.cached_title.appendSlice(allocator, snapshot.focused_title) catch {};
+            c.cached_title_window.* = snapshot.focused_window;
+        }
+    }
+    const fg = if (is_focused) ctx.config.selected_fg else ctx.config.fg;
+    try carousel.drawOrScrollTitle(
+        ctx.dc, baseline_y, geom,
+        snapshot.focused_title, accent, fg,
+        snapshot.focused_window, title_invalidated,
+    );
 }
 
 // Private — split-view segmented titles 
@@ -402,36 +404,36 @@ fn drawSegmentedTitles(
 
         ctx.dc.createRectangle(segment_x, 0, segment_width, ctx.height, accent);
 
-        if (info.title.len > 0 and segment_width > scaled_padding *| 2) {
-            const text_x  = segment_x + scaled_padding + TITLE_LEAD_PX;
-            const avail_w = segment_width -| scaled_padding *| 2 -| TITLE_LEAD_PX;
-            const text_fg = if (is_focused_win) ctx.config.selected_fg else ctx.config.fg;
-            const text_w  = ctx.dc.textWidth(info.title);
-            const geom    = carousel.SegmentGeometry{
-                .seg_x   = segment_x,
-                .seg_w   = segment_width,
-                .text_x  = text_x,
-                .avail_w = avail_w,
-            };
+        if (info.title.len == 0 or segment_width <= scaled_padding *| 2) continue;
 
-            if (is_focused_win and carousel.isCarouselEnabled()) {
-                // Focused + carousel enabled: pass full segment bounds so
-                // the scroll covers the entire segment width.
-                const scrolled = try carousel.blitSegCarousel(
-                    ctx.dc, baseline_y, geom, text_w,
-                    info.title, accent, text_fg, info.window, title_invalidated,
-                );
-                if (!scrolled) {
-                    // Text fits — draw it inset with normal padding.
-                    try ctx.dc.drawText(text_x, baseline_y, info.title, text_fg);
-                }
-            } else {
-                // Non-focused or carousel disabled: ellipsis on overflow.
-                if (text_w <= avail_w)
-                    try ctx.dc.drawText(text_x, baseline_y, info.title, text_fg)
-                else
-                    try ctx.dc.drawTextEllipsis(text_x, baseline_y, info.title, avail_w, text_fg);
+        const text_x  = segment_x + scaled_padding + TITLE_LEAD_PX;
+        const avail_w = segment_width -| scaled_padding *| 2 -| TITLE_LEAD_PX;
+        const text_fg = if (is_focused_win) ctx.config.selected_fg else ctx.config.fg;
+        const text_w  = ctx.dc.textWidth(info.title);
+        const geom    = carousel.SegmentGeometry{
+            .seg_x   = segment_x,
+            .seg_w   = segment_width,
+            .text_x  = text_x,
+            .avail_w = avail_w,
+        };
+
+        if (is_focused_win and carousel.isCarouselEnabled()) {
+            // Focused + carousel enabled: pass full segment bounds so
+            // the scroll covers the entire segment width.
+            const scrolled = try carousel.blitSegCarousel(
+                ctx.dc, baseline_y, geom, text_w,
+                info.title, accent, text_fg, info.window, title_invalidated,
+            );
+            if (!scrolled) {
+                // Text fits — draw it inset with normal padding.
+                try ctx.dc.drawText(text_x, baseline_y, info.title, text_fg);
             }
+        } else {
+            // Non-focused or carousel disabled: ellipsis on overflow.
+            if (text_w <= avail_w)
+                try ctx.dc.drawText(text_x, baseline_y, info.title, text_fg)
+            else
+                try ctx.dc.drawTextEllipsis(text_x, baseline_y, info.title, avail_w, text_fg);
         }
     }
 }

@@ -451,20 +451,17 @@ pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
         switch (mkr) {
             .consumed => return .none,
             .motion   => |m| {
-                if (m.op != 0) {
-                    if (m.dot_eligible) vs.dot = .{ .op_motion = .{
-                        .op           = m.op,
-                        .op_count     = m.op_count,
-                        .motion_count = m.motion_count,
-                        .motion_sym   = if (m.find_kind != 0) 0 else @truncate(sym),
-                        .find_kind    = m.find_kind,
-                        .find_ch      = m.find_ch,
-                        .g_prefix     = m.g_prefix,
-                    }};
-                    doOp(vs, m.op, m.mr);
-                } else {
-                    setCursor(vs, m.mr);
-                }
+                if (m.op == 0) { setCursor(vs, m.mr); return .none; }
+                if (m.dot_eligible) vs.dot = .{ .op_motion = .{
+                    .op           = m.op,
+                    .op_count     = m.op_count,
+                    .motion_count = m.motion_count,
+                    .motion_sym   = if (m.find_kind != 0) 0 else @truncate(sym),
+                    .find_kind    = m.find_kind,
+                    .find_ch      = m.find_ch,
+                    .g_prefix     = m.g_prefix,
+                }};
+                doOp(vs, m.op, m.mr);
                 return .none;
             },
         }
@@ -688,31 +685,29 @@ pub fn handleReplace(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 
         XK_Return => return .spawn,
 
-        XK_BackSpace => {
-            if (vs.cursor > vs.replace_orig_cur) {
-                vs.cursor -= 1;
-                if (vs.cursor < vs.replace_orig_len) {
-                    vs.buf[vs.cursor] = vs.replace_orig_buf[vs.cursor];
-                } else {
-                    if (vs.cursor < vs.len - 1) {
-                        std.mem.copyForwards(u8, vs.buf[vs.cursor .. vs.len - 1], vs.buf[vs.cursor + 1 .. vs.len]);
-                    }
-                    vs.len -= 1;
+        XK_BackSpace => blk: {
+            if (vs.cursor <= vs.replace_orig_cur) break :blk;
+            vs.cursor -= 1;
+            if (vs.cursor < vs.replace_orig_len) {
+                vs.buf[vs.cursor] = vs.replace_orig_buf[vs.cursor];
+            } else {
+                if (vs.cursor < vs.len - 1) {
+                    std.mem.copyForwards(u8, vs.buf[vs.cursor .. vs.len - 1], vs.buf[vs.cursor + 1 .. vs.len]);
                 }
+                vs.len -= 1;
             }
         },
 
-        else => {
-            if (sym >= 0x20 and sym <= 0x7e) {
-                const ch: u8 = @truncate(sym);
-                if (vs.cursor < vs.len) {
-                    vs.buf[vs.cursor] = ch;
-                    vs.cursor += 1;
-                } else if (vs.len < vs.max_input - 1) {
-                    vs.buf[vs.len] = ch;
-                    vs.len    += 1;
-                    vs.cursor += 1;
-                }
+        else => blk: {
+            if (sym < 0x20 or sym > 0x7e) break :blk;
+            const ch: u8 = @truncate(sym);
+            if (vs.cursor < vs.len) {
+                vs.buf[vs.cursor] = ch;
+                vs.cursor += 1;
+            } else if (vs.len < vs.max_input - 1) {
+                vs.buf[vs.len] = ch;
+                vs.len    += 1;
+                vs.cursor += 1;
             }
         },
     }
@@ -920,21 +915,18 @@ fn textObjWord(vs: *VimState, big: bool, inner: bool) ?MotionResult {
 fn textObjQuote(vs: *VimState, q: u8, inner: bool) ?MotionResult {
     var i: usize = 0;
     while (i < vs.len) {
-        if (vs.buf[i] == q) {
-            const start = i;
-            i += 1;
-            while (i < vs.len and vs.buf[i] != q) i += 1;
-            if (i >= vs.len) break;
-            const stop = i;
-            i += 1;
-            if (vs.cursor >= start and vs.cursor <= stop) {
-                const lo: usize = if (inner) start + 1 else start;
-                const hi: usize = if (inner) stop       else stop + 1;
-                if (lo >= hi) return null;
-                return MotionResult{ .pos = hi, .inclusive = false, .from_override = lo };
-            }
-        } else {
-            i += 1;
+        if (vs.buf[i] != q) { i += 1; continue; }
+        const start = i;
+        i += 1;
+        while (i < vs.len and vs.buf[i] != q) i += 1;
+        if (i >= vs.len) break;
+        const stop = i;
+        i += 1;
+        if (vs.cursor >= start and vs.cursor <= stop) {
+            const lo: usize = if (inner) start + 1 else start;
+            const hi: usize = if (inner) stop       else stop + 1;
+            if (lo >= hi) return null;
+            return MotionResult{ .pos = hi, .inclusive = false, .from_override = lo };
         }
     }
     return null;

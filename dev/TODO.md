@@ -1,6 +1,10 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+remember dev/PROMPT.md
+
+poruko: you couldn't generate your response fully. Please continue and finish what you were doing.
+
 0117 (PENDING self-healing): this self-healing is nice, but i think it'd be better if no healing needed to take place in the first place; i feel like the solution you provided doesn't tackle the root issue, but rather provides a solution that serves as a band-aid to the symptoms that the root issue cause. what are your thoughts about this? do you think you could maybe provide a solution that is solid enough to not ever need self-healing?
 
 prompt {
