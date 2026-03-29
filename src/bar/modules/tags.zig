@@ -21,7 +21,7 @@ const static_numbers = blk: {
 
 // Both arrays are capped at 20 entries, matching static_numbers and
 // workspaces.WORKSPACE_NAMES. Workspaces beyond index 20 still render
-// correctly: draw() falls back to dc.textWidth(label) on a cache miss.
+// correctly: draw() falls back to dc.measureTextWidth(label) on a cache miss.
 // Raise this cap if workspace count ever exceeds 20.
 var label_widths: [20]u16 = [_]u16{0} ** 20;
 var ws_width:          u16     = 0;
@@ -44,7 +44,7 @@ pub fn getCachedWorkspaceWidth() u16 { return ws_width; }
 
 fn ensureCache(dc: *drawing.DrawContext, config: core.BarConfig, height: u16) void {
     if (cache_valid) return;
-    for (&label_widths, 0..) |*w, i| w.* = dc.textWidth(getLabel(i, config));
+    for (&label_widths, 0..) |*w, i| w.* = dc.measureTextWidth(getLabel(i, config));
     ws_width    = config.scaledWorkspaceWidth(height);
     cache_valid = true;
 
@@ -125,10 +125,10 @@ pub fn draw(
         const bg         = if (is_current) config.selected_bg else config.bg;
         const fg         = if (is_current) config.selected_fg else config.fg;
 
-        dc.createRectangle(x, 0, ws_width, height, bg);
+        dc.fillRect(x, 0, ws_width, height, bg);
 
         const label   = getLabel(i, config);
-        const label_w = if (i < label_widths.len) label_widths[i] else dc.textWidth(label);
+        const label_w = if (i < label_widths.len) label_widths[i] else dc.measureTextWidth(label);
         const text_x  = x + (ws_width - label_w) / 2;
         try dc.drawText(text_x, baseline_y, label, fg);
 
