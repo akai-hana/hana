@@ -524,7 +524,14 @@ fn unmanageWindow(win: u32) void {
     _ = xcb.xcb_grab_server(core.conn);
 
     // Notify each module in order inside the server grab.
-    if (tilingActive()) {
+    // Use a comptime guard here, NOT the runtime tilingActive() check.
+    // tilingActive() reads core.config.tiling.enabled, which can change on a
+    // config reload *after* a window was added to the tiling pool.  If
+    // enabled flips false between addWindow and this unmanage call, the
+    // runtime guard would skip removeWindow and leave the window as a zombie
+    // in tiling.State.windows — causing ghost tiles on the next retile.
+    // tiling.removeWindow is a safe no-op if the window was never added.
+    if (comptime build_options.has_tiling) {
         tiling.removeWindow(win);
         tiling.evictSizeHints(win);
     }

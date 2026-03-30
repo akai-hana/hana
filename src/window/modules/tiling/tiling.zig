@@ -430,12 +430,20 @@ pub fn retileAllWorkspaces() void {
 
     @memset(s.retile_lens[0..effective_ws], 0);
 
+    // Use a per-bit membership check (matching collectWorkspaceWindows) so
+    // windows tagged to multiple workspaces are added to EVERY workspace they
+    // belong to.  The previous getWorkspaceForWindow call returned only the
+    // lowest-set-bit workspace, causing higher-indexed workspaces to be tiled
+    // with an incomplete window list and their geometry cache to be marked valid
+    // for the wrong set of windows.
     for (s.windows.items()) |win| {
-        const ws_idx = tracking.getWorkspaceForWindow(win) orelse continue;
-        if (ws_idx >= effective_ws) continue;
-        if (s.retile_lens[ws_idx] < max_workspace_windows) {
-            s.retile_wins[ws_idx * max_workspace_windows + s.retile_lens[ws_idx]] = win;
-            s.retile_lens[ws_idx] += 1;
+        var ws_bit: u8 = 0;
+        while (ws_bit < effective_ws) : (ws_bit += 1) {
+            if (!tracking.isWindowOnWorkspace(win, ws_bit)) continue;
+            if (s.retile_lens[ws_bit] < max_workspace_windows) {
+                s.retile_wins[ws_bit * max_workspace_windows + s.retile_lens[ws_bit]] = win;
+                s.retile_lens[ws_bit] += 1;
+            }
         }
     }
 

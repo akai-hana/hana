@@ -265,9 +265,13 @@ const CommitFlags = struct {
 ///   • `win` != g_focused_window (no-op transitions are filtered upstream).
 ///   • Any stale confirm cookie has been cancelled or consumed by the caller.
 fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
-    if (old) |o| recordInHistory(o);
+    // Update g_focused_window BEFORE calling recordInHistory so the assertion
+    // inside recordInHistory (g_focused_window != old) holds.  The old order
+    // called recordInHistory(old) while g_focused_window still equalled old,
+    // making old == old fire every time in debug/releaseSafe builds.
     g_focused_window  = win;
     g_suppress_reason = flags.new_suppress;
+    if (old) |o| recordInHistory(o);
 
     window.grabButtons(win, true);
     if (old) |o| window.grabButtons(o, false);

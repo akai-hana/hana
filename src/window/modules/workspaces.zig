@@ -681,24 +681,29 @@ fn applyPostSwitchFocus(new_ws: u8, new_ws_obj: *Workspace, ptr_cookie: xcb.xcb_
             child else lastFocusedOrFirst(new_ws_obj);
     };
 
-    const old_focused = focus.getFocused();
-    focus.setFocused(focus_target);
-
-    window.updateFocusBorders(old_focused, focus_target);
-
-    if (old_focused) |old_win| window.grabButtons(old_win, false);
-
+    // Route through focus.setFocus / focus.clearFocus so that
+    // commitFocusTransition runs its full side-effect list:
+    //   • recordInHistory(old)       — MRU history kept correct for recovery
+    //   • tiling.updateWindowFocus   — tiling border state updated
+    //   • carousel.notifyFocusChanged — carousel UI notified
+    //   • advertiseActiveWindow      — _NET_ACTIVE_WINDOW on root updated
+    //   • grabButtons on old/new     — button grab ownership transferred
+    //   • xcb_set_input_focus        — X server notified
+    //
+    // The previous direct focus.setFocused() call bypassed all of these,
+    // leaving the MRU history stale and focus recovery broken after every
+    // workspace switch.
+    //
+    // .workspace_switch skips the mapped-check round-trip and never raises
+    // the window — both correct for this path since all windows are already
+    // mapped and the stacking order is set by hide/restoreWorkspaceWindows.
+    // bar.scheduleFocusRedraw() sets only a dirty bit here; the caller
+    // calls bar.redrawInsideGrab() for the actual synchronous redraw.
     if (focus_target) |new_win| {
-        window.grabButtons(new_win, true);
-
-        const input_model = utils.getInputModelCached(core.conn, new_win);
-        if (input_model == .locally_active or input_model == .globally_active) {
-            utils.sendWMTakeFocus(core.conn, new_win, focus.getLastEventTime());
-        }
+        focus.setFocus(new_win, .workspace_switch);
+    } else {
+        focus.clearFocus();
     }
-
-    _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-        focus_target orelse core.root, focus.getLastEventTime());
 }
 
 fn executeSwitch(old_ws: u8, new_ws: u8) void {
