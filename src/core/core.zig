@@ -1,11 +1,11 @@
 //! Shared type definitions
-//! XCB handles, geometry, input state, DPI info, and process-wide globals.
+//! Includes XCB handles, geometry, input state, DPI info, and process-wide globals.
 
 const std = @import("std");
 
-// On every @cImport, C code has to be translated to Zig.
-// Importing xcb here, and then making other files import it
-// through this file, is a tiny bit more efficient.
+// On every @cImport, C code has to be translated to Zig on every compilation.
+// That's why importing xcb here, and then making other files import it
+// through this file is a tiny bit more efficient.
 pub const xcb = @cImport(@cInclude("xcb/xcb.h"));
 
 // Modifier masks

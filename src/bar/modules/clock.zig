@@ -1,5 +1,5 @@
-//! Clock segment — displays the current time and manages the update timer.
-//! The timer is dynamically enabled/disabled to reduce idle CPU usage.
+//! Clock segment
+//! Displays the current time and manages the update timer.
 
 const std     = @import("std");
 const core    = @import("core");
