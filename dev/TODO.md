@@ -1,19 +1,9 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-poruko: you couldn't generate your response fully. Please continue and finish what you were doing.
-
-0117 (PENDING self-healing): this self-healing is nice, but i think it'd be better if no healing needed to take place in the first place; i feel like the solution you provided doesn't tackle the root issue, but rather provides a solution that serves as a band-aid to the symptoms that the root issue cause. what are your thoughts about this? do you think you could maybe provide a solution that is solid enough to not ever need self-healing?
-
-prompt {
-(tsunde) i still see the issue.
- 
-When i go to the right of the prompt enough to make the text scroll, this message is spammed on the terminal. Is this some issue going on inside the window manager that could be fixed, or what?
-(process:14841): Pango-WARNING **: 12:43:28.603: Invalid UTF-8 string passed to pango_layout_set_text()
-
+6f6e { your response got cut. please continue generating. }
 
 add the ability to do two basic vim motions: ":w" and ":q". ":q" acts as cancel, while ":w" sends the command through the prompt. ":w" alone doesn't cancel the prompt: it sends the current command, but keeps the prompt open so that the user can write a different prompt; to send a command AND close the prompt inline bar, the user must either do ":wq" or ":x". 
-}
 
 how to switch to floating layout? (><>)
 

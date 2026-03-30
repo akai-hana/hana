@@ -339,6 +339,17 @@ fn handleAction(action: vim.Action) void {
             if (cmd.len > 0) spawnCommand(cmd);
             deactivate();
         },
+        // :w — execute the current command but keep the prompt open so the
+        // user can immediately type a new one.  The buffer is cleared and the
+        // mode is reset to INSERT, mirroring what activate() does without the
+        // keyboard-grab overhead (the grab is already held).
+        .spawn_keep => {
+            const cmd = g.vim_state.buf[0..g.vim_state.len];
+            if (cmd.len > 0) spawnCommand(cmd);
+            resetVimEditing(&g.vim_state);
+            g.ghost_len = 0;
+            g.has_space = false;
+        },
     }
 }
 
