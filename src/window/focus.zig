@@ -167,33 +167,30 @@ pub inline fn getLastEventTime()  u32                        { return g_last_eve
 
 pub inline fn setFocused(win: ?u32) void    { g_focused_window  = win; }
 
-/// Update the X11 event timestamp used for xcb_set_input_focus and
-/// WM_TAKE_FOCUS messages.
+/// Update the X11 event timestamp.  Kept for any callers that still need the
+/// last event time (e.g. future protocol extensions), but focus-protocol calls
+/// (xcb_set_input_focus and WM_TAKE_FOCUS) now unconditionally use
+/// XCB_CURRENT_TIME, matching DWM's approach.
 ///
-/// CRITICAL: this MUST be called for EnterNotify events (with enter_event.time)
-/// BEFORE calling setFocus(.mouse_enter).  If it is only called for button and
-/// key events, g_last_event_time will be from the last click/keystroke, not
-/// the current hover event.
+/// Background: the original code passed g_last_event_time to every
+/// xcb_set_input_focus and WM_TAKE_FOCUS call, attempting ICCCM timestamp
+/// compliance.  In practice this caused a subtle failure mode:
 ///
-/// Why this matters:
-///   1. The WM sends xcb_set_input_focus(win, T_enter).
+///   1. WM sends xcb_set_input_focus(win, T_enter).
 ///      X server: last-focus-change-time = T_enter.
-///   2. The WM sends WM_TAKE_FOCUS(win, g_last_event_time).
-///      If g_last_event_time is an old button-press timestamp T_old < T_enter,
-///      the app (e.g. Discord, Prism Launcher) receives WM_TAKE_FOCUS with T_old
-///      and calls XSetInputFocus(internal_widget, T_old).
-///   3. X server: T_old < last-focus-change-time (T_enter) → request IGNORED.
-///   4. The app's internal focus widget never gets focus; the app appears
-///      unresponsive to hover even though the X server reported success for
-///      the WM's own xcb_set_input_focus.
+///   2. WM sends WM_TAKE_FOCUS(win, T_enter).
+///   3. App (Electron, Qt) calls XSetInputFocus(internal_widget, T_enter).
+///   4. X server accepts T_enter >= T_enter.  Focus lands on internal_widget.
+///   5. FocusIn(win) arrives at WM → cancelPendingConfirm().
+///   6. Internal focus then moves again inside the app.
+///   7. User moves mouse away and back → setFocus sees g_focused_window==win →
+///      early-return, no XSetInputFocus/WM_TAKE_FOCUS re-sent → app unresponsive.
 ///
-/// Terminals and Firefox are often immune: terminals are passive (no
-/// WM_TAKE_FOCUS, so no app-side XSetInputFocus to fail), and Firefox may use
-/// CurrentTime rather than the WM-provided timestamp.  Electron apps (Discord)
-/// and Qt apps (Prism Launcher) strictly use the provided timestamp per ICCCM.
-///
-/// dwm avoids this entirely by always passing CurrentTime (0) everywhere,
-/// which the X server interprets as "now" and bypasses the ordering check.
+/// DWM avoids all of this by always passing CurrentTime (0) everywhere, which
+/// the X server interprets as "now" and bypasses the ordering check entirely.
+/// Observed behaviour confirms DWM works correctly for all app types including
+/// Electron and Qt, disproving the earlier assumption that globally_active apps
+/// would reject CurrentTime.
 pub inline fn setLastEventTime(t: u32) void { g_last_event_time = t;   }
 
 /// Set the suppress reason and immediately focus `win` as an atomic operation.
@@ -306,14 +303,14 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
 
     if (flags.set_input_focus)
         _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-            win, g_last_event_time);
+            win, xcb.XCB_CURRENT_TIME);
 
     if (flags.raise)
         _ = xcb.xcb_configure_window(core.conn, win,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
     if (flags.send_wm_take_focus)
-        utils.sendWMTakeFocus(core.conn, win, g_last_event_time);
+        utils.sendWMTakeFocus(core.conn, win, xcb.XCB_CURRENT_TIME);
 
     if (flags.arm_confirm) {
         g_confirm_cookie = xcb.xcb_get_input_focus(core.conn);
@@ -448,13 +445,13 @@ pub fn drainPendingConfirm() void {
         _ = xcb.xcb_configure_window(core.conn, win,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
         _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-            win, g_last_event_time);
+            win, xcb.XCB_CURRENT_TIME);
         // Re-send WM_TAKE_FOCUS after the raise so locally_active clients
         // (e.g. Qt) process it in the correct stacking context.
         // Not sent for passive windows — they have no WM_TAKE_FOCUS handler
         // and xcb_set_input_focus alone is the correct protocol.
         if (input_model == .locally_active) {
-            utils.sendWMTakeFocus(core.conn, win, g_last_event_time);
+            utils.sendWMTakeFocus(core.conn, win, xcb.XCB_CURRENT_TIME);
         }
     }
 }
@@ -590,10 +587,10 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
     const input_model = utils.getInputModelCached(core.conn, intended);
     if (input_model != .no_input and input_model != .globally_active) {
         _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-            intended, g_last_event_time);
+            intended, xcb.XCB_CURRENT_TIME);
     }
     if (input_model == .locally_active or input_model == .globally_active) {
-        utils.sendWMTakeFocus(core.conn, intended, g_last_event_time);
+        utils.sendWMTakeFocus(core.conn, intended, xcb.XCB_CURRENT_TIME);
     }
 }
 
@@ -648,7 +645,7 @@ pub fn clearFocus() void {
     g_focused_window  = null;
     g_suppress_reason = .none;
     _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-        core.root, g_last_event_time);
+        core.root, xcb.XCB_CURRENT_TIME);
     carousel.notifyFocusChanged(null);
     bar.scheduleFocusRedraw(null);
 
