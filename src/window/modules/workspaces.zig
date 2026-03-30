@@ -249,7 +249,7 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
 
     evictWindow(win);
     if (focus.getFocused() == win) focus.clearFocus();
-    if (has_tiling and core.config.tiling.enabled) tiling.dirty();
+    if (has_tiling and core.config.tiling.enabled) tiling.markDirty();
     bar.scheduleRedraw();
     _ = xcb.xcb_flush(core.conn);
 }
@@ -614,7 +614,7 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
 
 // Step 3b: restore geometry for the new workspace.
 fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8) void {
-    const tiling_active = has_tiling and tiling.getState().enabled;
+    const tiling_active = has_tiling and tiling.getState().is_enabled;
 
     if (tiling_active) {
         if (!core.config.tiling.global_layout) tiling.syncLayoutFromWorkspace(ws);

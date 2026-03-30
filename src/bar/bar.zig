@@ -1166,7 +1166,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 inline fn isTilingActive() bool {
     if (comptime !build_options.has_tiling) return false;
     return core.config.tiling.enabled and
-        if (tiling.getStateOpt()) |t| t.enabled else false;
+        if (tiling.getStateOpt()) |t| t.is_enabled else false;
 }
 
 /// Retiles every workspace that has windows, honouring fullscreen guards.

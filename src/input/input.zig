@@ -467,7 +467,7 @@ fn dumpState() void {
 
     if (comptime build.has_tiling) {
         if (tiling.getStateOpt()) |t| {
-            debug.info("Tiling enabled: {}",     .{t.enabled});
+            debug.info("Tiling enabled: {}",     .{t.is_enabled});
             debug.info("Tiling layout:  {s}",    .{@tagName(t.layout)});
             debug.info("Tiled windows:  {}",     .{t.windows.len});
             debug.info("Master count:   {}",     .{t.master_count});
