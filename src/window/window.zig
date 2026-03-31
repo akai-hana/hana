@@ -717,8 +717,8 @@ inline fn maybeFocusWindow(win: u32) void {
             return;
         }
     }
-    debug.info("[MAYBE_FOCUS] 0x{x} -> calling setFocus", .{win});
-    focus.setFocus(win, .mouse_enter);
+    debug.info("[MAYBE_FOCUS] 0x{x} -> calling bruteForceMouseEnterFocus", .{win});
+    focus.bruteForceMouseEnterFocus(win);
 }
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
