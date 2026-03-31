@@ -1,20 +1,21 @@
 //! Focus management — set, clear, and reason-aware focus routing.
 
-const std    = @import("std");
-const core   = @import("core");
+const std           = @import("std");
+const core          = @import("core");
 const build_options = @import("build_options");
 const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
-const utils  = @import("utils");
-const bar    = if (build_options.has_bar) @import("bar") else struct {
+const utils         = @import("utils");
+const bar           = if (build_options.has_bar) @import("bar") else struct {
     pub fn scheduleFocusRedraw(_: anytype) void {}
     pub fn isBarWindow(_: u32) bool { return false; }
     pub fn redrawInsideGrab() void {}
 };
-const window = @import("window");
-const carousel = if (build_options.has_bar and build_options.has_carousel) @import("carousel") else struct {
+const window        = @import("window");
+const carousel      = if (build_options.has_bar and build_options.has_carousel) @import("carousel") else struct {
     pub fn notifyFocusChanged(_: anytype) void {}
 };
-const xcb    = core.xcb;
+const xcb           = core.xcb;
+const debug = @import("debug");
 
 // Module state
 //
@@ -332,23 +333,16 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
 }
 
 pub fn setFocus(win: u32, reason: Reason) void {
-    if (win == 0 or win == core.root) return;
-    if (g_focused_window == win) return;
-    if (bar.isBarWindow(win)) return;
+    debug.info("[SET_FOCUS] win=0x{x} reason={s} focused=0x{?x} input_model=?", .{
+        win, @tagName(reason), g_focused_window,
+    });
+    if (win == 0 or win == core.root) { debug.info("[SET_FOCUS] -> bail: zero/root", .{}); return; }
+    if (g_focused_window == win) { debug.info("[SET_FOCUS] -> bail: already focused", .{}); return; }
+    if (bar.isBarWindow(win)) { debug.info("[SET_FOCUS] -> bail: bar window", .{}); return; }
 
-    // Skip the blocking xcb_get_window_attributes round-trip when we can
-    // guarantee the window is mapped without asking the server:
-    //
-    //  mouse_enter / mouse_leave — only delivered for mapped windows.
-    //  window_spawn              — map was queued on this connection moments ago.
-    //  tiling_operation          — window is in the tiling tracking set, which is
-    //                              populated at map time and kept coherent by
-    //                              removeWindow on unmap/destroy.
-    //
-    // For all other reasons (click, command) a race with destroy is possible,
-    // so we guard with a live attribute query.
     const input_model = utils.getInputModelCached(core.conn, win);
-    if (input_model == .no_input) return;
+    debug.info("[SET_FOCUS] win=0x{x} input_model={s}", .{ win, @tagName(input_model) });
+    if (input_model == .no_input) { debug.info("[SET_FOCUS] -> bail: no_input", .{}); return; }
 
     if (switch (reason) {
         .mouse_click, .user_command => !isWindowMapped(core.conn, win),

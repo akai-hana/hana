@@ -701,32 +701,53 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
 // Guards are ordered cheapest-first: `getFocused() == win` is a single field
 // read that short-circuits the rest for the common re-entry (mouse jitter) case.
 inline fn maybeFocusWindow(win: u32) void {
-    if (focus.getFocused() == win) return;
-    if (!isOnCurrentWorkspace(win)) return;
-    if (comptime build_options.has_minimize) {
-        if (minimize.isMinimized(win)) return;
+    if (focus.getFocused() == win) {
+        debug.info("[MAYBE_FOCUS] 0x{x} -> already focused", .{win});
+        return;
     }
+    if (!isOnCurrentWorkspace(win)) {
+        debug.info("[MAYBE_FOCUS] 0x{x} -> not on current workspace", .{win});
+        return;
+    }
+    if (comptime build_options.has_minimize) {
+        if (minimize.isMinimized(win)) {
+            debug.info("[MAYBE_FOCUS] 0x{x} -> minimized", .{win});
+            return;
+        }
+    }
+    debug.info("[MAYBE_FOCUS] 0x{x} -> calling setFocus", .{win});
     focus.setFocus(win, .mouse_enter);
 }
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     focus.setLastEventTime(event.time);
+    debug.info("[ENTER] win=0x{x} mode={} detail={} root_x={} root_y={}", .{
+        event.event, event.mode, event.detail, event.root_x, event.root_y,
+    });
     if (event.mode == xcb.XCB_NOTIFY_MODE_GRAB or
-        event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) return;
-    if (drag.isDragging()) return;
-    if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
-    // A tiling operation (e.g. fullscreen exit) just repositioned windows,
-    // potentially sliding one under the cursor.  Suppress focus-follow-mouse
-    // until the user actually moves the cursor; cleared by handleMotionNotify.
-    if (focus.getSuppressReason() == .tiling_operation) return;
-
-    // EnterNotify on the root window names the entered child in event.child.
-    // For all other windows the event window is the target directly.
+        event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) {
+        debug.info("[ENTER] -> filtered: GRAB/UNGRAB mode", .{});
+        return;
+    }
+    if (drag.isDragging()) {
+        debug.info("[ENTER] -> filtered: dragging", .{});
+        return;
+    }
+    if (suppressSpawnCrossing(event.root_x, event.root_y)) {
+        debug.info("[ENTER] -> filtered: spawn crossing suppressed", .{});
+        return;
+    }
+    if (focus.getSuppressReason() == .tiling_operation) {
+        debug.info("[ENTER] -> filtered: tiling_operation suppressed", .{});
+        return;
+    }
     const win: u32 = if (event.event == core.root and event.child != 0)
         event.child
     else
         event.event;
-    maybeFocusWindow(utils.findManagedWindow(core.conn, win, tracking.isManaged));
+    const managed = utils.findManagedWindow(core.conn, win, tracking.isManaged);
+    debug.info("[ENTER] -> resolved win=0x{x} managed=0x{x}", .{ win, managed });
+    maybeFocusWindow(managed);
 }
 
 pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t) void {
