@@ -1093,7 +1093,14 @@ fn drawActive(
         if (pre_text.len > 0)
             try drawSpan(dc, &px, text_left_x, scroll_end_x, baseline, pre_text, fg);
 
-        if (!colon_active) {
+        if (colon_active) {
+            // No cursor box — draw the character under the cursor as plain text
+            // so it isn't swallowed when the cursor moves to the pill widget.
+            if (g.vim_state.cursor < g.vim_state.len) {
+                if (cursorBlockGeom(px, cur_w, text_left_x, scroll_end_x)) |block|
+                    try dc.drawText(block.draw_x, baseline, cur_text, fg);
+            }
+        } else {
             if (cursorBlockGeom(px, cur_w, text_left_x, scroll_end_x)) |block| {
                 dc.fillRect(block.draw_x, cursor_v_pad, block.vis_w, height -| cursor_v_pad * 2, accent);
                 if (g.vim_state.cursor < g.vim_state.len)
