@@ -698,13 +698,15 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
     return false;
 }
 
-// Guards are ordered cheapest-first: `getFocused() == win` is a single field
-// read that short-circuits the rest for the common re-entry (mouse jitter) case.
+// Note: the `getFocused() == win` guard was intentionally removed.
+// Electron/Qt apps (Discord, PrismLauncher) call XSetInputFocus spontaneously on
+// startup. handleFocusIn accepts that grab when g_focused_window is null, setting
+// g_focused_window = discord WITHOUT sending WM_TAKE_FOCUS. The renderer widget
+// never activates. From then on, every hover hit the early-return and returned
+// without doing anything. We now always call through to bruteForceMouseEnterFocus
+// so it can re-send the focus protocol even when the WM already thinks the window
+// is focused.
 inline fn maybeFocusWindow(win: u32) void {
-    if (focus.getFocused() == win) {
-        debug.info("[MAYBE_FOCUS] 0x{x} -> already focused", .{win});
-        return;
-    }
     if (!isOnCurrentWorkspace(win)) {
         debug.info("[MAYBE_FOCUS] 0x{x} -> not on current workspace", .{win});
         return;
@@ -715,8 +717,8 @@ inline fn maybeFocusWindow(win: u32) void {
             return;
         }
     }
-    debug.info("[MAYBE_FOCUS] 0x{x} -> calling bruteForceMouseEnterFocus", .{win});
-    focus.bruteForceMouseEnterFocus(win);
+    debug.info("[MAYBE_FOCUS] 0x{x} -> calling setFocus", .{win});
+    focus.setFocus(win, .mouse_enter);
 }
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
