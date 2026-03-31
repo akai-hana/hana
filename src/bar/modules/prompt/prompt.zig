@@ -938,12 +938,10 @@ fn drawActive(
                     try dc.drawText(@intCast(ppx), baseline, ct, white);
                     ppx += @intCast(dc.measureTextWidth(ct));
                 }
-                // Block cursor (bg-coloured rect) at the insertion point.
-                const cur_w: u16 = @max(dc.measureTextWidth(" "), min_cursor_px);
+                // Thin caret (insert-mode style) at the insertion point.
                 const pill_inner_end: i32 = @as(i32, pill_x) + @as(i32, pill_w) - @as(i32, pill_h_pad);
                 if (ppx < pill_inner_end) {
-                    const vis_w: u16 = @intCast(@min(@as(i32, cur_w), pill_inner_end - ppx));
-                    dc.fillRect(@intCast(ppx), cursor_v_pad, vis_w, height -| cursor_v_pad * 2, bg);
+                    dc.fillRect(@intCast(ppx), cursor_v_pad, cursor_width, height -| cursor_v_pad * 2, white);
                 }
             } else {
                 // Normal mode label centred (left-padded) inside the pill.

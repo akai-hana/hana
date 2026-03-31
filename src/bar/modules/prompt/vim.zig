@@ -398,6 +398,10 @@ pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
                 resetPendingCmd(vs);
                 return .none;
             },
+            XK_BackSpace => {
+                if (vs.pending.colon_len > 0) vs.pending.colon_len -= 1;
+                return .none;
+            },
             XK_Return => {
                 // Copy command bytes locally before resetPendingCmd zeroes colon_buf.
                 var cmd_buf: [4]u8 = vs.pending.colon_buf;
