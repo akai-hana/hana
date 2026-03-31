@@ -1,18 +1,7 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-6f6e { your response got cut. please continue generating. }
-
-add the ability to do two basic vim motions: ":w" and ":q". ":q" acts as cancel, while ":w" sends the command through the prompt. ":w" alone doesn't cancel the prompt: it sends the current command, but keeps the prompt open so that the user can write a different prompt; to send a command AND close the prompt inline bar, the user must either do ":wq" or ":x". 
-
 how to switch to floating layout? (><>)
-
-title/carousel done
-6f6e: 2 PENDING file refactors
-
-89sh: (PENDING slow spawn window) finish doing this.
-
-pork: 2 PENDING file refactors
 
 in debug.zig, drop "info:" messages, and just display the [<name>] tags in place. make these tags have the same color that "info:" currently does.
 
