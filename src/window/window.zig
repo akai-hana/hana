@@ -433,7 +433,6 @@ fn commitWindowToScreen(win: u32, on_current_workspace: bool) void {
 
     if (on_current_workspace) {
         _ = xcb.xcb_map_window(core.conn, win);
-        snapshotSpawnCursor();
     } else {
         grabButtons(win, false);
     }
@@ -441,6 +440,15 @@ fn commitWindowToScreen(win: u32, on_current_workspace: bool) void {
     if (on_current_workspace) {
         const old_focused = focus.getFocused();
         focus.setFocus(win, .window_spawn);
+        // snapshotSpawnCursor must run AFTER setFocus(.window_spawn) because it
+        // opens with `if (focus.getSuppressReason() != .window_spawn) return`.
+        // The previous order called snapshotSpawnCursor() before setFocus, so
+        // the suppress reason was always .none at that point and the function
+        // returned immediately every time — spawn_cursor was never captured and
+        // stayed at {0,0}.  As a result, suppressSpawnCrossing compared real
+        // pointer coordinates against {0,0}, which only suppressed EnterNotify
+        // when the cursor happened to be at the top-left corner of the screen.
+        snapshotSpawnCursor();
         // Correct the new window to focused and strip focus from the old one,
         // still inside the server grab so no intermediate frame is visible.
         updateFocusBorders(old_focused, win);
@@ -705,16 +713,6 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     focus.setLastEventTime(event.time);
     if (event.mode == xcb.XCB_NOTIFY_MODE_GRAB or
         event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) return;
-    // NotifyInferior means the pointer entered this window from one of its own
-    // child windows (e.g. Electron moving internal focus back to the top-level
-    // frame area).  DWM filters these for all non-root windows:
-    //   if ((ev->mode != NotifyNormal || ev->detail == NotifyInferior) && ev->window != root)
-    //       return;
-    // Without this guard, a spurious EnterNotify with detail=NotifyInferior
-    // updates g_last_event_time and may re-trigger maybeFocusWindow on an
-    // already-focused window, which is a no-op in the common case but can
-    // interfere with the confirm/retry machinery for borderline apps.
-    if (event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR and event.event != core.root) return;
     if (drag.isDragging()) return;
     if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
     // A tiling operation (e.g. fullscreen exit) just repositioned windows,
