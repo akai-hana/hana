@@ -331,6 +331,46 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
     advertiseActiveWindow(win);
 }
 
+/// Brute-force hover focus — ignores all caching, input model checks, and
+/// timestamp logic.  Uses CurrentTime (0) for all X calls so the X server
+/// never rejects them due to timestamp ordering.  Always raises, always sends
+/// XSetInputFocus, always sends WM_TAKE_FOCUS.  Does not arm the confirm/retry
+/// machinery.  This is intentionally dumb — correctness comes later.
+pub fn bruteForceMouseEnterFocus(win: u32) void {
+    if (win == 0 or win == core.root) return;
+    if (bar.isBarWindow(win)) return;
+    if (g_focused_window == win) return;
+
+    cancelPendingConfirm();
+    g_suppress_reason = .none;
+
+    const old = g_focused_window;
+
+    // Update WM state first.
+    g_focused_window = win;
+    if (old) |o| recordInHistory(o);
+
+    // Button grabs.
+    window.grabButtons(win, true);
+    if (old) |o| window.grabButtons(o, false);
+
+    // Raise unconditionally.
+    _ = xcb.xcb_configure_window(core.conn, win,
+        xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+
+    // XSetInputFocus with CurrentTime (0) — bypasses all timestamp checks.
+    _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
+        win, 0);
+
+    // Send WM_TAKE_FOCUS with CurrentTime (0) — live WM_PROTOCOLS check inside.
+    utils.sendWMTakeFocus(core.conn, win, 0);
+
+    if (comptime build_options.has_tiling) tiling.updateWindowFocus(old, win);
+    carousel.notifyFocusChanged(win);
+    bar.scheduleFocusRedraw(win);
+    advertiseActiveWindow(win);
+}
+
 pub fn setFocus(win: u32, reason: Reason) void {
     if (win == 0 or win == core.root) return;
     if (g_focused_window == win) return;
