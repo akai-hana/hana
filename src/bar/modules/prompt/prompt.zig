@@ -893,7 +893,18 @@ fn drawActive(
     const text_end_x  = end_x   -| pad;
     if (text_left_x >= text_end_x) return end_x;
 
-    // Mode label — pinned to the right edge; does not scroll.
+    // Mode widget — pinned to the right edge; does not scroll.
+    //
+    // Rendered as a filled pill: accent-coloured background, white text.
+    // Horizontal padding of `pill_h_pad` is applied on both sides so the text
+    // never touches the pill edge and there is a natural gap between the pill
+    // and the scrollable text region.
+    //
+    // In colon-command mode the mode label is replaced by an ex-command input
+    // field that shows ":typed_chars" followed by a block cursor.
+    const pill_h_pad: u16 = 6;
+    const white: u32 = 0xFFFFFFFF;
+
     const mode_label = g.vim_state.mode.label();
     const mode_idx: usize = @intFromEnum(g.vim_state.mode);
 
@@ -903,17 +914,44 @@ fn drawActive(
         break :blk w;
     };
 
-    if (mode_w > 0 and text_end_x >= mode_w) {
-        const label_x = text_end_x - mode_w;
-        if (label_x >= text_left_x)
-            try dc.drawText(label_x, baseline, mode_label, accent);
+    // Total pill width = inner text width + left pad + right pad.
+    const pill_w: u16 = mode_w + pill_h_pad * 2;
+
+    // Reserve the pill width on the right; the scrollable region ends here.
+    const scroll_end_x: u16 = if (text_end_x >= pill_w) text_end_x - pill_w else text_left_x;
+    // Clip post-cursor text 2 px before the pill so ink never bleeds into it.
+    const ellipsis_end_x: u16 = scroll_end_x -| 2;
+
+    if (pill_w > 0 and text_end_x >= pill_w) {
+        const pill_x: u16 = text_end_x - pill_w;
+        if (pill_x >= text_left_x) {
+            // Filled pill background.
+            dc.fillRect(pill_x, cursor_v_pad, pill_w, height -| cursor_v_pad * 2, accent);
+
+            if (vim.colonInput(&g.vim_state)) |ct| {
+                // Ex-command input: ":typed_chars" + block cursor at end.
+                var ppx: i32 = @as(i32, pill_x) + @as(i32, pill_h_pad);
+                const colon_w: i32 = @intCast(dc.measureTextWidth(":"));
+                try dc.drawText(@intCast(ppx), baseline, ":", white);
+                ppx += colon_w;
+                if (ct.len > 0) {
+                    try dc.drawText(@intCast(ppx), baseline, ct, white);
+                    ppx += @intCast(dc.measureTextWidth(ct));
+                }
+                // Block cursor (bg-coloured rect) at the insertion point.
+                const cur_w: u16 = @max(dc.measureTextWidth(" "), min_cursor_px);
+                const pill_inner_end: i32 = @as(i32, pill_x) + @as(i32, pill_w) - @as(i32, pill_h_pad);
+                if (ppx < pill_inner_end) {
+                    const vis_w: u16 = @intCast(@min(@as(i32, cur_w), pill_inner_end - ppx));
+                    dc.fillRect(@intCast(ppx), cursor_v_pad, vis_w, height -| cursor_v_pad * 2, bg);
+                }
+            } else {
+                // Normal mode label centred (left-padded) inside the pill.
+                try dc.drawText(pill_x + pill_h_pad, baseline, mode_label, white);
+            }
+        }
     }
 
-    const scroll_end_x: u16 = if (text_end_x >= mode_w) text_end_x - mode_w else text_left_x;
-    // Clip 2 px before the mode label so its ink never bleeds into the '[' bracket.
-    // Only used for `drawPostSpan`; scroll math uses the full `scroll_end_x` so
-    // the cursor position is unaffected.
-    const ellipsis_end_x: u16 = scroll_end_x -| 2;
     if (text_left_x >= scroll_end_x) return end_x;
 
     const max_scroll_px: u16 = scroll_end_x - text_left_x;

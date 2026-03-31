@@ -290,6 +290,15 @@ pub fn visualRange(vs: *VimState) [2]usize {
     return .{ lo, hi };
 }
 
+/// Returns the ex-command characters typed so far after `:` in normal mode,
+/// or null when the prompt is not in colon-command mode.
+/// The returned slice aliases internal `PendingCmd` storage and is valid only
+/// until the next call that mutates `VimState`.
+pub fn colonInput(vs: *const VimState) ?[]const u8 {
+    if (!vs.pending.is_colon_cmd) return null;
+    return vs.pending.colon_buf[0..vs.pending.colon_len];
+}
+
 pub fn insertSlice(vs: *VimState, slice: []const u8) void {
     const n = @min(slice.len, vs.max_input - 1 - vs.len);
     if (n == 0) return;
