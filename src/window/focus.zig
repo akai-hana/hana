@@ -378,10 +378,12 @@ pub fn setFocus(win: u32, reason: Reason) void {
         //   1. raise the window (so the app knows it is on top)
         //   2. send WM_TAKE_FOCUS (so the app calls XSetInputFocus on itself)
         .set_input_focus    = input_model != .globally_active,
-        // Raise on click/command, and also on hover for globally_active windows
-        // (they never receive xcb_set_input_focus, so raising is the only signal).
-        .raise              = shouldRaise(reason) or
-                              (reason == .mouse_enter and input_model == .globally_active),
+        // Always raise on mouse_enter regardless of input model.
+        // When the window is miscached as passive (common for Electron due to the
+        // PropertyNotify race), XSetInputFocus silently fails unless the window is
+        // already topmost.  Raising upfront makes the initial attempt land correctly
+        // for all models, not just globally_active.
+        .raise              = shouldRaise(reason) or reason == .mouse_enter,
         // Attempt WM_TAKE_FOCUS for any focusable window, not just cached
         // locally_active/globally_active.  sendWMTakeFocus now performs a live
         // WM_PROTOCOLS check before sending (matching DWM's sendevent), so this
@@ -395,21 +397,12 @@ pub fn setFocus(win: u32, reason: Reason) void {
         // Without sending WM_TAKE_FOCUS, Electron's renderer widget never
         // activates internally despite XSetInputFocus succeeding on the top-level.
         .send_wm_take_focus = input_model != .no_input,
-        // Arm the async confirm only for mouse_enter on passive/locally_active windows.
-        //
-        // Compliant locally_active clients respond to xcb_set_input_focus directly.
-        // Non-compliant ones (e.g. Electron, which mis-declares its input model)
-        // silently ignore the request unless they are already topmost.  Passive
-        // clients (Java/AWT, some Electron builds that omit WM_TAKE_FOCUS) have the
-        // same problem.  The confirm arms a deferred raise-and-retry: we fire
-        // xcb_get_input_focus now; drainPendingConfirm() checks the result on the
-        // next event-loop iteration and raises+retries if focus did not land.
-        // If a FocusIn for `win` arrives first, handleFocusIn cancels the cookie.
-        //
-        // globally_active is excluded: it never receives xcb_set_input_focus so
-        // raising is the only signal — already covered by the .raise flag above.
-        .arm_confirm        = reason == .mouse_enter and
-                              (input_model == .locally_active or input_model == .passive),
+        // Arm the async confirm for all mouse_enter focus attempts.
+        // Previously excluded globally_active on the assumption that raise+WM_TAKE_FOCUS
+        // is sufficient, but if WM_TAKE_FOCUS is silently dropped (broken Electron/Qt
+        // builds, or stale cached model), there is no retry path.  Extending arm_confirm
+        // to cover globally_active gives every hover attempt a fallback raise-and-retry.
+        .arm_confirm        = reason == .mouse_enter,
         .schedule_bar       = true,
         .new_suppress       = suppressionFor(reason, g_suppress_reason),
     });
@@ -462,7 +455,17 @@ pub fn drainPendingConfirm() void {
     confirm: {
         const c = xcb.xcb_get_input_focus_reply(core.conn, cookie, null) orelse break :confirm;
         defer std.c.free(c);
-        if (c.*.focus == win) break :confirm;
+        // Consider focus successfully landed if ANY window has it (c.*.focus > 1).
+        // Electron (Discord, VS Code) and Qt (PrismLauncher) respond to WM_TAKE_FOCUS
+        // by calling XSetInputFocus on an internal child widget, not the managed toplevel.
+        // So xcb_get_input_focus returns the child XID, and the old `== win` check always
+        // failed — triggering a raise-and-retry that re-sends XSetInputFocus+WM_TAKE_FOCUS
+        // and resets Electron's internal focus state machine, leaving the window permanently
+        // unfocused.  Special X11 values: 0 = None, 1 = PointerRoot.  Any value > 1 means
+        // a real window has focus; if that window is a child of `win` the focus landed
+        // correctly.  If it is a different toplevel, the user moved on and we must not
+        // steal focus back.  Only retry when focus is completely absent (None/PointerRoot).
+        if (c.*.focus == win or c.*.focus > 1) break :confirm;
         _ = xcb.xcb_configure_window(core.conn, win,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
         _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
