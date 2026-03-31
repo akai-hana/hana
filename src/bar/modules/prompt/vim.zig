@@ -390,7 +390,10 @@ pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
                 return .none;
             },
             XK_Return => {
-                const cmd = vs.pending.colon_buf[0..vs.pending.colon_len];
+                // Copy command bytes locally before resetPendingCmd zeroes colon_buf.
+                var cmd_buf: [4]u8 = vs.pending.colon_buf;
+                const cmd_len: u8  = vs.pending.colon_len;
+                const cmd = cmd_buf[0..cmd_len];
                 resetPendingCmd(vs);
                 if (std.mem.eql(u8, cmd, "q"))  return .deactivate;
                 if (std.mem.eql(u8, cmd, "w"))  return .spawn_keep;
