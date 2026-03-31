@@ -119,14 +119,19 @@ pub fn isActive() bool { return g.is_active; }
 
 /// Returns true when the prompt is active in insert mode, signalling that
 /// the bar should schedule a periodic redraw for the cursor blink animation.
-pub fn needsRedraw() bool { return g.is_active and g.vim_state.mode == .insert; }
+pub fn needsRedraw() bool {
+    if (!g.is_active) return false;
+    return g.vim_state.mode == .insert or vim.colonInput(&g.vim_state) != null;
+}
 
 /// Returns the milliseconds until the next blink toggle, or -1 if the cursor
 /// blink animation is not running.  Pass this (combined with the clock timeout)
 /// to poll() so the event loop wakes up exactly when a redraw is needed.
 pub fn blinkPollTimeoutMs() i32 {
-    if (!g.is_active or g.vim_state.mode != .insert) return -1;
-    return cursor_blink_ms;
+    if (!g.is_active) return -1;
+    if (g.vim_state.mode == .insert or vim.colonInput(&g.vim_state) != null)
+        return cursor_blink_ms;
+    return -1;
 }
 
 /// Toggle cursor visibility.  Call from the event loop on every poll timeout
@@ -929,7 +934,7 @@ fn drawActive(
             dc.fillRect(pill_x, cursor_v_pad, pill_w, height -| cursor_v_pad * 2, accent);
 
             if (vim.colonInput(&g.vim_state)) |ct| {
-                // Ex-command input: ":typed_chars" + block cursor at end.
+                // Ex-command input: ":typed_chars" + blinking insert-style caret.
                 var ppx: i32 = @as(i32, pill_x) + @as(i32, pill_h_pad);
                 const colon_w: i32 = @intCast(dc.measureTextWidth(":"));
                 try dc.drawText(@intCast(ppx), baseline, ":", white);
@@ -938,10 +943,19 @@ fn drawActive(
                     try dc.drawText(@intCast(ppx), baseline, ct, white);
                     ppx += @intCast(dc.measureTextWidth(ct));
                 }
-                // Thin caret (insert-mode style) at the insertion point.
+                // Blinking thin caret — same geometry as the insert-mode caret
+                // in the main text area so both look identical.
+                if (g.cached_caret_top == null) {
+                    const asc, const desc = dc.getMetrics();
+                    const font_h: u16 = @intCast(@max(0, @as(i32, asc) + @as(i32, desc)));
+                    g.cached_caret_top = (height -| font_h) / 2;
+                    g.cached_caret_h   = @min(font_h, height);
+                }
+                const caret_top = g.cached_caret_top.?;
+                const caret_h   = g.cached_caret_h.?;
                 const pill_inner_end: i32 = @as(i32, pill_x) + @as(i32, pill_w) - @as(i32, pill_h_pad);
-                if (ppx < pill_inner_end) {
-                    dc.fillRect(@intCast(ppx), cursor_v_pad, cursor_width, height -| cursor_v_pad * 2, white);
+                if (g.is_blink_visible and ppx < pill_inner_end) {
+                    dc.fillRect(@intCast(ppx), caret_top, cursor_width, caret_h, white);
                 }
             } else {
                 // Normal mode label centred (left-padded) inside the pill.
@@ -1010,7 +1024,11 @@ fn drawActive(
     var px: i32 = @as(i32, text_left_x) - @as(i32, scroll_x);
     try drawSpan(dc, &px, text_left_x, scroll_end_x, baseline, prompt, accent);
 
-    // Mode-specific text rendering
+    // Mode-specific text rendering.
+    // When colon-command mode is active the cursor lives in the pill widget,
+    // not here — so we skip all cursor drawing in the main text area.
+    const colon_active = vim.colonInput(&g.vim_state) != null;
+
     if (g.vim_state.mode == .visual) {
         const sel      = vim.visualRange(&g.vim_state);
         const sel_lo   = sel[0];
@@ -1049,7 +1067,7 @@ fn drawActive(
         const caret_top = g.cached_caret_top.?;
         const caret_h   = g.cached_caret_h.?;
 
-        if (g.is_blink_visible and px >= @as(i32, text_left_x) and px < @as(i32, scroll_end_x)) {
+        if (g.is_blink_visible and !colon_active and px >= @as(i32, text_left_x) and px < @as(i32, scroll_end_x)) {
             dc.fillRect(@intCast(px), caret_top, cursor_width, caret_h, accent);
         }
 
@@ -1075,10 +1093,12 @@ fn drawActive(
         if (pre_text.len > 0)
             try drawSpan(dc, &px, text_left_x, scroll_end_x, baseline, pre_text, fg);
 
-        if (cursorBlockGeom(px, cur_w, text_left_x, scroll_end_x)) |block| {
-            dc.fillRect(block.draw_x, cursor_v_pad, block.vis_w, height -| cursor_v_pad * 2, accent);
-            if (g.vim_state.cursor < g.vim_state.len)
-                try dc.drawText(block.draw_x, baseline, cur_text, bg);
+        if (!colon_active) {
+            if (cursorBlockGeom(px, cur_w, text_left_x, scroll_end_x)) |block| {
+                dc.fillRect(block.draw_x, cursor_v_pad, block.vis_w, height -| cursor_v_pad * 2, accent);
+                if (g.vim_state.cursor < g.vim_state.len)
+                    try dc.drawText(block.draw_x, baseline, cur_text, bg);
+            }
         }
         px += @intCast(cur_w);
 

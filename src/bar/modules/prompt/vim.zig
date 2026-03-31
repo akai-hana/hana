@@ -399,7 +399,11 @@ pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
                 return .none;
             },
             XK_BackSpace => {
-                if (vs.pending.colon_len > 0) vs.pending.colon_len -= 1;
+                if (vs.pending.colon_len > 0) {
+                    vs.pending.colon_len -= 1;
+                } else {
+                    resetPendingCmd(vs); // nothing typed → cancel back to normal
+                }
                 return .none;
             },
             XK_Return => {
