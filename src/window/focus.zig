@@ -1,21 +1,20 @@
 //! Focus management — set, clear, and reason-aware focus routing.
 
-const std           = @import("std");
-const core          = @import("core");
+const std    = @import("std");
+const core   = @import("core");
 const build_options = @import("build_options");
 const tiling        = if (build_options.has_tiling) @import("tiling") else struct {};
-const utils         = @import("utils");
-const bar           = if (build_options.has_bar) @import("bar") else struct {
+const utils  = @import("utils");
+const bar    = if (build_options.has_bar) @import("bar") else struct {
     pub fn scheduleFocusRedraw(_: anytype) void {}
     pub fn isBarWindow(_: u32) bool { return false; }
     pub fn redrawInsideGrab() void {}
 };
-const window        = @import("window");
-const carousel      = if (build_options.has_bar and build_options.has_carousel) @import("carousel") else struct {
+const window = @import("window");
+const carousel = if (build_options.has_bar and build_options.has_carousel) @import("carousel") else struct {
     pub fn notifyFocusChanged(_: anytype) void {}
 };
-const xcb           = core.xcb;
-const debug = @import("debug");
+const xcb    = core.xcb;
 
 // Module state
 //
@@ -333,16 +332,23 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
 }
 
 pub fn setFocus(win: u32, reason: Reason) void {
-    debug.info("[SET_FOCUS] win=0x{x} reason={s} focused=0x{?x} input_model=?", .{
-        win, @tagName(reason), g_focused_window,
-    });
-    if (win == 0 or win == core.root) { debug.info("[SET_FOCUS] -> bail: zero/root", .{}); return; }
-    if (g_focused_window == win) { debug.info("[SET_FOCUS] -> bail: already focused", .{}); return; }
-    if (bar.isBarWindow(win)) { debug.info("[SET_FOCUS] -> bail: bar window", .{}); return; }
+    if (win == 0 or win == core.root) return;
+    if (g_focused_window == win) return;
+    if (bar.isBarWindow(win)) return;
 
+    // Skip the blocking xcb_get_window_attributes round-trip when we can
+    // guarantee the window is mapped without asking the server:
+    //
+    //  mouse_enter / mouse_leave — only delivered for mapped windows.
+    //  window_spawn              — map was queued on this connection moments ago.
+    //  tiling_operation          — window is in the tiling tracking set, which is
+    //                              populated at map time and kept coherent by
+    //                              removeWindow on unmap/destroy.
+    //
+    // For all other reasons (click, command) a race with destroy is possible,
+    // so we guard with a live attribute query.
     const input_model = utils.getInputModelCached(core.conn, win);
-    debug.info("[SET_FOCUS] win=0x{x} input_model={s}", .{ win, @tagName(input_model) });
-    if (input_model == .no_input) { debug.info("[SET_FOCUS] -> bail: no_input", .{}); return; }
+    if (input_model == .no_input) return;
 
     if (switch (reason) {
         .mouse_click, .user_command => !isWindowMapped(core.conn, win),
@@ -376,7 +382,19 @@ pub fn setFocus(win: u32, reason: Reason) void {
         // (they never receive xcb_set_input_focus, so raising is the only signal).
         .raise              = shouldRaise(reason) or
                               (reason == .mouse_enter and input_model == .globally_active),
-        .send_wm_take_focus = input_model == .locally_active or input_model == .globally_active,
+        // Attempt WM_TAKE_FOCUS for any focusable window, not just cached
+        // locally_active/globally_active.  sendWMTakeFocus now performs a live
+        // WM_PROTOCOLS check before sending (matching DWM's sendevent), so this
+        // is a safe no-op for truly passive windows.  The broader call is
+        // necessary because the cached input_model may be stale: Electron apps
+        // (Discord/Equibop, VS Code, etc.) commonly set WM_PROTOCOLS before or
+        // around XMapWindow.  If the PropertyNotify fires before the WM
+        // subscribes to PropertyChangeMask (i.e. before handleMapRequest sets the
+        // event mask), the notification is lost and the cache stays `passive`
+        // permanently, even though the window actually advertises WM_TAKE_FOCUS.
+        // Without sending WM_TAKE_FOCUS, Electron's renderer widget never
+        // activates internally despite XSetInputFocus succeeding on the top-level.
+        .send_wm_take_focus = input_model != .no_input,
         // Arm the async confirm only for mouse_enter on passive/locally_active windows.
         //
         // Compliant locally_active clients respond to xcb_set_input_focus directly.
@@ -435,6 +453,12 @@ pub fn drainPendingConfirm() void {
     // between the setFocus call and this drain.
     const input_model = utils.getInputModelCached(core.conn, win);
 
+    // No point raising and retrying focus on a window that won't accept input.
+    if (input_model == .no_input) {
+        if (xcb.xcb_get_input_focus_reply(core.conn, cookie, null)) |r| std.c.free(r);
+        return;
+    }
+
     confirm: {
         const c = xcb.xcb_get_input_focus_reply(core.conn, cookie, null) orelse break :confirm;
         defer std.c.free(c);
@@ -443,13 +467,11 @@ pub fn drainPendingConfirm() void {
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
         _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
             win, g_last_event_time);
-        // Re-send WM_TAKE_FOCUS after the raise so locally_active clients
-        // (e.g. Qt) process it in the correct stacking context.
-        // Not sent for passive windows — they have no WM_TAKE_FOCUS handler
-        // and xcb_set_input_focus alone is the correct protocol.
-        if (input_model == .locally_active) {
-            utils.sendWMTakeFocus(core.conn, win, g_last_event_time);
-        }
+        // Always attempt WM_TAKE_FOCUS on retry — sendWMTakeFocus performs a live
+        // WM_PROTOCOLS check and is a no-op for windows that don't support it.
+        // Previously guarded on locally_active, which would miss windows cached as
+        // passive whose WM_PROTOCOLS was updated after map.
+        utils.sendWMTakeFocus(core.conn, win, g_last_event_time);
     }
 }
 
@@ -563,23 +585,19 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
     // next hover and silently swallow it.
     g_suppress_reason = .none;
 
-    // If nothing is focused, do nothing — matching dwm's focusin() exactly:
-    //
-    //   void focusin(XEvent *e) {
-    //       if (selmon->sel && ev->window != selmon->sel->win)
-    //           setfocus(selmon->sel);
-    //   }
-    //
-    // When selmon->sel == NULL, dwm returns without acting.  The previous code
-    // accepted the spontaneous FocusIn and called commitFocusTransition to
-    // record the app as g_focused_window — without ever sending WM_TAKE_FOCUS.
-    // This left apps like Electron "focused" from the WM's perspective without
-    // their renderer widget having been activated.  Subsequent hover attempts
-    // then hit the g_focused_window == win early-return in setFocus and sent
-    // nothing.  The fix: if we have no intended window, ignore the event.
-    // A legitimate focus will be set by the next user action (click, hover,
-    // workspace switch) which goes through setFocus and sends the full protocol.
-    const intended = g_focused_window orelse return;
+    const intended = g_focused_window orelse {
+        // Nothing was focused — accept this FocusIn so the WM has a valid
+        // focused window rather than staying stuck at null.
+        commitFocusTransition(null, win, .{
+            .set_input_focus    = false,
+            .raise              = false,
+            .send_wm_take_focus = false,
+            .arm_confirm        = false,
+            .schedule_bar       = true,
+            .new_suppress       = .none,
+        });
+        return;
+    };
 
     // Re-send focus to the intended window.  Use xcb_set_input_focus +
     // WM_TAKE_FOCUS directly (not setFocus) to avoid the g_focused_window ==
@@ -590,7 +608,9 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
         _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
             intended, g_last_event_time);
     }
-    if (input_model == .locally_active or input_model == .globally_active) {
+    // Always attempt WM_TAKE_FOCUS — live check inside sendWMTakeFocus handles
+    // the passive/stale-cache case without sending to truly passive windows.
+    if (input_model != .no_input) {
         utils.sendWMTakeFocus(core.conn, intended, g_last_event_time);
     }
 }
@@ -740,7 +760,7 @@ pub fn syncPointerFocusNow() void {
     commitFocusTransition(old, child, .{
         .set_input_focus    = true,
         .raise              = false,
-        .send_wm_take_focus = input_model == .locally_active or input_model == .globally_active,
+        .send_wm_take_focus = input_model != .no_input,
         .arm_confirm        = false,
         // schedule_bar is false — caller must call bar.redrawInsideGrab() instead.
         // This prevents a second async redraw from being queued, ensuring the
