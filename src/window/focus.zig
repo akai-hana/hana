@@ -305,15 +305,26 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
     if (old) |o| window.grabButtons(o, false);
 
     if (flags.set_input_focus)
+        // DWM: XSetInputFocus(dpy, c->win, RevertToPointerRoot, CurrentTime)
+        // Always CurrentTime (0) — never rejected by the X server's timestamp
+        // ordering check, and prevents Electron/Qt apps from receiving a stale
+        // WM timestamp that they then pass back to XSetInputFocus on their own
+        // internal widget (which would be rejected because it predates the
+        // server's last-focus-change-time).
         _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-            win, g_last_event_time);
+            win, 0); // CurrentTime
 
     if (flags.raise)
         _ = xcb.xcb_configure_window(core.conn, win,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
     if (flags.send_wm_take_focus)
-        utils.sendWMTakeFocus(core.conn, win, g_last_event_time);
+        // DWM: ev.xclient.data.l[1] = CurrentTime
+        // The timestamp in the WM_TAKE_FOCUS message is what Electron/Qt apps
+        // use when they call XSetInputFocus on their internal renderer widget.
+        // If this is a real (older) event timestamp the X server rejects the
+        // app's internal call, leaving the renderer widget without focus.
+        utils.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
 
     if (flags.arm_confirm) {
         g_confirm_cookie = xcb.xcb_get_input_focus(core.conn);
@@ -507,15 +518,17 @@ pub fn drainPendingConfirm() void {
         // correctly.  If it is a different toplevel, the user moved on and we must not
         // steal focus back.  Only retry when focus is completely absent (None/PointerRoot).
         if (c.*.focus == win or c.*.focus > 1) break :confirm;
-        _ = xcb.xcb_configure_window(core.conn, win,
-            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+        // Retry with CurrentTime (0), not g_last_event_time.
+        // After dwmSetFocus ran CurrentTime earlier, the server's internal
+        // focus-change-time is "server now".  Any real (older) timestamp here
+        // would be rejected by the X server's ordering check, making the retry
+        // silently fail for apps that strictly check timestamps.
+        //
+        // No raise on retry — DWM's setfocus never raises; raising generates
+        // synthetic FocusOut/FocusIn events that confuse Electron's focus FSM.
         _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-            win, g_last_event_time);
-        // Always attempt WM_TAKE_FOCUS on retry — sendWMTakeFocus performs a live
-        // WM_PROTOCOLS check and is a no-op for windows that don't support it.
-        // Previously guarded on locally_active, which would miss windows cached as
-        // passive whose WM_PROTOCOLS was updated after map.
-        utils.sendWMTakeFocus(core.conn, win, g_last_event_time);
+            win, 0); // CurrentTime
+        utils.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
     }
 }
 
@@ -580,11 +593,20 @@ fn dwmSetFocus(win: u32) void {
     const input_model = utils.getInputModelCached(core.conn, win);
 
     // DWM: if (!c->neverfocus) { XSetInputFocus; XChangeProperty(NetActiveWindow); }
-    // neverfocus == true  →  globally_active in ICCCM terms.
-    if (input_model != .globally_active) {
+    //
+    // neverfocus = !wmh->input, so neverfocus=True when input=False.
+    // input=False covers TWO ICCCM models:
+    //   • no_input        (input=False, no WM_TAKE_FOCUS)
+    //   • globally_active (input=False, WM_TAKE_FOCUS)
+    //
+    // The previous code only skipped XSetInputFocus for globally_active,
+    // incorrectly sending it to no_input windows as well.
+    // Correct mapping: send XSetInputFocus only when input=True,
+    // i.e. only for passive and locally_active.
+    if (input_model == .passive or input_model == .locally_active) {
         _ = xcb.xcb_set_input_focus(core.conn,
             xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win,
-            0); // CurrentTime — never rejected by the X server
+            0); // CurrentTime
         advertiseActiveWindow(win);
     }
 
@@ -716,7 +738,7 @@ pub fn clearFocus() void {
     g_focused_window  = null;
     g_suppress_reason = .none;
     _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
-        core.root, g_last_event_time);
+        core.root, 0); // CurrentTime — DWM: XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime)
     carousel.notifyFocusChanged(null);
     bar.scheduleFocusRedraw(null);
 

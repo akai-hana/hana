@@ -718,9 +718,18 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     debug.info("[ENTER] win=0x{x} mode={} detail={} root_x={} root_y={}", .{
         event.event, event.mode, event.detail, event.root_x, event.root_y,
     });
-    if (event.mode == xcb.XCB_NOTIFY_MODE_GRAB or
-        event.mode == xcb.XCB_NOTIFY_MODE_UNGRAB) {
-        debug.info("[ENTER] -> filtered: GRAB/UNGRAB mode", .{});
+    // DWM: if ((ev->mode != NotifyNormal || ev->detail == NotifyInferior) && ev->window != root) return;
+    //
+    // The `&& ev->window != root` clause is omitted here — root is never a
+    // managed window so maybeFocusWindow would return early for it anyway.
+    // This filters three cases DWM rejects:
+    //   • mode != Normal  (GRAB, UNGRAB, WHILE_GRABBED — events during grabs)
+    //   • detail == Inferior  (pointer moved to a child of this window; the
+    //     managed window itself did not change — no focus action needed)
+    if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
+        event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR)
+    {
+        debug.info("[ENTER] -> filtered: mode={} detail={}", .{ event.mode, event.detail });
         return;
     }
     if (drag.isDragging()) {
@@ -735,12 +744,13 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
         debug.info("[ENTER] -> filtered: tiling_operation suppressed", .{});
         return;
     }
-    const win: u32 = if (event.event == core.root and event.child != 0)
-        event.child
-    else
-        event.event;
-    const managed = utils.findManagedWindow(core.conn, win, tracking.isManaged);
-    debug.info("[ENTER] -> resolved win=0x{x} managed=0x{x}", .{ win, managed });
+    // DWM: c = wintoclient(ev->window) — direct lookup, no tree walk.
+    // We use findManagedWindow so child-window EnterNotify events (e.g. from
+    // apps that create subwindows) resolve to their managed parent, but the
+    // root redirect that was here previously is removed: DWM's wintoclient
+    // returns NULL for root and exits early, so we should do the same.
+    const managed = utils.findManagedWindow(core.conn, event.event, tracking.isManaged);
+    debug.info("[ENTER] -> resolved managed=0x{x}", .{managed});
     maybeFocusWindow(managed);
 }
 
