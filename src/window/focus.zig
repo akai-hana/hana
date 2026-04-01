@@ -89,6 +89,7 @@ pub fn init(allocator: std.mem.Allocator) void {
 
     // Intern _NET_ACTIVE_WINDOW so setFocus can advertise the focused window
     // on the root window — required for xev -root / xprop based external tools.
+    // null reply → stays XCB_ATOM_NONE; advertiseActiveWindow no-ops.
     const ck = xcb.xcb_intern_atom(core.conn, 0, "_NET_ACTIVE_WINDOW".len, "_NET_ACTIVE_WINDOW");
     if (xcb.xcb_intern_atom_reply(core.conn, ck, null)) |r| {
         g_net_active_window = r.*.atom;
@@ -112,10 +113,8 @@ pub fn deinit() void {
 /// may allocate on growth.
 fn recordInHistory(win: u32) void {
     if (win == 0) return;
-    // Invariant: g_focused_window is never in the history.  recordInHistory is
-    // always called with the *previous* focused window (old_win), captured before
-    // g_focused_window is overwritten.  If this fires, a caller passed the
-    // post-transition value instead.
+    // Invariant: recordInHistory is always called with the pre-transition window.
+    // If this fires, a caller passed the post-transition value instead.
     std.debug.assert(g_focused_window != win);
     // Short-circuit: already the most-recent entry — nothing to do.
     if (g_history.items.len > 0 and g_history.items[0] == win) return;
@@ -153,36 +152,44 @@ pub inline fn getFocused()        ?u32                       { return g_focused_
 pub inline fn getSuppressReason() core.FocusSuppressReason   { return g_suppress_reason; }
 pub inline fn getLastEventTime()  u32                        { return g_last_event_time; }
 
+/// Raw write to g_focused_window, bypassing all side effects: history recording,
+/// grab management, XCB protocol calls, bar/carousel notifications, and
+/// _NET_ACTIVE_WINDOW updates.  All of those invariants are the responsibility
+/// of commitFocusTransition.  Callers must ensure they maintain every invariant
+/// that commitFocusTransition normally enforces.
 pub inline fn setFocused(win: ?u32) void    { g_focused_window  = win; }
 
-/// Update the X11 event timestamp used for xcb_set_input_focus and
-/// WM_TAKE_FOCUS messages.
-///
-/// CRITICAL: this MUST be called for EnterNotify events (with enter_event.time)
-/// BEFORE calling setFocus(.mouse_enter).  If it is only called for button and
-/// key events, g_last_event_time will be from the last click/keystroke, not
-/// the current hover event.
-///
-/// Why this matters:
-///   1. The WM sends xcb_set_input_focus(win, T_enter).
-///      X server: last-focus-change-time = T_enter.
-///   2. The WM sends WM_TAKE_FOCUS(win, g_last_event_time).
-///      If g_last_event_time is an old button-press timestamp T_old < T_enter,
-///      the app (e.g. Discord, Prism Launcher) receives WM_TAKE_FOCUS with T_old
-///      and calls XSetInputFocus(internal_widget, T_old).
-///   3. X server: T_old < last-focus-change-time (T_enter) → request IGNORED.
-///   4. The app's internal focus widget never gets focus; the app appears
-///      unresponsive to hover even though the X server reported success for
-///      the WM's own xcb_set_input_focus.
-///
-/// Terminals and Firefox are often immune: terminals are passive (no
-/// WM_TAKE_FOCUS, so no app-side XSetInputFocus to fail), and Firefox may use
-/// CurrentTime rather than the WM-provided timestamp.  Electron apps (Discord)
-/// and Qt apps (Prism Launcher) strictly use the provided timestamp per ICCCM.
-///
-/// dwm avoids this entirely by always passing CurrentTime (0) everywhere,
-/// which the X server interprets as "now" and bypasses the ordering check.
+/// Update the X11 event timestamp used for xcb_set_input_focus and WM_TAKE_FOCUS
+/// messages.  See "Timestamp handling" below for why this must be called for
+/// EnterNotify events before setFocus(.mouse_enter).
 pub inline fn setLastEventTime(t: u32) void { g_last_event_time = t;   }
+
+// Timestamp handling
+//
+// CRITICAL: setLastEventTime MUST be called with enter_event.time BEFORE
+// calling setFocus(.mouse_enter).  If it is only called for button and key
+// events, g_last_event_time will be from the last click/keystroke, not the
+// current hover event.
+//
+// Why this matters:
+//   1. The WM sends xcb_set_input_focus(win, T_enter).
+//      X server: last-focus-change-time = T_enter.
+//   2. The WM sends WM_TAKE_FOCUS(win, g_last_event_time).
+//      If g_last_event_time is an old button-press timestamp T_old < T_enter,
+//      the app (e.g. Discord, Prism Launcher) receives WM_TAKE_FOCUS with T_old
+//      and calls XSetInputFocus(internal_widget, T_old).
+//   3. X server: T_old < last-focus-change-time (T_enter) → request IGNORED.
+//   4. The app's internal focus widget never gets focus; the app appears
+//      unresponsive to hover even though the X server reported success for
+//      the WM's own xcb_set_input_focus.
+//
+// Terminals and Firefox are often immune: terminals are passive (no
+// WM_TAKE_FOCUS, so no app-side XSetInputFocus to fail), and Firefox may use
+// CurrentTime rather than the WM-provided timestamp.  Electron apps (Discord)
+// and Qt apps (Prism Launcher) strictly use the provided timestamp per ICCCM.
+//
+// dwm avoids this entirely by always passing CurrentTime (0) everywhere,
+// which the X server interprets as "now" and bypasses the ordering check.
 
 /// Set the suppress reason and immediately focus `win` as an atomic operation.
 ///
@@ -261,7 +268,8 @@ const CommitFlags = struct {
     schedule_bar:       bool = false,
 
     /// New value for g_suppress_reason after the transition.
-    /// setFocus computes this via suppressionFor(); all other callers use .none.
+    /// `setFocus` derives this from reason + current state via suppressionFor();
+    /// all direct callers of `commitFocusTransition` hardcode `.none`.
     new_suppress: core.FocusSuppressReason = .none,
 };
 
@@ -303,11 +311,7 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
     if (flags.send_wm_take_focus)
-        // CurrentTime (0) for the same reason as xcb_set_input_focus above:
-        // Electron/Qt apps use the timestamp we supply here when they call
-        // XSetInputFocus on their internal renderer widget.  An older real
-        // timestamp would be rejected by the X server's ordering check, leaving
-        // the renderer widget without focus even though the top-level succeeded.
+        // CurrentTime (0) — same reason as xcb_set_input_focus above.
         utils.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
 
     if (flags.arm_confirm) {
@@ -363,6 +367,7 @@ pub fn bruteForceMouseEnterFocus(win: u32) void {
             .new_suppress       = .none,
         });
     } else {
+        // Already focused: bookkeeping skipped, but suppression must still clear.
         g_suppress_reason = .none;
     }
 
@@ -461,7 +466,8 @@ pub fn drainPendingConfirm() void {
     g_confirm_cookie = null;
     g_confirm_win    = null;
 
-    // Single drain point. defer frees the reply on every path.
+    // Reply must be consumed before any return to drain the XCB queue.
+    // defer frees the reply on every exit path.
     const focus_reply = xcb.xcb_get_input_focus_reply(core.conn, cookie, null);
     defer if (focus_reply) |r| std.c.free(r);
 
@@ -567,6 +573,10 @@ fn sendFocusProtocol(win: u32) void {
             xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0); // CurrentTime
         advertiseActiveWindow(win);
     }
+    // _NET_ACTIVE_WINDOW is intentionally not updated for .globally_active windows:
+    // they manage their own input focus and never receive xcb_set_input_focus, so
+    // advertising them here could mislead EWMH-aware tools about which window
+    // actually holds X focus.
     utils.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
 }
 
@@ -700,12 +710,16 @@ pub fn clearFocus() void {
 
 inline fn advertiseActiveWindow(win: u32) void {
     if (g_net_active_window == xcb.XCB_ATOM_NONE) return;
-    const val = win;
     _ = xcb.xcb_change_property(core.conn, xcb.XCB_PROP_MODE_REPLACE,
-        core.root, g_net_active_window, xcb.XCB_ATOM_WINDOW, 32, 1, &val);
+        core.root, g_net_active_window, xcb.XCB_ATOM_WINDOW, 32, 1, &win);
 }
 
 inline fn shouldRaise(reason: Reason) bool {
+    // Note: mouse_enter returns false here but is OR-ed in setFocus as
+    // `shouldRaise(reason) or reason == .mouse_enter`.  It is kept separate
+    // because the raise is tied to Electron/input-model interaction rather than
+    // being a blanket policy; any new reason must check both this switch and
+    // that inline condition.
     return switch (reason) {
         .mouse_click, .user_command => true,
         .mouse_enter, .tiling_operation, .window_spawn, .workspace_switch => false,
