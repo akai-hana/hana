@@ -92,7 +92,7 @@ const SpawnQueue = struct {
     /// Appends `entry` to the queue.
     ///
     /// If we would overflow `len`, double-capacity and realloc.  Never loses data.
-    fn push(self: *SpawnQueue, entry: SpawnEntry) void {
+    fn push(self: *SpawnQueue, entry: SpawnEntry) !void {
         const new_len = self.len + 1;
 
         // Double buffer when needed; keep 64 as a soft ceiling to avoid excessive growth.
@@ -118,7 +118,7 @@ const SpawnQueue = struct {
     /// Removes the entry at index i, shifting later entries left, and returns its workspace.
     fn consume(self: *SpawnQueue, i: usize) u8 {
         const ws = self.buf[i].workspace;
-        std.mem.moveForwards(SpawnEntry, self.buf[i .. self.len - 1], self.buf[i + 1 .. self.len]);
+        std.mem.copyForwards(SpawnEntry, self.buf[i .. self.len - 1], self.buf[i + 1 .. self.len]);
         self.len -= 1;
         return ws;
     }
@@ -387,7 +387,7 @@ fn resolveTargetWorkspace(
         return clampToValidWorkspace(target, current_ws);
     }
 
-    if (findSpawnQueueWorkspace(c_net_wm_pid)) |spawn_ws|
+    if (findSpawnQueueWorkspace(c_net_wm_pid, current_ws)) |spawn_ws|
         return clampToValidWorkspace(spawn_ws, current_ws);
 
     return current_ws;
@@ -397,7 +397,9 @@ fn resolveTargetWorkspace(
 
 pub inline fn registerSpawn(workspace: u8, pid: u32) void {
     if (g_spawn_queue) |sq| {
-        sq.push(.{ .workspace = workspace, .pid = pid });
+        sq.push(.{ .workspace = workspace, .pid = pid }) catch |err| {
+            debug.warn("registerSpawn: failed to queue spawn entry: {}", .{err});
+        };
     }
 }
 
@@ -467,16 +469,13 @@ fn firePropertyCookies(win: u32) PropertyCookies {
         ),
         // Only fired when the spawn queue is non-empty so the type system
         // enforces this cookie is never accessed on an idle queue.
-        .net_wm_pid = if (g_spawn_queue) |sq| sq.len > 0
+        .net_wm_pid = if (g_spawn_queue) |sq| if (sq.len > 0)
             xcb.xcb_get_property(
-            core.conn, 0, win,
-            atoms.net_wm_pid,
-            xcb.XCB_ATOM_CARDINAL, 0, 1,
-        ) else null,
-            core.conn, 0, win,
-            atoms.net_wm_pid,
-            xcb.XCB_ATOM_CARDINAL, 0, 1,
-        ) else null,
+                core.conn, 0, win,
+                atoms.net_wm_pid,
+                xcb.XCB_ATOM_CARDINAL, 0, 1,
+            )
+            else null else null,
     };
 }
 
