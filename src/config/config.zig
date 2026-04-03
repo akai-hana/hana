@@ -2,14 +2,18 @@
 //! Loads, parses, and validates TOML config files.
 
 const std           = @import("std");
-const core          = @import("core");
-const types         = @import("types");
-const debug         = @import("debug");
-const parser        = @import("parser");
+const build = @import("build_options");
+
+const core      = @import("core");
+const types     = @import("types");
+const constants = @import("constants");
+const debug     = @import("debug");
+
 const xkbcommon     = @import("xkbcommon");
-const constants     = @import("constants");
-const build_options = @import("build_options");
-const carousel      = if (build_options.has_carousel) @import("carousel") else struct {
+
+const parser        = @import("parser");
+
+const carousel      = if (build.has_carousel) @import("carousel") else struct {
     pub fn setCarouselEnabled(_: bool)  void {}
     pub fn setScrollSpeed(_: f64)       void {}
     pub fn setRefreshRateOverride(_: f64) void {}

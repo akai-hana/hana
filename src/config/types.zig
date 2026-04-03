@@ -126,7 +126,7 @@ pub const LayoutVariantOverride = union(enum) {
 };
 
 /// Per-workspace startup layout assignment, overriding the global default.
-/// variant is null → use the per-layout section default.
+/// variant is null -> use the per-layout section default.
 pub const WorkspaceLayoutOverride = struct {
     workspace_idx: u8,                   // 0-indexed workspace number
     layout_idx:    u8,                   // index into TilingConfig.layouts

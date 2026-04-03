@@ -387,10 +387,10 @@ pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
         return .none;
     }
 
-    // Colon ex-command mode: :w  → spawn_keep (execute, keep open)
-    //                         :q  → deactivate (cancel)
-    //                         :wq → spawn      (execute, close)
-    //                         :x  → spawn      (execute, close)
+    // Colon ex-command mode: :w  -> spawn_keep (execute, keep open)
+    //                         :q  -> deactivate (cancel)
+    //                         :wq -> spawn      (execute, close)
+    //                         :x  -> spawn      (execute, close)
     // Escape cancels; any unrecognised command is silently discarded.
     if (vs.pending.is_colon_cmd) {
         switch (sym) {
@@ -402,7 +402,7 @@ pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
                 if (vs.pending.colon_len > 0) {
                     vs.pending.colon_len -= 1;
                 } else {
-                    resetPendingCmd(vs); // nothing typed → cancel back to normal
+                    resetPendingCmd(vs); // nothing typed -> cancel back to normal
                 }
                 return .none;
             },

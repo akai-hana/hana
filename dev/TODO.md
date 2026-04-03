@@ -1,7 +1,15 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-remember akaihana
+# #################### #
+
+iesfm: continue 
+
+6f6e input stack pending
+
+send prompt.md and output.md to claude
+
+# #################### #
 
 how to switch to floating layout? (><>)
 
