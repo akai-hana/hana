@@ -179,34 +179,34 @@ pub const State = struct {
 
 // Module-level singleton 
 
-// Guaranteed live after init(), never null during normal operation.
-// `is_initialized` guards debug assertions; production builds pay zero cost.
-var state: State = undefined;
-var is_initialized: bool = false;
+// Null before init(), non-null for the rest of the process lifetime.
+// Using ?State rather than (State + bool) makes pre-init access a safe
+// runtime @panic in all build modes, not UB in ReleaseFast.
+var state: ?State = null;
 
 /// Returns a pointer to the live tiling state.
-/// Asserts in Debug builds that `init()` has been called.
+/// Panics in all build modes when called before init() — never silent UB.
 pub inline fn getState() *State {
-    std.debug.assert(is_initialized);
-    return &state;
+    if (state) |*s| return s;
+    @panic("tiling: getState() called before init()");
 }
 
 /// Safe pre-init query for code that may run before the event loop starts.
 /// Returns null only during the narrow startup window before `init()` is called.
 pub inline fn getStateOpt() ?*State {
-    return if (is_initialized) &state else null;
+    if (state) |*s| return s;
+    return null;
 }
 
 // Lifecycle 
 
 pub fn init() void {
-    state         = buildState();
-    is_initialized = true;
+    state = buildState();
 }
 
 pub fn deinit() void {
     // State holds only fixed arrays and value types; nothing to free.
-    is_initialized = false;
+    state = null;
 }
 
 pub fn reloadConfig() void {
@@ -221,7 +221,8 @@ pub fn reloadConfig() void {
     new_state.windows = saved_windows;
     state = new_state;
 
-    const ns = &state;
+    // getState() is safe here: we just assigned a non-null value above.
+    const ns = getState();
 
     // Reset all workspace layouts and master widths to the new config defaults.
     // Per-workspace adjustments made at runtime are intentionally discarded so

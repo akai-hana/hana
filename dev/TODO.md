@@ -11,6 +11,10 @@ send prompt.md and output.md to claude
 
 # #################### #
 
+fix window spawning sometimes spawning on different workspaces
+
+fix window tiling issues (clicking should also bring a window floating, always, regardless of the layout used)
+
 how to switch to floating layout? (><>)
 
 in debug.zig, drop "info:" messages, and just display the [<name>] tags in place. make these tags have the same color that "info:" currently does.

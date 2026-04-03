@@ -114,6 +114,13 @@ const cache_capacity: usize = 256;
 /// without a null-check while guaranteeing no live cache entry is corrupted.
 /// The affected window simply misses the dedup check and receives a redundant
 /// configure_window on the next retile — an unconditionally correct outcome.
+///
+/// SINGLE-THREADED ASSUMPTION: two concurrent overflows would alias to the same
+/// pointer.  The WM is single-threaded for all geometry operations; the bar
+/// render thread calls `configureSafe` (and thus `getOrPut`) only on the
+/// render thread, never concurrently with tiling retile calls on the main
+/// thread.  If that invariant ever changes, this sentinel must become per-call
+/// or the overflow path must return an error.
 var overflow_sentinel: WindowData = .{};
 
 /// Fixed-capacity cache mapping window IDs to their last geometry and border color.

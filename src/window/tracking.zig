@@ -30,6 +30,15 @@ const minimize      = if (build.has_minimize) @import("minimize") else struct {}
 // the always-present tracking module rather than the optional workspaces module.
 
 pub const Tracking = struct {
+    /// Maximum windows tracked per workspace.
+    ///
+    /// This is a hard compile-time cap, not a tuneable.  Power users with many
+    /// terminal instances or IDE popups can hit it; windows beyond the cap are
+    /// silently dropped from tiling and workspace membership with an error log.
+    ///
+    /// If 64 is regularly too small for your workflow, increase this value and
+    /// rebuild.  The struct is stack-allocated, so the cost is 4 × capacity bytes
+    /// per Workspace instance — 256 bytes at capacity = 64, 512 bytes at 128.
     const capacity = 64;
 
     buf: [capacity]u32 = undefined,

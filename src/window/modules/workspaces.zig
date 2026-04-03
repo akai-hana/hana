@@ -596,9 +596,14 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
             if (pending_n < MAX_FLOAT) {
                 pending[pending_n] = .{ .win = win, .cookie = xcb.xcb_get_geometry(core.conn, win) };
                 pending_n += 1;
-                if (pending_n == MAX_FLOAT)
+            } else {
+                // Warn exactly once — when the first window is being skipped,
+                // not when the last slot is filled (Issue: cap warning per-window).
+                if (pending_n == MAX_FLOAT) {
                     debug.warn("hideWorkspaceWindows: geometry-save cap ({d}) reached; " ++
                         "additional floating windows will not have geometry saved", .{MAX_FLOAT});
+                    pending_n += 1; // advance past MAX_FLOAT so the warning fires only once
+                }
             }
         }
 
