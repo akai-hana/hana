@@ -350,6 +350,8 @@ const ACTION_MAP = std.StaticStringMap(types.Action).initComptime(.{
     .{ "focus_next",             .focus_next_window      },
     .{ "focus_prev_window",      .focus_prev_window      },
     .{ "focus_prev",             .focus_prev_window      },
+    .{ "move_window_next",       .move_window_next       },
+    .{ "move_window_prev",       .move_window_prev       },
 });
 
 const GlobEntry = struct {

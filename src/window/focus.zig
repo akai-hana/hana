@@ -868,3 +868,33 @@ pub fn focusPrev() void {
         0;
     setFocus(wins[(idx + len - 1) % len], .user_command);
 }
+/// Move the focused window one step forward in the cycle (Mod+Shift+k).
+///
+/// Swaps the focused window with the window that would receive focus on
+/// Mod+k, keeping focus on the moved window.  Only has an effect when
+/// tiling is active and at least two windows are visible.
+pub fn moveWindowNext() void {
+    if (comptime !build.has_tiling) return;
+    const len = collectVisibleWindows();
+    if (len < 2) return;
+    const wins = cycle_buf[0..len];
+    const focused = state.focused_window orelse return;
+    const idx = std.mem.indexOfScalar(u32, wins, focused) orelse return;
+    const target = wins[(idx + 1) % len];
+    tiling.swapWindowsById(focused, target);
+}
+
+/// Move the focused window one step backward in the cycle (Mod+Shift+j).
+///
+/// Swaps the focused window with the window that would receive focus on
+/// Mod+j, keeping focus on the moved window.
+pub fn moveWindowPrev() void {
+    if (comptime !build.has_tiling) return;
+    const len = collectVisibleWindows();
+    if (len < 2) return;
+    const wins = cycle_buf[0..len];
+    const focused = state.focused_window orelse return;
+    const idx = std.mem.indexOfScalar(u32, wins, focused) orelse return;
+    const target = wins[(idx + len - 1) % len];
+    tiling.swapWindowsById(focused, target);
+}

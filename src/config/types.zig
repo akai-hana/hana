@@ -50,6 +50,8 @@ pub const Action = union(enum) {
     toggle_tag_all,          // flip between pinned-to-all and current-workspace-only
     focus_next_window,       // cycle focus forward / right  (dwm-style Mod+k)
     focus_prev_window,       // cycle focus backward / left  (dwm-style Mod+j)
+    move_window_next,        // move focused window forward  (dwm-style Mod+Shift+k)
+    move_window_prev,        // move focused window backward (dwm-style Mod+Shift+j)
 
     pub fn deinit(self: *Action, allocator: std.mem.Allocator) void {
         switch (self.*) {

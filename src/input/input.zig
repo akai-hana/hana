@@ -324,6 +324,9 @@ fn executeAction(action: *const types.Action) !void {
         // Window focus cycling (dwm-style Mod+k / Mod+j)
         .focus_next_window => focus.focusNext(),
         .focus_prev_window => focus.focusPrev(),
+        // Window move in cycle (dwm-style Mod+Shift+k / Mod+Shift+j)
+        .move_window_next  => focus.moveWindowNext(),
+        .move_window_prev  => focus.moveWindowPrev(),
     }
 }
 

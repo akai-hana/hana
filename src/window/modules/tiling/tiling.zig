@@ -1080,6 +1080,22 @@ fn swapWindowsInList(s: *State, idx_a: usize, idx_b: usize) void {
     s.windows.reorder(s.scratch_wins[0..current.len]);
 }
 
+/// Swap two tiled windows by their IDs.  Used by focus.zig to implement
+/// Mod+Shift+j / Mod+Shift+k — move the focused window in cycle order.
+pub fn swapWindowsById(win_a: u32, win_b: u32) void {
+    const s = getState();
+    const all = s.windows.items();
+    var idx_a: ?usize = null;
+    var idx_b: ?usize = null;
+    for (all, 0..) |w, i| {
+        if (w == win_a) idx_a = i;
+        if (w == win_b) idx_b = i;
+        if (idx_a != null and idx_b != null) break;
+    }
+    swapWindowsInList(s, idx_a orelse return, idx_b orelse return);
+    retileCurrentWorkspace();
+}
+
 /// Locates the focused window and the current workspace's master window in the
 /// ordered window list. Returns null when preconditions are not met (nothing
 /// focused, not tiled, not on current workspace, or fewer than 2 windows).
