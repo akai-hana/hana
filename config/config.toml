@@ -163,13 +163,15 @@ Mod+Middle_click = "toggle_floating_window" # Toggle clicked window between tile
 ## Master-stack
 Mod+H      = "decrease_master" 
 Mod+L      = "increase_master" # Increase master area width
-Mod+comma  = "increase_master_count"
-Mod+period = "decrease_master_count" 
+Mod+Shift+L    = "increase_master_count"
+Mod+Shift+H    = "decrease_master_count"
 
 # Focus cycling (dwm-style)
 ## k = next/right (master → stack → ... → wrap), j = prev/left
 Mod+k = "focus_next_window"
 Mod+j = "focus_prev_window"
+Mod+Shift+k = "move_window_next"
+Mod+Shift+j = "move_window_prev"
 
 # Workspaces
 ## Switch to workspace N
