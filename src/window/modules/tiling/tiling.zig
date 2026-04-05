@@ -633,7 +633,7 @@ pub inline fn isLayoutAvailable(layout: Layout) bool {
 pub fn adjustMasterCount(delta: i8) void {
     const s = getState();
     const new: i16 = @as(i16, s.master_count) + delta;
-    if (new < 0) return;
+    if (new < 1) return;
     const clamped: u8 = @intCast(@min(new, 10));
     if (clamped == s.master_count) return;
     s.master_count = clamped;
