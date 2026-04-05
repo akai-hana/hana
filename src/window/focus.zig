@@ -389,7 +389,7 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
 
     if (flags.send_wm_take_focus)
         // CurrentTime (0) — same reason as xcb_set_input_focus above.
-        utils.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
+        window.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
 
     if (flags.arm_confirm) {
         state.confirm_cookie = xcb.xcb_get_input_focus(core.conn);
@@ -451,7 +451,7 @@ pub fn bruteForceMouseEnterFocus(win: u32) void {
         xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
         win, 0);
-    utils.sendWMTakeFocus(core.conn, win, 0);
+    window.sendWMTakeFocus(core.conn, win, 0);
 }
 
 pub fn setFocus(win: u32, reason: Reason) void {
@@ -464,7 +464,7 @@ pub fn setFocus(win: u32, reason: Reason) void {
     if ((reason == .mouse_click or reason == .user_command) and
         !isWindowMapped(core.conn, win)) return;
 
-    const input_model = utils.getInputModelCached(core.conn, win);
+    const input_model = window.getInputModelCached(core.conn, win);
     if (input_model == .no_input) return;
 
     cancelPendingConfirm();
@@ -512,7 +512,7 @@ pub fn drainPendingConfirm() void {
 
     if (!window.isValidManagedWindow(win)) return;
 
-    const input_model = utils.getInputModelCached(core.conn, win);
+    const input_model = window.getInputModelCached(core.conn, win);
     if (input_model == .no_input) return;
 
     const c = focus_reply orelse return;
@@ -530,7 +530,7 @@ pub fn drainPendingConfirm() void {
 
     _ = xcb.xcb_set_input_focus(core.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT,
         win, 0); // CurrentTime
-    utils.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
+    window.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
 }
 
 /// Discard a pending confirm reply without acting on it.
@@ -565,7 +565,7 @@ fn cancelPendingConfirm() void {
 /// A stale cache would skip the message, leaving the app's internal widget
 /// inactive.
 pub fn invalidateInputModelCache(win: u32) void {
-    utils.recacheInputModel(core.conn, win);
+    window.recacheInputModel(core.conn, win);
 }
 
 /// Send the X protocol focus signals for `win` using CurrentTime (0).
@@ -574,14 +574,14 @@ pub fn invalidateInputModelCache(win: u32) void {
 /// WM_TAKE_FOCUS is always sent; sendWMTakeFocus is a no-op for windows that
 /// do not advertise it.  No raise, no confirm/retry machinery.
 fn sendFocusProtocol(win: u32) void {
-    const model = utils.getInputModelCached(core.conn, win);
+    const model = window.getInputModelCached(core.conn, win);
     if (model == .no_input) return;
     if (model == .passive or model == .locally_active) {
         _ = xcb.xcb_set_input_focus(core.conn,
             xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0); // CurrentTime
         advertiseActiveWindow(win);
     }
-    utils.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
+    window.sendWMTakeFocus(core.conn, win, 0); // CurrentTime
 }
 
 /// Hover focus following DWM's focus(c) semantics.
@@ -606,7 +606,7 @@ pub fn dwmFocus(win: u32) void {
 
     cancelPendingConfirm();
 
-    const model = utils.getInputModelCached(core.conn, win);
+    const model = window.getInputModelCached(core.conn, win);
     if (model == .no_input) return;
     const old = state.focused_window;
     commitFocusTransition(old, win, .{
@@ -730,7 +730,7 @@ pub fn syncPointerFocusNow() void {
 
     cancelPendingConfirm();
 
-    const input_model = utils.getInputModelCached(core.conn, child);
+    const input_model = window.getInputModelCached(core.conn, child);
     if (input_model == .no_input) return;
 
     const old = state.focused_window;

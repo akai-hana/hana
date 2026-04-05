@@ -165,7 +165,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 
     // Ignore clicks on root / unknown windows
     const clicked_window = if (event.child != 0) event.child else event.event;
-    const managed_window = utils.findManagedWindow(core.conn, clicked_window, tracking.isManaged);
+    const managed_window = window.findManagedWindow(core.conn, clicked_window, tracking.isManaged);
 
     if (clicked_window == 0 or clicked_window == core.root or managed_window == 0) {
         replayPointer(event.time);
@@ -226,7 +226,7 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t) void {
 /// Closes a window gracefully via WM_DELETE_WINDOW (ICCCM §4.1.2.7), falling
 /// back to xcb_destroy_window for clients that don't advertise the protocol.
 fn closeWindow(win: u32) void {
-    if (!utils.supportsWMDeleteCached(core.conn, win)) {
+    if (!window.supportsWMDeleteCached(core.conn, win)) {
         _ = xcb.xcb_destroy_window(core.conn, win);
         return;
     }

@@ -13,14 +13,14 @@ const debug = @import("debug");
 
 const window   = @import("window");
 const tracking = @import("tracking");
-const Tracking = @import("tracking").Tracking; // re-exported for use as a type alias at call sites
+const Tracking = @import("tracking").Tracking; //TODO: this and the previous line is confusing
 const focus    = @import("focus");
 
 const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
 const minimize   = if (build.has_minimize) @import("minimize") else struct {};
 
 const tiling       = if (build.has_tiling) @import("tiling") else struct {};
-const TilingLayout = if (build.has_tiling) tiling.Layout else u0; // u0 stub satisfies the type when tiling is absent
+const TilingLayout = if (build.has_tiling) tiling.Layout else u0; //TODO: this and the previous line is confusing
 
 const bar = if (build.has_bar) @import("bar") else struct {
     pub fn scheduleRedraw() void {}
@@ -459,7 +459,7 @@ pub fn switchToAll() void {
                 if (window.getWindowGeom(win)) |rect| {
                     utils.configureWindow(core.conn, win, rect);
                 } else {
-                    const pos = utils.floatDefaultPos();
+                    const pos = window.floatDefaultPos();
                     _ = xcb.xcb_configure_window(core.conn, win,
                         xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
                         &[_]u32{ pos.x, pos.y });
@@ -660,7 +660,7 @@ fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8) void {
     }
 
     // Map every window; restore floating geometry for those not already on screen.
-    const pos = utils.floatDefaultPos();
+    const pos = window.floatDefaultPos();
     for (ws.windows.items()) |win| {
         _ = xcb.xcb_map_window(core.conn, win);
         if ((!build.has_tiling or !tiling.isWindowActiveTiled(win)) and !isMinimized(win) and
@@ -735,7 +735,7 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
     if (fs_info != null) bar.setBarState(.hide_fullscreen) else bar.setBarState(.show_fullscreen);
 
     if (fs_info) |info| {
-        utils.configureWindowGeom(core.conn, info.window, .{
+        window.configureWindowGeom(core.conn, info.window, .{
             .x = 0, .y = 0,
             .width        = @intCast(core.screen.width_in_pixels),
             .height       = @intCast(core.screen.height_in_pixels),

@@ -3,9 +3,6 @@
 
 # #################### #
 
-akhtsunde
-
-{
 > be on workspace 1
 > fullscreen onto a window
 > switch to another workspace
@@ -15,7 +12,6 @@ akhtsunde
 > windows are tiled accounting the newly spawned window, except that it isn't visible, and so there's just an empty gap instead
 > switch to another workspace and back onto 1
 > all windows look fine now
-}
 
 # #################### #
 
