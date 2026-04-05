@@ -113,6 +113,12 @@ var atoms: struct {
     net_wm_state_fullscreen: u32 = 0,
 } = .{};
 
+/// Returns the cached WM_PROTOCOLS atom for use by other modules.
+/// Avoids exposing the full atoms struct across module boundaries.
+pub fn wmProtocolsAtom() u32 {
+    return atoms.wm_protocols;
+}
+
 // Geometry cache
 //
 // Stores last-known window geometry for workspace-switch and minimize/restore.
@@ -316,11 +322,27 @@ fn findSpawnQueueWorkspace(
         return ws;
     }
 
-    // Oldest-entry fallback — queue is non-empty per precondition: firePropertyCookies
-    // only sets net_wm_pid when the spawn queue is non-empty.
-    if (g_spawn_queue.items.len == 0) return null;
+    // Oldest-entry fallback — only safe when there is exactly one pending entry.
+    // Common case: the app was launched via `sh -c "cmd"` and the window reports
+    // a PID that is a grandchild of the tracked sh process (sh exec-optimised into
+    // cmd, or cmd forked a subprocess for its UI).  With a single entry there is
+    // no ambiguity: it must belong to this window.
+    //
+    // With multiple entries we cannot know which entry belongs to this window.
+    // Consuming items[0] would mis-route the window to whatever workspace the
+    // *oldest* pending spawn was registered on — which may be a completely
+    // different workspace than where the user currently is (the classic symptom:
+    // "window spawns on the workspace I was previously on").  Return null so
+    // handleMapRequest falls back to current_ws instead.
+    if (g_spawn_queue.items.len != 1) {
+        std.log.debug(
+            "spawn: no exact PID match for pid={d}, {d} entries pending — ambiguous, routing to current workspace",
+            .{ win_pid, g_spawn_queue.items.len },
+        );
+        return null;
+    }
     std.log.debug(
-        "spawn: no exact PID match for pid={d}, using oldest entry ws={d}",
+        "spawn: no exact PID match for pid={d}, sole entry ws={d} — using heuristic",
         .{ win_pid, g_spawn_queue.items[0].workspace },
     );
     const ws = g_spawn_queue.items[0].workspace;
