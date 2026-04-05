@@ -5,9 +5,9 @@
 
 fix window tiling issues (clicking should also bring a window floating, always, regardless of the layout used)
 
-how to switch to floating layout? (><>)
+# #################### #
 
-in debug.zig, drop "info:" messages, and just display the [<name>] tags in place. make these tags have the same color that "info:" currently does.
+how to switch to floating layout? (><>)
 
 when i cycle between layouts using toggleLayout/toggleLayoutReverse (core.zig, config.zig, input.zig), please make it so that mouse hovering doesn't steal focus at windows being re-positioned, if it was previously positioned on one window but the layout cycling made it touch a different one. (focus.zig, window.zig, tracking.zig)
 
