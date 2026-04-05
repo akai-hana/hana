@@ -3,15 +3,21 @@
 
 # #################### #
 
-iesfm: continue 
+akhtsunde
 
-6f6e input stack pending
-
-send prompt.md and output.md to claude
+{
+> be on workspace 1
+> fullscreen onto a window
+> switch to another workspace
+> spawn a window bound to workspace 1 (from a different workspace)
+> switch back to workspace 1
+> un-fullscreen the fullscreened window
+> windows are tiled accounting the newly spawned window, except that it isn't visible, and so there's just an empty gap instead
+> switch to another workspace and back onto 1
+> all windows look fine now
+}
 
 # #################### #
-
-fix window spawning sometimes spawning on different workspaces
 
 fix window tiling issues (clicking should also bring a window floating, always, regardless of the layout used)
 

@@ -42,11 +42,8 @@ inline fn wsRemoveWindow(win: u32) void {
     else tracking.removeWindow(win);
 }
 
-// NOTE: This fallback stub must stay in sync with the real implementation in
-// scale.zig (scaleBorderWidth).  If the formula changes there, update this stub
-// too.  Ideally scaleBorderWidth would be moved to a file that is always
-// compiled (not gated on has_scale), eliminating this duplication entirely.
-// There is no compile-time enforcement of that sync; update both sites together.
+// Stub must use the same formula as scale.zig:scaleBorderWidth for builds
+// without the scale module. Both sites must be updated together.
 const scale = if (build.has_scale) @import("scale") else struct {
     /// Stub matching scale.scaleBorderWidth for builds without the scale module.
     /// Formula must stay identical to scale.zig:scaleBorderWidth.
@@ -73,11 +70,9 @@ const XSizeHintsFlags = struct {
 // Tracks pending (workspace, pid) assignments for newly-mapped windows.
 // Lives here (window.zig) because it is exclusively accessed by this module.
 //
-// Implemented as a module-level std.ArrayListUnmanaged so there is one logical
-// allocation rather than two (the old design heap-allocated a SpawnQueue node
-// that itself heap-allocated its backing slice, plus stored a redundant alloc
-// field).  The allocator is stored once at module level (g_alloc) and used for
-// both the spawn queue and any other window-module lifetime allocations.
+// Implemented as a module-level std.ArrayListUnmanaged with a single backing
+// allocation. The allocator is stored once at module level (g_alloc) and used
+// for both the spawn queue and any other window-module lifetime allocations.
 //
 // The list is capped at SPAWN_QUEUE_CAP entries.  Exceeding the cap logs an
 // error and drops the entry; it never terminates the process.
