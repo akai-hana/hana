@@ -219,6 +219,7 @@ pub fn reloadConfig() void {
             for (ws_state.workspaces) |*ws| {
                 ws.layout       = ns.layout;
                 ws.master_width = null;
+                ws.master_count = null;
             }
         }
     }
@@ -444,8 +445,11 @@ pub fn retileAllWorkspaces() void {
         const ws_windows = s.retile_wins[ws_idx * max_workspace_windows ..][0..n];
 
         const saved_width = s.master_width;
+        const saved_count = s.master_count;
         s.master_width = resolveMasterWidth(s, ws_state_opt, ws_idx);
+        s.master_count = resolveMasterCount(s, ws_state_opt, ws_idx);
         defer s.master_width = saved_width;
+        defer s.master_count = saved_count;
 
         dispatchLayout(resolveLayout(s, ws_state_opt, ws_idx, core.config.tiling.global_layout), &ctx, s, ws_windows, screen);
         markWorkspaceGeomValid(s, ws_idx);
@@ -598,6 +602,7 @@ pub fn syncLayoutFromWorkspace(ws: *const WsWorkspace) void {
     const needs_retile = s.layout != ws.layout or ws.variants != null;
     s.layout = ws.layout;
     if (ws.master_width) |mw| s.master_width = mw;
+    s.master_count = ws.master_count orelse core.config.tiling.master_count;
     if (ws.variants) |v| {
         switch (v) {
             .master  => |mv| s.layout_variants.master  = mv,
@@ -632,6 +637,11 @@ pub fn adjustMasterCount(delta: i8) void {
     const clamped: u8 = @intCast(@min(new, 10));
     if (clamped == s.master_count) return;
     s.master_count = clamped;
+    if (!core.config.tiling.global_layout) {
+        if (comptime build.has_workspaces) {
+            if (getWsCurrentWorkspace()) |ws| ws.master_count = s.master_count;
+        }
+    }
     retileCurrentWorkspace();
 }
 
@@ -923,6 +933,17 @@ inline fn resolveMasterWidth(s: *const State, ws_state: ?*WsState, ws_idx: u8) f
     return s.master_width;
 }
 
+/// Returns the master count for `ws_idx` in per-workspace mode.
+/// Falls back to the current global value for workspaces that have no override.
+inline fn resolveMasterCount(s: *const State, ws_state: ?*WsState, ws_idx: u8) u8 {
+    if (comptime !build.has_workspaces) return s.master_count;
+    if (core.config.tiling.global_layout) return s.master_count;
+    const wss = ws_state orelse return s.master_count;
+    if (ws_idx >= wss.workspaces.len) return s.master_count;
+    if (wss.workspaces[ws_idx].master_count) |mc| return mc;
+    return s.master_count;
+}
+
 // Core retile 
 
 /// Core retile. `for_ws`: when non-null, process that specific workspace instead
@@ -944,8 +965,13 @@ fn retile(screen: utils.Rect, for_ws: ?u8) void {
     const ctx = buildLayoutCtx(s);
 
     const saved_width = s.master_width;
-    if (for_ws != null) s.master_width = resolveMasterWidth(s, getWsState(), target_ws);
+    const saved_count = s.master_count;
+    if (for_ws != null) {
+        s.master_width = resolveMasterWidth(s, getWsState(), target_ws);
+        s.master_count = resolveMasterCount(s, getWsState(), target_ws);
+    }
     defer s.master_width = saved_width;
+    defer s.master_count = saved_count;
 
     dispatchLayout(
         resolveLayout(s, getWsState(), target_ws, core.config.tiling.global_layout),

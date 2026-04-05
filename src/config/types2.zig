@@ -135,12 +135,6 @@ pub const WorkspaceLayoutOverride = struct {
     variant:     ?LayoutVariantOverride, // null = use per-layout section default
 };
 
-/// Per-workspace master count override, parsed from [tiling.layouts.master-stack.counts].
-pub const WorkspaceMasterCountOverride = struct {
-    workspace_idx: u8, // 0-indexed workspace number
-    count:         u8,
-};
-
 pub const TilingConfig = struct {
     enabled:      bool           = true,
     layout:       []const u8     = "master_left",
@@ -171,10 +165,6 @@ pub const TilingConfig = struct {
     /// Per-workspace layout assignments parsed from the layouts array.
     workspace_layout_overrides: std.ArrayList(WorkspaceLayoutOverride) = .empty,
 
-    /// Per-workspace master count overrides parsed from [tiling.layouts.master-stack.counts].
-    /// Only applied when global_layout = false.
-    workspace_master_count_overrides: std.ArrayList(WorkspaceMasterCountOverride) = .empty,
-
     /// When true, layout changes apply globally across all workspaces (legacy behavior).
     global_layout: bool = false,
 
@@ -182,7 +172,6 @@ pub const TilingConfig = struct {
         for (self.layouts.items) |layout| allocator.free(layout);
         self.layouts.deinit(allocator);
         self.workspace_layout_overrides.deinit(allocator);
-        self.workspace_master_count_overrides.deinit(allocator);
     }
 };
 

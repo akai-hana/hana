@@ -7,8 +7,11 @@ const core    = @import("core");
     const xcb = core.xcb;
 const utils   = @import("utils");
 
-const window = @import("window");
-const tiling = if (build.has_tiling) @import("tiling") else struct {};
+const window   = @import("window");
+const tracking = @import("tracking");
+const tiling   = if (build.has_tiling) @import("tiling") else struct {
+    pub fn getStateOpt() ?*anyopaque { return null; }
+};
 
 const bar = if (build.has_bar) @import("bar") else struct {
     pub fn scheduleFocusRedraw(_: anytype) void {}
@@ -777,4 +780,91 @@ fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
     ) orelse return false;
     defer std.c.free(reply);
     return reply.*.map_state == xcb.XCB_MAP_STATE_VIEWABLE;
+}
+
+// ---------------------------------------------------------------------------
+// Window focus cycling — dwm-style Mod+j / Mod+k
+// ---------------------------------------------------------------------------
+//
+// Scratch buffer for collectVisibleWindows.  Module-level so it is not
+// stack-allocated on every key press.  Safe in a single-threaded WM.
+
+var cycle_buf: [64]u32 = undefined;
+
+/// Build an ordered list of visible windows for cycling.
+///
+/// When tiling is active the tiling module's window list is used — it matches
+/// the order windows appear on screen (master first, then stack), which is
+/// exactly what dwm's focusstack() walks.
+///
+/// Falls back to a list built from the focus MRU history (current focus first,
+/// then history) when tiling is disabled or has no windows.
+///
+/// Returns the number of windows written into `cycle_buf`, or 0 if none.
+fn collectVisibleWindows() usize {
+    var len: usize = 0;
+
+    if (comptime build.has_tiling) {
+        if (tiling.getStateOpt()) |t| {
+            if (t.is_enabled) {
+                for (t.windows.items()) |w| {
+                    if (len >= cycle_buf.len) break;
+                    if (tracking.isOnCurrentWorkspaceAndVisible(w)) {
+                        cycle_buf[len] = w;
+                        len += 1;
+                    }
+                }
+                if (len > 0) return len;
+            }
+        }
+    }
+
+    // Fallback: MRU order — current focus first, then history.
+    if (state.focused_window) |w| {
+        cycle_buf[len] = w;
+        len += 1;
+    }
+    for (state.history.items) |w| {
+        if (len >= cycle_buf.len) break;
+        if (!tracking.isOnCurrentWorkspaceAndVisible(w)) continue;
+        // Skip if already added (avoids duplicating focused_window).
+        var dup = false;
+        for (cycle_buf[0..len]) |existing| {
+            if (existing == w) { dup = true; break; }
+        }
+        if (!dup) {
+            cycle_buf[len] = w;
+            len += 1;
+        }
+    }
+    return len;
+}
+
+/// Cycle focus to the next visible window (dwm Mod+k — moves right/forward).
+///
+/// Walks the tiling window list in ascending order so the focus follows the
+/// visual layout: master → first stack slot → second stack slot → … → master.
+pub fn focusNext() void {
+    const len = collectVisibleWindows();
+    if (len == 0) return;
+    const wins = cycle_buf[0..len];
+    const idx = if (state.focused_window) |w|
+        std.mem.indexOfScalar(u32, wins, w) orelse 0
+    else
+        0;
+    setFocus(wins[(idx + 1) % len], .user_command);
+}
+
+/// Cycle focus to the previous visible window (dwm Mod+j — moves left/backward).
+///
+/// Walks the tiling window list in descending order.
+pub fn focusPrev() void {
+    const len = collectVisibleWindows();
+    if (len == 0) return;
+    const wins = cycle_buf[0..len];
+    const idx = if (state.focused_window) |w|
+        std.mem.indexOfScalar(u32, wins, w) orelse 0
+    else
+        0;
+    setFocus(wins[(idx + len - 1) % len], .user_command);
 }

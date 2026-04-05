@@ -59,6 +59,11 @@ pub const Workspace = struct {
     // Set when the user adjusts master width in per-workspace layout mode;
     // loaded back into tiling state on every workspace switch-in.
     master_width: ?f32 = null,
+    // Per-workspace master count override (master-stack layout).
+    // null = use the global default from config / tiling state.
+    // Populated at init from [tiling.layouts.master-stack.counts] and updated
+    // when the user adjusts the count via keybind in per-workspace layout mode.
+    master_count: ?u8 = null,
     // Last window that held focus on this workspace before the user left it.
     // Restored on re-entry when the cursor is not hovering over any window.
     last_focused: ?u32 = null,
@@ -157,6 +162,15 @@ pub fn init() !void {
         }
     }
 
+    // Per-workspace master count overrides from [tiling.layouts.master-stack.counts].
+    var master_count_lookup: [MAX_WS]?u8 = .{null} ** MAX_WS;
+    if (build.has_tiling) {
+        for (cfg_tiling.workspace_master_count_overrides.items) |o| {
+            if (o.workspace_idx < MAX_WS)
+                master_count_lookup[o.workspace_idx] = o.count;
+        }
+    }
+
     for (wss, 0..) |*ws, i| {
         const id: u8 = @intCast(i);
         const name   = if (i < WORKSPACE_NAMES.len) WORKSPACE_NAMES[i] else "?";
@@ -175,6 +189,9 @@ pub fn init() !void {
 
         ws.* = Workspace.init(id, name, ws_layout);
         ws.variants = ws_variant;
+        if (build.has_tiling) {
+            if (master_count_lookup[id]) |mc| ws.master_count = mc;
+        }
     }
 
     tracking.setWorkspaceCount(count);

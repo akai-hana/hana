@@ -320,6 +320,10 @@ fn executeAction(action: *const types.Action) !void {
 
         // Prompt 
         .toggle_prompt => prompt.toggle(),
+
+        // Window focus cycling (dwm-style Mod+k / Mod+j)
+        .focus_next_window => focus.focusNext(),
+        .focus_prev_window => focus.focusPrev(),
     }
 }
 

@@ -3,7 +3,7 @@
 ### NOTES:
 #
 # - All parameters and values are cApS-iNsEnSiTiVe. 
-# - Strings can be set with single or double quotes (''/"").
+# - Strings can be set with single or double quotes (''/&quot;&quot;).
 # - Decimal values can use a dot (N.NN) or comma (N,NN).
 # - Any percentage value can be decimal (N.NN%/%N.NN).
 #
@@ -165,6 +165,11 @@ Mod+H      = "decrease_master"
 Mod+L      = "increase_master" # Increase master area width
 Mod+comma  = "increase_master_count"
 Mod+period = "decrease_master_count" 
+
+# Focus cycling (dwm-style)
+## k = next/right (master → stack → ... → wrap), j = prev/left
+Mod+k = "focus_next_window"
+Mod+j = "focus_prev_window"
 
 # Workspaces
 ## Switch to workspace N
