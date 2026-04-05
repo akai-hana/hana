@@ -459,10 +459,12 @@ pub fn switchToAll() void {
                 if (window.getWindowGeom(win)) |rect| {
                     utils.configureWindow(core.conn, win, rect);
                 } else {
-                    const pos = window.floatDefaultPos();
                     _ = xcb.xcb_configure_window(core.conn, win,
                         xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
-                        &[_]u32{ pos.x, pos.y });
+                        &[_]u32{
+                            @intCast(core.screen.width_in_pixels  / 4),
+                            @intCast(core.screen.height_in_pixels / 4),
+                        });
                 }
             }
         }
@@ -660,7 +662,8 @@ fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8) void {
     }
 
     // Map every window; restore floating geometry for those not already on screen.
-    const pos = window.floatDefaultPos();
+    const default_x: u32 = @intCast(core.screen.width_in_pixels  / 4);
+    const default_y: u32 = @intCast(core.screen.height_in_pixels / 4);
     for (ws.windows.items()) |win| {
         _ = xcb.xcb_map_window(core.conn, win);
         if ((!build.has_tiling or !tiling.isWindowActiveTiled(win)) and !isMinimized(win) and
@@ -671,7 +674,7 @@ fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8) void {
             } else {
                 _ = xcb.xcb_configure_window(core.conn, win,
                     xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y,
-                    &[_]u32{ pos.x, pos.y });
+                    &[_]u32{ default_x, default_y });
             }
         }
     }
@@ -735,12 +738,37 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
     if (fs_info != null) bar.setBarState(.hide_fullscreen) else bar.setBarState(.show_fullscreen);
 
     if (fs_info) |info| {
-        window.configureWindowGeom(core.conn, info.window, .{
-            .x = 0, .y = 0,
-            .width        = @intCast(core.screen.width_in_pixels),
-            .height       = @intCast(core.screen.height_in_pixels),
-            .border_width = 0,
-        });
+        // Map and push offscreen every non-fullscreen window on this workspace.
+        //
+        // When a window is spawned onto an inactive workspace that already has
+        // an active fullscreen, executeSwitch takes this branch and skips
+        // restoreWorkspaceWindows — the only place that calls xcb_map_window
+        // on switch-in. The spawned window therefore stays unmapped. On
+        // fullscreen exit, tiling allocates a tile cell for it (it is in
+        // s.windows and on this workspace) but the cell is invisible, leaving
+        // an empty gap until the next workspace round-trip triggers a normal
+        // restoreWorkspaceWindows path.
+        //
+        // Fix: map every non-fullscreen workspace window here, then push it
+        // offscreen so it is hidden behind the fullscreen window. Invalidate
+        // the tiling cache entry for tiled windows so the next retile after
+        // fullscreen exit does not find a stale zero-rect and skip configure.
+        for (new_ws_obj.windows.items()) |win| {
+            if (win == info.window) continue;
+            _ = xcb.xcb_map_window(core.conn, win);
+            pushOffscreen(core.conn, win);
+            if (comptime build.has_tiling) {
+                if (tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
+            }
+        }
+        _ = xcb.xcb_configure_window(core.conn, info.window,
+            xcb.XCB_CONFIG_WINDOW_X     | xcb.XCB_CONFIG_WINDOW_Y     |
+            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
+            xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH,
+            &[_]u32{ 0, 0,
+                @intCast(core.screen.width_in_pixels),
+                @intCast(core.screen.height_in_pixels),
+                0 });
         _ = xcb.xcb_configure_window(core.conn, info.window,
             xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     } else {

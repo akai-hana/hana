@@ -194,7 +194,18 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
         return;
     }
 
-    // Fallback: Any other click focuses the window
+    // Fallback: Any other click focuses and raises the window.
+    //
+    // The raise must be issued unconditionally here, before setFocus, because
+    // setFocus short-circuits when managed_window is already focused_window
+    // (the common case after hover-focus) and never reaches the raise inside
+    // commitFocusTransition.  Without this explicit raise, a window that holds
+    // focus but has been visually covered — by a newly-spawned window, a
+    // floating peer, or any stacking change that bypasses the focus path —
+    // stays buried despite the click.  The double-raise when setFocus also
+    // raises is a no-op from the server's perspective.
+    _ = xcb.xcb_configure_window(core.conn, managed_window,
+        xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     focus.setFocus(managed_window, .mouse_click);
     releaseGrab(event.time);
 }
