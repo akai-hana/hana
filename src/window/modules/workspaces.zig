@@ -36,12 +36,15 @@ inline fn isMinimized(win: u32) bool {
     return if (comptime build.has_minimize) minimize.isMinimized(win) else false;
 }
 
-// Comptime-generated workspace name strings ("1".."20"), never heap-allocated.
-const WORKSPACE_NAMES = blk: {
-    var names: [20][]const u8 = undefined;
-    for (&names, 1..) |*name, i| name.* = std.fmt.comptimePrint("{d}", .{i});
-    break :blk names;
-};
+// P-02: workspaceBit and allWorkspacesMask are now imported from tracking.zig,
+// which is always compiled in.  The two private copies that used to live here
+// (with signatures `fn workspaceBit(ws_idx: u8)` and `fn allWorkspacesMask(count: usize)`)
+// have been removed.  All call sites below use tracking.workspaceBit /
+// tracking.allWorkspacesMask directly.
+
+// P-03: WORKSPACE_NAMES has been removed.  The identical comptime array is now
+// declared once as `tracking.WORKSPACE_LABELS` (always-compiled module) and
+// used via that import wherever workspace display labels are needed.
 
 pub const Workspace = struct {
     id:      u8,
@@ -92,15 +95,6 @@ pub const State = struct {
 var g_state: ?State = null;
 
 pub inline fn getState() ?*State { return if (g_state) |*s| s else null; }
-
-/// Returns the bitmask with only the bit for `ws_idx` set.
-inline fn workspaceBit(ws_idx: u8) u64 { return @as(u64, 1) << @intCast(ws_idx); }
-
-/// Returns a bitmask with bits set for every workspace in [0, count).
-inline fn allWorkspacesMask(count: usize) u64 {
-    if (count >= 64) return ~@as(u64, 0);
-    return (@as(u64, 1) << @intCast(count)) - 1;
-}
 
 /// Yields the index of each set bit in `mask`, lowest first.
 const SetBitIterator = struct {
@@ -173,7 +167,9 @@ pub fn init() !void {
 
     for (wss, 0..) |*ws, i| {
         const id: u8 = @intCast(i);
-        const name   = if (i < WORKSPACE_NAMES.len) WORKSPACE_NAMES[i] else "?";
+        // P-03: use the shared label table from tracking.zig instead of the
+        // local WORKSPACE_NAMES array that duplicated the identical comptime logic.
+        const name = if (i < tracking.WORKSPACE_LABELS.len) tracking.WORKSPACE_LABELS[i] else "?";
 
         // Apply any workspace-specific layout + variants override from the
         // layouts array (e.g. `"monocle", "gapless", "4,8"` in config.toml).
@@ -243,10 +239,10 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
         return;
     };
 
-    const target_bit = workspaceBit(target_ws);
+    const target_bit = tracking.workspaceBit(target_ws);
     if (mask == target_bit) return;
 
-    var new_mask = (mask & ~workspaceBit(s.current)) | target_bit;
+    var new_mask = (mask & ~tracking.workspaceBit(s.current)) | target_bit;
     if (new_mask == 0) new_mask = target_bit; // safety: never leave mask empty
 
     // Route through setWindowMask so every workspace's window list stays in sync,
@@ -308,7 +304,7 @@ pub fn moveWindowExclusive(win: u32, target_ws: u8) void {
     if (isMinimized(win)) return;
 
     const mask = tracking.getWindowWorkspaceMask(win) orelse return;
-    if (mask == workspaceBit(target_ws)) return; // already exclusively on target — no-op
+    if (mask == tracking.workspaceBit(target_ws)) return; // already exclusively on target — no-op
 
     // Transfer fullscreen record to the target workspace so the window
     // remains fullscreen wherever it lands, not just on the source workspace.
@@ -325,7 +321,7 @@ pub fn moveWindowExclusive(win: u32, target_ws: u8) void {
         fullscreen.setForWorkspace(target_ws, info);
     }
 
-    setWindowMask(s, win, workspaceBit(target_ws));
+    setWindowMask(s, win, tracking.workspaceBit(target_ws));
 
     if (target_ws != s.current) {
         evictWindow(win);
@@ -348,7 +344,7 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
 
     const current = s.current;
     const mask = tracking.getWindowWorkspaceMask(win) orelse return;
-    const tbit = workspaceBit(target_ws);
+    const tbit = tracking.workspaceBit(target_ws);
 
     if (mask & tbit != 0) {
         // Remove tag N.
@@ -376,7 +372,7 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
         }
     } else {
         // Add tag N. In protected mode, always keep the current workspace set too.
-        const new_mask = if (protect_current) mask | tbit | workspaceBit(current) else mask | tbit;
+        const new_mask = if (protect_current) mask | tbit | tracking.workspaceBit(current) else mask | tbit;
         setWindowMask(s, win, new_mask);
         if (target_ws == current) {
             _ = xcb.xcb_map_window(core.conn, win);
@@ -409,7 +405,7 @@ fn exitAllWorkspacesView(s: *State) void {
     const current = s.current;
     for (s.all_view_temp_wins.items) |win| {
         const mask = tracking.getWindowWorkspaceMask(win) orelse continue;
-        const restored = mask & ~workspaceBit(current);
+        const restored = mask & ~tracking.workspaceBit(current);
         if (restored == 0) continue; // shouldn't happen, but never leave mask empty
         setWindowMask(s, win, restored);
         evictWindow(win);
@@ -456,7 +452,7 @@ pub fn switchToAll() void {
                 const mask = tracking.getWindowWorkspaceMask(win) orelse continue;
                 // Patch the mask: window is now genuinely on the current workspace,
                 // so tiling, focus, and every other subsystem sees it naturally.
-                setWindowMask(s, win, mask | workspaceBit(s.current));
+                setWindowMask(s, win, mask | tracking.workspaceBit(s.current));
                 s.all_view_temp_wins.append(s.allocator, win) catch {
                     // OOM: undo the mask patch so we stay consistent.
                     setWindowMask(s, win, mask);
@@ -495,12 +491,12 @@ pub fn switchToAll() void {
 /// Common implementation for moveWindowToAll and tagToggleAll:
 /// toggles a window between "pinned to every workspace" and "current workspace only".
 fn pinToAllWorkspacesToggle(s: *State, win: u32) void {
-    const all_mask = allWorkspacesMask(s.workspaces.len);
+    const all_mask = tracking.allWorkspacesMask(s.workspaces.len);
     const mask = tracking.getWindowWorkspaceMask(win) orelse return;
 
     if (mask == all_mask) {
         // Pinned everywhere — shrink back to current workspace only.
-        setWindowMask(s, win, workspaceBit(s.current));
+        setWindowMask(s, win, tracking.workspaceBit(s.current));
     } else {
         // Pin to every workspace.
         setWindowMask(s, win, all_mask);

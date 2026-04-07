@@ -262,6 +262,38 @@ pub inline fn getWorkspaceCount() usize {
     return g_workspace_count;
 }
 
+// Workspace bitmask helpers (P-02)
+//
+// Centralised here so tiling.zig and workspaces.zig share one definition.
+// Both previously defined their own private copy; having two meant a future
+// bounds check or type change had to be applied in two places.
+
+/// Returns a u64 bitmask with only the bit for `ws_idx` set.
+/// `ws_idx` may be any integer type; the cast is checked in debug builds.
+pub inline fn workspaceBit(ws_idx: anytype) u64 {
+    return @as(u64, 1) << @intCast(ws_idx);
+}
+
+/// Returns a bitmask with bits set for every workspace in [0, count).
+/// Returns all-ones for count ≥ 64 (saturating at the u64 width).
+pub inline fn allWorkspacesMask(count: usize) u64 {
+    if (count >= 64) return ~@as(u64, 0);
+    return (@as(u64, 1) << @intCast(count)) - 1;
+}
+
+// Comptime workspace label table (P-03)
+//
+// Previously duplicated in tags.zig and workspaces.zig under different names.
+// Declaring it once here (always-compiled module) removes the duplication.
+
+/// Comptime-generated number strings "1".."20" for workspace display labels.
+/// Never heap-allocated; slices remain valid for the lifetime of the program.
+pub const WORKSPACE_LABELS: [20][]const u8 = blk: {
+    var labels: [20][]const u8 = undefined;
+    for (&labels, 1..) |*label, i| label.* = std.fmt.comptimePrint("{d}", .{i});
+    break :blk labels;
+};
+
 /// Returns the lowest-indexed workspace this window belongs to, or null if
 /// the window is not tracked.
 ///

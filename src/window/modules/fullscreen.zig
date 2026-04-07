@@ -365,6 +365,36 @@ fn restoreFloatingWindows(skip_win: u32) void {
     g_float_saves_len = 0;
 }
 
+// P-04: EWMH _NET_WM_STATE_FULLSCREEN helper
+//
+// Previously the same guard + xcb_change_property pattern appeared verbatim in
+// three functions (enterFullscreenCommit, exitFullscreenCommit, and
+// cleanupFullscreenForMove), differing only in the atom count (1 vs 0) and the
+// data pointer (&g_net_wm_state_fullscreen vs null).
+//
+// A single parameterised helper eliminates the triplication: any future change
+// to the atom guard, property mode, or format only needs to be made once.
+
+/// Advertise or clear the EWMH _NET_WM_STATE_FULLSCREEN property on `win`.
+///
+/// Guards on both atoms being valid so a partial atom-intern failure cannot
+/// corrupt the property (matches the enter-path guard that was already
+/// dual-checking both atoms; exit paths now do the same).
+///
+/// `is_fullscreen = true`  → sets count=1, data=&g_net_wm_state_fullscreen
+/// `is_fullscreen = false` → sets count=0, data=null  (clears the property)
+fn setEwmhFullscreenState(win: u32, is_fullscreen: bool) void {
+    if (g_net_wm_state == xcb.XCB_ATOM_NONE or
+        g_net_wm_state_fullscreen == xcb.XCB_ATOM_NONE) return;
+    const count: u32 = if (is_fullscreen) 1 else 0;
+    _ = xcb.xcb_change_property(
+        core.conn, xcb.XCB_PROP_MODE_REPLACE,
+        win, g_net_wm_state,
+        xcb.XCB_ATOM_ATOM, 32,
+        count, if (is_fullscreen) &g_net_wm_state_fullscreen else null,
+    );
+}
+
 // Commit helpers (XCB-only; caller owns grab/ungrab/flush)
 //
 // Improvement #4: `inline` removed from both helpers.  These functions contain
@@ -423,14 +453,9 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
 
     // Advertise fullscreen state via EWMH so external tools (e.g. compositor
     // scripts) can detect it with xprop / xev.
-    if (g_net_wm_state != xcb.XCB_ATOM_NONE and g_net_wm_state_fullscreen != xcb.XCB_ATOM_NONE) {
-        _ = xcb.xcb_change_property(
-            core.conn, xcb.XCB_PROP_MODE_REPLACE,
-            win, g_net_wm_state,
-            xcb.XCB_ATOM_ATOM, 32,
-            1, &g_net_wm_state_fullscreen,
-        );
-    }
+    // P-04: delegated to setEwmhFullscreenState — one call replaces the former
+    // inline guard + xcb_change_property block.
+    setEwmhFullscreenState(win, true);
 }
 
 fn exitFullscreenCommit(win: u32, ws: u8) void {
@@ -454,17 +479,10 @@ fn exitFullscreenCommit(win: u32, ws: u8) void {
     window.applyBorder(win);
 
     // Clear EWMH fullscreen state so external tools see the window is no longer fullscreen.
-    // Improvement #2: guard now checks both atoms, mirroring the enter path.
-    // Previously only g_net_wm_state was checked; if atom interning had partially
-    // failed, the clear would still fire and write against an unexpected atom value.
-    if (g_net_wm_state != xcb.XCB_ATOM_NONE and g_net_wm_state_fullscreen != xcb.XCB_ATOM_NONE) {
-        _ = xcb.xcb_change_property(
-            core.conn, xcb.XCB_PROP_MODE_REPLACE,
-            win, g_net_wm_state,
-            xcb.XCB_ATOM_ATOM, 32,
-            0, null,
-        );
-    }
+    // P-04: delegated to setEwmhFullscreenState — one call replaces the former
+    // inline guard + xcb_change_property block.  Both atoms are now guarded
+    // consistently, matching the enter path.
+    setEwmhFullscreenState(win, false);
 }
 
 // Public actions
@@ -501,14 +519,8 @@ pub fn cleanupFullscreenForMove(win: u32, src_ws: u8) void {
 
     // Clear the EWMH fullscreen property so external tools (compositors, etc.)
     // see the window is no longer fullscreen.
-    if (g_net_wm_state != xcb.XCB_ATOM_NONE and g_net_wm_state_fullscreen != xcb.XCB_ATOM_NONE) {
-        _ = xcb.xcb_change_property(
-            core.conn, xcb.XCB_PROP_MODE_REPLACE,
-            win, g_net_wm_state,
-            xcb.XCB_ATOM_ATOM, 32,
-            0, null,
-        );
-    }
+    // P-04: delegated to setEwmhFullscreenState.
+    setEwmhFullscreenState(win, false);
 }
 
 /// Enter fullscreen for `win` on the current workspace.

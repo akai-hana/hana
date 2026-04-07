@@ -1,6 +1,10 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+can you make it so that id i'm holding the mod key on the prompt and do a bind, that the prompt doesn't intercept it, and that the bind works normally? but the prompt must still be there.
+
+when i'm on prompt (normal mode) and i do a bind (let's say workspace mod+1), i have to press "esc" two times instead of one to cancel the prompt under this normal mode, when it'd only take me one time if i didn't do this bind. when 
+
 # #################### #
 
 how to switch to floating layout? (><>)

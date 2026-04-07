@@ -12,17 +12,16 @@ const std     = @import("std");
 const core    = @import("core");
 const types   = @import("types");
 const drawing = @import("drawing");
+const tracking = @import("tracking");
 
-/// Comptime-generated label strings "1".."20". Never heap-allocated.
-const static_numbers = blk: {
-    var nums: [20][]const u8 = undefined;
-    for (&nums, 1..) |*num, i| num.* = std.fmt.comptimePrint("{d}", .{i});
-    break :blk nums;
-};
+// P-03: the comptime number strings "1".."20" are now declared once in
+// tracking.WORKSPACE_LABELS (always-compiled module) and imported here,
+// replacing the former local `static_numbers` array that duplicated the
+// identical generation logic in workspaces.zig.
 
-// Both arrays are capped at 20 entries, matching static_numbers and
-// workspaces.WORKSPACE_NAMES. Workspaces beyond index 20 still render
-// correctly: draw() falls back to dc.measureTextWidth(label) on a cache miss.
+// Both arrays are capped at 20 entries, matching tracking.WORKSPACE_LABELS.
+// Workspaces beyond index 20 still render correctly: draw() falls back to
+// dc.measureTextWidth(label) on a cache miss.
 // Raise this cap if workspace count ever exceeds 20.
 var label_widths: [20]u16 = [_]u16{0} ** 20;
 var ws_width:          u16     = 0;
@@ -35,7 +34,7 @@ var cached_ind_y:      u16     = 0;
 
 inline fn getLabel(i: usize, config: types.BarConfig) []const u8 {
     if (i < config.workspace_icons.items.len) return config.workspace_icons.items[i];
-    if (i < static_numbers.len)               return static_numbers[i];
+    if (i < tracking.WORKSPACE_LABELS.len)    return tracking.WORKSPACE_LABELS[i];
     return "?";
 }
 

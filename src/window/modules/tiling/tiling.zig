@@ -31,17 +31,9 @@ const bar = if (build.has_bar) @import("bar") else struct {
     pub fn scheduleFullRedraw() void {}
 };
 
-const scale = if (build.has_scale) @import("scale") else struct {
-    pub fn scaleMasterWidth(value: anytype) f32 {
-        return if (value.is_percentage) value.value / 100.0 else -value.value;
-    }
-    pub fn scaleBorderWidth(value: anytype, reference_dimension: u16) u16 {
-        if (value.is_percentage) {
-            const dim_f: f32 = @floatFromInt(reference_dimension);
-            return @intFromFloat(@max(0.0, @round((value.value / 100.0) * 0.5 * dim_f)));
-        } else return @intFromFloat(@max(0.0, @round(value.value)));
-    }
-};
+// P-01: fallback lives in utils.scale_fallback (shared with window.zig) instead of
+// being duplicated here and in window.zig.
+const scale = if (build.has_scale) @import("scale") else utils.scale_fallback;
 
 
 fn getWsState() ?*WsState {
@@ -371,7 +363,8 @@ pub fn invalidateGeomCache(window_id: u32) void {
 /// for that workspace triggers a full retile.
 pub inline fn invalidateWsGeomBit(ws_idx: u8) void {
     const s = getState();
-    if (ws_idx < max_workspaces) s.workspace_geom_valid_bits &= ~workspaceBit(ws_idx);
+    // P-02: use tracking.workspaceBit — the private copy has been removed.
+    if (ws_idx < max_workspaces) s.workspace_geom_valid_bits &= ~tracking.workspaceBit(ws_idx);
 }
 
 pub inline fn markDirty() void {
@@ -511,7 +504,8 @@ pub fn restoreWorkspaceGeom() bool {
 
     const current_ws = tracking.getCurrentWorkspace() orelse return false;
     if (current_ws >= max_workspaces) return false;
-    if (s.workspace_geom_valid_bits & workspaceBit(current_ws) == 0) return false;
+    // P-02: use tracking.workspaceBit — the private copy has been removed.
+    if (s.workspace_geom_valid_bits & tracking.workspaceBit(current_ws) == 0) return false;
 
     const current_screen = calcScreenArea();
     if (!layouts.rectsEqual(current_screen, s.last_retile_area)) return false;
@@ -1169,12 +1163,15 @@ fn swapWindowGeometriesDirectly(s: *State, win_a: u32, win_b: u32) void {
     updateCacheRect(s, win_b, rect_a);
 }
 
-// Misc private helpers 
-
-inline fn workspaceBit(ws_idx: anytype) u64 { return @as(u64, 1) << @intCast(ws_idx); }
+// Misc private helpers
+//
+// P-02: workspaceBit has been removed from this file.
+// All call sites now use tracking.workspaceBit, which is declared once in
+// the always-compiled tracking.zig module and shared with workspaces.zig.
 
 inline fn markWorkspaceGeomValid(s: *State, ws_idx: anytype) void {
-    if (ws_idx < max_workspaces) s.workspace_geom_valid_bits |= workspaceBit(ws_idx);
+    // P-02: use tracking.workspaceBit — the private copy has been removed.
+    if (ws_idx < max_workspaces) s.workspace_geom_valid_bits |= tracking.workspaceBit(ws_idx);
 }
 
 inline fn applyLayoutStep(comptime forward: bool) void {
