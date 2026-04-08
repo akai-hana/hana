@@ -3,6 +3,8 @@
 
 89
 
+limit window dragging/resizing to follow monitor's refresh rate. 
+
 # ### EDGE CASES ### #
 
 - when i'm on prompt (normal mode) and i do a bind (let's say workspace mod+1), i have to press "esc" two times instead of one to cancel the prompt under this normal mode, when it'd only take me one time if i didn't do this bind. when 
