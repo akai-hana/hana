@@ -140,19 +140,6 @@ fn appendFlatOrSingle(allocator: std.mem.Allocator, dst_arr: *std.ArrayList(Valu
     }
 }
 
-// P-05: Unified duplicate-key accumulation
-//
-// Previously, parse() handled duplicate keys inline with a hard-coded 2-element
-// array construction, while mergeSectionsInto() used appendFlatOrSingle() —
-// two paths with subtly different flattening behaviour.
-//
-// accumulateIntoExisting centralises both behind a single function, parameterised
-// by `flatten`:
-//   flatten = false  →  used by parse()         (incoming arrays are not exploded)
-//   flatten = true   →  used by mergeSectionsInto() (incoming arrays are flattened)
-//
-// This ensures any future bug fix or invariant change is applied in one place.
-
 /// Accumulate `incoming` into the existing value at `old_val`.
 ///
 /// If `old_val` is already an array the new value is appended (or flattened)
@@ -561,9 +548,6 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
                 //
                 // parseKeybindings already handles array values as sequences,
                 // so no further changes are needed there.
-                //
-                // P-05: delegate to accumulateIntoExisting (flatten=false) so
-                // the wrapping logic is shared with mergeSectionsInto.
                 try accumulateIntoExisting(allocator, old, kv[1], false);
                 allocator.free(kv[0]);
             } else {

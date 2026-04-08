@@ -1,28 +1,10 @@
-//! Core window tracking — always present, no optionality.
-//!
-//! Owns the window→workspace bitmask map and the current-workspace cursor.
-//! Every other module queries window membership and focus eligibility through
-//! this module, which means those predicates work correctly even when the full
-//! workspace-switching subsystem (workspaces.zig) is not compiled in.
-//!
-//! workspaces.zig calls setCurrentWorkspace() and setWorkspaceCount() on every
-//! switch and init respectively, keeping the state here in sync with the
-//! multi-workspace feature when it is present.  When workspaces.zig is absent
-//! the WM operates as a single-workspace session: all windows land on
-//! workspace 0 and getCurrentWorkspace() always returns 0.
-//!
-//! Memory conventions
-//! ------------------
-//! g_map entries are managed by the Zig allocator supplied to init().
-//! XCB reply buffers (xcb_*_reply_t*) are allocated by the C library and must
-//! be freed with std.c.free, never with the Zig allocator.  The two memory
-//! systems must never be confused; callers that interact with both in the same
-//! function should add a comment at each free site.
+//! Core window tracking
+//! Tracks windows' focus eligibility through workspaces.
 
 const std   = @import("std");
 const build = @import("build_options");
 
-const minimize      = if (build.has_minimize) @import("minimize") else struct {};
+const minimize = if (build.has_minimize) @import("minimize") else struct {};
 
 
 // Fixed-size ordered window list.
@@ -262,11 +244,7 @@ pub inline fn getWorkspaceCount() usize {
     return g_workspace_count;
 }
 
-// Workspace bitmask helpers (P-02)
-//
-// Centralised here so tiling.zig and workspaces.zig share one definition.
-// Both previously defined their own private copy; having two meant a future
-// bounds check or type change had to be applied in two places.
+// Workspace bitmask helpers
 
 /// Returns a u64 bitmask with only the bit for `ws_idx` set.
 /// `ws_idx` may be any integer type; the cast is checked in debug builds.
@@ -281,10 +259,7 @@ pub inline fn allWorkspacesMask(count: usize) u64 {
     return (@as(u64, 1) << @intCast(count)) - 1;
 }
 
-// Comptime workspace label table (P-03)
-//
-// Previously duplicated in tags.zig and workspaces.zig under different names.
-// Declaring it once here (always-compiled module) removes the duplication.
+// Comptime workspace label table
 
 /// Comptime-generated number strings "1".."20" for workspace display labels.
 /// Never heap-allocated; slices remain valid for the lifetime of the program.

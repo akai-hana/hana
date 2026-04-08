@@ -13,7 +13,6 @@ const debug = @import("debug");
 
 const window   = @import("window");
 const tracking = @import("tracking");
-const Tracking = @import("tracking").Tracking; //TODO: this and the previous line is confusing
 const focus    = @import("focus");
 
 const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
@@ -36,19 +35,9 @@ inline fn isMinimized(win: u32) bool {
     return if (comptime build.has_minimize) minimize.isMinimized(win) else false;
 }
 
-// P-02: workspaceBit and allWorkspacesMask are now imported from tracking.zig,
-// which is always compiled in.  The two private copies that used to live here
-// (with signatures `fn workspaceBit(ws_idx: u8)` and `fn allWorkspacesMask(count: usize)`)
-// have been removed.  All call sites below use tracking.workspaceBit /
-// tracking.allWorkspacesMask directly.
-
-// P-03: WORKSPACE_NAMES has been removed.  The identical comptime array is now
-// declared once as `tracking.WORKSPACE_LABELS` (always-compiled module) and
-// used via that import wherever workspace display labels are needed.
-
 pub const Workspace = struct {
     id:      u8,
-    windows: Tracking,
+    windows: tracking.Tracking,
     name:    []const u8,
     // The tiling layout active on this workspace.
     // Initialized from config; updated when the user switches layouts
@@ -108,16 +97,10 @@ const SetBitIterator = struct {
 };
 inline fn setBits(mask: u64) SetBitIterator { return .{ .bits = mask }; }
 
-/// Moves `win` to the offscreen holding area (outside visible display bounds).
-inline fn pushOffscreen(conn: *xcb.xcb_connection_t, win: u32) void {
-    _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X,
-        &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
-}
-
 /// Push `win` offscreen and evict its geometry cache entry.
 /// Used when a window leaves the current workspace.
 inline fn evictWindow(win: u32) void {
-    pushOffscreen(core.conn, win);
+    utils.pushWindowOffscreen(core.conn, win);
     if (build.has_tiling) tiling.invalidateGeomCache(win);
 }
 
@@ -167,8 +150,6 @@ pub fn init() !void {
 
     for (wss, 0..) |*ws, i| {
         const id: u8 = @intCast(i);
-        // P-03: use the shared label table from tracking.zig instead of the
-        // local WORKSPACE_NAMES array that duplicated the identical comptime logic.
         const name = if (i < tracking.WORKSPACE_LABELS.len) tracking.WORKSPACE_LABELS[i] else "?";
 
         // Apply any workspace-specific layout + variants override from the
@@ -437,8 +418,7 @@ pub fn switchToAll() void {
         applyPostSwitchFocus(s.current, &s.workspaces[s.current], ptr_cookie);
         bar.raiseBar();
         bar.redrawInsideGrab();
-        _ = xcb.xcb_ungrab_server(core.conn);
-        _ = xcb.xcb_flush(core.conn);
+        utils.ungrabAndFlush(core.conn);
     } else {
         // Enter all-workspaces view 
         _ = xcb.xcb_grab_server(core.conn);
@@ -483,8 +463,7 @@ pub fn switchToAll() void {
         }
 
         bar.scheduleRedraw();
-        _ = xcb.xcb_ungrab_server(core.conn);
-        _ = xcb.xcb_flush(core.conn);
+        utils.ungrabAndFlush(core.conn);
     }
 }
 
@@ -622,7 +601,7 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
             }
         }
 
-        pushOffscreen(core.conn, win);
+        utils.pushWindowOffscreen(core.conn, win);
         if (build.has_tiling and tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
     }
 
@@ -769,7 +748,7 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
         for (new_ws_obj.windows.items()) |win| {
             if (win == info.window) continue;
             _ = xcb.xcb_map_window(core.conn, win);
-            pushOffscreen(core.conn, win);
+            utils.pushWindowOffscreen(core.conn, win);
             if (comptime build.has_tiling) {
                 if (tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
             }
@@ -792,6 +771,5 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
 
     bar.raiseBar();
     bar.redrawInsideGrab();
-    _ = xcb.xcb_ungrab_server(core.conn);
-    _ = xcb.xcb_flush(core.conn);
+    utils.ungrabAndFlush(core.conn);
 }

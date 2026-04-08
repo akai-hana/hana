@@ -14,11 +14,6 @@ const types   = @import("types");
 const drawing = @import("drawing");
 const tracking = @import("tracking");
 
-// P-03: the comptime number strings "1".."20" are now declared once in
-// tracking.WORKSPACE_LABELS (always-compiled module) and imported here,
-// replacing the former local `static_numbers` array that duplicated the
-// identical generation logic in workspaces.zig.
-
 // Both arrays are capped at 20 entries, matching tracking.WORKSPACE_LABELS.
 // Workspaces beyond index 20 still render correctly: draw() falls back to
 // dc.measureTextWidth(label) on a cache miss.

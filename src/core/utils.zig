@@ -164,13 +164,6 @@ pub inline fn getAtomCached(comptime name: []const u8) error{AtomCacheNotInitial
 
 // Property helpers
 
-// Scale fallback (P-01)
-//
-// A single authoritative copy of the scale stubs for builds without the
-// scale module. Both tiling.zig and window.zig import this struct via
-// `if (build.has_scale) @import("scale") else utils.scale_fallback`,
-// eliminating the verbatim duplication and the comment-debt warning.
-
 /// Fallback scale helpers used when `build.has_scale` is false.
 /// Formula must stay identical to scale.zig; this is now the single
 /// source of truth for no-scale builds.
@@ -185,12 +178,6 @@ pub const scale_fallback = struct {
         } else return @intFromFloat(@max(0.0, @round(value.value)));
     }
 };
-
-// Monotonic clock helpers (P-08)
-//
-// Consolidated from carousel.zig (monotonicMs) and bar.zig (monotonicNowNs).
-// Having both units in one place makes the difference explicit and prevents
-// callers from adding a third variant elsewhere.
 
 /// Returns the current monotonic clock time in milliseconds.
 /// Uses the VDSO-accelerated clock_gettime on supported kernels.
@@ -207,11 +194,10 @@ pub fn monotonicNs() u64 {
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
-// XCB grab helpers (P-09, P-11)
+// XCB grab helpers
 
 /// Moves `win` to the offscreen holding area (outside visible display bounds).
-/// Uses only XCB_CONFIG_WINDOW_X; callers that also need to zero Y should issue
-/// a combined configure directly (e.g. minimize.hideWindow).
+/// Uses only XCB_CONFIG_WINDOW_X.
 pub inline fn pushWindowOffscreen(conn: *xcb.xcb_connection_t, win: u32) void {
     _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X,
         &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});

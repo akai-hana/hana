@@ -365,16 +365,6 @@ fn restoreFloatingWindows(skip_win: u32) void {
     g_float_saves_len = 0;
 }
 
-// P-04: EWMH _NET_WM_STATE_FULLSCREEN helper
-//
-// Previously the same guard + xcb_change_property pattern appeared verbatim in
-// three functions (enterFullscreenCommit, exitFullscreenCommit, and
-// cleanupFullscreenForMove), differing only in the atom count (1 vs 0) and the
-// data pointer (&g_net_wm_state_fullscreen vs null).
-//
-// A single parameterised helper eliminates the triplication: any future change
-// to the atom guard, property mode, or format only needs to be made once.
-
 /// Advertise or clear the EWMH _NET_WM_STATE_FULLSCREEN property on `win`.
 ///
 /// Guards on both atoms being valid so a partial atom-intern failure cannot
@@ -414,9 +404,7 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     // Improvement #3: iteration dispatched through the shared helper.
     const PushCtx = struct {
         fn call(_: @This(), w: u32) void {
-            _ = xcb.xcb_configure_window(core.conn, w,
-                xcb.XCB_CONFIG_WINDOW_X,
-                &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+            utils.pushWindowOffscreen(core.conn, w);
             if (comptime build.has_tiling) {
                 // Only invalidate tiled windows — floating windows' cache entries
                 // hold the geometry we need to restore on exit.
@@ -453,8 +441,6 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
 
     // Advertise fullscreen state via EWMH so external tools (e.g. compositor
     // scripts) can detect it with xprop / xev.
-    // P-04: delegated to setEwmhFullscreenState — one call replaces the former
-    // inline guard + xcb_change_property block.
     setEwmhFullscreenState(win, true);
 }
 
@@ -479,9 +465,6 @@ fn exitFullscreenCommit(win: u32, ws: u8) void {
     window.applyBorder(win);
 
     // Clear EWMH fullscreen state so external tools see the window is no longer fullscreen.
-    // P-04: delegated to setEwmhFullscreenState — one call replaces the former
-    // inline guard + xcb_change_property block.  Both atoms are now guarded
-    // consistently, matching the enter path.
     setEwmhFullscreenState(win, false);
 }
 
@@ -519,7 +502,6 @@ pub fn cleanupFullscreenForMove(win: u32, src_ws: u8) void {
 
     // Clear the EWMH fullscreen property so external tools (compositors, etc.)
     // see the window is no longer fullscreen.
-    // P-04: delegated to setEwmhFullscreenState.
     setEwmhFullscreenState(win, false);
 }
 
@@ -533,8 +515,7 @@ pub fn enterFullscreen(win: u32, saved_geom: ?core.WindowGeometry) void {
     saveFloatingWindowGeoms(win);
     _ = xcb.xcb_grab_server(core.conn);
     enterFullscreenCommit(win, ws, geom);
-    _ = xcb.xcb_ungrab_server(core.conn);
-    _ = xcb.xcb_flush(core.conn);
+    utils.ungrabAndFlush(core.conn);
 }
 
 // Improvement #1 (bug fix) + #5 (uniform grab ownership):
@@ -565,8 +546,7 @@ pub fn toggle() void {
             _ = xcb.xcb_grab_server(core.conn);
             exitFullscreenCommit(win, current_ws);
             restoreFloatingWindows(win);
-            _ = xcb.xcb_ungrab_server(core.conn);
-            _ = xcb.xcb_flush(core.conn);
+            utils.ungrabAndFlush(core.conn);
         } else {
             // Switch: a different window is currently fullscreen.
             // Hoist both round-trip operations (fetchWindowGeom issues a
@@ -582,8 +562,7 @@ pub fn toggle() void {
             // this step they remain invisible after the transition.
             restoreFloatingWindows(win);
             enterFullscreenCommit(win, current_ws, new_geom);
-            _ = xcb.xcb_ungrab_server(core.conn);
-            _ = xcb.xcb_flush(core.conn);
+            utils.ungrabAndFlush(core.conn);
         }
     } else {
         // Nothing fullscreen on this workspace — enter fullscreen.
@@ -593,7 +572,6 @@ pub fn toggle() void {
         saveFloatingWindowGeoms(win);
         _ = xcb.xcb_grab_server(core.conn);
         enterFullscreenCommit(win, current_ws, geom);
-        _ = xcb.xcb_ungrab_server(core.conn);
-        _ = xcb.xcb_flush(core.conn);
+        utils.ungrabAndFlush(core.conn);
     }
 }
