@@ -202,6 +202,7 @@ Mod+S       = "flatpak run org.equicord.equibop"
 Mod+Shift+S = "{kill} equibop"
 
 Mod+D       = "ghostty"
+Mod+i = "xeyes"
 Mod+Shift+D = "{kill} ghostty"
 
 Mod+Z       = "cd ~/Games/isaac-repentance+; wine isaac-ng.exe"
