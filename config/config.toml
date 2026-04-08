@@ -256,7 +256,7 @@ Mod+Shift+Escape = "emergency_recover" #TODO: remove. this is hacky and assumes 
 # Games
 5 = ["osu!", "DDNet", "isaac-ng.exe"]
 # Editors
-6 = ["emacs", "xeyes"]
+6 = ["emacs"]
 # Media
 7 = ["prismlauncher", "freetube", "gimp"]
 # Torrenting
