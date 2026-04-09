@@ -1,8 +1,6 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-89
-
 limit window dragging/resizing to follow monitor's refresh rate. 
 
 # ### EDGE CASES ### #

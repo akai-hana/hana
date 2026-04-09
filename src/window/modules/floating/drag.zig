@@ -14,6 +14,10 @@ const focus  = @import("focus");
 const tiling     = if (build.has_tiling) @import("tiling") else struct {};
 const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
 
+const scale = if (build.has_scale) @import("scale") else struct {
+    pub fn cachedRefreshRate() f64 { return 60.0; }
+};
+
 const bar = if (build.has_bar) @import("bar") else struct {
     pub fn isVisible() bool { return false; }
     pub fn getBarHeight() u16 { return 0; }
@@ -121,7 +125,10 @@ inline fn snapFarEdge(edge: i32, boundary: i32, snap: i32) i32 {
 const State = struct {
     drag:          DragState = .{},
     pending_float: bool      = false,
+    frame_ms:       f64      = 0.0,
+    last_update_ms: u32      = 0,
 };
+
 var g_state: State = .{};
 
 // Public API 
@@ -168,6 +175,7 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
         else
             false,
     };
+    g_state.frame_ms = 1000.0 / scale.cachedRefreshRate();
     focus.setFocus(win, .user_command);
     // Raise the window to the top of the stack.  The cookie is intentionally
     // discarded — XCB errors surface only via xcb_request_check, which we do
