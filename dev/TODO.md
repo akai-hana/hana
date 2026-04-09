@@ -1,11 +1,11 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-limit window dragging/resizing to follow monitor's refresh rate. 
+# *** #
+- when i'm on prompt (normal mode) and i do a bind, and then i press ESC, the prompt doesn't update by itself, it depends on other unrelated bar updates to be updated to be reverted back to title. this doesn't happen if i don't do any binds in-between the prompt's normal mode and pressing esc.
+# *** #
 
 # ### EDGE CASES ### #
-
-- when i'm on prompt (normal mode) and i do a bind (let's say workspace mod+1), i have to press "esc" two times instead of one to cancel the prompt under this normal mode, when it'd only take me one time if i didn't do this bind. when 
 
 - make it so that when doing mod+shift+f while a prompt is currently ongoing, if cursor is hovering over the bar it should kill the prompt, but if it's hovering over no window nothing happens, or a program's window it should kill that window; it should not in all cases kill the prompt no matter where the cursor is.
 
