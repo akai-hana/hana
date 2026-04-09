@@ -1,6 +1,5 @@
 //! Tiling window manager
 //! Orchestrates layout, window tracking, and geometry/border cache. Delegates pixel arithmetic to the per-layout modules.
-//TODO: maybe pixel arithmetic could be centralized within tiling.zig?
 
 const std   = @import("std");
 const build = @import("build_options");
@@ -941,17 +940,20 @@ fn retile(screen: utils.Rect, for_ws: ?u8) void {
 
     const ctx = makeLayoutCtx(s);
 
+    // Hoist getState() once — used by resolve* and selectLayout below.
+    const wss = workspaces.getState();
+
     const saved_width = s.master_width;
     const saved_count = s.master_count;
     if (for_ws != null) {
-        s.master_width = resolveMasterWidth(s, workspaces.getState(), target_ws);
-        s.master_count = resolveMasterCount(s, workspaces.getState(), target_ws);
+        s.master_width = resolveMasterWidth(s, wss, target_ws);
+        s.master_count = resolveMasterCount(s, wss, target_ws);
     }
     defer s.master_width = saved_width;
     defer s.master_count = saved_count;
 
     invokeLayout(
-        selectLayout(s, workspaces.getState(), target_ws, core.config.tiling.global_layout),
+        selectLayout(s, wss, target_ws, core.config.tiling.global_layout),
         &ctx, s, ws_windows, screen,
     );
 

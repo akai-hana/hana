@@ -157,12 +157,12 @@ pub const CacheMap = struct {
 
     /// Returns a copy of the cached WindowData for `win`, or null if absent.
     pub fn get(self: *const CacheMap, win: u32) ?WindowData {
-        for (self.buf[0..self.len]) |e| if (e.win == win) return e.data;
+        for (self.buf[0..self.len]) |*e| if (e.win == win) return e.data;
         return null;
     }
 
     pub fn getPtr(self: *CacheMap, win: u32) ?*WindowData {
-        return if (self.findEntry(win)) |e| &e.data else null;
+        return if (findEntry(self, win)) |e| &e.data else null;
     }
 
     /// Swap-and-decrement removal: O(1), order-independent.
@@ -175,11 +175,8 @@ pub const CacheMap = struct {
         }
     }
 
-    /// Reset the cache to empty. The backing buffer is left untouched;
-    /// only the fill counter is zeroed. O(1).
-    pub fn clearRetainingCapacity(self: *CacheMap) void {
-        self.len = 0;
-    }
+    /// Reset the cache to empty: single counter write, O(1).
+    pub fn clearRetainingCapacity(self: *CacheMap) void { self.len = 0; }
 
     fn findEntry(self: *CacheMap, win: u32) ?*Entry {
         for (self.buf[0..self.len]) |*e| if (e.win == win) return e;

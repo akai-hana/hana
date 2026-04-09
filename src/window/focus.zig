@@ -502,16 +502,13 @@ pub fn setFocus(win: u32, reason: Reason) void {
 /// Safe to call when no confirm is pending (returns immediately).
 pub fn drainPendingConfirm() void {
     const cookie = state.confirm_cookie orelse return;
-    const win_opt = state.confirm_win;
+    const win    = state.confirm_win.?;  // invariant: always set/cleared together with confirm_cookie
     state.confirm_cookie = null;
     state.confirm_win    = null;
 
     // Reply must be consumed before any return to drain the XCB queue.
     const focus_reply = xcb.xcb_get_input_focus_reply(core.conn, cookie, null);
     defer if (focus_reply) |r| std.c.free(r);
-
-    std.debug.assert(win_opt != null);
-    const win = win_opt orelse return;
 
     if (!window.isValidManagedWindow(win)) return;
 

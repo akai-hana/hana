@@ -1,5 +1,4 @@
-//! Hana's main loop.
-//! Entry point and orchestrator of all hana's module sub-systems //TODO: can this line description be improved?
+//! Hana's main loop — entry point and orchestrator of all subsystems.
 
 const std   = @import("std");
 const build = @import("build_options");
@@ -147,5 +146,4 @@ fn initGlobalState(conn: *xcb.xcb_connection_t) !void {
 }
 
 /// Tears down global WM state initialized by initGlobalState.
-fn deinitGlobalState() void {
-}
+fn deinitGlobalState() void {}

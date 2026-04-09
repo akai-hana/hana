@@ -1,5 +1,5 @@
 //! Window lifecycle
-//! Handles window mapping operations Map/unmap/destroy, configure, enter/button events, and per-window property caching.%
+//! Handles window mapping/unmapping/destroy, configure, enter/button events, and per-window property caching.
 
 const std   = @import("std");
 const build = @import("build_options");
@@ -463,9 +463,8 @@ pub fn supportsWMDeleteCached(conn: *xcb.xcb_connection_t, win: u32) bool {
 ///   which is imperceptible at human interaction speed and is pipelined on the
 ///   same Unix-domain socket as xcb_set_input_focus.
 pub fn sendWMTakeFocus(conn: *xcb.xcb_connection_t, win: u32, time: u32) void {
-    const protocols_atom  = utils.getAtomCached("WM_PROTOCOLS")    catch return;
-    const take_focus_atom = utils.getAtomCached("WM_TAKE_FOCUS")   catch return;
-    const wm_delete_atom  = utils.getAtomCached("WM_DELETE_WINDOW") catch return;
+    const protocols_atom  = utils.getAtomCached("WM_PROTOCOLS")  catch return;
+    const take_focus_atom = utils.getAtomCached("WM_TAKE_FOCUS") catch return;
 
     // Live WM_PROTOCOLS scan — same logic as DWM's sendevent.
     const proto_reply = xcb.xcb_get_property_reply(conn,
@@ -475,12 +474,14 @@ pub fn sendWMTakeFocus(conn: *xcb.xcb_connection_t, win: u32, time: u32) void {
     defer std.c.free(proto_reply);
     if (proto_reply.*.format != 32 or proto_reply.*.value_len == 0) return;
     const proto_list: [*]const u32 = @ptrCast(@alignCast(xcb.xcb_get_property_value(proto_reply)));
-    const props = scanProtocolAtoms(
-        proto_list[0..@intCast(proto_reply.*.value_len)],
-        take_focus_atom,
-        wm_delete_atom,
-    );
-    if (!props.take_focus) return;
+    const len: usize = @intCast(proto_reply.*.value_len);
+
+    // Only take_focus matters here — skip building the full WMProtocolsProps.
+    var has_take_focus = false;
+    for (proto_list[0..len]) |atom| {
+        if (atom == take_focus_atom) { has_take_focus = true; break; }
+    }
+    if (!has_take_focus) return;
 
     var event = std.mem.zeroes(xcb.xcb_client_message_event_t);
     event.response_type  = xcb.XCB_CLIENT_MESSAGE;
