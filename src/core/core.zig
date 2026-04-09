@@ -6,8 +6,7 @@ const std = @import("std");
 const constants = @import("constants");
 
 // On every @cImport, C code has to be translated to Zig on every compilation.
-// That's why importing xcb here, and then making other files import it
-// through this file is a tiny bit more efficient.
+// Importing xcb here, and then making other files import it through this file is a tiny bit more efficient.
 pub const xcb = @cImport(@cInclude("xcb/xcb.h"));
 
 

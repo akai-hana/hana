@@ -1,5 +1,5 @@
-//! Window lifecycle — map/unmap/destroy, configure, enter/button events,
-//! and per-window property caching.
+//! Window lifecycle
+//! Handles window mapping operations Map/unmap/destroy, configure, enter/button events, and per-window property caching.%
 
 const std   = @import("std");
 const build = @import("build_options");
@@ -23,7 +23,9 @@ const workspaces = if (build.has_workspaces) @import("workspaces") else struct {
 };
 
 const tiling  = if (build.has_tiling) @import("tiling") else struct {};
-const layouts = @import("layouts");
+const layouts = if (build.has_tiling) @import("layouts") else struct {
+    pub const CacheMap = struct {};
+};
 
 const drag = @import("drag");
 
