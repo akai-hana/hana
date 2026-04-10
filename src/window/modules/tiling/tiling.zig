@@ -1,3 +1,4 @@
+
 //! Tiling window manager
 //! Orchestrates layout, window tracking, and geometry/border cache. Delegates pixel arithmetic to the per-layout modules.
 
@@ -667,19 +668,22 @@ pub inline fn decreaseMasterWidth() void { adjustMasterWidth(-0.025); }
 /// Swap the focused window into the master slot (index 0 of the current
 /// workspace window list). If it is already the master, promotes the next
 /// workspace window.
+///
+/// NOTE: Does NOT call retileCurrentWorkspace(). The caller (action handler)
+/// is responsible for retiling inside the server grab so that the list
+/// reorder and the geometry flush are part of the same atomic batch.
 pub fn swapWithMaster() void {
     const s = getState();
     _ = swapWithMasterCore(s, findFocusMasterPos(s) orelse return);
-    retileCurrentWorkspace();
 }
 
-/// Like `swapWithMaster`, but focus transfers to the displaced window rather
-/// than staying on the window that was moved.
-pub fn swapWithMasterFollowFocus() void {
+/// Like `swapWithMaster`, but returns the displaced window so the caller can
+/// transfer focus to it after retiling, still inside the server grab.
+///
+/// NOTE: Does NOT call retileCurrentWorkspace(). See swapWithMaster().
+pub fn swapWithMasterFollowFocus() ?u32 {
     const s = getState();
-    const other = swapWithMasterCore(s, findFocusMasterPos(s) orelse return);
-    retileCurrentWorkspace();
-    if (other) |win| focus.setFocus(win, .tiling_operation);
+    return swapWithMasterCore(s, findFocusMasterPos(s) orelse return null);
 }
 
 /// Swap the on-screen positions of the currently focused window and the most

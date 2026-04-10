@@ -1,3 +1,4 @@
+
 //! User input handling
 //! Handles keyboard, mouse buttons, pointer motion, and drag operations.
 
@@ -290,11 +291,25 @@ fn executeAction(action: *const types.Action) !void {
 
         .swap_master, .swap_master_focus_swap => if (comptime build.has_tiling) {
             _ = xcb.xcb_grab_server(core.conn);
-            if (action.* == .swap_master)
-                tiling.swapWithMaster()
-            else
-                tiling.swapWithMasterFollowFocus();
-            focus.syncPointerFocusNow();
+            if (action.* == .swap_master) {
+                // Reorder list, then retile — both happen before any flush so
+                // the geometry change and the visual update are a single atomic
+                // batch from the compositor's perspective.
+                tiling.swapWithMaster();
+                tiling.retileCurrentWorkspace();
+            } else {
+                // For follow-focus: reorder, retile, then set focus — all
+                // inside the grab so the focus border change is part of the
+                // same flush as the geometry change.
+                const displaced = tiling.swapWithMasterFollowFocus();
+                tiling.retileCurrentWorkspace();
+                if (displaced) |win| focus.setFocus(win, .tiling_operation);
+            }
+            // Use the async pointer-sync variant: it queues the xcb_query_pointer
+            // cookie without blocking, so no premature XCB buffer flush occurs
+            // inside the grab.  drainPointerSync() in the event loop will
+            // consume the reply and route focus on the next iteration.
+            focus.beginPointerSync();
             window.updateWorkspaceBorders();
             window.markBordersFlushed();
             bar.redrawInsideGrab();
