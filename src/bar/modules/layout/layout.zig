@@ -1,5 +1,5 @@
 //! Layout icon segment — shows the current tiling layout symbol.
-//! For the variants indicator see variantss.zig.
+//! For the variants indicator see variants.zig.
 
 const core    = @import("core");
 const types   = @import("types");
