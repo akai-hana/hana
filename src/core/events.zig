@@ -1,3 +1,4 @@
+
 //! X event dispatch, signal handling, config reload, and the main event loop.
 
 const std   = @import("std");
@@ -237,6 +238,11 @@ fn handleConfigReload() !void {
     core.config = new_config;
     old_config.deinit(core.alloc);
 
+    // Rebuild the workspace-rule fast-lookup map now that core.config points
+    // at the new config.  Must happen AFTER the swap so the borrowed key slices
+    // in g_rules_map point into the new config's allocations, not the freed old ones.
+    window.rebuildRulesMap();
+
     debug.info("Reload complete", .{});
 }
 
@@ -249,7 +255,9 @@ fn validateConfig(cfg: *const @import("types").Config) !void {
 }
 
 /// Applies a validated config: resolves keybindings, swaps globals, re-grabs keys,
-/// and notifies all subsystems of the change.
+/// and notifies all subsystems of the change.  window.rebuildRulesMap() is called
+/// by the caller (handleConfigReload) after core.config is swapped, not here,
+/// because the map borrows key slices from the live config allocation.
 fn applyConfig(new_config: *@import("types").Config) !void {
     config.resolveKeybindings(new_config.keybindings.items, input.getXkbState(), core.alloc);
     config.finalizeConfig(new_config, core.screen);
