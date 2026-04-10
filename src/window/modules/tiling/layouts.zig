@@ -245,6 +245,56 @@ pub fn configureWithHints(
         xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
 }
 
+/// Like configureWithHints, but also raises the window atomically.
+/// Combines XCB_CONFIG_WINDOW_{X,Y,WIDTH,HEIGHT} with XCB_CONFIG_WINDOW_STACK_MODE
+/// in a single request when geometry changes, so the compositor never sees an
+/// intermediate frame between the reposition/resize and the raise.
+pub fn configureWithHintsAndRaise(
+    ctx: *const LayoutCtx,
+    win: u32,
+    rect: utils.Rect,
+) void {
+    const gop = ctx.cache.getOrPut(win);
+    const effective = applyHintsToRect(rect, gop.value_ptr.hints);
+
+    if (!effective.isValid()) {
+        debug.err("Invalid rect for window 0x{x}: {}x{} at {},{}",
+            .{ win, effective.width, effective.height, effective.x, effective.y });
+        // Still raise even if geometry is invalid.
+        _ = xcb.xcb_configure_window(ctx.conn, win,
+            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+        return;
+    }
+
+    const is_rect_changed = !gop.found_existing or !rectsEqual(gop.value_ptr.rect, effective);
+    if (is_rect_changed) {
+        gop.value_ptr.rect = effective;
+        // Combine geometry + raise into one request — one ConfigureNotify to the compositor.
+        _ = xcb.xcb_configure_window(ctx.conn, win,
+            xcb.XCB_CONFIG_WINDOW_X     | xcb.XCB_CONFIG_WINDOW_Y     |
+            xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
+            xcb.XCB_CONFIG_WINDOW_STACK_MODE,
+            &[_]u32{
+                @bitCast(@as(i32, effective.x)),
+                @bitCast(@as(i32, effective.y)),
+                effective.width,
+                effective.height,
+                xcb.XCB_STACK_MODE_ABOVE,
+            });
+    } else {
+        // Geometry unchanged (cache hit) — only raise; no intermediate state possible.
+        _ = xcb.xcb_configure_window(ctx.conn, win,
+            xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+    }
+
+    const getBorderColor = ctx.get_border_color orelse return;
+    const color = getBorderColor(win);
+    if (gop.found_existing and gop.value_ptr.border == color) return;
+    gop.value_ptr.border = color;
+    _ = xcb.xcb_change_window_attributes(ctx.conn, win,
+        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
+}
+
 // Private helpers
 
 /// Apply all ICCCM §4.1.2.3 hint passes in order to a raw rect.
