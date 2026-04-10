@@ -586,6 +586,7 @@ const State = struct {
 
 // Bar thread 
 
+/// Entry point for the bar render thread. Runs until a .quit work item is received.
 fn runBarThread(s: *State) void {
     var next_carousel_ns: u64 = 0;
 
@@ -655,6 +656,7 @@ inline fn spawnBarThread(s: *State) void {
     };
 }
 
+/// Signals the bar thread to quit and waits for it to exit.
 fn joinBarThread() void {
     gBar.channel.mutex.lock();
     gBar.channel.work = .{ .kind = .quit };
@@ -682,6 +684,8 @@ fn hasMinimizedSetChanged(
 /// `forced` must be read from `gBar.channel.pending_force_full_redraw` (and
 /// that flag cleared) by the caller before invoking this function, so that
 /// `captureStateIntoSlot` has no dependency on global channel state.
+/// Captures main-thread WM state into `snap`, diffing against `prev` to set dirty flags.
+/// `forced` overrides dirty checks and requests a full redraw.
 fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot, forced: bool) !void {
     const allocator = s.render.allocator;
     snap.minimized_windows.clearRetainingCapacity();

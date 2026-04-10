@@ -296,6 +296,8 @@ fn drawSingleWindow(
 
 // Private — split-view segmented titles
 
+/// Renders one title segment per window in a horizontal split-view layout.
+/// Windows are sorted spatially so each segment position is stable across focus changes.
 fn drawSegmentedTitles(
     ctx:               TitleRenderContext,
     snapshot:          TitleSnapshot,

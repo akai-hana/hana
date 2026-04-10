@@ -175,6 +175,8 @@ fn handleSignalPipe(fd: std.posix.fd_t) void {
 
 // Keybindings
 
+/// Ungrabs all keys, then re-grabs every configured keybinding across all LOCK_MODIFIERS combinations.
+/// Fires all xcb_grab_key cookies before reading any reply to reduce round-trips.
 pub fn grabKeybindings() !void {
     _ = xcb.xcb_ungrab_key(core.conn, xcb.XCB_GRAB_ANY, core.root, xcb.XCB_MOD_MASK_ANY);
     const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };
@@ -211,6 +213,7 @@ pub fn grabKeybindings() !void {
 
 // Config reload
 
+/// Triggers a config reload if one has been requested via the signal pipe. No-op otherwise.
 inline fn maybeReload() void {
     if (utils.consumeReload())
         handleConfigReload() catch |err| debug.err("Reload failed: {}", .{err});
@@ -220,25 +223,20 @@ inline fn maybeReload() void {
 /// On failure, the old config remains active.
 fn handleConfigReload() !void {
     debug.info("Reload requested", .{});
-    
-    // Load new config
+
     var new_config = config.loadConfigDefault(core.alloc) catch |err| {
         debug.err("Failed to load: {}, keeping old", .{err});
         return err;
     };
     errdefer new_config.deinit(core.alloc);
-    
-    // Validate
+
     try validateConfig(&new_config);
-    
-    // Apply atomically
     try applyConfig(&new_config);
-    
-    // Clean up old config
+
     var old_config = core.config;
     core.config = new_config;
     old_config.deinit(core.alloc);
-    
+
     debug.info("Reload complete", .{});
 }
 

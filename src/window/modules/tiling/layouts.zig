@@ -161,6 +161,7 @@ pub const CacheMap = struct {
         return null;
     }
 
+    /// Returns a mutable pointer to the cached WindowData for `win`, or null if absent.
     pub fn getPtr(self: *CacheMap, win: u32) ?*WindowData {
         return if (findEntry(self, win)) |e| &e.data else null;
     }
@@ -296,6 +297,7 @@ inline fn snapDimToIncrement(dim: u16, base: u16, inc: u16) u16 {
     return base + (excess / inc) * inc;
 }
 
+/// Returns true when all hint fields are zero, indicating the client published no constraints.
 inline fn isEmptySizeHints(h: SizeHints) bool {
     return h.min_width == 0 and h.min_height == 0 and
            h.max_width == 0 and h.max_height == 0 and

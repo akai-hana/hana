@@ -48,10 +48,12 @@ pub const Rect = struct {
     width:  u16,
     height: u16,
 
+    /// Constructs a Rect from an XCB geometry reply.
     pub inline fn fromXcb(geom: *const xcb.xcb_get_geometry_reply_t) Rect {
         return .{ .x = geom.x, .y = geom.y, .width = geom.width, .height = geom.height };
     }
 
+    /// Returns true when both dimensions meet the minimum window size requirement.
     pub inline fn isValid(self: Rect) bool {
         return self.width >= constants.MIN_WINDOW_DIM and self.height >= constants.MIN_WINDOW_DIM;
     }

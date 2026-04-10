@@ -150,6 +150,8 @@ var g_state: State = .{};
 
 // Public API 
 
+/// Begins a move (button 1) or resize (button 3) drag on `win` at pointer position (x, y).
+/// No-op when a drag is already active, or for bar/fullscreen windows.
 pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
     if (g_state.drag.active) return;
     if (bar.isBarWindow(win)) return;
@@ -219,6 +221,8 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
     _ = xcb.xcb_flush(core.conn);
 }
 
+/// Applies pointer motion to the active drag, updating window position or size.
+/// No-op when no drag is active.
 pub fn updateDrag(x: i16, y: i16) void {
     if (!g_state.drag.active) return;
     const drag = &g_state.drag;
@@ -345,6 +349,7 @@ pub fn updateDrag(x: i16, y: i16) void {
     _ = xcb.xcb_flush(core.conn);
 }
 
+/// Ends the active drag and resets all drag state.
 pub fn stopDrag() void {
     // No flush needed: the last updateDrag call already flushed all pending
     // geometry changes before this function is reached.

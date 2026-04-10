@@ -1,9 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-> tsunde (02:14 am)
-> yes please, continue, and when you finish, present all files you've edited throughout this whole conversation, as i cannot see them anywhere on the artifacts section.
-
+# *** #
+- whenever i spawn or close windows, the window manager acts really slowly. i don't know whether this is a problem of the window spawning/killing process, or of the window tiling. can you please analyze the entire logic flow that the window manager follows from the user doing the program bind to its window being accomodated in the screen and displayed? then, analyze each part of the code that is involved on this logic flow, analyzing the performance and efficiency of the way the code is written, and trying to find any possible ways this code could be optimized so that the main issue at hand is solved or mitigated.
 # *** #
 - when i'm on prompt (normal mode) and i do a bind, and then i press ESC, the prompt doesn't update by itself, it depends on other unrelated bar updates to be updated to be reverted back to title. this doesn't happen if i don't do any binds in-between the prompt's normal mode and pressing esc.
 # *** #
@@ -16,6 +15,8 @@
 
 + decouple prompt.zig from vim.zig
   - the issue at hand is that prompt.zig is very tightly coupled with vim.zig, so that if i wanted to make vim.zig an optional module on my window manager, in prompt.zig i should either create tons of empty stubs guarded against build.zig's comprobation of whether vim.zig is present in the codebase or not, or to guard every vim.zig call within the code as comptime (e.g. "if (comptime build.has_vim)"). the former leads to hard-coding lots of functions, making the window manager more rigid and tedious to modify, while the latter bloats and muddies the code. because of this, i'd like to re-code vim.zig in a way so that, for example, there is, for example, only one master function in charge of processing keys, and then the guard is at prompt.zig's highest possible level, so that i only end up needing one comptime guard at the entire vim modekey routing function within prompt.zig. can you please evaluate whether this proposal is both possible and viable? 
+- make windows.zig be able to exist without tiling
+- make tiling unconditional between tiling.zig and layout.zig
 
 # ### MISC ### #
 
