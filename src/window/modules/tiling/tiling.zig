@@ -123,7 +123,8 @@ pub const State = struct {
     last_retile_area: utils.Rect,
 
     /// Per-window cache storing last geometry AND last border color in a single
-    /// flat array. Populated by configureWithHints (rect) and applyBorderColor (border).
+    /// open-addressing hash table. Populated by configureWithHints (rect) and
+    /// applyBorderColor (border). O(1) lookup per window per retile.
     cache: layouts.CacheMap,
 
     // Scratch buffers — fixed-size arrays embedded in State (BSS, zero allocation).
@@ -264,8 +265,20 @@ pub fn addWindow(window_id: u32) void {
     const border_color = s.borderColor(window_id);
     _ = xcb.xcb_change_window_attributes(core.conn, window_id,
         xcb.XCB_CW_BORDER_PIXEL, &[_]u32{border_color});
-    _ = xcb.xcb_configure_window(core.conn, window_id,
-        xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{s.border_width});
+
+    // NOTE: BORDER_WIDTH is intentionally NOT sent here.
+    //
+    // Every code path that calls addWindow is immediately followed by a call
+    // that owns the BORDER_WIDTH send:
+    //   • mapWindowToScreen      → applyBorderWidth(win)   (on-screen spawn)
+    //   • registerWindowOffscreen → applyBorder(win)        (off-screen spawn)
+    //   • toggleWindowFloat       (float→tiled)             border width already
+    //   • addWindowAtFilteredIndex (unminimize)              set at initial map
+    //
+    // The X server retains BORDER_WIDTH between configure_window calls, so the
+    // value from the initial map remains correct for toggle and unminimize paths.
+    // Sending it here duplicated the request from applyBorderWidth in the common
+    // spawn path, costing one extra XCB round-trip per window open.
 
     // Pre-populate the cache so the immediately-following retile does not
     // re-send the border pixel. getOrPut is infallible on the flat-array cache.
@@ -1027,6 +1040,28 @@ fn applyBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u32
 
 inline fn updateBorders(s: *State, ws_windows: []const u32) void {
     for (ws_windows) |win| applyBorderColor(s, core.conn, win, s.borderColor(win));
+}
+
+/// Public dedup helper for window.zig's border-sweep functions.
+///
+/// Checks the tiling geometry cache for `win` and sends
+/// `xcb_change_window_attributes BORDER_PIXEL` only when `color` differs from
+/// the stored value.  Returns true when the window was found in the cache
+/// (caller should `continue` and not send again).  Returns false when the
+/// window has no cache entry (pure floating window never retiled), so the
+/// caller falls back to an unconditional send.
+///
+/// This eliminates one `xcb_change_window_attributes` per tiled window per
+/// event batch when the focused window has not changed — the most common case
+/// during idle scroll, typing, or cursor movement inside a window.
+pub fn sendBorderColorIfChanged(win: u32, color: u32) bool {
+    const s = getStateOpt() orelse return false;
+    const wd = s.cache.getPtr(win) orelse return false;
+    if (wd.border == color) return true; // cached, color unchanged — skip XCB
+    wd.border = color;
+    _ = xcb.xcb_change_window_attributes(core.conn, win,
+        xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
+    return true;
 }
 
 // Window list helpers 

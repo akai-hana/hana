@@ -1,5 +1,5 @@
 //! Focus management
-//! Routes windows' focus. Reason-aware sets/clears.
+//! Routes windows' focus with reason-aware sets/clears.
 
 const std   = @import("std");
 const build = @import("build_options");
