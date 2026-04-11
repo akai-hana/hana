@@ -1,10 +1,8 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-0117: finish new findings and present all files throughout conversation
+ifm: continue, do other #9, finish
 
-# *** #
-- whenever i spawn or close windows, the window manager acts really slowly. i don't know whether this is a problem of the window spawning/killing process, or of the window tiling. can you please analyze the entire logic flow that the window manager follows from the user doing the program bind to its window being accomodated in the screen and displayed? then, analyze each part of the code that is involved on this logic flow, analyzing the performance and efficiency of the way the code is written, and trying to find any possible ways this code could be optimized so that the main issue at hand is solved or mitigated.
 # *** #
 - when i'm on prompt (normal mode) and i do a bind, and then i press ESC, the prompt doesn't update by itself, it depends on other unrelated bar updates to be updated to be reverted back to title. this doesn't happen if i don't do any binds in-between the prompt's normal mode and pressing esc.
 # *** #
