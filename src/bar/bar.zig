@@ -1,4 +1,3 @@
-
 //! Status bar
 //! Renders segments via Cairo/Pango into an XCB override-redirect window.
 
@@ -1215,7 +1214,10 @@ pub fn setBarState(action: BarAction) void {
     if (s.is_visible == show and action != .toggle) return;
     s.is_visible = show;
     if (action == .toggle) {
-        if (show) submitDrawBlockingFull();
+        if (show) {
+            s.title_cache.is_invalidated = true; // force carousel reset from pos 0 on re-show
+            submitDrawBlockingFull();
+        }
         _ = xcb.xcb_grab_server(core.conn);
         if (show) _ = xcb.xcb_map_window(core.conn, s.win.win_id)
         else      _ = xcb.xcb_unmap_window(core.conn, s.win.win_id);
@@ -1228,6 +1230,7 @@ pub fn setBarState(action: BarAction) void {
         ungrabAndFlush();
     } else {
         if (show) {
+            s.title_cache.is_invalidated = true; // force carousel reset from pos 0 on re-show
             submitDrawBlockingFull();
             _ = xcb.xcb_map_window(core.conn, s.win.win_id);
         } else {

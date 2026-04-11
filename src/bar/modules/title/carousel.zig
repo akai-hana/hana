@@ -56,9 +56,9 @@ const CarouselBase = struct {
 ///             `drawScrollingTitle` call.  A mismatch (e.g. bar resize) triggers
 ///             a rebuild with `start_ms` preserved so the animation is seamless.
 /// `last_bg` — background colour baked into the pixmap.  A mismatch triggers
-///             a rebuild with `start_ms` preserved so the accent change (e.g.
-///             minimize / unminimize) is reflected immediately without a
-///             visible animation reset.
+///             a rebuild and resets `start_ms` to now, so the scroll restarts
+///             from position 0 when the accent changes (e.g. on minimize /
+///             unminimize).
 const SingleEntry = struct {
     base:    CarouselBase,
     window:  ?u32,
@@ -70,8 +70,9 @@ const SingleEntry = struct {
 ///
 /// `window`  — always a real window ID; the seg path only activates for the
 ///             focused window in a split view.
-/// `last_bg` — same bg-change tracking as `SingleEntry`, applied when the
-///             focused segment's accent colour changes.
+/// `last_bg` — same bg-change tracking as `SingleEntry`; resets `start_ms`
+///             when the focused segment's accent colour changes, so the scroll
+///             restarts from position 0 on minimize / unminimize.
 const SegmentEntry = struct {
     base:    CarouselBase,
     window:  u32,
@@ -283,8 +284,8 @@ pub fn drawCarouselTick(
 /// Pixmap rebuild triggers (in order of precedence):
 ///   full_stale   — window ID changed, title invalidated, or no pixmap exists;
 ///                  resets `start_ms` to 0 so the animation begins from position 0.
-///   bg_changed   — accent colour changed (minimize / unminimize); preserves
-///                  `start_ms` for a seamless visual update.
+///   bg_changed   — accent colour changed (minimize / unminimize); resets
+///                  `start_ms` so the scroll restarts from position 0.
 ///   geom_changed — segment geometry changed (bar resize / DPI change); preserves
 ///                  `start_ms` so the animation continues without interruption.
 pub fn drawScrollingTitle(
@@ -323,10 +324,11 @@ pub fn drawScrollingTitle(
     );
 
     if (full_stale or bg_changed or geom_changed) {
-        // Read start_ms before freeing the old entry (full_stale may set it to
-        // utils.monotonicMs(); the other two cases preserve the running animation clock).
+        // Read start_ms before freeing the old entry.
+        // full_stale and bg_changed both restart the animation from position 0.
+        // geom_changed preserves the running clock so the resize is seamless.
         const preserved_start_ms: i64 =
-            if (full_stale) utils.monotonicMs() else render.single_carousel.?.base.start_ms;
+            if (full_stale or bg_changed) utils.monotonicMs() else render.single_carousel.?.base.start_ms;
 
         deinitSingleCarousel();
 
@@ -365,7 +367,8 @@ pub fn drawScrollingTitle(
 ///   externally_invalidated — focus changed (signalled via `notifyFocusChanged`);
 ///                            consumes `focus_signal.start_ms` so the animation
 ///                            is anchored to click time.
-///   bg_changed             — accent colour changed; preserves `start_ms`.
+///   bg_changed             — accent colour changed; resets `start_ms` so the
+///                            scroll restarts from position 0.
 ///   window ID changed      — window replaced; resets `start_ms` to `utils.monotonicMs()`.
 ///   title_invalidated      — title text changed; resets `start_ms` to `utils.monotonicMs()`.
 ///   cycle_w mismatch       — available area changed; resets `start_ms` to `utils.monotonicMs()`.
@@ -398,11 +401,12 @@ pub fn drawSegmentedCarousel(
 
     if (content_stale or bg_changed) {
         // Determine start_ms before freeing the old entry.
-        // bg_changed-only: preserve the running clock so the colour update is
-        // seamless.  content_stale: consume the focus-event timestamp when
-        // available, otherwise fall back to utils.monotonicMs().
+        // bg_changed resets to now so the scroll restarts from position 0 when
+        // the accent changes (e.g. minimize / unminimize).
+        // content_stale: consume the focus-event timestamp when available,
+        // otherwise fall back to utils.monotonicMs().
         const preserved_start_ms: i64 = if (!content_stale and bg_changed)
-            render.seg_carousel.?.base.start_ms
+            utils.monotonicMs()
         else blk: {
             const t = focus_signal.start_ms.swap(0, .acq_rel);
             break :blk if (t != 0) t else utils.monotonicMs();
@@ -522,16 +526,16 @@ fn detectRefreshRate(conn: *xcb.xcb_connection_t) f64 {
 
 // Private helpers — scroll math
 
-/// Compute the v-synced scroll offset for a carousel with the given cycle width.
+/// Compute the smooth scroll offset for a carousel with the given cycle width.
 ///
-///   frame_duration_ms = 1000.0 / hz
-///   px_per_frame      = scroll_speed / hz
-///   frame_num         = floor(elapsed_ms / frame_duration_ms)
-///   offset            = (frame_num × px_per_frame) mod cycle_w
+///   offset = (elapsed_ms * speed / 1000.0) mod cycle_w
 ///
-/// Quantising to frame boundaries aligns visual updates with v-blank and
-/// prevents partial-frame tearing when the bar redraws at an arbitrary
-/// sub-frame moment.
+/// Uses continuous time interpolation so the position advances on every call
+/// regardless of the bar's wakeup cadence.  The previous frame-quantised
+/// approach aligned updates to display v-blank boundaries (e.g. every 16.67 ms
+/// at 60 Hz), but the bar thread wakes at a different rate (e.g. 165 Hz /
+/// ~6 ms).  That mismatch produced a step-function: frozen for ~10 ms then a
+/// 2 px snap, perceived as stutter.  Continuous interpolation eliminates it.
 ///
 /// `now_ms` is passed in by the caller (computed once per function invocation
 /// via `utils.monotonicMs()`) to avoid redundant clock calls and to keep this
@@ -540,13 +544,9 @@ fn carouselOffset(start_ms: i64, cycle_w: u16, now_ms: i64) u16 {
     // cycle_w = text_w + carousel_gap_px; both are always >= 1.
     std.debug.assert(cycle_w > 0);
 
-    const hz           = effectiveRefreshRate();
-    const frame_ms     = 1000.0 / hz;
-    const px_per_frame = scroll_config.speed / hz;
-    const elapsed_ms   = @as(f64, @floatFromInt(now_ms - start_ms));
-    const frame_num    = @floor(elapsed_ms / frame_ms);
-    const raw_px       = frame_num * px_per_frame;
-    const cycle_f      = @as(f64, @floatFromInt(cycle_w));
+    const elapsed_ms = @as(f64, @floatFromInt(@max(0, now_ms - start_ms)));
+    const raw_px     = elapsed_ms * scroll_config.speed / 1000.0;
+    const cycle_f    = @as(f64, @floatFromInt(cycle_w));
 
     // @mod guarantees 0 <= result < cycle_f, so the cast to u16 is always safe.
     return @intFromFloat(@mod(raw_px, cycle_f));
