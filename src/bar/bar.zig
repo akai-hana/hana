@@ -566,14 +566,15 @@ const State = struct {
         self.title_cache.focused_window = new_focused;
 
         // Fast path: carousel.drawCarouselTick handles its own flush and returns true on success.
-        // Use minimised accent when the sole workspace window is minimised.
+        // Passes the current accent so the carousel can detect a bg change (minimize/unminimize)
+        // and return false, letting the full draw path rebuild the pixmap.
         if (carousel.isCarouselActive()) {
             const accent: u32 = if (self.title_cache.workspace_windows.items.len == 1 and
                 self.title_cache.minimized_windows.contains(self.title_cache.workspace_windows.items[0]))
                 self.render.config.title_minimized_accent
             else
                 self.render.config.title_accent_color;
-            if (carousel.drawCarouselTick(self.render.dc, accent, self.render.height,
+            if (carousel.drawCarouselTick(self.render.dc, accent,
                     self.title_cache.title_x, self.title_cache.title_width)) return;
         }
 
