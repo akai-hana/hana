@@ -197,6 +197,15 @@ pub const LayoutCtx = struct {
     /// do not have focus/border information (e.g. direct utils.configureWindow
     /// calls in restoreWorkspaceGeom).
     get_border_color: ?*const fn (win: u32) u32 = null,
+    /// When non-null, layout modules should emit this window's configure_window
+    /// call LAST within each column or stack group it belongs to.
+    ///
+    /// Used by swap_master to avoid a one-frame wallpaper gap: after swapping
+    /// the focused window into the master slot the growing window (new master)
+    /// must not vacate its old stack slot until the shrinking window (old master)
+    /// has already been configured into that slot.  Setting defer_configure to
+    /// the new master achieves this ordering without changing geometry arithmetic.
+    defer_configure: ?u32 = null,
 };
 
 /// Returns true when both rects have identical coordinates and dimensions.

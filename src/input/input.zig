@@ -1,4 +1,3 @@
-
 //! User input handling
 //! Handles keyboard, mouse buttons, pointer motion, and drag operations.
 
@@ -292,17 +291,23 @@ fn executeAction(action: *const types.Action) !void {
         .swap_master, .swap_master_focus_swap => if (comptime build.has_tiling) {
             _ = xcb.xcb_grab_server(core.conn);
             if (action.* == .swap_master) {
-                // Reorder list, then retile — both happen before any flush so
-                // the geometry change and the visual update are a single atomic
-                // batch from the compositor's perspective.
+                // Capture the focused window ID *before* the swap so we can
+                // pass it as defer_configure.  After swapWithMaster() the
+                // focused window is the new master (the growing window); by
+                // deferring its configure_window call to last inside every
+                // column/stack, the shrinking window (old master) fills its new
+                // stack slot before the growing window vacates its old one —
+                // eliminating the one-frame wallpaper gap (Fix 3).
+                const new_master = focus.getFocused();
                 tiling.swapWithMaster();
-                tiling.retileCurrentWorkspace();
+                tiling.retileCurrentWorkspaceDeferred(new_master);
             } else {
-                // For follow-focus: reorder, retile, then set focus — all
-                // inside the grab so the focus border change is part of the
-                // same flush as the geometry change.
+                // For follow-focus: capture focused window, reorder, retile
+                // with deferred configure, then transfer focus — all inside
+                // the grab so the focus border change is part of the same flush.
+                const new_master = focus.getFocused();
                 const displaced = tiling.swapWithMasterFollowFocus();
-                tiling.retileCurrentWorkspace();
+                tiling.retileCurrentWorkspaceDeferred(new_master);
                 if (displaced) |win| focus.setFocus(win, .tiling_operation);
             }
             // Use the async pointer-sync variant: it queues the xcb_query_pointer
@@ -312,6 +317,10 @@ fn executeAction(action: *const types.Action) !void {
             focus.beginPointerSync();
             window.updateWorkspaceBorders();
             window.markBordersFlushed();
+            // redrawInsideGrab now renders to the off-screen pixmap via the bar
+            // thread (no xcb_flush) and queues xcb_copy_area without flushing.
+            // The blit is sent atomically with configure_window + xcb_ungrab_server
+            // by ungrabAndFlush() below — one compositor frame, no wallpaper flash.
             bar.redrawInsideGrab();
             utils.ungrabAndFlush(core.conn);
         },

@@ -1,4 +1,3 @@
-
 //! Tiling window manager
 //! Orchestrates layout, window tracking, and geometry/border cache. Delegates pixel arithmetic to the per-layout modules.
 
@@ -384,6 +383,21 @@ pub fn retileCurrentWorkspace() void {
         return;
     }
     retile(calcScreenArea(), null);
+    s.is_dirty = false;
+}
+
+/// Like retileCurrentWorkspace, but passes `defer_win` through to the layout
+/// context so that window is configured LAST inside every column/stack it
+/// appears in.  Used by swap_master to ensure the shrinking window (old master
+/// moving into the stack) fills its new slot before the growing window (new
+/// master) vacates its old one — eliminating the one-frame wallpaper gap.
+pub fn retileCurrentWorkspaceDeferred(defer_win: ?u32) void {
+    const s = getState();
+    if (!s.is_enabled) {
+        _ = restoreWorkspaceGeom();
+        return;
+    }
+    retileDeferred(calcScreenArea(), null, defer_win);
     s.is_dirty = false;
 }
 
@@ -878,6 +892,19 @@ inline fn makeLayoutCtx(s: *State) layouts.LayoutCtx {
         .conn             = core.conn,
         .cache            = &s.cache,
         .get_border_color = getBorderColorForWindow,
+        .defer_configure  = null,
+    };
+}
+
+/// Like makeLayoutCtx but sets defer_configure so the named window is emitted
+/// last in every column/stack, preventing it from vacating its slot before the
+/// shrinking window has filled the adjacent slot.
+inline fn makeLayoutCtxDeferred(s: *State, defer_win: ?u32) layouts.LayoutCtx {
+    return .{
+        .conn             = core.conn,
+        .cache            = &s.cache,
+        .get_border_color = getBorderColorForWindow,
+        .defer_configure  = defer_win,
     };
 }
 
@@ -946,6 +973,12 @@ inline fn resolveMasterCount(s: *const State, ws_state: ?*WsState, ws_idx: u8) u
 /// Core retile. `for_ws`: when non-null, process that specific workspace instead
 /// of the current one.
 fn retile(screen: utils.Rect, for_ws: ?u8) void {
+    retileDeferred(screen, for_ws, null);
+}
+
+/// Like retile but sets LayoutCtx.defer_configure = defer_win.
+/// The named window is configured last inside every column/stack it appears in.
+fn retileDeferred(screen: utils.Rect, for_ws: ?u8, defer_win: ?u32) void {
     const s = getState();
 
     const target_ws: u8 = for_ws orelse
@@ -959,7 +992,7 @@ fn retile(screen: utils.Rect, for_ws: ?u8) void {
     const ws_windows = s.scratch_wins[0..ws_count];
     if (ws_windows.len == 0) return;
 
-    const ctx = makeLayoutCtx(s);
+    const ctx = makeLayoutCtxDeferred(s, defer_win);
 
     // Hoist getState() once — used by resolve* and selectLayout below.
     const wss = workspaces.getState();
@@ -1100,19 +1133,28 @@ fn findFocusMasterPos(s: *State) ?FocusMasterPos {
 }
 
 /// Shared core for both swap-with-master variants.
+///
+/// Uses swapWindowsInList (O(1) std.mem.swap) instead of moveWindowToIndex
+/// (O(n) remove-then-insert) so that only the two swapping windows receive new
+/// geometry during the subsequent retile.  Every other window's slot is
+/// unchanged → same rect → cache hit → no configure_window call → no
+/// intermediate frames visible to the compositor.
 fn swapWithMasterCore(s: *State, pos: FocusMasterPos) ?u32 {
     if (pos.fp == pos.mp) {
         // Focused is already master — promote the next workspace window.
+        // A swap is sufficient: brings the target to index mp, demotes the
+        // current master to that target's slot.  Stack order differs from the
+        // old rotate but the visual result is identical for single-master layouts.
         for (pos.all[pos.mp + 1..], pos.mp + 1..) |win, i| {
             if (tracking.isOnCurrentWorkspace(win)) {
-                moveWindowToIndex(s, i, pos.mp);
+                swapWindowsInList(s, pos.mp, i);
                 return win;
             }
         }
         return null;
     }
     const other = pos.all[pos.mp];
-    moveWindowToIndex(s, pos.fp, pos.mp);
+    swapWindowsInList(s, pos.fp, pos.mp);
     return other;
 }
 
