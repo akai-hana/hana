@@ -1,3 +1,4 @@
+
 //! Drawing context for hana's status bar.
 //!
 //! Rectangle fills use XCB core drawing instead of Cairo's XRender, since the
@@ -132,6 +133,13 @@ pub const DrawContext = struct {
     last_color:    ?u32 = null,
     /// Cached GC foreground — skips xcb_change_gc when the packed ARGB pixel is unchanged.
     last_gc_color: ?u32 = null,
+    /// Cached Pango layout width (in Pango units) set by drawTextEllipsis.
+    /// Avoids pango_layout_set_width/set_ellipsize calls — which invalidate
+    /// Pango's internal shaping cache — when the same width is reused across
+    /// consecutive ellipsis draws (e.g. a stable window title in a narrow cell).
+    /// Reset to -1 after each ellipsis draw so the cache is invalidated on the
+    /// next frame (the layout is reset to defaults between draws).
+    last_ellipsis_width: i32 = -1,
 
     // NOTE: pango_layout_get_baseline is intentionally NOT cached. The baseline
     // can vary per text run when font fallback is active (e.g. a CJK glyph
@@ -382,13 +390,16 @@ pub const DrawContext = struct {
     ) !void {
         self.setPangoText(text);
 
-        // Pango re-invalidates its internal layout shaping on every set_width /
-        // set_ellipsize call even when the value is unchanged. These four calls
-        // are unconditional because the layout is always reset to defaults after
-        // each draw, so a cache would never find a matching value on entry anyway.
+        // Only call pango_layout_set_width / set_ellipsize when the width has
+        // changed since the last draw.  Both calls invalidate Pango's internal
+        // shaping cache unconditionally — even when the value is unchanged — so
+        // skipping them when max_width is stable across frames avoids reshaping.
         const pango_width: i32 = @as(i32, max_width) * c.PANGO_SCALE;
-        c.pango_layout_set_width(self.font.pango_layout, pango_width);
-        c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.END);
+        if (pango_width != self.last_ellipsis_width) {
+            c.pango_layout_set_width(self.font.pango_layout, pango_width);
+            c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.END);
+            self.last_ellipsis_width = pango_width;
+        }
 
         self.setColor(color);
         self.moveToTextBaseline(x, y);
@@ -396,6 +407,7 @@ pub const DrawContext = struct {
 
         c.pango_layout_set_width(self.font.pango_layout, -1);
         c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.NONE);
+        self.last_ellipsis_width = -1; // invalidate cache: layout is back to defaults
     }
 
     /// Measure how many pixels wide `text` would render with the current font.
