@@ -3,10 +3,6 @@
 
 # *** #
 
-# ### EDGE CASES ### #
-
-- make it so that when doing mod+shift+f while a prompt is currently ongoing, if cursor is hovering over the bar it should kill the prompt, but if it's hovering over no window nothing happens, or a program's window it should kill that window; it should not in all cases kill the prompt no matter where the cursor is.
-
 # ### HIGH-LEVEL CHANGES ### #
 
 + decouple prompt.zig from vim.zig
