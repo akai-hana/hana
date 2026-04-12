@@ -1,7 +1,7 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-ifm: continue, do other #9, finish
+89sk [yes]: continue 
 
 # *** #
 - when i'm on prompt (normal mode) and i do a bind, and then i press ESC, the prompt doesn't update by itself, it depends on other unrelated bar updates to be updated to be reverted back to title. this doesn't happen if i don't do any binds in-between the prompt's normal mode and pressing esc.
