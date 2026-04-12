@@ -243,6 +243,21 @@ pub fn drawSegCarouselTick(
     return true;
 }
 
+/// Parameterless segmented carousel tick for use from the bar's drawTitleOnly path.
+///
+/// Reads seg_x, seg_w, and last_bg directly from the live render.seg entry so
+/// the caller does not need to cache or re-derive the focused segment's bounds.
+/// Returns false when no segmented carousel is live or the accent colour changed
+/// (indicating a minimize/unminimize that requires a full rebuild).
+pub fn drawSegCarouselTickAuto(dc: *drawing.DrawContext, accent: u32) bool {
+    const e = render.seg orelse return false;
+    if (accent != e.last_bg) return false;
+    const off = carouselOffset(e.start_ms, e.cycle_w, utils.monotonicMs());
+    e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, e.geom.seg_x, off, e.geom.seg_w);
+    dc.flushRect(e.geom.seg_x, e.geom.seg_w);
+    return true;
+}
+
 // ── Public API — single-window title rendering ───────────────────────────────
 
 /// Render `text` into the segment described by `geom`.

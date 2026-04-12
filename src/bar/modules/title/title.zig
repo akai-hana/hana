@@ -343,11 +343,10 @@ fn drawSegmentedTitles(
     }
 
     // Determine whether pre-fetched title data is available.
-    // When title_invalidated is true the snapshot may have been captured
-    // before the updated property was flushed; bypass the cache and let
-    // the XCB fallback re-fetch every title this frame.
-    const has_prefetched_titles = !title_invalidated and
-        snapshot.window_title_ends.len >= win_count;
+    // When window_title_ends is populated with the correct count of entries,
+    // all N title round-trips are skipped on the render thread (they were
+    // already fetched on the main thread in captureStateIntoSlot).
+    const has_prefetched_titles = snapshot.window_title_ends.len >= win_count;
 
     atoms.ensureResolved();
     const net_atom = atoms.net_wm_name;
