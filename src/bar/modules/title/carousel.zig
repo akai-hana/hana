@@ -362,7 +362,14 @@ pub fn drawSegmentedCarousel(
     window:            u32,
     title_invalidated: bool,
 ) !bool {
-    if (text_w <= geom.avail_w) return false;
+    if (text_w <= geom.avail_w) {
+        // Text fits — free any live seg-carousel pixmap so the tick fast-path
+        // (drawSegCarouselTickAuto) cannot blit stale scrolling content over
+        // the static text that the caller is about to draw.  Mirrors the
+        // deinitSingleCarousel() call in drawScrollingTitle for the same case.
+        deinitSegmentedCarousel();
+        return false;
+    }
 
     // Consume the focus-change signal atomically.
     const externally_invalidated = focus_signal.is_invalidated.swap(false, .acq_rel);
