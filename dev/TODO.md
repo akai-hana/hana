@@ -2,6 +2,8 @@
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
 # *** #
+when im resizing a window, as i go to the horizontal middle of a window and past that, i want the resizing to wrap around and make the window grow bigger to the opposite side, and same with vertical middle, make it grow/resize the opposite side. basically mirror the corner it is resizing.
+# *** #
 
 # ### EDGE CASES ### #
 

@@ -1,7 +1,5 @@
-//! Prompt bar segment
-//! In-line command runner embedded in hana's bar
-//!
-//! Borrows title's segment space to integrate seamlessly into the bar
+//! Prompt bar in-line command runner
+//! Borrows title's segment space to embed into the bar
 
 const std   = @import("std");
 const build = @import("build_options");
