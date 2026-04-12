@@ -252,6 +252,10 @@ pub fn drawSegCarouselTick(
 pub fn drawSegCarouselTickAuto(dc: *drawing.DrawContext, accent: u32) bool {
     const e = render.seg orelse return false;
     if (accent != e.last_bg) return false;
+    // If a focus change is pending, bail out so the caller falls through to
+    // drawCached → drawSegmentedTitles, which redraws ALL segments with the
+    // correct accent colours (old focused → unfocused, new focused → focused).
+    if (focus_signal.is_invalidated.load(.acquire)) return false;
     const off = carouselOffset(e.start_ms, e.cycle_w, utils.monotonicMs());
     e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, e.geom.seg_x, off, e.geom.seg_w);
     dc.flushRect(e.geom.seg_x, e.geom.seg_w);
