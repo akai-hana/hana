@@ -2,6 +2,8 @@
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
 # *** #
+- can you please hook the refresh rate logic onto this currently hard-coded constant, so that the window manager actually detects the refresh rate of the diplay and utilizes it accordingly?
+# *** #
 - solve swap_master not working
 # *** #
 
