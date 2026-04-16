@@ -81,6 +81,7 @@ const scale      = if (build.has_scale) @import("scale") else struct {
         const px: f32 = if (value.is_percentage) h * (value.value / 100.0) else value.value;
         return @max(20, @as(u16, @intFromFloat(@round(px))));
     }
+    pub fn ensureRefreshRateDetected(_: anytype) void {}
 };
 
 /// When workspaces are disabled, all workspace-segment calls are no-ops.
@@ -126,9 +127,6 @@ const defaultBarHeight:        u16 = 24;
 const fallbackWorkspacesWidth: u16 = 270;
 const layoutSegmentWidth:      u16 = 60;
 const titleSegmentMinWidth:    u16 = 100;
-
-/// Carousel frame interval — 165 Hz (1_000_000_000 / 165 ≈ 6_060_606 ns).
-const carouselWakeNs: u64 = 6_060_606;
 
 // Core data structures 
 
@@ -651,11 +649,16 @@ const State = struct {
 fn runBarThread(s: *State) void {
     var next_carousel_ns: u64 = 0;
 
-    // Advance the carousel wake deadline by one frame interval.
+    // Advance the carousel wake deadline by one frame interval, derived from
+    // the monitor's detected refresh rate (via carousel.wakeIntervalNs()).
+    // Calling wakeIntervalNs() each advance is cheap (one division) and
+    // ensures a config reload that changes carousel_refresh_rate takes effect
+    // without restarting the bar thread.
     const advanceCarouselTimer = struct {
         inline fn f(next: *u64) void {
+            const interval = carousel.wakeIntervalNs();
             const now = utils.monotonicNs();
-            next.* = if (now >= next.*) now + carouselWakeNs else next.* +% carouselWakeNs;
+            next.* = if (now >= next.*) now + interval else next.* +% interval;
         }
     }.f;
 
@@ -1052,6 +1055,11 @@ fn createDrawContext(setup: BarWindowSetup, height: u16) !*drawing.DrawContext {
 pub fn init() !void {
     std.debug.assert(core.config.bar.enabled);
     initAtoms();
+    // Detect the monitor refresh rate now, before the bar thread spawns,
+    // so carousel.wakeIntervalNs() returns the real rate from the first tick.
+    // ensureRefreshRateDetected is idempotent; if title.zig already triggered
+    // it this is a fast cache-hit return.
+    scale.ensureRefreshRateDetected(core.conn);
     const height = try calcBarHeight();
     const y_pos  = calcBarYPos(height);
     const setup  = createBarWindow(height, y_pos);
