@@ -12,54 +12,41 @@
 const std     = @import("std");
 const builtin = @import("builtin");
 
-// Configuration
-
 const source_root = "src/";
-
-/// Describes a subsystem whose presence in the build is optional.
-/// Bar *segments* (is_segment = true) additionally contribute to the
-/// `has_any_segment` flag that gates Cairo/Pango linkage.
-const OptionalSubsystem = struct {
-    name:       []const u8,
-    /// True when this subsystem renders a visual segment on the status bar.
-    is_segment: bool = false,
-};
 
 /// Add an entry here to expose a new optional subsystem, layout, or bar segment
 /// to the rest of the build system.  No other changes are required.
-const optional_subsystems = [_]OptionalSubsystem{
+const optional_subsystems = [_][]const u8{
     // core/modules/
-    .{ .name = "scale" },
-    .{ .name = "debug" },
+    "scale",
+    "debug",
 
     // window/modules/
-    .{ .name = "fullscreen" },
-    .{ .name = "minimize"   },
-    .{ .name = "workspaces" },
+    "fullscreen",
+    "minimize",
+    "workspaces",
 
     // window/modules/tiling/
-    .{ .name = "tiling"    },
-    .{ .name = "layouts"   },
-    .{ .name = "master"    },
-    .{ .name = "monocle"   },
-    .{ .name = "grid"      },
-    .{ .name = "fibonacci" },
+    "tiling",
+    "layouts",
+    "master",
+    "monocle",
+    "grid",
+    "fibonacci",
 
     // bar/
-    .{ .name = "bar" },
+    "bar",
 
     // bar/modules/
-    .{ .name = "tags",     .is_segment = true  },
-    .{ .name = "layout",   .is_segment = true  },
-    .{ .name = "variants", .is_segment = true  },
-    .{ .name = "title",    .is_segment = true  },
-    .{ .name = "prompt",   .is_segment = false },
-    .{ .name = "vim",      .is_segment = false },
-    .{ .name = "carousel", .is_segment = true  },
-    .{ .name = "clock",    .is_segment = true  },
+    "tags",
+    "layout",
+    "variants",
+    "title",
+    "prompt",
+    "vim",
+    "carousel",
+    "clock",
 };
-
-// Entry point
 
 pub fn build(b: *std.Build) void {
     requireMasterBranch();
@@ -79,20 +66,18 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "has_fallback_toml",    fallback_toml != null);
 
     // Module discovery
-    var discovered = std.StringHashMap(DiscoveredModule).init(b.allocator);
+    var discovered = std.StringHashMap(*std.Build.Module).init(b.allocator);
     Module.discoverAll(b, source_root, target, optimize, &discovered) catch |err| {
         std.debug.print("Fatal: module discovery failed: {}\n", .{err});
         std.process.exit(1);
     };
 
-    // Emit one `has_<name>` build option per optional subsystem.
-    var has_any_segment = false;
+    // Emit one `has_<n>` build option per optional subsystem.
     for (optional_subsystems) |sys| {
-        const is_present = discovered.contains(sys.name);
-        build_opts.addOption(bool, b.fmt("has_{s}", .{sys.name}), is_present);
-        if (sys.is_segment and is_present) has_any_segment = true;
+        const is_present = discovered.contains(sys);
+        build_opts.addOption(bool, b.fmt("has_{s}", .{sys}), is_present);
     }
-    build_opts.addOption(bool, "has_any_segment", has_any_segment);
+    const has_any_segment = discovered.contains("bar");
 
     // Root module
     const shared_ctx: SharedBuildContext = .{
@@ -124,16 +109,7 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_cmd.addArgs(args);
     b.step("run",   "Run hana").dependOn(&run_cmd.step);
     b.step("check", "Type-check without installing").dependOn(&exe.step);
-    _ = b.step("test", "Run unit tests");
 }
-
-// Types
-
-/// A Zig module that was found during directory traversal.
-const DiscoveredModule = struct {
-    module:      *std.Build.Module,
-    source_path: []const u8,
-};
 
 /// Shared artefacts injected into every discovered module and the root module.
 const SharedBuildContext = struct {
@@ -141,8 +117,6 @@ const SharedBuildContext = struct {
     fallback_toml: *std.Build.Module,
     optimize:      std.builtin.OptimizeMode,
 };
-
-// Helpers — fallback TOML
 
 /// Reads `config/fallback.toml` from the build root, or returns null if absent.
 /// Uses the build-lifetime arena so no explicit free is needed.
@@ -182,8 +156,6 @@ fn buildFallbackTomlModule(
     });
 }
 
-// Helpers
-
 /// Enables symbol stripping for release builds to reduce binary size.
 /// Has no effect on Debug or ReleaseSafe builds.
 fn stripIfRelease(mod: *std.Build.Module, optimize: std.builtin.OptimizeMode) void {
@@ -192,8 +164,6 @@ fn stripIfRelease(mod: *std.Build.Module, optimize: std.builtin.OptimizeMode) vo
         else => {},
     }
 }
-
-// Module namespace discovery & wiring
 
 /// Namespace that owns all logic related to module discovery and wiring.
 /// Grouped here so the entry point (`build`) stays at a high level of abstraction.
@@ -206,7 +176,7 @@ const Module = struct {
         dir_path:   []const u8,
         target:     std.Build.ResolvedTarget,
         optimize:   std.builtin.OptimizeMode,
-        out:        *std.StringHashMap(DiscoveredModule),
+        out:        *std.StringHashMap(*std.Build.Module),
     ) !void {
         var dir = try b.build_root.handle.openDir(b.graph.io, dir_path, .{ .iterate = true });
         defer dir.close(b.graph.io);
@@ -237,12 +207,12 @@ const Module = struct {
     /// compile time or binary size.
     fn wireAll(
         root: *std.Build.Module,
-        all:  *std.StringHashMap(DiscoveredModule),
+        all:  *std.StringHashMap(*std.Build.Module),
         ctx:  SharedBuildContext,
     ) void {
         var outer = all.iterator();
         while (outer.next()) |entry| {
-            const mod  = entry.value_ptr.module;
+            const mod  = entry.value_ptr.*;
             const name = entry.key_ptr.*;
 
             stripIfRelease(mod, ctx.optimize);
@@ -253,14 +223,12 @@ const Module = struct {
             var inner = all.iterator();
             while (inner.next()) |dep| {
                 if (!std.mem.eql(u8, dep.key_ptr.*, name))
-                    mod.addImport(dep.key_ptr.*, dep.value_ptr.module);
+                    mod.addImport(dep.key_ptr.*, dep.value_ptr.*);
             }
 
             root.addImport(name, mod);
         }
     }
-
-    // Private helpers
 
     fn registerModule(
         b:        *std.Build,
@@ -268,7 +236,7 @@ const Module = struct {
         filename: []const u8,
         target:   std.Build.ResolvedTarget,
         optimize: std.builtin.OptimizeMode,
-        out:      *std.StringHashMap(DiscoveredModule),
+        out:      *std.StringHashMap(*std.Build.Module),
     ) !void {
         const stem     = std.fs.path.stem(filename);
         const rel_path = try std.fs.path.join(b.allocator, &.{ dir_path, filename });
@@ -278,14 +246,11 @@ const Module = struct {
             return error.ModuleNameCollision;
         }
 
-        try out.put(try b.allocator.dupe(u8, stem), .{
-            .module = b.createModule(.{
-                .root_source_file = b.path(rel_path),
-                .target   = target,
-                .optimize = optimize,
-            }),
-            .source_path = rel_path,
-        });
+        try out.put(try b.allocator.dupe(u8, stem), b.createModule(.{
+            .root_source_file = b.path(rel_path),
+            .target   = target,
+            .optimize = optimize,
+        }));
     }
 
     /// A subsystem directory is gated out when it appears in `optional_subsystems`
@@ -293,7 +258,7 @@ const Module = struct {
     /// This lets users opt out of a feature by simply deleting its entry file.
     fn isGatedOut(b: *std.Build, parent: []const u8, dir_name: []const u8) bool {
         for (optional_subsystems) |sys| {
-            if (!std.mem.eql(u8, sys.name, dir_name)) continue;
+            if (!std.mem.eql(u8, sys, dir_name)) continue;
             const entry_path = b.pathJoin(&.{ parent, dir_name, b.fmt("{s}.zig", .{dir_name}) });
             return !pathExists(b, entry_path);
         }
@@ -318,8 +283,6 @@ const Module = struct {
     }
 };
 
-// System library linkage
-
 /// Namespace that owns system library linkage to keep `build()` clean.
 const SystemLibraries = struct {
 
@@ -333,11 +296,11 @@ const SystemLibraries = struct {
 
     fn linkXcb(root: *std.Build.Module) void {
         root.linkSystemLibrary("X11",           .{});
-        root.linkSystemLibrary("xcb",            .{});
-        root.linkSystemLibrary("xcb-cursor",     .{});
-        root.linkSystemLibrary("xcb-keysyms",    .{});
-        root.linkSystemLibrary("xkbcommon",      .{});
-        root.linkSystemLibrary("xkbcommon-x11",  .{});
+        root.linkSystemLibrary("xcb",           .{});
+        root.linkSystemLibrary("xcb-cursor",    .{});
+        root.linkSystemLibrary("xcb-keysyms",   .{});
+        root.linkSystemLibrary("xkbcommon",     .{});
+        root.linkSystemLibrary("xkbcommon-x11", .{});
     }
 
     fn linkCairoPango(root: *std.Build.Module) void {
@@ -348,8 +311,6 @@ const SystemLibraries = struct {
         root.linkSystemLibrary("gobject-2.0",    .{});
     }
 };
-
-// Compile-time guard
 
 /// Aborts compilation with a friendly message when built against a stable Zig
 /// release.  Hana uses APIs that are only available on the master branch.
