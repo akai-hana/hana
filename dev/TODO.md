@@ -2,7 +2,7 @@
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
 # *** #
-- solve swap_master not working
+- eliminate build.zig's is_segment
 # *** #
 
 # ### HIGH-LEVEL CHANGES ### #
