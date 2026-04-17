@@ -1,4 +1,3 @@
-
 //! Status bar
 //! Renders segments via Cairo/Pango into an XCB override-redirect window.
 
@@ -774,11 +773,16 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot,
         snap.current_workspace    = ws_state.current;
         snap.is_all_view_active   = ws_state.all_view_temp_wins.items.len > 0;
         try snap.workspace_has_windows.resize(allocator, snap.workspace_count);
-        for (ws_state.workspaces, 0..) |*workspace, i|
-            snap.workspace_has_windows.items[i] = workspace.windows.len > 0;
+        for (ws_state.workspaces, 0..) |_, i|
+            snap.workspace_has_windows.items[i] = tracking.hasWindowsOnWorkspace(@intCast(i));
         snap.current_workspace_windows.clearRetainingCapacity();
-        if (ws_state.current < ws_state.workspaces.len)
-            try snap.current_workspace_windows.appendSlice(allocator, ws_state.workspaces[ws_state.current].windows.items());
+        if (ws_state.current < ws_state.workspaces.len) {
+            const cur_bit = tracking.workspaceBit(ws_state.current);
+            for (tracking.allWindows()) |entry| {
+                if (entry.mask & cur_bit != 0)
+                    try snap.current_workspace_windows.append(allocator, entry.win);
+            }
+        }
     } else {
         // No workspace subsystem — treat as single workspace so workspace_count
         // differs from prev.workspace_count (0) on the first draw, ensuring
@@ -786,10 +790,8 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot,
         // are drawn.
         snap.workspace_count = 1;
         snap.current_workspace_windows.clearRetainingCapacity();
-        if (tracking.allWindowsIterator()) |it| {
-            var iter = it;
-            while (iter.next()) |wp| try snap.current_workspace_windows.append(allocator, wp.*);
-        }
+        for (tracking.allWindows()) |entry|
+            try snap.current_workspace_windows.append(allocator, entry.win);
     }
 
     snap.focused_window      = focus.getFocused();
@@ -1340,8 +1342,8 @@ fn retileAllWorkspaces() void {
     if (comptime !build.has_tiling) return;
     const ws_state = workspaces.getState() orelse return;
     if (!isTilingActive()) { tiling.retileCurrentWorkspace(); return; }
-    for (ws_state.workspaces, 0..) |*ws, idx| {
-        if (ws.windows.len == 0) continue;
+    for (ws_state.workspaces, 0..) |_, idx| {
+        if (!tracking.hasWindowsOnWorkspace(@intCast(idx))) continue;
         if (comptime build.has_fullscreen) {
             if (fullscreen.getForWorkspace(@intCast(idx)) != null) continue;
         }

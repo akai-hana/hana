@@ -2,8 +2,6 @@
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
 # *** #
-{porco} continue, finish and present the files.
-# *** #
 - solve swap_master not working
 # *** #
 
