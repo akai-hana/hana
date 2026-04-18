@@ -2,7 +2,7 @@
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
 # *** #
-- eliminate build.zig's is_segment
+- windows like firefox which have a minimum horizontal dimension won't be resized by mod_h/l, but when i resize it with my mouse it will. once i did resize it with mouse in floating and then i added it back to tiling, it WILL be resized with mod_h/l. can you make this make sense?
 # *** #
 
 # ### HIGH-LEVEL CHANGES ### #
