@@ -17,24 +17,11 @@ const input = @import("input");
 const window = @import("window");
 const focus  = @import("focus");
 
-const tiling = if (build.has_tiling) @import("tiling") else struct {};
+const tiling = if (build.has_tiling) @import("tiling");
 
-const bar = if (build.has_bar) @import("bar") else struct {
-    pub fn pollTimeoutMs() i32 { return -1; }
-    pub fn checkClockUpdate() void {}
-    pub fn submitDraw(_: bool) void {}
-    pub fn handleExpose(_: *anyopaque) void {}
-    pub fn handlePropertyNotify(_: *anyopaque) void {}
-    pub fn updateIfDirty() !void {}
-    pub fn updateTimerState() void {}
-    pub fn reload() void {}
-};
+const bar = if (build.has_bar) @import("bar");
 
-const prompt = if (build.has_bar and build.has_prompt) @import("prompt") else struct {
-    pub fn blinkPollTimeoutMs() i32 { return -1; }
-    pub fn blinkTick() void {}
-};
-
+const prompt = if (build.has_bar and build.has_prompt) @import("prompt");
 
 // Indices into the poll fd array.
 const FD_XCB    = 0;
@@ -61,27 +48,31 @@ inline fn asHandler(comptime f: anytype) EventHandler {
 /// Fans out PropertyNotify to both bar (title) and window (WM_PROTOCOLS cache).
 fn handlePropertyNotify(event: *anyopaque) void {
     const e: *xcb.xcb_property_notify_event_t = @ptrCast(@alignCast(event));
-    bar.handlePropertyNotify(e);
+    if (build.has_bar) bar.handlePropertyNotify(e);
     window.handlePropertyNotify(e);
 }
 
 /// O(1) dispatch via a comptime-built table indexed by XCB event type (low 7 bits).
 const dispatch_table = blk: {
     var table = [_]?EventHandler{null} ** EVENT_DISPATCH_TABLE;
-    table[xcb.XCB_KEY_PRESS]         = asHandler(input.handleKeyPress);
-    table[xcb.XCB_BUTTON_PRESS]      = asHandler(input.handleButtonPress);
-    table[xcb.XCB_BUTTON_RELEASE]    = asHandler(input.handleButtonRelease);
-    table[xcb.XCB_MOTION_NOTIFY]     = asHandler(input.handleMotionNotify);
-    table[xcb.XCB_ENTER_NOTIFY]      = asHandler(window.handleEnterNotify);
-    table[xcb.XCB_LEAVE_NOTIFY]      = asHandler(window.handleLeaveNotify);
-    table[xcb.XCB_FOCUS_IN]          = asHandler(focus.handleFocusIn);
+    table[xcb.XCB_ENTER_NOTIFY] = asHandler(window.handleEnterNotify);
+    table[xcb.XCB_LEAVE_NOTIFY] = asHandler(window.handleLeaveNotify);
+
     table[xcb.XCB_MAP_REQUEST]       = asHandler(window.handleMapRequest);
     table[xcb.XCB_CONFIGURE_REQUEST] = asHandler(window.handleConfigureRequest);
     table[xcb.XCB_UNMAP_NOTIFY]      = asHandler(window.handleUnmapNotify);
     table[xcb.XCB_DESTROY_NOTIFY]    = asHandler(window.handleDestroyNotify);
-    table[xcb.XCB_EXPOSE]            = asHandler(bar.handleExpose);
-    table[xcb.XCB_PROPERTY_NOTIFY]   = asHandler(handlePropertyNotify);
     table[xcb.XCB_CLIENT_MESSAGE]    = asHandler(window.handleClientMessage);
+
+    table[xcb.XCB_KEY_PRESS]       = asHandler(input.handleKeyPress);
+    table[xcb.XCB_BUTTON_PRESS]    = asHandler(input.handleButtonPress);
+    table[xcb.XCB_BUTTON_RELEASE]  = asHandler(input.handleButtonRelease);
+    table[xcb.XCB_MOTION_NOTIFY]   = asHandler(input.handleMotionNotify);
+    table[xcb.XCB_FOCUS_IN]        = asHandler(focus.handleFocusIn);
+    table[xcb.XCB_PROPERTY_NOTIFY] = asHandler(handlePropertyNotify);
+
+    if (build.has_bar) table[xcb.XCB_EXPOSE] = asHandler(bar.handleExpose);
+
     break :blk table;
 };
 
@@ -160,10 +151,7 @@ fn handleSignalPipe(fd: std.posix.fd_t) void {
     var byte: [1]u8 = undefined;
     while (true) {
         const rc = std.os.linux.read(fd, &byte, 1);
-        switch (std.posix.errno(rc)) {
-            .SUCCESS => {},
-            else     => break,
-        }
+        if (std.posix.errno(rc) != .SUCCESS) break;
         switch (byte[0]) {
             sigToU8(std.posix.SIG.HUP)  => utils.reload(),
             sigToU8(std.posix.SIG.TERM),
@@ -260,20 +248,26 @@ fn validateConfig(cfg: *const @import("types").Config) !void {
 fn applyConfig(new_config: *@import("types").Config) !void {
     config.resolveKeybindings(new_config.keybindings.items, input.getXkbState(), core.alloc);
     config.finalizeConfig(new_config, core.screen);
-    
+
     grabKeybindings() catch |err| {
         debug.err("Keybind grab failed: {}, reverting", .{err});
         return err;
     };
-    
-    if (build.has_tiling) tiling.reloadConfig();
+
     window.reloadBorders();
-    bar.updateTimerState();
-    bar.reload();
-    // Unconditional flush: ensures border and tiling commands from reloadBorders()
-    // and reloadConfig() are sent even when bar.reload() takes an early-return path
-    // (e.g. bar disabled) that does not call its own ungrabAndFlush().
-    _ = xcb.xcb_flush(core.conn);
+    if (build.has_tiling) tiling.reloadConfig();
+
+    if (build.has_bar) {
+        bar.updateTimerState();
+        bar.reload();
+    }
+
+    // No xcb_flush here: tiling.reloadConfig() ends with ungrabAndFlush,
+    // which already drains the buffer atomically.  Any remaining requests
+    // from window.reloadBorders() or bar.reload() that arrived after that
+    // flush are covered by the event-loop's end-of-batch xcb_flush.
+    // The previous flush was a no-op in the common case and is removed to
+    // keep the flush discipline consistent across all call sites.
 }
 
 // Event loop
@@ -281,9 +275,12 @@ fn applyConfig(new_config: *@import("types").Config) !void {
 /// Returns the shortest timeout across all subsystems that need periodic wakeups,
 /// or -1 if nothing needs one right now (block indefinitely).
 fn combinedTimeoutMs(blink_ms: i32) i32 {
+    if (!build.has_bar) return -1;
+
     const clock_ms = bar.pollTimeoutMs();
     if (clock_ms < 0) return blink_ms;
     if (blink_ms < 0) return clock_ms;
+
     return @min(clock_ms, blink_ms);
 }
 
@@ -297,7 +294,7 @@ pub fn run() !void {
     };
 
     while (utils.running.load(.acquire)) {
-        const blink_ms = prompt.blinkPollTimeoutMs();
+        const blink_ms = if (build.has_prompt) prompt.blinkPollTimeoutMs() else -1;
         const cursor_is_blinking = blink_ms >= 0;
         const poll_rc = std.os.linux.poll(&fds, fds.len, combinedTimeoutMs(blink_ms));
         const ready: usize = switch (std.posix.errno(poll_rc)) {
@@ -309,12 +306,18 @@ pub fn run() !void {
             },
         };
 
-        if (ready == 0) {
+        if (build.has_bar and ready == 0) {
             bar.checkClockUpdate();
             if (cursor_is_blinking) {
                 prompt.blinkTick();
                 bar.submitDraw();
             }
+            // Timer-driven paths (clock tick, cursor blink) queue xcb_copy_area
+            // requests but the event loop's end-of-batch xcb_flush only runs when
+            // X events arrive (ready > 0).  On an idle desktop the copy_area would
+            // sit in the XCB client buffer indefinitely.  Flush explicitly here so
+            // the compositor sees the updated pixmap immediately after every timeout.
+            _ = xcb.xcb_flush(core.conn);
             continue;
         }
 
@@ -328,11 +331,13 @@ pub fn run() !void {
                 defer std.c.free(event);
                 dispatch(@as(*u8, @ptrCast(event)).*, event);
             }
+
             if (build.has_tiling) tiling.retileIfDirty();
             focus.drainPendingConfirm();
             focus.drainPointerSync();
             window.updateWorkspaceBordersIfNeeded();
-            bar.updateIfDirty() catch |err| debug.err("Failed to update bar: {}", .{err});
+            if (build.has_bar) bar.updateIfDirty() catch |err| debug.err("Failed to update bar: {}", .{err});
+
             _ = xcb.xcb_flush(core.conn);
         }
 

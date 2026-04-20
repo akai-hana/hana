@@ -458,13 +458,13 @@ const State = struct {
 
     fn drawAll(self: *State, snap: *const BarSnapshot) !void {
         try self.drawAllInner(snap);
-        self.render.dc.flush();
+        self.render.dc.blit();
         if (self.title_cache_pending_x) |x|
             self.syncTitleCache(snap, x, self.title_cache_pending_w);
         self.title_cache_pending_x = null;
     }
 
-    /// Like drawAll but does NOT call dc.flush() (no xcb_copy_area, no xcb_flush).
+    /// Like drawAll but does NOT call dc.blit() (no xcb_copy_area, no xcb_flush).
     /// Safe to call from inside an xcb_grab_server section via submitRenderBlocking.
     /// The caller must queue a blit with dc.blitQueued() and flush at ungrab time.
     fn drawAllNoFlush(self: *State, snap: *const BarSnapshot) !void {
@@ -551,7 +551,7 @@ const State = struct {
         const clock_x = self.layout_cache.clock_x orelse return;
         _ = clockSegment.draw(self.render.dc, self.render.config, self.render.height, clock_x) catch |e|
             debug.warnOnErr(e, "drawClockOnly");
-        self.render.dc.flush();
+        self.render.dc.blit();
     }
 
     fn drawTitleOnly(self: *State, new_focused: ?u32) void {
@@ -604,7 +604,7 @@ const State = struct {
             },
             self.render.allocator,
         ) catch |e| { debug.warnOnErr(e, "drawTitleOnly"); return; };
-        self.render.dc.flush();
+        self.render.dc.blit();
     }
 
     /// Update the title geometry and window-list caches after a successful full draw.

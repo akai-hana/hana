@@ -1,4 +1,3 @@
-
 //! Carousel title extension.
 //! Extends title by adding a smooth-scroll carousel effect for titles that
 //! don't fully fit the segment.
@@ -13,7 +12,7 @@
 //! where left_pad = text_x − seg_x (the segment's left inset).
 //! cycle_w = text_w + gap.  At scroll offset O the hot-path blit is a
 //! single xcb_copy_area of seg_w pixels from pixmap position O into the
-//! offscreen pixmap, then a flushRect.  Two XCB calls total per tick —
+//! offscreen pixmap, then a blitAndFlush.  Two XCB calls total per tick —
 //! no fill, no clipping arithmetic, no second copy.
 //!
 //! Offset formula: O = (elapsed_ms × speed / 1000) mod cycle_w.
@@ -198,7 +197,7 @@ pub fn notifyFocusChanged(new_window: ?u32) void {
 ///   • the accent colour changed (minimize/unminimize — caller triggers a full draw
 ///     which rebuilds the pixmap with the new bg baked in).
 ///
-/// Hot path: one xcb_copy_area (wide pixmap → offscreen) + flushRect.
+/// Hot path: one xcb_copy_area (wide pixmap → offscreen) + blitAndFlush.
 /// No fill, no Cairo, no Pango.
 pub fn drawCarouselTick(
     dc:    *drawing.DrawContext,
@@ -212,7 +211,7 @@ pub fn drawCarouselTick(
 
     const off = carouselOffset(e.start_ms, e.cycle_w, utils.monotonicMs());
     e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, seg_x, off, seg_w);
-    dc.flushRect(seg_x, seg_w);
+    dc.blitAndFlush(seg_x, seg_w);
     return true;
 }
 
@@ -231,7 +230,7 @@ pub fn drawSegCarouselTickAuto(dc: *drawing.DrawContext, accent: u32) bool {
     if (focus_signal.is_invalidated.load(.acquire)) return false;
     const off = carouselOffset(e.start_ms, e.cycle_w, utils.monotonicMs());
     e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, e.geom.seg_x, off, e.geom.seg_w);
-    dc.flushRect(e.geom.seg_x, e.geom.seg_w);
+    dc.blitAndFlush(e.geom.seg_x, e.geom.seg_w);
     return true;
 }
 

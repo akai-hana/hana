@@ -1,3 +1,4 @@
+
 //! User input handling
 //! Handles keyboard, mouse buttons, pointer motion, and drag operations.
 
@@ -269,18 +270,68 @@ fn executeAction(action: *const types.Action) !void {
         // Fullscreen 
         .toggle_fullscreen => if (comptime build.has_fullscreen) fullscreen.toggle(),
 
-        // Tiling 
+        // Tiling
+        //
+        // toggle_floating_window: wrap in a server grab so that the retile,
+        // border sweep, and bar blit all land in one compositor frame.
+        // Previously a naked xcb_flush fired after retileCurrentWorkspace but
+        // before the border sweep, producing a flash where border colors were
+        // wrong for the newly-tiled or newly-floating window.
         .toggle_floating_window => if (comptime build.has_tiling) {
-            if (focus.getFocused()) |win| tiling.toggleWindowFloat(win);
-            bar.scheduleFullRedraw();
+            if (focus.getFocused()) |win| {
+                _ = xcb.xcb_grab_server(core.conn);
+                tiling.toggleWindowFloat(win);
+                window.updateWorkspaceBorders();
+                window.markBordersFlushed();
+                bar.redrawInsideGrab();
+                utils.ungrabAndFlush(core.conn);
+            }
         },
-        .toggle_layout         => if (comptime build.has_tiling) { tiling.toggleLayout();        bar.scheduleRedraw(); },
-        .toggle_layout_reverse => if (comptime build.has_tiling) { tiling.toggleLayoutReverse(); bar.scheduleRedraw(); },
-        .cycle_layout_variants => if (comptime build.has_tiling) { tiling.stepLayoutVariant(); bar.scheduleRedraw(); },
-        .increase_master       => if (comptime build.has_tiling) tiling.increaseMasterWidth(),
-        .decrease_master       => if (comptime build.has_tiling) tiling.decreaseMasterWidth(),
-        .increase_master_count => if (comptime build.has_tiling) tiling.increaseMasterCount(),
-        .decrease_master_count => if (comptime build.has_tiling) tiling.decreaseMasterCount(),
+        // Layout and master operations: wrap each retile in a server grab so
+        // the compositor cannot render a partial retile frame.  Consistent with
+        // swap_master which already uses this pattern for the same reason.
+        .toggle_layout => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            tiling.toggleLayout();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
+        .toggle_layout_reverse => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            tiling.toggleLayoutReverse();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
+        .cycle_layout_variants => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            tiling.stepLayoutVariant();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
+        .increase_master => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            tiling.increaseMasterWidth();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
+        .decrease_master => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            tiling.decreaseMasterWidth();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
+        .increase_master_count => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            tiling.increaseMasterCount();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
+        .decrease_master_count => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            tiling.decreaseMasterCount();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
 
         .swap_master, .swap_master_focus_swap => if (comptime build.has_tiling) {
             _ = xcb.xcb_grab_server(core.conn);
@@ -344,9 +395,26 @@ fn executeAction(action: *const types.Action) !void {
         // Window focus cycling (dwm-style Mod+k / Mod+j)
         .focus_next_window => focus.focusNext(),
         .focus_prev_window => focus.focusPrev(),
-        // Window move in cycle (dwm-style Mod+Shift+k / Mod+Shift+j)
-        .move_window_next  => focus.moveWindowNext(),
-        .move_window_prev  => focus.moveWindowPrev(),
+        // Window move in cycle (dwm-style Mod+Shift+k / Mod+Shift+j).
+        // Wrapped in a server grab matching swap_master: both swap two windows
+        // and retile all others, so without a grab the compositor can render a
+        // partial retile frame between individual configure_window calls.
+        .move_window_next => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            focus.moveWindowNext();
+            window.updateWorkspaceBorders();
+            window.markBordersFlushed();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
+        .move_window_prev => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            focus.moveWindowPrev();
+            window.updateWorkspaceBorders();
+            window.markBordersFlushed();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
     }
 }
 
@@ -355,8 +423,17 @@ fn executeAction(action: *const types.Action) !void {
 /// toggle_floating_window affects whichever window was actually clicked.
 fn executeMouseAction(action: *const types.Action, clicked_win: u32) !void {
     switch (action.*) {
-        .toggle_floating_window => if (comptime build.has_tiling) tiling.toggleWindowFloat(clicked_win),
-        else             => try executeAction(action),
+        // Same grab pattern as the keyboard path in executeAction: retile,
+        // border sweep, and bar blit must be atomic from the compositor's view.
+        .toggle_floating_window => if (comptime build.has_tiling) {
+            _ = xcb.xcb_grab_server(core.conn);
+            tiling.toggleWindowFloat(clicked_win);
+            window.updateWorkspaceBorders();
+            window.markBordersFlushed();
+            bar.redrawInsideGrab();
+            utils.ungrabAndFlush(core.conn);
+        },
+        else => try executeAction(action),
     }
 }
 

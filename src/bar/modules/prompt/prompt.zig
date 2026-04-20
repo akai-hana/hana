@@ -449,7 +449,11 @@ fn activate() void {
     }
     g.is_active      = true;
     g.redraw_pending = true;
-    _ = xcb.xcb_flush(core.conn);
+    // No xcb_flush: xcb_grab_keyboard_reply already drained the XCB output
+    // buffer to deliver the preceding grab request.  The two assignments above
+    // are pure struct-field writes; no XCB requests are pending here.
+    // Contrast with deactivate(), where the flush is correct because
+    // xcb_ungrab_keyboard sends a new request that must arrive promptly.
 }
 
 /// Ungrabs the keyboard and marks the prompt inactive.
@@ -1137,6 +1141,6 @@ fn drawActive(
         try drawPostSpan(dc, px, text_left_x, ellipsis_end_x, baseline, post_text, fg);
     }
 
-    dc.flushRect(start_x, width);
+    dc.blitAndFlush(start_x, width);
     return end_x;
 }

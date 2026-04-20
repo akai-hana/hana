@@ -1,11 +1,14 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-6f6e: check generated response
+a25: continue
 
 # *** #
-- windows like firefox which have a minimum horizontal dimension won't be resized by mod_h/l, but when i resize it with my mouse it will. once i did resize it with mouse in floating and then i added it back to tiling, it WILL be resized with mod_h/l. can you make this make sense?
+- resolve numlock blocking binds
 # *** #
+- when i'm on a workspace where with two windows, focused onto one of them whose title is long enough to trigger carousel mode, and then i switch to a different workspace with a minimized window (short title, not carousel, static), text will be visible for a singular frame, when it suddenly disappears, leaving me with a blank rectangle. switching onto other workspaces and back to this glitched workspace doesn't solve it; what does solve it is going back to the window with carousel mode, and either focus on the second window (which isn't long enough to trigger carousel) and then switching back onto the glitched workspace, or closing either of the two windows, so there's only one window (no matter static or carousel, it will be fixed anyway). this is a really strange bug. could you please trace the cause of this? 
+# *** #
+
 
 # ### HIGH-LEVEL CHANGES ### #
 
