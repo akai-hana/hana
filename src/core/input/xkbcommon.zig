@@ -132,6 +132,19 @@ fn retrySetup(xcb_conn: *anyopaque) !void {
     return error.XkbSetupFailed;
 }
 
+/// Returns true if `km` has at least 40 reachable keysyms in the 8..128 range.
+/// Guards against accepting a partially-initialised keymap on early startup.
+fn keymapHasEnoughSymbols(km: *xkb_keymap) bool {
+    const test_state = xkb.xkb_state_new(km) orelse return false;
+    defer xkb.xkb_state_unref(test_state);
+    var valid_keys: u32 = 0;
+    for (8..128) |kc| {
+        if (xkb.xkb_state_key_get_one_sym(test_state, @intCast(kc)) != xkb.XKB_KEY_NoSymbol)
+            valid_keys += 1;
+    }
+    return valid_keys >= 40;
+}
+
 /// Accept a keymap only if it has at least 40 reachable keysyms in the 8..128
 /// range — guards against a partially-initialised keymap on early startup.
 fn retryKeymap(ctx: *xkb_context, xcb_conn: *anyopaque, device_id: i32) !*xkb_keymap {
@@ -143,16 +156,7 @@ fn retryKeymap(ctx: *xkb_context, xcb_conn: *anyopaque, device_id: i32) !*xkb_ke
             continue;
         };
 
-        validate: {
-            const test_state = xkb.xkb_state_new(km) orelse break :validate;
-            defer xkb.xkb_state_unref(test_state);
-            var valid_keys: u32 = 0;
-            for (8..128) |kc| {
-                if (xkb.xkb_state_key_get_one_sym(test_state, @intCast(kc)) != xkb.XKB_KEY_NoSymbol)
-                    valid_keys += 1;
-            }
-            if (valid_keys >= 40) return km;
-        }
+        if (keymapHasEnoughSymbols(km)) return km;
 
         xkb.xkb_keymap_unref(km);
         retryDelay(@intCast(i));
