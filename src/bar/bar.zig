@@ -5,14 +5,14 @@ const std   = @import("std");
 const build = @import("build_options");
 
 // core/
-const core       = @import("core");
-    const xcb    = core.xcb;
+const core    = @import("core");
+    const xcb = core.xcb;
 
 // core/modules/
-const debug      = @import("debug");
+const debug = @import("debug");
 
 // config/
-const types  = @import("types");
+const types = @import("types");
 
 // window/
 const window = @import("window");
@@ -1281,13 +1281,14 @@ pub fn updateIfDirty() !void {
     if (s.is_dirty) { submitDraw(); s.is_dirty = false; }
 }
 
-pub fn checkClockUpdate() void {
-    const s = gBar.state orelse return;
-    if (!s.is_visible) return;
+pub fn checkClockUpdate() bool {
+    const s = gBar.state orelse return false;
+    if (!s.is_visible) return false;
     gBar.channel.mutex.lock();
     gBar.channel.work.has_clock_tick = true;
     gBar.channel.work_ready.signal();
     gBar.channel.mutex.unlock();
+    return true;
 }
 
 pub fn pollTimeoutMs() i32     { return clockSegment.pollTimeoutMs(); }
