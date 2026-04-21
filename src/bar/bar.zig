@@ -582,6 +582,21 @@ const State = struct {
             }
         }
 
+        // Guard: title_cache.title holds text for the window of the last full
+        // draw (title_cache.title_window).  If new_focused differs, that text
+        // is stale.  Calling drawCached here would pass the wrong title into
+        // drawScrollingTitle, which would see a window-ID mismatch, rebuild the
+        // carousel pixmap with incorrect content, and reset start_ms — causing
+        // the carousel to visibly start once with the wrong text and then
+        // restart from the beginning when the full snapReady draw arrives
+        // moments later with the correct title.
+        //
+        // scheduleFocusRedraw marks the bar dirty after posting this focusOnly
+        // work item, so a snapReady draw is guaranteed to follow.  Returning
+        // here leaves the current frame unchanged for that one extra iteration,
+        // which is imperceptible.
+        if (new_focused != self.title_cache.title_window) return;
+
         _ = titleSegment.drawCached(
             .{
                 .dc      = self.render.dc,
@@ -1177,6 +1192,15 @@ pub fn scheduleFocusRedraw(new_win: ?u32) void {
         gBar.channel.work_ready.signal();
     }
     gBar.channel.mutex.unlock();
+    // Mark dirty so updateIfDirty issues a full snapReady draw on the next main-loop
+    // iteration.  The focusOnly work item above provides an immediate visual update
+    // for accent-colour changes and carousel ticks on same-window redraws; the
+    // following snapReady fetches the new window's title from the X server and
+    // performs a single correct carousel build.  Without this, a cross-window focus
+    // change that arrives when nothing else is dirty would rely solely on the focusOnly
+    // path, which only has stale cached title text — the combination that produces
+    // the double-start flicker that the drawTitleOnly title_window guard prevents.
+    s.markDirty();
 }
 
 pub fn isBarWindow(win: u32) bool  { return if (gBar.state) |s| s.win.win_id == win else false; }

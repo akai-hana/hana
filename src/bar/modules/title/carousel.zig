@@ -3,7 +3,7 @@
 //! don't fully fit the segment.
 //!
 //! Design
-//! ──────
+//! 
 //! A wide XCB pixmap is pre-rendered once per title change:
 //!
 //!   [ bg * left_pad | text A | bg * gap | text B ]
@@ -33,7 +33,7 @@ const utils   = @import("utils");
 const scale   = @import("scale");
 const drawing = @import("drawing");
 
-// ── Public constants ────────────────────────────────────────────────────────
+// Public constants
 
 /// Default scroll speed in pixels per second.
 pub const default_scroll_speed: f64 = 125.0;
@@ -42,7 +42,7 @@ pub const default_scroll_speed: f64 = 125.0;
 /// pre-rendered pixmap.
 pub const carousel_gap_px: u16 = 60;
 
-// ── Public geometry type ────────────────────────────────────────────────────
+// Public geometry type
 
 /// Segment geometry passed to carousel draw functions.
 ///
@@ -56,7 +56,7 @@ pub const SegmentGeometry = struct {
     avail_w: u16,
 };
 
-// ── Internal types ──────────────────────────────────────────────────────────
+// Internal types
 
 /// All state for one live carousel (single-window or segmented).
 const CarouselEntry = struct {
@@ -101,7 +101,7 @@ var scroll_config: ScrollConfig = .{};
 var render:        RenderState  = .{};
 var focus_signal:  FocusSignal  = .{};
 
-// ── Public API — feature toggles and scroll config ──────────────────────────
+// Public API — feature toggles and scroll config
 
 /// Enable or disable the carousel globally.
 /// Disabling immediately frees all carousel pixmaps.
@@ -142,7 +142,7 @@ pub fn wakeIntervalNs() u64 {
     return @intFromFloat(1_000_000_000.0 / hz);
 }
 
-// ── Public API — lifecycle ───────────────────────────────────────────────────
+// Public API — lifecycle
 
 /// True when either carousel pixmap is live.
 pub fn isCarouselActive() bool {
@@ -174,7 +174,7 @@ pub fn deinitSegmentedCarousel() void {
     focus_signal.seg_window.store(0, .release);
 }
 
-// ── Public API — focus notification (main thread only) ───────────────────────
+// Public API — focus notification (main thread only)
 
 /// Called by the focus system when the focused window changes.
 /// MUST be called from the main thread only.
@@ -187,7 +187,7 @@ pub fn notifyFocusChanged(new_window: ?u32) void {
     focus_signal.is_invalidated.store(true, .release);
 }
 
-// ── Public API — hot-path carousel tick ─────────────────────────────────────
+// Public API — hot-path carousel tick
 
 /// Fast per-tick single-window carousel blit.
 ///
@@ -234,7 +234,7 @@ pub fn drawSegCarouselTickAuto(dc: *drawing.DrawContext, accent: u32) bool {
     return true;
 }
 
-// ── Public API — single-window title rendering ───────────────────────────────
+// Public API — single-window title rendering
 
 /// Render `text` into the segment described by `geom`.
 ///
@@ -314,7 +314,7 @@ pub fn drawScrollingTitle(
     e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, geom.seg_x, off, geom.seg_w);
 }
 
-// ── Public API — segmented carousel ─────────────────────────────────────────
+// Public API — segmented carousel
 
 /// Render the focused window's title for a split-view segment.
 ///
@@ -391,7 +391,7 @@ pub fn drawSegmentedCarousel(
     return true;
 }
 
-// ── Private — scroll math ────────────────────────────────────────────────────
+// Private — scroll math
 
 /// Smooth continuous scroll offset.
 ///

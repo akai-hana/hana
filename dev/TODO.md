@@ -1,35 +1,20 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-a25: continue
+89sk: [2 PM] continue; finish slow spawning resolving
+iesfm: [3 PM] continue; make tiling and floating optional, mandatory one minimum
 
 # *** #
-- resolve numlock blocking binds
+- fix mod+n cycling onto floating layout, not just making the focused window floating
 # *** #
-- when i'm on a workspace where with two windows, focused onto one of them whose title is long enough to trigger carousel mode, and then i switch to a different workspace with a minimized window (short title, not carousel, static), text will be visible for a singular frame, when it suddenly disappears, leaving me with a blank rectangle. switching onto other workspaces and back to this glitched workspace doesn't solve it; what does solve it is going back to the window with carousel mode, and either focus on the second window (which isn't long enough to trigger carousel) and then switching back onto the glitched workspace, or closing either of the two windows, so there's only one window (no matter static or carousel, it will be fixed anyway). this is a really strange bug. could you please trace the cause of this? 
-# *** #
-
-
-# ### HIGH-LEVEL CHANGES ### #
-
-+ decouple prompt.zig from vim.zig
-  - the issue at hand is that prompt.zig is very tightly coupled with vim.zig, so that if i wanted to make vim.zig an optional module on my window manager, in prompt.zig i should either create tons of empty stubs guarded against build.zig's comprobation of whether vim.zig is present in the codebase or not, or to guard every vim.zig call within the code as comptime (e.g. "if (comptime build.has_vim)"). the former leads to hard-coding lots of functions, making the window manager more rigid and tedious to modify, while the latter bloats and muddies the code. because of this, i'd like to re-code vim.zig in a way so that, for example, there is, for example, only one master function in charge of processing keys, and then the guard is at prompt.zig's highest possible level, so that i only end up needing one comptime guard at the entire vim modekey routing function within prompt.zig. can you please evaluate whether this proposal is both possible and viable? 
-- make windows.zig be able to exist without tiling
-- make tiling unconditional between tiling.zig and layout.zig
 
 # ### MISC ### #
-
-- are build.zig's "is_segment" optional subsystem property truly necessary? is there no way to rewrite the code so that there is no need for this property?
-
-- fix mod+n cycling onto floating layout, not just making the focused window floating
 
 - when cycling between layouts using toggleLayout/toggleLayoutReverse (core.zig, config.zig, input.zig), please make it so that mouse hovering doesn't steal focus at windows being re-positioned, if it was previously positioned on one window but the layout cycling made it touch a different one. (focus.zig, window.zig, tracking.zig)
 
 - when doing toggle_float (mod+middle_click), i want the window to be tiled to the area where it is closest to. what this means is that, if there's already another window tiled, and i do toggle_float with the floating window located onto the left half of the screen, then it should be tiled onto the left. if it's to the right, then tiled to the right. you should take its middle/center of the floating window to be tiled, and decide where to tile it based off of that coordinates. it should work on any tiling layout. 
 
-- opening a window bound to a specific workspace from a different workspace, while the workspace it is bound to contains a fullscreened window, switching to this workspace and un-fullscreening this window makes it so that there's a gap where the spawned bound window should be, but actually isn't: all there is, is only a blank gap where it would be tiled. switching workspaces back and forth re-triggers a tiling event, which fixes this and makes the bound window appear correctly. could you please fix this minor bug?
-
-- could you reinforce the window killing system, checking if it really did get closed? right now it only uses graceful closing, but the window may be unresponsive and ignore it; on these cases, i want you to forcefully kill the window (maybe sending a kill signal, or some other way).
+- reinforce the window killing system, checking if it really did get closed? right now it only uses graceful closing, but the window may be unresponsive and ignore it; on these cases, i want you to forcefully kill the window (maybe sending a kill signal, or some other way).
 
 - revise fallback.toml
   + fallback.toml is completely unupdated. pending to make up-to-date with latest config changes.
