@@ -1,4 +1,3 @@
-
 //! User input handling
 //! Handles keyboard, mouse buttons, pointer motion, and drag operations.
 
@@ -111,18 +110,21 @@ pub fn setup(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: u32) 
     XcbCursor.setupRoot(conn, screen);
 }
 
-/// Grabs Super+Button{1,2,3} on the root window.
+/// Grabs Super+Button{1,2,3} on the root window for all LOCK_MODIFIERS
+/// combinations (NumLock, CapsLock, ScrollLock, and their combinations).
 /// Button1 = move, Button3 = resize, Button2 = config-driven mouse binds.
 pub fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
     for (mouse_buttons) |button| {
-        _ = xcb.xcb_grab_button(
-            conn, 0, root,
-            xcb.XCB_EVENT_MASK_BUTTON_PRESS |
-                xcb.XCB_EVENT_MASK_BUTTON_RELEASE |
-                xcb.XCB_EVENT_MASK_POINTER_MOTION,
-            xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC,
-            root, xcb.XCB_NONE, button, constants.MOD_SUPER,
-        );
+        for (constants.LOCK_MODIFIERS) |lock| {
+            _ = xcb.xcb_grab_button(
+                conn, 0, root,
+                xcb.XCB_EVENT_MASK_BUTTON_PRESS |
+                    xcb.XCB_EVENT_MASK_BUTTON_RELEASE |
+                    xcb.XCB_EVENT_MASK_POINTER_MOTION,
+                xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC,
+                root, xcb.XCB_NONE, button, @intCast(constants.MOD_SUPER | lock),
+            );
+        }
     }
     _ = xcb.xcb_flush(conn);
 }

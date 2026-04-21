@@ -79,9 +79,11 @@ pub const XkbState = struct {
         xkb.xkb_context_unref(self.context);
     }
 
-    /// Convert an X11 keycode to a keysym (used during event processing).
-    pub inline fn keycodeToKeysym(self: *XkbState, keycode: u8) u32 {
-        return xkb.xkb_state_key_get_one_sym(self.state, keycode);
+    /// Convert an X11 keycode to a keysym for keybinding dispatch.
+    /// Uses the lock-modifier-free table built at init so results are
+    /// unaffected by NumLock / CapsLock state.
+    pub inline fn keycodeToKeysym(self: *const XkbState, keycode: u8) u32 {
+        return self.keysym_by_keycode[keycode];
     }
 
     /// Reverse-look up a keysym to its keycode (used during config parsing).
