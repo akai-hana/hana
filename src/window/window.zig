@@ -1,5 +1,5 @@
 //! Window lifecycle
-//! Handles window mapping/unmapping/destroy, configure, enter/button events, and per-window property caching.
+//! Manages window creation, destruction, configuration, and event handling for all managed windows.
 
 const std   = @import("std");
 const build = @import("build_options");

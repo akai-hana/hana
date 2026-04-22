@@ -1,17 +1,12 @@
-//! Drawing context for hana's status bar.
-//!
-//! Rectangle fills use XCB core drawing instead of Cairo's XRender, since the
-//! latter always pre-multiplies alpha pixels, making rectangle colours appear
-//! incorrect and too dark. Cairo + Pango handle all text layout and glyph
-//! rendering on top of these XCB-filled rectangles.
+//! Cairo/Pango drawing context: text measurement and rendering for bar segments.
 
 const std = @import("std");
 
-const core = @import("core");
-const xcb  = core.xcb;
+const core    = @import("core");
+    const xcb = core.xcb;
+const debug   = @import("debug");
 
-const c     = @import("render");
-const debug = @import("debug");
+const c = @import("render");
 
 // Public types 
 
@@ -54,12 +49,10 @@ pub const FontState = struct {
     current_font_desc: ?*c.PangoFontDescription = null,
     cached_metrics:    ?struct { ascent: i16, descent: i16 } = null,
 
-    /// Frees the current Pango font description, if one has been loaded.
     fn deinit(self: *FontState) void {
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
     }
 
-    /// Load a single font by name, replacing any previously loaded description.
     pub fn loadFont(self: *FontState, font_name: []const u8) !void {
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
         const pango_name   = try convertFontName(self.allocator, font_name);
@@ -74,12 +67,8 @@ pub const FontState = struct {
         self.cached_metrics = null;
     }
 
-    /// Load one or more fonts as a Pango comma-separated fallback list.
-    ///
-    /// Both `loadFont` and `loadFonts` exist so that DrawContext and
-    /// MeasureContext can share the same uniform call-site interface regardless
-    /// of whether there is one font or many. Callers never need to branch on
-    /// count.
+    /// Both loadFont and loadFonts exist so DrawContext and MeasureContext share
+    /// one call-site regardless of font count; callers never need to branch.
     pub fn loadFonts(self: *FontState, font_names: []const []const u8) !void {
         if (font_names.len == 0) return self.loadFont(fallbackFont);
         if (font_names.len == 1) return self.loadFont(font_names[0]);
@@ -88,8 +77,7 @@ pub const FontState = struct {
         try self.loadFont(font_list);
     }
 
-    /// Returns (ascent, descent) in pixels for the current font. Cached after the first call;
-    /// invalidated by loadFont. Result is in pixels, converted from Pango units via PANGO_SCALE.
+    /// Returns (ascent, descent) in pixels; cached per font description, invalidated by loadFont.
     pub fn getMetrics(self: *FontState) struct { i16, i16 } {
         if (self.cached_metrics) |m| return .{ m.ascent, m.descent };
         const metrics = c.pango_context_get_metrics(
@@ -105,8 +93,6 @@ pub const FontState = struct {
 
 // DrawContext 
 
-/// Unpack one 8-bit RGB channel from a packed 0xRRGGBB colour and convert
-/// to the [0.0, 1.0] float that Cairo expects.
 inline fn unpackColorChannel(color: u32, shift: u5) f64 {
     return @as(f64, @floatFromInt((color >> shift) & 0xFF)) / 255.0;
 }

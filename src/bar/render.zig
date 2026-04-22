@@ -1,14 +1,4 @@
-
-//! Manual C bindings for the bar's rendering stack: Cairo, Pango, and GLib.
-//!
-//! Cairo and Pango are bound together because `pango_cairo_*` functions
-//! cross the boundary between the two libraries.  GLib's `g_object_unref`
-//! is included here because it is the correct way to release Pango objects
-//! that carry a GObject reference count.
-//!
-//! XCB types are imported from `core` rather than re-declared here.
-//! xcb-cursor bindings live in `window/cursor_bindings.zig` — they serve
-//! the window/floating layer, not the rendering stack.
+//! Cairo/Pango/GLib C bindings for bar rendering.
 
 const core    = @import("core");
     const xcb = core.xcb;
@@ -22,8 +12,7 @@ const xcb_visualtype_t = xcb.xcb_visualtype_t;
 pub const cairo_surface_t = opaque {};
 pub const cairo_t         = opaque {};
 
-/// Pixel formats understood by Cairo surfaces.
-/// Numeric values match the C ABI and must not be changed.
+/// Numeric values match the C ABI; do not change them.
 pub const cairo_format_t = enum(c_int) {
     ARGB32    = 0,
     RGB24     = 1,
@@ -33,16 +22,13 @@ pub const cairo_format_t = enum(c_int) {
     RGB30     = 5,
 };
 
-/// Compositing operators used during painting.
-/// Trimmed to the two operators hana actually uses (CLEAR, OVER);
-/// the full C enum has 29 variants.  Numeric values are unchanged.
+/// Trimmed to the two operators used (CLEAR, OVER); full C enum has 29. Numeric values unchanged.
 pub const cairo_operator_t = enum(c_int) {
     CLEAR = 0,
     OVER  = 2,
 };
 
-/// Creates a Cairo surface backed by an XCB pixmap.
-/// The pixmap must outlive the surface; destroy the surface before freeing it.
+/// Pixmap must outlive the surface; destroy the surface before freeing the pixmap.
 pub extern fn cairo_xcb_surface_create(
     connection: *xcb_connection_t,
     pixmap:     xcb_pixmap_t,
@@ -51,8 +37,7 @@ pub extern fn cairo_xcb_surface_create(
     height:     c_int,
 ) ?*cairo_surface_t;
 
-/// Creates an in-memory image surface with no X connection.
-/// Used for off-screen font measurement before committing to the screen.
+/// In-memory surface with no X connection. Used for font measurement.
 pub extern fn cairo_image_surface_create(
     format: cairo_format_t,
     width:  c_int,
@@ -60,7 +45,7 @@ pub extern fn cairo_image_surface_create(
 ) ?*cairo_surface_t;
 
 pub extern fn cairo_surface_destroy(surface: *cairo_surface_t) void;
-/// Flushes pending drawing operations, ensuring the pixmap reflects all paints.
+/// Flushes pending Cairo operations to the underlying pixmap.
 pub extern fn cairo_surface_flush(surface: *cairo_surface_t) void;
 
 pub extern fn cairo_create(surface: *cairo_surface_t) ?*cairo_t;
@@ -71,10 +56,9 @@ pub extern fn cairo_move_to(cr: *cairo_t, x: f64, y: f64) void;
 pub extern fn cairo_set_operator(cr: *cairo_t, op: cairo_operator_t) void;
 pub extern fn cairo_paint(cr: *cairo_t) void;
 
-/// Saves the current Cairo graphics state onto an internal stack.
-/// Used by the carousel text scroller to isolate clip regions.
+/// Push/pop graphics state; used to isolate clip regions for carousel text scrolling.
 pub extern fn cairo_save(cr: *cairo_t) void;
-/// Restores the most recently saved graphics state, removing the active clip.
+/// Restores the most recently saved state, removing the active clip.
 pub extern fn cairo_restore(cr: *cairo_t) void;
 pub extern fn cairo_rectangle(cr: *cairo_t, x: f64, y: f64, width: f64, height: f64) void;
 pub extern fn cairo_clip(cr: *cairo_t) void;
@@ -86,8 +70,7 @@ pub const PangoContext         = opaque {};
 pub const PangoFontDescription = opaque {};
 pub const PangoFontMetrics     = opaque {};
 
-/// Conversion factor between Pango's internal fixed-point units and pixels.
-/// Divide a Pango unit value by PANGO_SCALE to get pixels.
+/// Divide Pango units by PANGO_SCALE to get pixels.
 pub const PANGO_SCALE: c_int = 1024;
 
 pub const PangoEllipsizeMode = enum(c_int) {
@@ -104,11 +87,8 @@ pub const PangoRectangle = extern struct {
     height: c_int,
 };
 
-/// Creates a PangoLayout pre-configured to render onto the given Cairo context.
 pub extern fn pango_cairo_create_layout(cr: *cairo_t) ?*PangoLayout;
-/// Renders the layout's current text onto the Cairo context at the current point.
 pub extern fn pango_cairo_show_layout(cr: *cairo_t, layout: *PangoLayout) void;
-/// Sets the DPI used for font resolution on this Pango context.
 pub extern fn pango_cairo_context_set_resolution(context: *PangoContext, dpi: f64) void;
 
 pub extern fn pango_layout_set_text(layout: *PangoLayout, text: [*]const u8, length: c_int) void;

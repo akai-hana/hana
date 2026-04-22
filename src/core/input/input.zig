@@ -353,17 +353,30 @@ fn executeSwapMaster(action: *const types.Action) void {
         // column/stack, the shrinking window (old master) fills its new
         // stack slot before the growing window vacates its old one —
         // eliminating the one-frame wallpaper gap (Fix 3).
+        //
+        // Use swapWithMasterGetWins so the window list built during the
+        // swap is passed directly into retile, avoiding a redundant
+        // collectWorkspaceWindows scan on this hot path (Issue 3 fix).
         const new_master = focus.getFocused();
-        tiling.swapWithMaster();
-        tiling.retileCurrentWorkspaceDeferred(new_master);
+        if (tiling.swapWithMasterGetWins()) |ws_wins| {
+            tiling.retileCurrentWorkspaceDeferredPrebuilt(ws_wins, new_master);
+        } else {
+            tiling.retileCurrentWorkspaceDeferred(new_master);
+        }
     } else {
         // For follow-focus: capture focused window, reorder, retile
         // with deferred configure, then transfer focus — all inside
         // the grab so the focus border change is part of the same flush.
+        // swapWithMasterFollowFocusGetWins returns the pre-built window
+        // slice alongside the displaced window, eliminating the second
+        // collectWorkspaceWindows call in retile (Issue 3 fix).
         const new_master = focus.getFocused();
-        const displaced = tiling.swapWithMasterFollowFocus();
-        tiling.retileCurrentWorkspaceDeferred(new_master);
-        if (displaced) |win| focus.setFocus(win, .tiling_operation);
+        if (tiling.swapWithMasterFollowFocusGetWins()) |result| {
+            tiling.retileCurrentWorkspaceDeferredPrebuilt(result.ws_wins, new_master);
+            if (result.displaced) |win| focus.setFocus(win, .tiling_operation);
+        } else {
+            tiling.retileCurrentWorkspaceDeferred(new_master);
+        }
     }
     // Use the async pointer-sync variant: it queues the xcb_query_pointer
     // cookie without blocking, so no premature XCB buffer flush occurs

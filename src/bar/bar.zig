@@ -1,5 +1,5 @@
 //! Status bar
-//! Renders segments via Cairo/Pango into an XCB override-redirect window.
+//! Creates and manages the WM status bar, rendering all configured segments.
 
 const std   = @import("std");
 const build = @import("build_options");

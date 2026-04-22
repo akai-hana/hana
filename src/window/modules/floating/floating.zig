@@ -1,4 +1,5 @@
 //! Floating windows layout
+//! Manages placement, movement, and resizing of freely positioned floating windows.
 
 const std   = @import("std");
 const build = @import("build_options");

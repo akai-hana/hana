@@ -1,9 +1,5 @@
 //! Master-stack tiling layout
-//!
-//! Divides the screen into a master pane (left or right) holding the first
-//! `master_count` windows, and a stack pane holding the rest.
-//! When the stack overflows its visible height, windows spill into a
-//! column-major overflow grid rather than being clipped or hidden.
+//! Divides the screen into a master pane and a stack pane, with overflow handling for extra windows.
 
 const utils     = @import("utils");
 const constants = @import("constants");
