@@ -437,7 +437,7 @@ fn execAsGrandchild(exec_pipe_write: c_int, cmd_z: [*:0]const u8) noreturn {
     _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z, null }));
     const sentinel: u8 = 1;
     _ = c.write(exec_pipe_write, &sentinel, 1);
-    std.posix.exit(1);
+    std.process.exit(1);
 }
 
 /// Intermediate child: forks the grandchild, forwards its PID over pid_pipe,
@@ -446,7 +446,7 @@ fn forkIntermediate(exec_pipe_write: c_int, pid_pipe_write: c_int, cmd_z: [*:0]c
     const grandchild_pid = c.fork();
     if (grandchild_pid < 0) {
         debug.err("Second fork failed", .{});
-        std.posix.exit(1);
+        std.process.exit(1);
     }
     if (grandchild_pid == 0) {
         _ = c.close(pid_pipe_write); // don't leak into the spawned process
@@ -457,7 +457,7 @@ fn forkIntermediate(exec_pipe_write: c_int, pid_pipe_write: c_int, cmd_z: [*:0]c
     _ = c.write(pid_pipe_write, &gp, @sizeOf(c_int));
     _ = c.close(pid_pipe_write);
     _ = c.close(exec_pipe_write);
-    std.posix.exit(0);
+    std.process.exit(0);
 }
 
 /// Creates an O_CLOEXEC|O_NONBLOCK pipe pair atomically via pipe2.
