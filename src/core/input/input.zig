@@ -27,10 +27,10 @@ const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {
 const minimize   = if (build.has_minimize) @import("minimize") else struct {};
 const workspaces = if (build.has_workspaces) @import("workspaces") else struct {};
 const tiling     = if (build.has_tiling) @import("tiling") else struct {};
-const drag = if (build.has_tiling) @import("drag") else struct {
-    pub fn isDragging() bool { return false; }
-    pub fn stopDrag() void {}
-    pub fn updateDrag(_: i16, _: i16) void {}
+const drag = if (build.has_drag) @import("drag") else struct {
+    pub fn isDragging()                          bool { return false; }
+    pub fn stopDrag()                            void {}
+    pub fn updateDrag(_: i16, _: i16)            void {}
     pub fn startDrag(_: u32, _: u8, _: i16, _: i16) void {}
 };
 
@@ -570,10 +570,11 @@ fn executeShellCommand(cmd: []const u8) !void {
     _ = c.close(exec_fds[1]);
     _ = c.close(pid_fds[1]);
 
-    // Pre-snapshot the pointer position for spawn-crossing suppression.
-    // Firing and draining the cookie here — during the key-press handler —
-    // is a single fast round-trip.  mapWindowToScreen can then drain the
-    // cached reply with zero additional latency.
+    // Fire xcb_query_pointer now (key-press time) to snapshot the cursor
+    // position for spawn-crossing suppression.  The reply is NOT drained here;
+    // it will be sitting in the XCB socket buffer by the time MapRequest arrives
+    // (app startup takes at least tens of ms), so mapWindowToScreen drains it
+    // for free with no added round-trip latency.
     window.prefetchSpawnPointer();
 
     if (g_pending.len < MAX_PENDING_SPAWNS) {

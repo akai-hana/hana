@@ -1,11 +1,12 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
-89sk: [2 PM] continue; finish slow spawning resolving
-iesfm: [3 PM] continue; make tiling and floating optional, mandatory one minimum
-
 # *** #
-- fix mod+n cycling onto floating layout, not just making the focused window floating
+- add floating as a layout that one can cycle into
+# *** #
+- both tiling.zig and layouts.zig are really heavy on comments. i believe this ends up harming readability. could you please cut back on the comments a little bit? i don't just want to remove all comments, but i don't want the file to end up being so bloated with them. light commenting, straight to the point and dense with meaningful information, should be the main goal.
+# *** #
+- the file imports on bar.zig are extremely messy. could you please sort them out? i want the file to be cleaner than it actually is.
 # *** #
 
 # ### MISC ### #

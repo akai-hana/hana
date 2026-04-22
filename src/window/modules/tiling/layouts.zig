@@ -46,31 +46,6 @@ pub const SizeHints = struct {
 };
 
 // Per-window geometry, border-color, and size-hint cache
-//
-// Stores the last-applied geometry, border color, AND WM_NORMAL_HINTS
-// constraints for each window in a single open-addressing hash table.  All
-// three fields share one slot so `configureWithHints` performs ONE O(1) hash
-// probe per window per retile — down from O(N) linear scan, making the full
-// retile pass O(N) total instead of O(N²).
-//
-// `configureWithHints` writes `.rect`; `applyBorderColor` writes `.border`;
-// `CacheMap.cacheHints` writes `.hints` at map time.
-//
-// Hash table design:
-//   • Open addressing with linear probing.  Hash table avoids heap allocation,
-//     keeps no allocator reference, has no deinit, and has no partial-failure
-//     states — all the properties the previous flat array offered.
-//   • Table capacity = 512 (power of two).  Max live entries = 256 (load ≤ 0.5).
-//     At load 0.5 the expected probe chain length is 1.5; worst case is bounded.
-//   • Hash: Knuth's multiplicative constant (2654435761 ≈ 2³² / φ).
-//     XCB allocates window IDs as near-sequential integers; the multiplicative
-//     hash spreads them across all 9 index bits with minimal collision.
-//   • Deletion: backward-shift (no tombstones).  When an entry is removed,
-//     subsequent entries in the same probe run are pulled back one step so that
-//     lookup probes never skip over a gap left by a deletion.  This keeps probe
-//     chains short without any bookkeeping beyond the shift itself.
-//   • EMPTY_WIN = 0 is the empty-slot sentinel.  XCB never allocates ID 0
-//     (it is XCB_NONE), so this is safe for the lifetime of the process.
 
 /// Combined per-window cache entry: last geometry, last border color, and
 /// WM_NORMAL_HINTS size constraints.

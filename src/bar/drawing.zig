@@ -5,8 +5,11 @@
 //! incorrect and too dark. Cairo + Pango handle all text layout and glyph
 //! rendering on top of these XCB-filled rectangles.
 
-const std   = @import("std");
-const core  = @import("core");
+const std = @import("std");
+
+const core = @import("core");
+const xcb  = core.xcb;
+
 const c     = @import("render");
 const debug = @import("debug");
 
@@ -48,7 +51,7 @@ const fallbackFont = "monospace:size=10";
 pub const FontState = struct {
     allocator:         std.mem.Allocator,
     pango_layout:      *c.PangoLayout,
-    current_font_desc: ?*c.PangoFontDescription         = null,
+    current_font_desc: ?*c.PangoFontDescription = null,
     cached_metrics:    ?struct { ascent: i16, descent: i16 } = null,
 
     /// Frees the current Pango font description, if one has been loaded.

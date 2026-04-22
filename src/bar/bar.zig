@@ -5,20 +5,42 @@ const std   = @import("std");
 const build = @import("build_options");
 
 // core/
-const core    = @import("core");
-    const xcb = core.xcb;
-
-// core/modules/
-const debug = @import("debug");
+const core      = @import("core");
+    const xcb   = core.xcb;
+const utils     = @import("utils");
+const constants = @import("constants");
+const scale     = @import("scale");
+const debug     = @import("debug");
 
 // config/
 const types = @import("types");
 
 // window/
+const tracking   = @import("tracking");
+const focus      = @import("focus");
+const fullscreen = @import("fullscreen");
+const minimize   = @import("minimize");
+const workspaces = @import("workspaces");
+
+// floating/
+const drag   = @import("drag");
 const window = @import("window");
 
+// tiling/
+const tiling = @import("tiling");
 
-// Low-level threading primitives 
+const drawing  = @import("drawing");
+const prompt   = @import("prompt");
+const carousel = @import("carousel");
+
+
+const clock    = @import("clock");
+const layout   = @import("layout");
+const title    = @import("title");
+const variants = @import("variants");
+const tags     = @import("tags");
+
+// Low-level threading primitives
 
 /// Blocking mutex backed by pthread_mutex_t; `.{}` is safe (= PTHREAD_MUTEX_INITIALIZER).
 const Mutex = struct {
@@ -51,81 +73,18 @@ const Condition = struct {
     pub fn broadcast(c: *Condition) void { _ = std.c.pthread_cond_broadcast(&c.inner); }
 };
 
-// Public API types 
+// Public API types
 
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 
-// Optional segment imports 
-
-const drawing    = @import("drawing");
-const tiling     = if (build.has_tiling) @import("tiling") else struct {};
-const drag       = @import("drag");
-const utils      = @import("utils");
-const tracking   = @import("tracking");
-const workspaces = if (build.has_workspaces) @import("workspaces") else struct {
-    pub inline fn getState() ?*State { return null; }
-    pub inline fn switchTo(_: u8) void {}
-};
-
-inline fn switchToWorkspace(ws_arg: u8) void {
-    if (comptime build.has_workspaces) workspaces.switchTo(ws_arg);
-}
-
-const focus      = @import("focus");
-const constants  = @import("constants");
-const minimize   = if (build.has_minimize) @import("minimize") else struct {};
-const scale      = if (build.has_scale) @import("scale") else struct {
-    pub fn scaleBarHeight(value: anytype, screen_height: u16) u16 {
-        const h: f32 = @floatFromInt(screen_height);
-        const px: f32 = if (value.is_percentage) h * (value.value / 100.0) else value.value;
-        return @max(20, @as(u16, @intFromFloat(@round(px))));
-    }
-    pub fn ensureRefreshRateDetected(_: anytype) void {}
-};
-
-/// When workspaces are disabled, all workspace-segment calls are no-ops.
-const DisabledSegment = struct {
-    pub fn draw(_: *drawing.DrawContext, _: types.BarConfig, _: u16, x: u16) !u16 { return x; }
-};
-
-const workspacesSegment = if (build.has_tags) @import("tags") else struct {
-    pub fn draw(_: *drawing.DrawContext, _: types.BarConfig, _: u16, x: u16, _: u8, _: []const bool, _: bool) !u16 { return x; }
-    pub fn invalidate() void {}
-    pub fn getCachedWorkspaceWidth() u16 { return 0; }
-};
-
-const layoutSegment   = if (build.has_layout)   @import("layout")   else DisabledSegment;
-const variantsSegment = if (build.has_variants) @import("variants") else DisabledSegment;
-
-const prompt     = @import("prompt");
-const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
-const carousel   = @import("carousel");
-
-const titleSegment = if (build.has_title) @import("title") else struct {
-    pub fn draw(
-        _: *drawing.DrawContext, _: types.BarConfig, _: u16,
-        x: u16, w: u16,
-        _: *xcb.xcb_connection_t, _: ?u32,
-        _: []const u32, _: []const u32,
-        _: *std.ArrayList(u8), _: *?u32,
-        _: bool, _: std.mem.Allocator,
-    ) !u16 { return x + w; }
-};
-
-const clockSegment = if (build.has_clock) @import("clock") else struct {
-    pub fn draw(_: *drawing.DrawContext, _: types.BarConfig, _: u16, x: u16) !u16 { return x; }
-    pub fn updateTimerState() void {}
-    pub fn pollTimeoutMs() i32 { return -1; }
-};
-
-// Constants 
+// Constants
 
 const minBarHeight:            u32 = 20;
 const maxBarHeight:            u32 = 200;
 const defaultBarHeight:        u16 = 24;
 const fallbackWorkspacesWidth: u16 = 270;
-const layoutSegmentWidth:      u16 = 60;
-const titleSegmentMinWidth:    u16 = 100;
+const layoutWidth:      u16 = 60;
+const titleMinWidth:    u16 = 100;
 
 // Core data structures 
 
@@ -340,18 +299,21 @@ const State = struct {
                 .allocator = allocator,
             },
             .layout_cache = .{
-                .clock_width = dc.measureTextWidth(clockSegment.CLOCK_MEASURE_STRING) + 2 * config.scaledSegmentPadding(height),
+                .clock_width = if (comptime build.has_clock)
+                    dc.measureTextWidth(clock.CLOCK_MEASURE_STRING) + 2 * config.scaledSegmentPadding(height)
+                else
+                    0,
             },
             .has_clock_segment = blk: {
                 if (comptime !build.has_clock) break :blk false;
-                for (config.layout.items) |layout|
-                    for (layout.segments.items) |seg|
+                for (config.layout.items) |lay|
+                    for (lay.segments.items) |seg|
                         if (seg == .clock) break :blk true;
                 break :blk false;
             },
         };
         try s.title_cache.title.ensureTotalCapacity(allocator, 256);
-        workspacesSegment.invalidate();
+        if (comptime build.has_tags) tags.invalidate();
         return s;
     }
 
@@ -370,12 +332,15 @@ const State = struct {
 
     fn measureSegmentWidth(self: *State, snap: *const BarSnapshot, segment: types.BarSegment) u16 {
         return switch (segment) {
-            .workspaces => if (snap.workspace_count > 0)
-                @intCast(snap.workspace_count * workspacesSegment.getCachedWorkspaceWidth())
-            else
-                fallbackWorkspacesWidth,
-            .layout, .variants => layoutSegmentWidth,
-            .title             => titleSegmentMinWidth,
+            .workspaces => blk: {
+                if (comptime !build.has_tags) break :blk fallbackWorkspacesWidth;
+                break :blk if (snap.workspace_count > 0)
+                    @intCast(snap.workspace_count * tags.getCachedWorkspaceWidth())
+                else
+                    fallbackWorkspacesWidth;
+            },
+            .layout, .variants => layoutWidth,
+            .title             => titleMinWidth,
             .clock             => self.layout_cache.clock_width,
         };
     }
@@ -384,11 +349,12 @@ const State = struct {
         if (segment == .workspaces) self.layout_cache.workspace_x = x;
         const r = &self.render;
         return switch (segment) {
-            .workspaces => try workspacesSegment.draw(
+            .workspaces => if (comptime build.has_tags) try tags.draw(
                 r.dc, r.config, r.height, x,
-                snap.current_workspace, snap.workspace_has_windows.items, snap.is_all_view_active),
-            .layout   => try layoutSegment.draw(r.dc, r.config, r.height, x),
-            .variants => try variantsSegment.draw(r.dc, r.config, r.height, x),
+                snap.current_workspace, snap.workspace_has_windows.items, snap.is_all_view_active)
+            else x,
+            .layout   => if (comptime build.has_layout)   try layout.draw(r.dc, r.config, r.height, x)   else x,
+            .variants => if (comptime build.has_variants)  try variants.draw(r.dc, r.config, r.height, x) else x,
             .title    => blk: {
                 const wins = snap.current_workspace_windows.items;
                 const minimized_title: []const u8 =
@@ -406,7 +372,7 @@ const State = struct {
                     &self.title_cache.title, &self.title_cache.title_window,
                     snap.is_title_invalidated, r.allocator);
             },
-            .clock    => try clockSegment.draw(r.dc, r.config, r.height, x),
+            .clock    => if (comptime build.has_clock) try clock.draw(r.dc, r.config, r.height, x) else x,
         };
     }
 
@@ -489,10 +455,10 @@ const State = struct {
         // Recompute right_section_width only when workspace_count changes.
         if (snap.workspace_count != self.layout_cache.cached_workspace_count) {
             var right_total: u16 = 0;
-            for (self.render.config.layout.items) |layout| {
-                if (layout.position != .right) continue;
-                for (layout.segments.items) |seg| right_total += self.measureSegmentWidth(snap, seg) + scaled_spacing;
-                if (layout.segments.items.len > 0) right_total -= scaled_spacing;
+            for (self.render.config.layout.items) |lay| {
+                if (lay.position != .right) continue;
+                for (lay.segments.items) |seg| right_total += self.measureSegmentWidth(snap, seg) + scaled_spacing;
+                if (lay.segments.items.len > 0) right_total -= scaled_spacing;
             }
             self.layout_cache.right_section_width    = right_total;
             self.layout_cache.cached_workspace_count = snap.workspace_count;
@@ -503,9 +469,9 @@ const State = struct {
         var title_seg_w: u16 = 0;
         var x: u16 = 0;
 
-        for (self.render.config.layout.items) |layout| {
-            switch (layout.position) {
-                .left => for (layout.segments.items) |seg| {
+        for (self.render.config.layout.items) |lay| {
+            switch (lay.position) {
+                .left => for (lay.segments.items) |seg| {
                     const seg_w = self.measureSegmentWidth(snap, seg);
                     if (seg == .title) { title_seg_x = x; title_seg_w = seg_w; }
                     if (shouldSkipSegment(snap, seg)) {
@@ -521,7 +487,7 @@ const State = struct {
                 },
                 .center => {
                     const remaining = @max(100, self.render.width -| x -| right_total -| scaled_spacing);
-                    for (layout.segments.items) |seg| {
+                    for (lay.segments.items) |seg| {
                         const w = if (seg == .title) remaining else self.measureSegmentWidth(snap, seg);
                         if (seg == .title) { title_seg_x = x; title_seg_w = w; }
                         if (shouldSkipSegment(snap, seg)) {
@@ -537,7 +503,7 @@ const State = struct {
                         }
                     }
                 },
-                .right => try self.drawRightSegments(snap, layout.segments.items),
+                .right => try self.drawRightSegments(snap, lay.segments.items),
             }
         }
 
@@ -548,13 +514,15 @@ const State = struct {
     }
 
     fn drawClockOnly(self: *State) void {
+        if (comptime !build.has_clock) return;
         const clock_x = self.layout_cache.clock_x orelse return;
-        _ = clockSegment.draw(self.render.dc, self.render.config, self.render.height, clock_x) catch |e|
+        _ = clock.draw(self.render.dc, self.render.config, self.render.height, clock_x) catch |e|
             debug.warnOnErr(e, "drawClockOnly");
         self.render.dc.blit();
     }
 
     fn drawTitleOnly(self: *State, new_focused: ?u32) void {
+        if (comptime !build.has_title) return;
         if (prompt.isActive()) return;
         if (!self.title_cache.is_layout_valid or self.title_cache.title_width == 0) return;
         self.title_cache.focused_window = new_focused;
@@ -597,7 +565,7 @@ const State = struct {
         // which is imperceptible.
         if (new_focused != self.title_cache.title_window) return;
 
-        _ = titleSegment.drawCached(
+        _ = title.drawCached(
             .{
                 .dc      = self.render.dc,
                 .config  = self.render.config,
@@ -814,13 +782,13 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot,
     s.title_cache.is_invalidated = false;
 
     snap.focused_title.clearRetainingCapacity();
-    if (snap.focused_window) |fw| {
+    if (comptime build.has_title) if (snap.focused_window) |fw| {
         if (snap.focused_window != prev.focused_window or snap.is_title_invalidated) {
-            titleSegment.fetchWindowTitleInto(core.conn, fw, &snap.focused_title, allocator) catch {};
+            title.fetchWindowTitleInto(core.conn, fw, &snap.focused_title, allocator) catch {};
         } else {
             snap.focused_title.appendSlice(allocator, prev.focused_title.items) catch {};
         }
-    }
+    };
 
     // Pre-fetch titles for every workspace window on the main thread so the
     // render thread's segmented-title path never issues X11 calls (Issue #2).
@@ -838,13 +806,14 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *const BarSnapshot,
         var title_tmp: std.ArrayListUnmanaged(u8) = .empty;
         defer title_tmp.deinit(allocator);
         for (snap.current_workspace_windows.items) |win| {
-            if (snap.focused_window == win) {
-                // Reuse the already-fetched focused title — no extra round-trip.
-                snap.window_title_data.appendSlice(allocator, snap.focused_title.items) catch {};
-            } else {
-                title_tmp.clearRetainingCapacity();
-                titleSegment.fetchWindowTitleInto(core.conn, win, &title_tmp, allocator) catch {};
-                snap.window_title_data.appendSlice(allocator, title_tmp.items) catch {};
+            if (comptime build.has_title) {
+                if (snap.focused_window == win) {
+                    snap.window_title_data.appendSlice(allocator, snap.focused_title.items) catch {};
+                } else {
+                    title_tmp.clearRetainingCapacity();
+                    title.fetchWindowTitleInto(core.conn, win, &title_tmp, allocator) catch {};
+                    snap.window_title_data.appendSlice(allocator, title_tmp.items) catch {};
+                }
             }
             const end: u32 = @intCast(snap.window_title_data.items.len);
             snap.window_title_ends.append(allocator, end) catch {};
@@ -1046,7 +1015,11 @@ fn resolvePercentageFontSize(bar_height: u16) ?u16 {
 
 fn calcBarHeight() !u16 {
     if (core.config.bar.height) |h| {
-        const height = scale.scaleBarHeight(h, core.screen.height_in_pixels);
+        const height = if (comptime build.has_scale) scale.scaleBarHeight(h, core.screen.height_in_pixels) else blk: {
+            const screen_h: f32 = @floatFromInt(core.screen.height_in_pixels);
+            const px: f32 = if (h.is_percentage) screen_h * (h.value / 100.0) else h.value;
+            break :blk @max(20, @as(u16, @intFromFloat(@round(px))));
+        };
         if (core.config.bar.font_size.is_percentage) {
             if (resolvePercentageFontSize(height)) |sz|
                 core.config.bar.scaled_font_size = sz;
@@ -1076,7 +1049,7 @@ pub fn init() !void {
     // so carousel.wakeIntervalNs() returns the real rate from the first tick.
     // ensureRefreshRateDetected is idempotent; if title.zig already triggered
     // it this is a fast cache-hit return.
-    scale.ensureRefreshRateDetected(core.conn);
+    if (comptime build.has_scale) scale.ensureRefreshRateDetected(core.conn);
     const height = try calcBarHeight();
     const y_pos  = calcBarYPos(height);
     const setup  = createBarWindow(height, y_pos);
@@ -1292,7 +1265,7 @@ pub fn setBarState(action: BarAction) void {
         if (comptime build.has_tiling) tiling.retileCurrentWorkspace();
     }
     debug.info("Bar {s} ({s})", .{ if (show) "shown" else "hidden", @tagName(action) });
-    clockSegment.updateTimerState();
+    if (comptime build.has_clock) clock.updateTimerState();
 }
 
 pub fn updateIfDirty() !void {
@@ -1315,8 +1288,8 @@ pub fn checkClockUpdate() bool {
     return true;
 }
 
-pub fn pollTimeoutMs() i32     { return clockSegment.pollTimeoutMs(); }
-pub fn updateTimerState() void { clockSegment.updateTimerState(); }
+pub fn pollTimeoutMs() i32     { return if (comptime build.has_clock) clock.pollTimeoutMs() else -1; }
+pub fn updateTimerState() void { if (comptime build.has_clock) clock.updateTimerState(); }
 
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t) void {
     if (gBar.state) |s| if (event.window == s.win.win_id and event.count == 0) {
@@ -1340,8 +1313,9 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     const s = gBar.state orelse return;
     if (event.event != s.win.win_id) return;
     if (comptime !build.has_workspaces) return;
+    if (comptime !build.has_tags) return;
     const ws_state = workspaces.getState() orelse return;
-    const ws_w     = workspacesSegment.getCachedWorkspaceWidth();
+    const ws_w     = tags.getCachedWorkspaceWidth();
     if (ws_w == 0) return;
     const click_x           = @max(0, event.event_x - s.layout_cache.workspace_x);
     const clicked_ws: usize = @intCast(@divFloor(click_x, ws_w));
@@ -1350,7 +1324,11 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     s.markDirty();
 }
 
-// Private helpers 
+// Private helpers
+
+inline fn switchToWorkspace(ws_arg: u8) void {
+    if (comptime build.has_workspaces) workspaces.switchTo(ws_arg);
+}
 
 /// Returns true when tiling is both globally enabled and currently active.
 inline fn isTilingActive() bool {
@@ -1365,6 +1343,7 @@ inline fn isTilingActive() bool {
 /// responsibility.
 fn retileAllWorkspaces() void {
     if (comptime !build.has_tiling) return;
+    if (comptime !build.has_workspaces) { tiling.retileCurrentWorkspace(); return; }
     const ws_state = workspaces.getState() orelse return;
     if (!isTilingActive()) { tiling.retileCurrentWorkspace(); return; }
     for (ws_state.workspaces, 0..) |_, idx| {
