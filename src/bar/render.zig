@@ -1,3 +1,4 @@
+//! Text rendering library bindings
 //! Cairo/Pango/GLib C bindings for bar rendering.
 
 const core    = @import("core");
@@ -45,7 +46,6 @@ pub extern fn cairo_image_surface_create(
 ) ?*cairo_surface_t;
 
 pub extern fn cairo_surface_destroy(surface: *cairo_surface_t) void;
-/// Flushes pending Cairo operations to the underlying pixmap.
 pub extern fn cairo_surface_flush(surface: *cairo_surface_t) void;
 
 pub extern fn cairo_create(surface: *cairo_surface_t) ?*cairo_t;
@@ -56,9 +56,8 @@ pub extern fn cairo_move_to(cr: *cairo_t, x: f64, y: f64) void;
 pub extern fn cairo_set_operator(cr: *cairo_t, op: cairo_operator_t) void;
 pub extern fn cairo_paint(cr: *cairo_t) void;
 
-/// Push/pop graphics state; used to isolate clip regions for carousel text scrolling.
+/// Used to isolate clip regions; cairo_restore removes the active clip.
 pub extern fn cairo_save(cr: *cairo_t) void;
-/// Restores the most recently saved state, removing the active clip.
 pub extern fn cairo_restore(cr: *cairo_t) void;
 pub extern fn cairo_rectangle(cr: *cairo_t, x: f64, y: f64, width: f64, height: f64) void;
 pub extern fn cairo_clip(cr: *cairo_t) void;
@@ -94,8 +93,7 @@ pub extern fn pango_cairo_context_set_resolution(context: *PangoContext, dpi: f6
 pub extern fn pango_layout_set_text(layout: *PangoLayout, text: [*]const u8, length: c_int) void;
 pub extern fn pango_layout_set_font_description(layout: *PangoLayout, desc: ?*PangoFontDescription) void;
 pub extern fn pango_layout_get_context(layout: *PangoLayout) *PangoContext;
-/// Writes the layout's pixel dimensions into `width` and/or `height`.
-/// Pass null for either dimension if it is not needed.
+/// Pass null for either dimension if not needed.
 pub extern fn pango_layout_get_pixel_size(layout: *PangoLayout, width: ?*c_int, height: ?*c_int) void;
 pub extern fn pango_layout_set_width(layout: *PangoLayout, width: c_int) void;
 pub extern fn pango_layout_set_ellipsize(layout: *PangoLayout, ellipsize: PangoEllipsizeMode) void;
@@ -110,15 +108,13 @@ pub extern fn pango_font_description_get_size_is_absolute(desc: *PangoFontDescri
 pub extern fn pango_font_description_set_size(desc: *PangoFontDescription, size: c_int) void;
 pub extern fn pango_font_description_set_absolute_size(desc: *PangoFontDescription, size: f64) void;
 
-/// Returns ink and logical extents of the layout in Pango units.
-/// Pass null for either rect if it is not needed.
+/// Returns Pango units. Pass null for either rect if not needed.
 pub extern fn pango_layout_get_extents(
     layout:       *PangoLayout,
     ink_rect:     ?*PangoRectangle,
     logical_rect: ?*PangoRectangle,
 ) void;
 
-/// Returns font metrics for the given description and context.
 /// Pass null for `language` to use the default language.
 pub extern fn pango_context_get_metrics(
     context:  *PangoContext,
@@ -132,6 +128,5 @@ pub extern fn pango_font_metrics_unref(metrics: *PangoFontMetrics) void;
 
 // GLib / GObject 
 
-/// Decrements the GObject reference count of `object`, freeing it when it
-/// reaches zero.  Used to release PangoLayout and other GObject-based types.
+/// Releases PangoLayout and other GObject-based types.
 pub extern fn g_object_unref(object: *anyopaque) void;
