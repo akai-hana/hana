@@ -8,16 +8,11 @@ const constants = @import("constants");
 const tiling  = @import("tiling");
 const layouts = @import("layouts");
 
-/// Maximum signed position representable in a `utils.Rect.x` (i16).
-/// Windows whose strip position falls outside this range are parked at
-/// OFFSCREEN_X rather than sent with an overflowing cast.
+// Max/min signed positions representable in a `utils.Rect.x`.
+// Windows whose strip position falls outside this range are parked at constants.OFFSCREEN_X_POSITION,
+// rather than sent with an overflowing cast.
 const I16_MAX: i32 = std.math.maxInt(i16);
 const I16_MIN: i32 = std.math.minInt(i16);
-
-/// Sentinel X sent to the X server for windows that are so far off-screen
-/// their strip coordinate would overflow i16.  Matches constants.OFFSCREEN_X_POSITION
-/// so they are treated the same as inactive-workspace windows by the rest of the WM.
-const OFFSCREEN_X: i32 = constants.OFFSCREEN_X_POSITION;
 
 pub fn tileWithOffset(
     ctx:      *const layouts.LayoutCtx,
@@ -76,7 +71,7 @@ pub fn tileWithOffset(
                 _ = @import("core").xcb.xcb_configure_window(
                     ctx.conn, win,
                     @import("core").xcb.XCB_CONFIG_WINDOW_X,
-                    &[_]u32{@bitCast(OFFSCREEN_X)},
+                    &[_]u32{@bitCast(constants.OFFSCREEN_X_POSITION)},
                 );
                 // Invalidate the cache entry so the next on-screen retile
                 // always reconfigures the window correctly.
@@ -102,9 +97,7 @@ pub fn tileWithOffset(
     }
 }
 
-// ============================================================================
 // Private helpers
-// ============================================================================
 
 /// Height of each window: full screen height minus top + bottom gap and borders.
 inline fn calcContentH(screen_h: u16, m: utils.Margins) u16 {

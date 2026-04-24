@@ -40,6 +40,7 @@ const optional_subsystems = [_][]const u8{
             "monocle",
             "grid",
             "fibonacci",
+            "scroll",
             "leaf",
 
     // floating/
