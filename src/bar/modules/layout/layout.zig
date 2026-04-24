@@ -16,7 +16,8 @@ pub fn getIcon(layout: anytype) []const u8 {
         .monocle   => "[M]",
         .grid      => "[+]",
         .fibonacci => "[@]",
-        .leaf      => "[/]",
+        .scroll    => "[|]",
+        .leaf      => "BSP",
         .floating  => "><>",
     };
 }
@@ -24,7 +25,7 @@ pub fn getIcon(layout: anytype) []const u8 {
 /// Draws the layout icon on the bar. Returns the x position after the drawn segment.
 pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, start_x: u16) !u16 {
     // Without tiling all windows are floating by definition.
-    if (comptime !build.has_tiling)
+    if (!build.has_tiling)
         return dc.drawSegment(start_x, height, "><>", config.scaledSegmentPadding(height), config.bg, config.fg);
 
     const t_state = tiling.getStateOpt() orelse return start_x;

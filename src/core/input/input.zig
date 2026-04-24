@@ -51,28 +51,28 @@ const prompt = if (build.has_bar and build.has_prompt) @import("prompt") else st
 
 /// Returns the workspaces.State pointer, or null when workspaces are compiled out.
 fn getWsState() ?*workspaces.State {
-    return if (comptime build.has_workspaces) workspaces.getState() else null;
+    return if (build.has_workspaces) workspaces.getState() else null;
 }
 inline fn switchToWs(ws: u8) void {
-    if (comptime build.has_workspaces) workspaces.switchTo(ws);
+    if (build.has_workspaces) workspaces.switchTo(ws);
 }
 inline fn moveWindowToWs(win: u32, ws: u8) !void {
-    if (comptime build.has_workspaces) try workspaces.moveWindowTo(win, ws);
+    if (build.has_workspaces) try workspaces.moveWindowTo(win, ws);
 }
 inline fn wsMoveWindowExclusive(win: u32, ws: u8) void {
-    if (comptime build.has_workspaces) workspaces.moveWindowExclusive(win, ws);
+    if (build.has_workspaces) workspaces.moveWindowExclusive(win, ws);
 }
 inline fn wsTagToggle(win: u32, ws: u8, p: bool) void {
-    if (comptime build.has_workspaces) workspaces.tagToggle(win, ws, p);
+    if (build.has_workspaces) workspaces.tagToggle(win, ws, p);
 }
 inline fn wsSwitchToAll() void {
-    if (comptime build.has_workspaces) workspaces.switchToAll();
+    if (build.has_workspaces) workspaces.switchToAll();
 }
 inline fn wsMoveWindowToAll(win: u32) void {
-    if (comptime build.has_workspaces) workspaces.moveWindowToAll(win);
+    if (build.has_workspaces) workspaces.moveWindowToAll(win);
 }
 inline fn wsTagToggleAll(win: u32) void {
-    if (comptime build.has_workspaces) workspaces.tagToggleAll(win);
+    if (build.has_workspaces) workspaces.tagToggleAll(win);
 }
 
 
@@ -271,7 +271,7 @@ fn executeAction(action: *const types.Action) !void {
         .sequence      => |acts| for (acts) |*a| try executeAction(a),
 
         // Fullscreen
-        .toggle_fullscreen => if (comptime build.has_fullscreen) fullscreen.toggle(),
+        .toggle_fullscreen => if (build.has_fullscreen) fullscreen.toggle(),
 
         // Tiling — delegated to executeTilingAction
         .toggle_floating_window,
@@ -282,14 +282,14 @@ fn executeAction(action: *const types.Action) !void {
             => executeTilingAction(action),
 
         // Bar
-        .toggle_bar_visibility => if (comptime build.has_bar) bar.setBarState(.toggle),
-        .toggle_bar_position   => if (comptime build.has_bar) bar.toggleBarSegmentAnchor(),
+        .toggle_bar_visibility => if (build.has_bar) bar.setBarState(.toggle),
+        .toggle_bar_position   => if (build.has_bar) bar.toggleBarSegmentAnchor(),
 
         // Minimize
-        .minimize_window => if (comptime build.has_minimize) minimize.minimizeWindow(),
-        .unminimize_lifo => if (comptime build.has_minimize) minimize.unminimize(.lifo),
-        .unminimize_fifo => if (comptime build.has_minimize) minimize.unminimize(.fifo),
-        .unminimize_all  => if (comptime build.has_minimize) minimize.unminimizeAll(),
+        .minimize_window => if (build.has_minimize) minimize.minimizeWindow(),
+        .unminimize_lifo => if (build.has_minimize) minimize.unminimize(.lifo),
+        .unminimize_fifo => if (build.has_minimize) minimize.unminimize(.fifo),
+        .unminimize_all  => if (build.has_minimize) minimize.unminimizeAll(),
 
         // Workspaces — delegated to executeWorkspaceAction
         .switch_workspace, .move_to_workspace, .move_window, .toggle_tag,
@@ -308,7 +308,7 @@ fn executeAction(action: *const types.Action) !void {
 /// Dispatches tiling-related actions, each wrapped in a server grab so the
 /// compositor cannot render a partial retile frame.
 fn executeTilingAction(action: *const types.Action) void {
-    if (comptime !build.has_tiling) return;
+    if (!build.has_tiling) return;
     switch (action.*) {
         // toggle_floating_window: wrap in a server grab so that the retile,
         // border sweep, and bar blit all land in one compositor frame.
@@ -415,7 +415,7 @@ fn executeMouseAction(action: *const types.Action, clicked_win: u32) !void {
     switch (action.*) {
         // Same grab pattern as the keyboard path in executeAction: retile,
         // border sweep, and bar blit must be atomic from the compositor's view.
-        .toggle_floating_window => if (comptime build.has_tiling)
+        .toggle_floating_window => if (build.has_tiling)
             withTilingGrabAndBordersWin(clicked_win, tiling.toggleWindowFloat),
         else => try executeAction(action),
     }
@@ -699,7 +699,7 @@ pub fn reapPendingChildren() void {
 
 /// Logs fullscreen state for each workspace, or "none" when compiled out.
 fn dumpFullscreenState() void {
-    if (comptime build.has_fullscreen) {
+    if (build.has_fullscreen) {
         fullscreen.forEachFullscreen(struct {
             fn cb(ws: u8, info: fullscreen.FullscreenInfo) void {
                 debug.info("Fullscreen on workspace {}: {x}", .{ ws, info.window });
@@ -714,7 +714,7 @@ fn dumpFullscreenState() void {
 /// Logs current workspace and per-workspace window counts.
 /// No-op when workspaces are compiled out.
 fn dumpWorkspaceState() void {
-    if (comptime !build.has_workspaces) return;
+    if (!build.has_workspaces) return;
     if (getWsState()) |ws_state| {
         debug.info("Current workspace: {}", .{ws_state.current + 1});
         for (ws_state.workspaces, 0..) |_, i| {
@@ -726,7 +726,7 @@ fn dumpWorkspaceState() void {
 /// Logs tiling layout, window count, and master geometry.
 /// No-op when tiling is compiled out.
 fn dumpTilingState() void {
-    if (comptime !build.has_tiling) return;
+    if (!build.has_tiling) return;
     if (tiling.getStateOpt()) |t| {
         debug.info("Tiling enabled: {}",     .{t.is_enabled});
         debug.info("Tiling layout:  {s}",    .{@tagName(t.layout)});

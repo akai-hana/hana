@@ -146,7 +146,7 @@ pub fn isMinimized(win: u32) bool {
 /// should use focus.focusBestAvailable() directly.
 pub fn focusMasterOrFirst() void {
     found: {
-        if (comptime build.has_workspaces) {
+        if (build.has_workspaces) {
             const cur = tracking.getCurrentWorkspace() orelse break :found;
             const bit = tracking.workspaceBit(cur);
             var first_win: ?u32 = null;
@@ -178,7 +178,7 @@ fn rollbackMinimize(win: u32, tiling_index: ?usize, fs_ws: ?u8, saved_fs: ?core.
             tiling.addWindow(win);
         tiling.retileCurrentWorkspace();
     }
-    if (comptime build.has_fullscreen) {
+    if (build.has_fullscreen) {
         if (saved_fs) |geom| {
             fullscreen.setForWorkspace(fs_ws.?, .{ .window = win, .saved_geometry = geom });
         }
@@ -194,7 +194,7 @@ pub fn minimizeWindow() void {
     // Tear down fullscreen state if needed, saving geometry for later restore.
     var saved_fs: ?core.WindowGeometry = null;
     var fs_ws_for_rollback: ?u8 = null;
-    if (comptime build.has_fullscreen) fs_blk: {
+    if (build.has_fullscreen) fs_blk: {
         const fs_ws = fullscreen.workspaceFor(win) orelse break :fs_blk;
         saved_fs = fullscreen.getForWorkspace(fs_ws).?.saved_geometry;
         fs_ws_for_rollback = fs_ws;
@@ -264,7 +264,7 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
         // choice — it queues the redraw to the next event-loop iteration after
         // the grab has been fully released.
         focus.setFocus(win, .window_spawn);
-        if (comptime build.has_fullscreen) fullscreen.enterFullscreen(win, geom);
+        if (build.has_fullscreen) fullscreen.enterFullscreen(win, geom);
         bar.scheduleRedraw();
         return;
     }

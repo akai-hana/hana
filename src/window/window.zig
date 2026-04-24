@@ -156,7 +156,7 @@ var borders_flushed_this_batch: bool = false;
 
 /// Save `rect` as the last-known geometry for `win`.
 pub fn saveWindowGeom(win: u32, rect: utils.Rect) void {
-    if (comptime build.has_tiling) { tiling.saveWindowGeom(win, rect); return; }
+    if (build.has_tiling) { tiling.saveWindowGeom(win, rect); return; }
     const c = &g_geom_cache;
     for (c.slots[0..c.len]) |*s| { if (s.win == win) { s.rect = rect; return; } }
     if (c.len < c.slots.len) { c.slots[c.len] = .{ .win = win, .rect = rect }; c.len += 1; }
@@ -164,7 +164,7 @@ pub fn saveWindowGeom(win: u32, rect: utils.Rect) void {
 
 /// Return the last-known geometry for `win`, or null if none is cached.
 pub fn getWindowGeom(win: u32) ?utils.Rect {
-    if (comptime build.has_tiling) return tiling.getWindowGeom(win);
+    if (build.has_tiling) return tiling.getWindowGeom(win);
     const c = &g_geom_cache;
     for (c.slots[0..c.len]) |s| if (s.win == win) {
         return if (s.rect.width > 0 or s.rect.height > 0) s.rect else null;
@@ -1686,7 +1686,7 @@ fn updateWorkspaceBordersImpl(comptime skip_tiled: bool) void {
     for (tracking.allWindows()) |_entry| {
         const win = _entry.win;
         if (_entry.mask & cur_bit == 0) continue;
-        if (comptime build.has_tiling) {
+        if (build.has_tiling) {
             if (skip_tiled and core.config.tiling.enabled) {
                 // Post-retile: tiled windows already updated by configureWithHints.
                 if (tiling.isWindowTiled(win)) continue;
@@ -1694,7 +1694,7 @@ fn updateWorkspaceBordersImpl(comptime skip_tiled: bool) void {
         }
         const color = borderColor(win);
         // Dedup via the tiling CacheMap: skip the XCB call when color is unchanged.
-        if (comptime build.has_tiling) {
+        if (build.has_tiling) {
             if (tiling.sendBorderColorIfChanged(win, color)) continue;
         }
         _ = xcb.xcb_change_window_attributes(core.conn, win,

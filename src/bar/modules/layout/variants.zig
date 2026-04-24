@@ -38,8 +38,6 @@ pub fn getIndicator(s: anytype) []const u8 {
             .rigid   => "[#]",
         },
 
-        .leaf => "[L]",
-
         else => ""
     };
 }

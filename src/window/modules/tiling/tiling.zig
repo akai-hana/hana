@@ -51,6 +51,7 @@ const monocle   = if (build.has_monocle)   @import("monocle")   else LayoutStub;
 const grid      = if (build.has_grid)      @import("grid")      else LayoutStub;
 const fibonacci = if (build.has_fibonacci) @import("fibonacci") else LayoutStub;
 const leaf       = if (build.has_leaf)       @import("leaf")       else LayoutStub;
+const scroll     = if (build.has_scroll)     @import("scroll")     else LayoutStub;
 
 // Module constants 
 
@@ -70,6 +71,7 @@ pub const Layout = enum {
     grid,
     fibonacci,
     leaf,
+    scroll,
     /// Windows are left at their current positions; no tiling is applied.
     /// Windows are left at their current positions; never part of the normal layout cycle.
     floating,
@@ -107,8 +109,12 @@ pub const State = struct {
     /// Runtime layout cycle: intersection of config `layouts` and disk-present
     /// layout files. `stepLayout` walks this so layouts omitted from the
     /// config are invisible at runtime even if their .zig file exists on disk.
-    enabled_layouts:       [5]Layout,
+    enabled_layouts:       [6]Layout,
     enabled_layout_count:  u8,
+
+    /// Pixel offset applied by the scroll layout.
+    /// Clamped by scroll.tileWithOffset on every retile.
+    scrolling_offset: i32,
 
     /// Per-workspace geometry validity bitmask (64 bits -> up to 64 workspaces).
     ///
@@ -144,7 +150,7 @@ pub const State = struct {
     }
 
     pub inline fn borderColor(self: *const State, win: u32) u32 {
-        if (comptime build.has_fullscreen) {
+        if (build.has_fullscreen) {
             if (fullscreen.isFullscreen(win)) return 0;
         }
         return if (focus.getFocused() == win) self.border_focused else self.border_unfocused;
@@ -198,7 +204,7 @@ pub fn reloadConfig() void {
     // Reset all workspace layouts and master widths to the new config defaults.
     // Per-workspace adjustments made at runtime are intentionally discarded so
     // the reloaded config values take effect immediately.
-    if (comptime build.has_workspaces) {
+    if (build.has_workspaces) {
         if (workspaces.getState()) |ws_state| {
             for (ws_state.workspaces) |*ws| {
                 ws.layout       = ns.layout;
@@ -481,7 +487,7 @@ pub fn retileAllWorkspaces() void {
     var ws_idx: u8 = 0;
     while (ws_idx < effective_ws) : (ws_idx += 1) {
         if (ws_idx == current_ws) continue;
-        if (comptime build.has_fullscreen) {
+        if (build.has_fullscreen) {
             if (fullscreen.getForWorkspace(ws_idx)) |_| continue;
         }
 
@@ -508,7 +514,7 @@ pub fn retileAllWorkspaces() void {
 pub fn retileInactiveWorkspace(ws_idx: u8) void {
     const s = getState();
     if (!s.is_enabled) return;
-    if (comptime !build.has_workspaces) return;
+    if (!build.has_workspaces) return;
 
     const ws_state = workspaces.getState() orelse return;
 
@@ -553,7 +559,7 @@ fn retileCurrentWorkspaceReload(border_width: u16) void {
     const screen     = calcScreenArea();
     const target_ws: u8 = @intCast(tracking.getCurrentWorkspace() orelse return);
 
-    if (comptime build.has_fullscreen) {
+    if (build.has_fullscreen) {
         if (fullscreen.getForWorkspace(target_ws)) |_| return;
     }
 
@@ -682,6 +688,7 @@ pub inline fn isLayoutAvailable(layout: Layout) bool {
         .grid      => build.has_grid,
         .fibonacci => build.has_fibonacci,
         .leaf       => build.has_leaf,
+        .scroll     => build.has_scroll,
         .floating  => true, // always built-in
     };
 }
@@ -696,7 +703,7 @@ pub fn adjustMasterCount(delta: i8) void {
     if (clamped == s.master_count) return;
     s.master_count = clamped;
     if (!core.config.tiling.global_layout) {
-        if (comptime build.has_workspaces) {
+        if (build.has_workspaces) {
             if (workspaces.getCurrentWorkspaceObject()) |ws| ws.master_count = s.master_count;
         }
     }
@@ -714,7 +721,7 @@ pub fn adjustMasterWidth(delta: f32) void {
     s.master_width = @max(constants.MIN_MASTER_WIDTH,
         @min(max_master_width_ratio, s.master_width + delta));
     if (!core.config.tiling.global_layout) {
-        if (comptime build.has_workspaces) {
+        if (build.has_workspaces) {
             if (workspaces.getCurrentWorkspaceObject()) |ws| ws.master_width = s.master_width;
         }
     }
@@ -787,7 +794,7 @@ pub fn retileCurrentWorkspaceDeferredPrebuilt(ws_wins: []const u32, defer_win: ?
     }
     const screen = calcScreenArea();
     const target_ws: u8 = @intCast(tracking.getCurrentWorkspace() orelse return);
-    if (comptime build.has_fullscreen) {
+    if (build.has_fullscreen) {
         if (fullscreen.getForWorkspace(target_ws)) |_| return;
     }
     if (ws_wins.len == 0) return;
@@ -848,6 +855,7 @@ const layout_cycle: []const Layout = blk: {
     if (build.has_grid)      list = list ++ &[_]Layout{.grid};
     if (build.has_fibonacci) list = list ++ &[_]Layout{.fibonacci};
     if (build.has_leaf)       list = list ++ &[_]Layout{.leaf};
+    if (build.has_scroll)     list = list ++ &[_]Layout{.scroll};
     if (list.len == 0) @compileError("No tiling layouts found. Add at least one .zig file to src/tiling/layouts/.");
     break :blk list;
 };
@@ -861,14 +869,15 @@ inline fn layoutFromString(name: []const u8) ?Layout {
     if (std.mem.eql(u8, name, "grid"))      return .grid;
     if (std.mem.eql(u8, name, "fibonacci")) return .fibonacci;
     if (std.mem.eql(u8, name, "leaf"))       return .leaf;
+    if (std.mem.eql(u8, name, "scroll"))     return .scroll;
     return null;
 }
 
 /// Build the runtime-enabled layout list from the config's `layouts` array,
 /// keeping only entries whose .zig file is present on disk. Duplicates are
 /// dropped. Falls back to `layout_cycle` when the config produces an empty list.
-fn parseEnabledLayouts(layouts_cfg: []const []const u8) struct { arr: [5]Layout, len: u8 } {
-    var arr: [5]Layout = undefined;
+fn parseEnabledLayouts(layouts_cfg: []const []const u8) struct { arr: [6]Layout, len: u8 } {
+    var arr: [6]Layout = undefined;
     var len: u8 = 0;
     for (layouts_cfg) |name| {
         if (len >= arr.len) break;
@@ -938,6 +947,7 @@ fn initState() State {
         .is_dirty         = false,
         .workspace_geom_valid_bits = 0,
         .last_retile_area = zero_rect,
+        .scrolling_offset = 0,
         .cache            = .{},
         .scratch_wins     = undefined,
         .retile_wins      = undefined,
@@ -989,6 +999,7 @@ fn invokeLayout(
         .grid      => grid.tileWithOffset(ctx, s, wins, w, h, y),
         .fibonacci => fibonacci.tileWithOffset(ctx, s, wins, w, h, y),
         .leaf       => leaf.tileWithOffset(ctx, s, wins, w, h, y),
+        .scroll     => scroll.tileWithOffset(ctx, s, wins, w, h, y),
         .floating  => floating.tileWithOffset(ctx, s, wins, w, h, y),
     }
 }
@@ -1005,7 +1016,7 @@ inline fn calcScreenArea() utils.Rect {
 }
 
 fn selectLayout(s: *State, ws_state: ?*WsState, ws_idx: u8, is_global: bool) Layout {
-    if (comptime !build.has_workspaces) return s.layout;
+    if (!build.has_workspaces) return s.layout;
     if (is_global) return s.layout;
     const wss = ws_state orelse return s.layout;
     return if (ws_idx < wss.workspaces.len) wss.workspaces[ws_idx].layout else s.layout;
@@ -1015,7 +1026,7 @@ fn selectLayout(s: *State, ws_state: ?*WsState, ws_idx: u8, is_global: bool) Lay
 /// Falls back to the current global value for workspaces that have not yet
 /// had their width adjusted (master_width == null).
 inline fn resolveMasterWidth(s: *const State, ws_state: ?*WsState, ws_idx: u8) f32 {
-    if (comptime !build.has_workspaces) return s.master_width;
+    if (!build.has_workspaces) return s.master_width;
     if (core.config.tiling.global_layout) return s.master_width;
     const wss = ws_state orelse return s.master_width;
     if (ws_idx >= wss.workspaces.len) return s.master_width;
@@ -1026,7 +1037,7 @@ inline fn resolveMasterWidth(s: *const State, ws_state: ?*WsState, ws_idx: u8) f
 /// Returns the master count for `ws_idx` in per-workspace mode.
 /// Falls back to the current global value for workspaces that have no override.
 inline fn resolveMasterCount(s: *const State, ws_state: ?*WsState, ws_idx: u8) u8 {
-    if (comptime !build.has_workspaces) return s.master_count;
+    if (!build.has_workspaces) return s.master_count;
     if (core.config.tiling.global_layout) return s.master_count;
     const wss = ws_state orelse return s.master_count;
     if (ws_idx >= wss.workspaces.len) return s.master_count;
@@ -1050,7 +1061,7 @@ fn retileDeferred(screen: utils.Rect, for_ws: ?u8, defer_win: ?u32) void {
     const target_ws: u8 = for_ws orelse
         @intCast(tracking.getCurrentWorkspace() orelse return);
 
-    if (comptime build.has_fullscreen) {
+    if (build.has_fullscreen) {
         if (fullscreen.getForWorkspace(target_ws)) |_| return;
     }
 
@@ -1350,7 +1361,7 @@ inline fn applyLayoutStep(comptime forward: bool) void {
 fn applyLayout(s: *State, layout: Layout) void {
     s.layout = layout;
     if (!core.config.tiling.global_layout) {
-        if (comptime build.has_workspaces) {
+        if (build.has_workspaces) {
             if (workspaces.getCurrentWorkspaceObject()) |ws| ws.layout = layout;
         }
     }
