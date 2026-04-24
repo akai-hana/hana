@@ -3,6 +3,9 @@
 
 # ### HIGH-PRIORITY ### #
 
+89sk: scrolling layout
+porco: bsp layout
+
 # *** #
 - add floating as a layout that one can cycle into
 # *** #
