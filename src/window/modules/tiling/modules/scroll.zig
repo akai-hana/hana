@@ -1,28 +1,12 @@
 //! Scrolling tiling layout
-//!
-//! Windows are arranged in an infinite horizontal strip of half-screen columns,
-//! matching niri's column model: opening a new window never resizes existing ones.
-//!
-//! Each window occupies exactly half the screen width (accounting for gaps and
-//! borders).  The viewport is panned left/right with the `scroll_left` /
-//! `scroll_right` actions (bound by default to Mod+ScrollDown / Mod+ScrollUp).
-//!
-//! Geometry rules
-//! ──────────────
-//!   slot_w  = screen_w / 2          (integer pixels)
-//!   win_x   = i * slot_w + gap/2 − scroll_offset
-//!   win_w   = slot_w − gap − 2*border   (symmetric: gap/2 on each side)
-//!   win_y   = y_offset + gap
-//!   win_h   = screen_h − 2*gap − 2*border
-//!
-//! The scroll offset is clamped in [0, (n−2)*slot_w] so the strip never
-//! scrolls left past window 0 or right past the last window.
 
-const std       = @import("std");
-const constants = @import("constants");
+const std = @import("std");
+
 const utils     = @import("utils");
-const layouts   = @import("layouts");
-const tiling    = @import("tiling");
+const constants = @import("constants");
+
+const tiling  = @import("tiling");
+const layouts = @import("layouts");
 
 /// Maximum signed position representable in a `utils.Rect.x` (i16).
 /// Windows whose strip position falls outside this range are parked at
