@@ -56,8 +56,6 @@ pub fn tileWithOffset(
     }
 }
 
-// Private helpers
-
 /// Returns the window content dimension for a cell of `cell_size`, subtracting
 /// the combined border margin. Falls back to MIN_WINDOW_DIM on underflow.
 inline fn cellToWindowSize(cell_size: u16, border_margin: u16) u16 {

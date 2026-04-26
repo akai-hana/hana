@@ -1240,13 +1240,11 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     s.markDirty();
 }
 
-// Private helpers
-
 inline fn switchToWorkspace(ws_arg: u8) void {
     if (build.has_workspaces) workspaces.switchTo(ws_arg);
 }
 
-inline fn isTilingActive() bool {
+fn isTilingActive() bool {
     if (!build.has_tiling) return false;
     return core.config.tiling.enabled and
         if (tiling.getStateOpt()) |t| t.is_enabled else false;

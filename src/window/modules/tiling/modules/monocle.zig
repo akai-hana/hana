@@ -37,10 +37,6 @@ pub fn tileWithOffset(
     pushBackgroundWindowsOffscreen(ctx, windows[0 .. windows.len - 1]);
 }
 
-// ============================================================================
-// Private helpers
-// ============================================================================
-
 /// Push non-top windows off the visible screen area so they never show through
 /// a transparent top window. Skips windows already known to be offscreen to
 /// avoid redundant round-trips; invalidates their cache rect so

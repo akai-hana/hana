@@ -16,10 +16,10 @@ const window   = @import("window");
 const tracking = @import("tracking");
 const focus    = @import("focus");
 
-const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
-const minimize   = if (build.has_minimize) @import("minimize") else struct {};
+const fullscreen = if (build.has_fullscreen) @import("fullscreen");
+const minimize   = if (build.has_minimize) @import("minimize");
 
-const tiling       = if (build.has_tiling) @import("tiling") else struct {};
+const tiling       = if (build.has_tiling) @import("tiling");
 const TilingLayout = if (build.has_tiling) tiling.Layout else u0; // u0 sentinel when tiling is absent: zero-size, never stored
 
 const bar = if (build.has_bar) @import("bar") else struct {

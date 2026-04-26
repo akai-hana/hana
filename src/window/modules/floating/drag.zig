@@ -12,8 +12,8 @@ const utils     = @import("utils");
 const window = @import("window");
 const focus  = @import("focus");
 
-const tiling     = if (build.has_tiling) @import("tiling") else struct {};
-const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
+const tiling     = if (build.has_tiling) @import("tiling");
+const fullscreen = if (build.has_fullscreen) @import("fullscreen");
 
 
 const bar = if (build.has_bar) @import("bar") else struct {

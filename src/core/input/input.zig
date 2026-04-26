@@ -23,10 +23,10 @@ const window   = @import("window");
 const tracking = @import("tracking");
 const focus    = @import("focus");
 
-const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
-const minimize   = if (build.has_minimize) @import("minimize") else struct {};
-const workspaces = if (build.has_workspaces) @import("workspaces") else struct {};
-const tiling     = if (build.has_tiling) @import("tiling") else struct {};
+const fullscreen = if (build.has_fullscreen) @import("fullscreen");
+const minimize   = if (build.has_minimize) @import("minimize");
+const workspaces = if (build.has_workspaces) @import("workspaces");
+const tiling     = if (build.has_tiling) @import("tiling");
 const drag = if (build.has_drag) @import("drag") else struct {
     pub fn isDragging()                          bool { return false; }
     pub fn stopDrag()                            void {}
@@ -78,11 +78,16 @@ inline fn wsTagToggleAll(win: u32) void {
 
 // Constants 
 
-const mouse_button_left:   u8 = 1;
-const mouse_button_middle: u8 = 2;
-const mouse_button_right:  u8 = 3;
+const mouse_button_left:        u8 = 1;
+const mouse_button_middle:      u8 = 2;
+const mouse_button_right:       u8 = 3;
+const mouse_button_scroll_up:   u8 = 4;
+const mouse_button_scroll_down: u8 = 5;
 
-const mouse_buttons = [_]u8{ mouse_button_left, mouse_button_middle, mouse_button_right };
+const mouse_buttons = [_]u8{
+    mouse_button_left, mouse_button_middle, mouse_button_right,
+    mouse_button_scroll_up, mouse_button_scroll_down,
+};
 
 // XKB state 
 
@@ -176,6 +181,15 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     }
 
     const super_held = (event.state & constants.MOD_SUPER) != 0;
+
+    // Scroll-wheel binds (buttons 4/5) are viewport actions — they don't
+    // target a specific window, so we check them before the managed-window
+    // guard that would otherwise discard events fired over the desktop/bar.
+    if (super_held and (event.detail == mouse_button_scroll_up or event.detail == mouse_button_scroll_down)) {
+        const mods = utils.normalizeModifiers(event.state);
+        _ = tryConfigMouseBind(mods, event.detail, 0, event.time);
+        return;
+    }
 
     // Config-driven mouse binds (Super + Key)
     if (super_held) {
@@ -279,6 +293,7 @@ fn executeAction(action: *const types.Action) !void {
         .increase_master, .decrease_master, .increase_master_count, .decrease_master_count,
         .swap_master, .swap_master_focus_swap,
         .move_window_next, .move_window_prev,
+        .scroll_view_left, .scroll_view_right,
             => executeTilingAction(action),
 
         // Bar
@@ -299,9 +314,19 @@ fn executeAction(action: *const types.Action) !void {
         // Prompt
         .toggle_prompt => prompt.toggle(),
 
-        // Window focus cycling (dwm-style Mod+k / Mod+j)
-        .focus_next_window => focus.focusNext(),
-        .focus_prev_window => focus.focusPrev(),
+        // Window focus cycling (dwm-style Mod+k / Mod+j).
+        // After cycling, snap the scroll-layout viewport to the newly focused
+        // window when it is off-screen, so a window reached via keyboard is
+        // always brought into view.  The server grab prevents the compositor
+        // from rendering a partial retile frame when the snap triggers a retile.
+        .focus_next_window => {
+            focus.focusNext();
+            if (build.has_tiling) withTilingGrab(tiling.snapScrollToFocused);
+        },
+        .focus_prev_window => {
+            focus.focusPrev();
+            if (build.has_tiling) withTilingGrab(tiling.snapScrollToFocused);
+        },
     }
 }
 
@@ -337,6 +362,9 @@ fn executeTilingAction(action: *const types.Action) void {
         // partial retile frame between individual configure_window calls.
         .move_window_next => withTilingGrabAndBorders(focus.moveWindowNext),
         .move_window_prev => withTilingGrabAndBorders(focus.moveWindowPrev),
+
+        .scroll_view_left  => withTilingGrab(tiling.scrollViewLeft),
+        .scroll_view_right => withTilingGrab(tiling.scrollViewRight),
 
         else => {},
     }

@@ -18,7 +18,7 @@ const focus    = @import("focus");
 const layouts  = @import("layouts");
 const floating = @import("floating");
 
-const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
+const fullscreen = if (build.has_fullscreen) @import("fullscreen");
 const workspaces = if (build.has_workspaces) @import("workspaces") else struct {
     pub const Workspace = struct {};
     pub inline fn getState() ?*State { return null; }
@@ -37,6 +37,7 @@ const bar = if (build.has_bar) @import("bar") else struct {
 const scale = if (build.has_scale) @import("scale") else utils.scale_fallback;
 
 
+/// Fallback no-op layout used when a layout module is excluded from the build.
 const LayoutStub = struct {
     pub fn tileWithOffset(
         _: *const layouts.LayoutCtx,
@@ -53,13 +54,14 @@ const fibonacci = if (build.has_fibonacci) @import("fibonacci") else LayoutStub;
 const leaf       = if (build.has_leaf)       @import("leaf")       else LayoutStub;
 const scroll     = if (build.has_scroll)     @import("scroll")     else LayoutStub;
 
-// Module constants 
+// Module constants
 
-const max_master_width_ratio: f32  = 0.95;
+const max_master_width_ratio: f32  = 0.95; // prevents master from consuming the full screen
+const max_master_count:       u8   = 10;
 const max_workspace_windows: usize = 128; // per-retile window list capacity
 const max_workspaces: usize        = 64;  // matches u64 workspace_geom_valid_bits
 
-// Public types 
+// Public types
 
 /// Sentinel zero rect used to mark a cache entry as stale.
 /// Exported so layout modules (monocle) can write it directly.
@@ -72,8 +74,7 @@ pub const Layout = enum {
     fibonacci,
     leaf,
     scroll,
-    /// Windows are left at their current positions; no tiling is applied.
-    /// Windows are left at their current positions; never part of the normal layout cycle.
+    /// Windows are left at their current positions. Never part of the layout cycle.
     floating,
 };
 
@@ -116,6 +117,17 @@ pub const State = struct {
     /// Clamped by scroll.tileWithOffset on every retile.
     scrolling_offset: i32,
 
+    /// Window count seen on the last scroll-layout retile.
+    /// Used by scroll.tileWithOffset to detect spawns and auto-follow new windows.
+    scroll_prev_n: usize,
+
+    /// The window that held focus immediately before the current one, within
+    /// the scroll layout.  Updated by updateWindowFocus on every real A→B
+    /// transition (not on clearFocus).  Used by takePrevFocusedForScroll so
+    /// that closing the focused window in scroll layout restores focus to the
+    /// previously focused window rather than falling back to tracking-list order.
+    prev_focused: ?u32,
+
     /// Per-workspace geometry validity bitmask (64 bits -> up to 64 workspaces).
     ///
     /// Bit N is set when workspace N's geometry has been pre-computed and the
@@ -149,6 +161,8 @@ pub const State = struct {
         return .{ .gap = self.gap_width, .border = self.border_width };
     }
 
+    /// Returns the border color for `win`: 0 for fullscreen windows, focused or
+    /// unfocused color otherwise.
     pub inline fn borderColor(self: *const State, win: u32) u32 {
         if (build.has_fullscreen) {
             if (fullscreen.isFullscreen(win)) return 0;
@@ -157,7 +171,7 @@ pub const State = struct {
     }
 };
 
-// Module-level singleton 
+// Module-level singleton
 
 // Null before init(), non-null for the rest of the process lifetime.
 // Using ?State rather than (State + bool) makes pre-init access a safe
@@ -175,7 +189,7 @@ pub inline fn getState() *State {
 /// Returns null only during the narrow startup window before `init()` is called.
 pub inline fn getStateOpt() ?*State { return if (state) |*s| s else null; }
 
-// Lifecycle 
+// Lifecycle
 
 pub fn init() void {
     state = initState();
@@ -198,7 +212,6 @@ pub fn reloadConfig() void {
     new_state.windows = saved_windows;
     state = new_state;
 
-    // getState() is safe here: we just assigned a non-null value above.
     const ns = getState();
 
     // Reset all workspace layouts and master widths to the new config defaults.
@@ -244,7 +257,7 @@ pub fn reloadConfig() void {
     }
 }
 
-// Size hints (delegated to layouts.zig via the combined cache) 
+// Size hints (delegated to layouts.zig via the combined cache)
 
 /// Cache WM_NORMAL_HINTS minimum size constraints for `win` in its CacheMap entry.
 /// Called from window.zig at MapRequest time after the property cookie is drained.
@@ -254,7 +267,7 @@ pub fn cacheSizeHints(win: u32, hints: layouts.SizeHints) void {
     getState().cache.cacheHints(win, hints);
 }
 
-// Window management 
+// Window management
 
 pub fn addWindow(window_id: u32) void {
     std.debug.assert(window_id != 0);
@@ -400,7 +413,7 @@ pub inline fn markDirty() void {
     getState().is_dirty = true;
 }
 
-// Retile 
+// Retile
 
 /// Retile the current workspace immediately.
 pub fn retileCurrentWorkspace() void {
@@ -623,7 +636,7 @@ pub fn restoreWorkspaceGeom() bool {
     return true;
 }
 
-// Layout control 
+// Layout control
 
 /// Cycle to the next layout in the enabled-layout list.
 pub fn toggleLayout()        void { applyLayoutStep(true);  }
@@ -656,6 +669,7 @@ pub fn stepLayoutVariant() void {
     retileCurrentWorkspace();
 }
 
+/// Apply `ws`'s stored layout/variant/master settings to State, marking dirty when anything changed.
 pub fn applyWorkspaceLayout(ws: *const WsWorkspace) void {
     const s = getState();
     const needs_retile =
@@ -693,13 +707,13 @@ pub inline fn isLayoutAvailable(layout: Layout) bool {
     };
 }
 
-// Master width and count 
+// Master width and count
 
 pub fn adjustMasterCount(delta: i8) void {
     const s = getState();
     const new: i16 = @as(i16, s.master_count) + delta;
     if (new < 1) return;
-    const clamped: u8 = @intCast(@min(new, 10));
+    const clamped: u8 = @intCast(@min(new, max_master_count));
     if (clamped == s.master_count) return;
     s.master_count = clamped;
     if (!core.config.tiling.global_layout) {
@@ -736,7 +750,79 @@ pub fn adjustMasterWidth(delta: f32) void {
 pub inline fn increaseMasterWidth() void { adjustMasterWidth( 0.025); }
 pub inline fn decreaseMasterWidth() void { adjustMasterWidth(-0.025); }
 
-// Window swap operations 
+/// Shift the scroll-layout viewport left or right by one slot.
+/// `delta` is +1 (right/forward) or -1 (left/backward).
+/// No-op when the current layout is not .scroll.
+/// tileWithOffset clamps the result to [0, max_off] on the next retile.
+pub fn stepScrollView(delta: i32) void {
+    const s = getState();
+    if (s.layout != .scroll) return;
+    const slot_w: i32 = @intCast(core.screen.width_in_pixels / 2);
+    s.scrolling_offset += delta * slot_w;
+    retileCurrentWorkspace();
+}
+
+pub inline fn scrollViewLeft()  void { stepScrollView(-1); }
+pub inline fn scrollViewRight() void { stepScrollView( 1); }
+
+/// Scroll layout only: if `win` is not fully in the current viewport, snaps
+/// `scrolling_offset` so `win` occupies either the left or right half-screen
+/// slot — whichever requires the smaller offset change.
+///
+/// Returns true when the offset actually changed (caller should retile).
+///
+/// Visibility rule: window at filtered index `fi` has its left (strip) edge at
+/// `fi * slot_w`.  It is fully visible when that edge falls in [scroll, scroll +
+/// slot_w].  Outside that range:
+///   • edge > scroll + slot_w  →  window is to the right  →  place on right half:
+///     new_scroll = fi*slot_w - slot_w   (predecessor fills left half)
+///   • edge < scroll           →  window is to the left   →  place on left half:
+///     new_scroll = fi*slot_w            (successor  fills right half)
+fn snapScrollOffsetToWindow(s: *State, win: u32) bool {
+    const ws_count = collectWorkspaceWindows(s, &s.scratch_wins, null);
+    const ws_wins  = s.scratch_wins[0..ws_count];
+    const fi = std.mem.indexOfScalar(u32, ws_wins, win) orelse return false;
+
+    const fi_i32:  i32 = @intCast(fi);
+    const slot_w:  i32 = @intCast(core.screen.width_in_pixels / 2);
+    const n_i32:   i32 = @intCast(ws_wins.len);
+    const sw_i32:  i32 = @intCast(core.screen.width_in_pixels);
+    const max_off: i32 = @max(0, n_i32 * slot_w - sw_i32);
+
+    const win_left:  i32 = fi_i32 * slot_w;
+    const scroll_off = s.scrolling_offset;
+
+    // Already fully visible — left edge is inside [scroll_off, scroll_off + slot_w].
+    if (win_left >= scroll_off and win_left <= scroll_off + slot_w) return false;
+
+    const new_scroll: i32 = if (win_left > scroll_off + slot_w)
+        win_left - slot_w   // window goes to right half; predecessor fills left
+    else
+        win_left;           // window goes to left half;  successor  fills right
+
+    const clamped = std.math.clamp(new_scroll, 0, max_off);
+    if (clamped == scroll_off) return false;
+    s.scrolling_offset = clamped;
+    return true;
+}
+
+/// Scroll layout only: snaps the viewport to the currently focused window when
+/// it is off-screen, then retiles. Called after keyboard focus-cycle actions
+/// (focus_next_window / focus_prev_window) so a window that was moved into
+/// focus via Mod+j/k is immediately brought into view.
+///
+/// No-op when:
+///   • the active layout is not .scroll
+///   • no window is focused
+///   • the focused window is already fully visible in the current viewport
+pub fn snapScrollToFocused() void {
+    const s = getState();
+    if (s.layout != .scroll) return;
+    const win = focus.getFocused() orelse return;
+    if (snapScrollOffsetToWindow(s, win)) retileCurrentWorkspace();
+}
+
+// Window swap operations
 
 /// Swap the focused window into the master slot (index 0 of the current
 /// workspace window list). If it is already the master, promotes the next
@@ -809,7 +895,7 @@ pub fn retileCurrentWorkspaceDeferredPrebuilt(ws_wins: []const u32, defer_win: ?
     s.is_dirty = false;
 }
 
-// Query functions 
+// Query functions
 
 pub inline fn isWindowTiled(window_id: u32) bool {
     const s = getStateOpt() orelse return false;
@@ -830,10 +916,20 @@ pub inline fn isWindowActiveTiled(window_id: u32) bool {
     return s.is_enabled and s.windows.contains(window_id);
 }
 
-// Focus / border management 
+// Focus / border management
 
 pub fn updateWindowFocus(old_focused: ?u32, new_focused: ?u32) void {
     const s = getState();
+
+    // Track focus history for scroll-layout close recovery.
+    // Only update when focus moves between two live windows (not on clear).
+    // updateWindowFocus(A, null) is called by clearFocus when a window is being
+    // closed — we must NOT update prev_focused there, because A is about to be
+    // removed and prev_focused should still point to the last window before A.
+    if (old_focused != null and new_focused != null) {
+        s.prev_focused = old_focused;
+    }
+
     for ([2]?u32{ old_focused, new_focused }) |opt| {
         const win = opt orelse continue;
         if (!s.windows.contains(win)) continue;
@@ -841,9 +937,29 @@ pub fn updateWindowFocus(old_focused: ?u32, new_focused: ?u32) void {
     }
 }
 
+/// Scroll layout only: return and consume the previously focused window so
+/// that the caller can restore focus to it after the current focused window
+/// is closed.
+///
+/// Returns null when:
+///   • the scroll layout is not compiled in (comptime)
+///   • the active layout is not .scroll
+///   • no previous focus has been recorded yet
+///
+/// Consuming (clearing) prev_focused prevents a stale value from being
+/// reused across multiple successive window closes.
+pub fn takePrevFocusedForScroll() ?u32 {
+    if (comptime !build.has_scroll) return null;
+    const s = getState();
+    if (s.layout != .scroll) return null;
+    const prev = s.prev_focused orelse return null;
+    s.prev_focused = null;
+    return prev;
+}
+
 // Private implementation
 
-// Layout cycle (comptime) 
+// Layout cycle (comptime)
 
 // Layouts present on disk at build time. `toggleLayout`/`toggleLayoutReverse`
 // walk this list so missing layouts are never visited during cycling.
@@ -908,6 +1024,8 @@ inline fn stepLayout(s: *const State, current: Layout, comptime forward: bool) L
     return cycle[0]; // current not in list (disabled at reload) — jump to first
 }
 
+/// Compute the initial master pane width ratio from config, converting negative
+/// pixel values to screen-relative fractions.
 fn calcMasterWidth() f32 {
     const raw = scale.scaleMasterWidth(core.config.tiling.master_width);
     if (raw < 0) {
@@ -948,6 +1066,8 @@ fn initState() State {
         .workspace_geom_valid_bits = 0,
         .last_retile_area = zero_rect,
         .scrolling_offset = 0,
+        .scroll_prev_n    = 0,
+        .prev_focused     = null,
         .cache            = .{},
         .scratch_wins     = undefined,
         .retile_wins      = undefined,
@@ -955,7 +1075,7 @@ fn initState() State {
     };
 }
 
-// Layout dispatch helpers 
+// Layout dispatch helpers
 
 /// Stable function-pointer target for `LayoutCtx.get_border_color`.
 fn getBorderColorForWindow(win: u32) u32 {
@@ -1004,6 +1124,7 @@ fn invokeLayout(
     }
 }
 
+/// Screen area available for tiling, with bar height subtracted from the appropriate edge.
 inline fn calcScreenArea() utils.Rect {
     const bar_height: u16 = if (bar.isVisible()) bar.getBarHeight() else 0;
     const is_bar_at_bottom = core.config.bar.bar_position == .bottom;
@@ -1045,7 +1166,7 @@ inline fn resolveMasterCount(s: *const State, ws_state: ?*WsState, ws_idx: u8) u
     return s.master_count;
 }
 
-// Core retile 
+// Core retile
 
 /// Core retile. `for_ws`: when non-null, process that specific workspace instead
 /// of the current one.
@@ -1071,7 +1192,6 @@ fn retileDeferred(screen: utils.Rect, for_ws: ?u8, defer_win: ?u32) void {
 
     const ctx = makeLayoutCtxDeferred(s, defer_win);
 
-    // Hoist getState() once — used by resolve* and selectLayout below.
     const wss = workspaces.getState();
 
     const saved_width = s.master_width;
@@ -1092,9 +1212,9 @@ fn retileDeferred(screen: utils.Rect, for_ws: ?u8, defer_win: ?u32) void {
     markWorkspaceGeomValid(s, target_ws);
 }
 
-// Border management 
+// Border management
 
-/// Send border pixel only if color changed since last send.
+/// Change the border pixel for `win` only when `color` differs from the cached value.
 fn applyBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u32) void {
     const gop = s.cache.getOrPut(win);
     if (gop.found_existing and gop.value_ptr.border == color) return;
@@ -1102,6 +1222,7 @@ fn applyBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u32
     _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
 }
 
+/// Refresh border colors for all `ws_windows`, deduped via the cache.
 inline fn updateBorders(s: *State, ws_windows: []const u32) void {
     for (ws_windows) |win| applyBorderColor(s, core.conn, win, s.borderColor(win));
 }
@@ -1128,20 +1249,15 @@ pub fn sendBorderColorIfChanged(win: u32, color: u32) bool {
     return true;
 }
 
-// Window list helpers 
+// Window list helpers
 
 /// Collect windows belonging to the target workspace into `buf`.
 /// `for_ws`: when non-null, filter by that index; when null, use current workspace.
 /// Returns the number of windows written.
 fn collectWorkspaceWindows(s: *State, buf: []u32, for_ws: ?u8) usize {
-    // Always iterate s.windows.items() — the tiling-ordered list — and filter
-    // by workspace membership.  This must be the single source of ordering for
-    // the layout because swapWindowsInList, moveWindowToIndex, and
-    // retileAllWorkspaces all read/write s.windows.buf.  Using a different
-    // iteration source (e.g. tracking.allWindows(), which is ordered by global
-    // registration time via an ArrayList that uses swapRemove) would make the
-    // window order seen by retile diverge from the order those functions
-    // manipulate, causing swaps and moves to have no visual effect.
+    // Must iterate s.windows.items() (tiling order), not tracking.allWindows()
+    // (registration order): swap/move operations reorder s.windows.buf, so
+    // retile must observe the same sequence or swaps have no visual effect.
     var n: usize = 0;
     for (s.windows.items()) |win| {
         if (n >= buf.len) break;
@@ -1160,6 +1276,7 @@ inline fn hasWindowBufCapacity(s: *const State, n: usize, comptime caller: []con
     return false;
 }
 
+/// Move the element at `from_idx` to `to_idx` in `s.windows`, shifting intervening elements.
 fn moveWindowToIndex(s: *State, from_idx: usize, to_idx: usize) void {
     if (from_idx == to_idx) return;
     const current = s.windows.items();
@@ -1251,9 +1368,8 @@ pub fn swapWindowsById(win_a: u32, win_b: u32) void {
 const FocusMasterPos = struct {
     fp_global:   usize,
     mp_global:   usize,
-    /// Global index of ws_wins[1] — the first stack window. Pre-computed in the
-    /// same merged pass as fp_global/mp_global so swapWithMasterCore's "already
-    /// master" path needs no third O(N) scan of s.windows.
+    /// Global index of ws_wins[1] — the first stack window.
+    /// Pre-computed alongside fp/mp to avoid a third O(N) scan in swapWithMasterCore.
     ns_global:   usize,
     fp_filtered: usize,
     /// Mutable slice into s.scratch_wins; swapWithMasterCore keeps it in sync
@@ -1278,10 +1394,8 @@ fn findFocusMasterPos(s: *State) ?FocusMasterPos {
     // Locate the focused window inside the filtered list.
     const fp_filtered = std.mem.indexOfScalar(u32, ws_wins, focused) orelse return null;
 
-    // Translate focused, master (ws_wins[0]), and next-stack (ws_wins[1]) to
-    // their global positions in s.windows.buf in ONE pass with early exit when
-    // all three are found. Replaces two separate indexOfScalar calls (issues 2
-    // and 12) and eliminates the third O(N) scan in swapWithMasterCore.
+    // Single pass over s.windows.buf to find global indices for focused, master,
+    // and next-stack windows — avoids three separate O(N) scans.
     const all    = s.windows.items();
     const master_xid = ws_wins[0];
     const next       = ws_wins[1]; // always valid: ws_wins.len >= 2 checked above
@@ -1308,37 +1422,21 @@ fn findFocusMasterPos(s: *State) ?FocusMasterPos {
 /// Shared core for both swap-with-master variants.
 ///
 /// Uses swapWindowsInList (O(1) std.mem.swap) instead of moveWindowToIndex
-/// (O(n) remove-then-insert) so that only the two swapping windows receive new
-/// geometry during the subsequent retile.  Every other window's slot is
-/// unchanged → same rect → cache hit → no configure_window call → no
-/// intermediate frames visible to the compositor.
+/// (O(n) remove-then-insert) — untouched windows keep their slots, get cache
+/// hits, and receive no configure_window call, preventing intermediate frames.
 fn swapWithMasterCore(s: *State, pos: FocusMasterPos) ?u32 {
     if (pos.fp_filtered == 0) {
-        // Focused is already the master — promote the next window in the
-        // per-workspace list into the master slot.  ws_wins[1] is the first
-        // stack window in layout order, guaranteed to be on the current
-        // workspace (collectWorkspaceWindows only returns current-workspace
-        // windows), so no extra isOnCurrentWorkspace check is needed.
-        //
-        // A swap is sufficient: brings ws_wins[1] to mp_global, demotes the
-        // current master to that target's slot.  Stack order differs from the
-        // old rotate but the visual result is identical for single-master layouts.
-        //
-        // pos.ns_global was pre-computed in findFocusMasterPos's merged scan,
-        // eliminating what was previously a third O(N) indexOfScalar here.
+        // Focused is already master — promote ws_wins[1]; a swap gives the same
+        // visual result as a rotation for single-master layouts.
         if (pos.ws_wins.len < 2) return null;
         const next_win = pos.ws_wins[1];
         swapWindowsInList(s, pos.mp_global, pos.ns_global);
-        // Mirror the swap into ws_wins so the slice stays consistent with
-        // s.windows.buf. Callers that pass ws_wins directly to
-        // retileCurrentWorkspaceDeferredPrebuilt see the correct post-swap order.
-        std.mem.swap(u32, &pos.ws_wins[0], &pos.ws_wins[1]);
+        std.mem.swap(u32, &pos.ws_wins[0], &pos.ws_wins[1]); // keep ws_wins in sync with buf
         return next_win;
     }
     const master_win = pos.ws_wins[0];
     swapWindowsInList(s, pos.fp_global, pos.mp_global);
-    // Mirror into ws_wins: focused window moves to index 0 (master slot).
-    std.mem.swap(u32, &pos.ws_wins[0], &pos.ws_wins[pos.fp_filtered]);
+    std.mem.swap(u32, &pos.ws_wins[0], &pos.ws_wins[pos.fp_filtered]); // keep ws_wins in sync
     return master_win;
 }
 
@@ -1346,12 +1444,12 @@ fn updateCacheRect(s: *State, win: u32, rect: utils.Rect) void {
     s.cache.getOrPut(win).value_ptr.rect = rect;
 }
 
-// Misc private helpers
-
+/// Set the geometry-valid bit for `ws_idx`, indicating the cache is correct for that workspace.
 inline fn markWorkspaceGeomValid(s: *State, ws_idx: anytype) void {
     if (ws_idx < max_workspaces) s.workspace_geom_valid_bits |= tracking.workspaceBit(ws_idx);
 }
 
+/// Step the layout forward or backward and apply it.
 inline fn applyLayoutStep(comptime forward: bool) void {
     const s = getState();
     if (s.layout == .floating) return;

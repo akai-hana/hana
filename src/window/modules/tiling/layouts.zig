@@ -14,11 +14,6 @@ const debug = @import("debug");
 // Populated from WM_NORMAL_HINTS during handleMapRequest; evicted on unmanage.
 // `configureWithHints` clamps every rect to stored minimums so terminals always
 // receive a geometry they can render.
-//
-// Implemented as a flat array with a linear scan. Realistic window counts
-// (10–80) make a HashMap's O(1) lookup theoretical rather than measurable:
-// a linear scan over a handful of cache lines is faster in practice and
-// carries zero allocation overhead, no deinit, and no partial-failure states.
 
 /// ICCCM WM_NORMAL_HINTS geometry constraints for a single window.
 pub const SizeHints = struct {
@@ -82,9 +77,8 @@ var overflow_sentinel: WindowData = .{};
 /// Open-addressing hash table mapping window IDs to their last geometry,
 /// border color, and WM_NORMAL_HINTS constraints — all three in one slot.
 ///
-/// Public API is identical to the previous flat-array CacheMap; callers need
-/// no changes.  The struct is zero-initializable: `CacheMap{}` or `.{}` in
-/// tiling.State produces an empty table because EMPTY_WIN = 0.
+/// Zero-initializable: `CacheMap{}` or `.{}` produces an empty table because
+/// EMPTY_WIN = 0.
 pub const CacheMap = struct {
     const Slot = struct {
         win:  u32        = EMPTY_WIN,
@@ -181,14 +175,9 @@ pub const CacheMap = struct {
         self.slots[hole] = .{}; // clear the final hole (original or shifted)
     }
 
-    /// Reset the cache to empty in O(count) time.
-    ///
-    /// Iterates only occupied slots rather than zeroing all 512 unconditionally.
-    /// With typical window counts (10–80) this avoids zeroing 6–50× more memory
-    /// than necessary, making this safe to call on a hot path.
-    ///
-    /// Scans the table sequentially, clears each occupied slot, and stops once
-    /// all `count` entries have been visited.
+    /// Reset the cache to empty in O(count) time, visiting only occupied slots.
+    /// Safe to call on a hot path: with typical window counts (10–80) this
+    /// avoids zeroing 6–50× more memory than necessary.
     pub fn clearRetainingCapacity(self: *CacheMap) void {
         var i: usize = 0;
         var cleared: usize = 0;
@@ -260,7 +249,7 @@ pub inline fn rectsEqual(a: utils.Rect, b: utils.Rect) bool {
 /// the geometry configure_window call, reducing 3 XCB requests per window to 2.
 /// This is only set during reloadConfig; it is null for all normal retile passes.
 fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
-    // Single scan: gop.value_ptr.hints holds any cached WM_NORMAL_HINTS
+    // Single probe: gop.value_ptr.hints holds any cached WM_NORMAL_HINTS
     // constraints alongside the geometry and border dedup data.
     const gop = ctx.cache.getOrPut(win);
     const effective = applyHintsToRect(rect, gop.value_ptr.hints);
@@ -322,14 +311,8 @@ fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32,
 }
 
 /// Apply geometry to `win`, clamped to its WM_NORMAL_HINTS constraints.
-///
-/// Performs a SINGLE hash probe per window per retile (getOrPut supplies
-/// geometry, border dedup data, and SizeHints in one lookup).
-///
-/// Skips the XCB round-trip when the computed rect matches the cached value.
-/// When `ctx.get_border_color` is set, border color is also updated in the same
-/// probe at zero additional search cost.  When `ctx.border_width` is set,
-/// BORDER_WIDTH is merged into the geometry request (reloadConfig path only).
+/// Skips the XCB round-trip when the rect is unchanged; updates border color
+/// in the same probe when `ctx.get_border_color` is set.
 pub fn configureWithHints(ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
     configureWithHintsImpl(false, ctx, win, rect);
 }
@@ -341,8 +324,6 @@ pub fn configureWithHints(ctx: *const LayoutCtx, win: u32, rect: utils.Rect) voi
 pub fn configureWithHintsAndRaise(ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
     configureWithHintsImpl(true, ctx, win, rect);
 }
-
-// Private helpers
 
 /// Apply ICCCM §4.1.2.3 hint passes to a raw rect.
 ///

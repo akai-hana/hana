@@ -13,8 +13,8 @@ const debug     = @import("debug");
 const tracking = @import("tracking");
 const focus    = @import("focus");
 
-const fullscreen = if (build.has_fullscreen) @import("fullscreen") else struct {};
-const minimize   = if (build.has_minimize)   @import("minimize")   else struct {};
+const fullscreen = if (build.has_fullscreen) @import("fullscreen");
+const minimize   = if (build.has_minimize)   @import("minimize")  ;
 const workspaces = if (build.has_workspaces) @import("workspaces") else struct {
     pub const State     = struct {};
     pub const Workspace = struct {};
@@ -22,7 +22,7 @@ const workspaces = if (build.has_workspaces) @import("workspaces") else struct {
     pub fn getCurrentWorkspaceObject() ?*Workspace { return null; }
 };
 
-const tiling = if (build.has_tiling) @import("tiling") else struct {};
+const tiling = if (build.has_tiling) @import("tiling");
 
 const drag = if (build.has_drag) @import("drag") else struct {
     pub fn isDragging()              bool       { return false; }
@@ -1309,6 +1309,22 @@ fn focusWindowUnderPointer(ptr_reply: ?*xcb.xcb_query_pointer_reply_t) void {
         minimize.focusMasterOrFirst
     else
         null;
+
+    // Scroll layout: windows can be off-screen, so the pointer is often not
+    // over any managed window.  Bypass pointer-based focus entirely and use
+    // the focus history recorded by tiling.updateWindowFocus instead.
+    // takePrevFocusedForScroll is a no-op (returns null) in all other layouts.
+    if (build.has_tiling) {
+        if (tiling.takePrevFocusedForScroll()) |prev| {
+            if (tracking.isOnCurrentWorkspaceAndVisible(prev)) {
+                focus.setFocus(prev, .tiling_operation);
+                return;
+            }
+            // prev was already closed or on another workspace — fall through
+            // to the normal pointer / best-available path.
+        }
+    }
+
     // reply memory is owned by the caller; no std.c.free here.
     const reply = ptr_reply orelse {
         focus.focusBestAvailable(.tiling_operation, tracking.isOnCurrentWorkspaceAndVisible, fallback);

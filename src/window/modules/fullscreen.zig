@@ -15,10 +15,10 @@ const window   = @import("window");
 const tracking = @import("tracking");
 const focus    = @import("focus");
 
-const minimize   = if (build.has_minimize) @import("minimize") else struct {};
-const workspaces = if (build.has_workspaces) @import("workspaces") else struct {};
+const minimize   = if (build.has_minimize) @import("minimize");
+const workspaces = if (build.has_workspaces) @import("workspaces");
 
-const tiling = if (build.has_tiling) @import("tiling") else struct {};
+const tiling = if (build.has_tiling) @import("tiling");
 
 const bar = if (build.has_bar) @import("bar") else struct {
     pub fn setBarState(_: anytype) void {}

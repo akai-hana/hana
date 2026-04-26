@@ -3,8 +3,7 @@
 
 # ### HIGH-PRIORITY ### #
 
-89sk: scrolling layout
-porco: bsp layout
+[04-26] poruko: continue
 
 # *** #
 - add floating as a layout that one can cycle into
@@ -13,6 +12,31 @@ porco: bsp layout
 # *** #
 - the file imports on bar.zig are extremely messy. pending to sort them out. i want the files to be cleaner than they actually are.
 # *** #
+
+```
+❯ zig build -Drelease=true --color on --error-style minimal -freference-trace=0
+build.zig:10:42: error: !!! Hana requires Zig's master branch. !!!
+
+                        # If your package manager doesn't ship it, you can try ZVM's easy installer:
+                        curl https://raw.githubusercontent.com/tristanisham/zvm/master/install.sh | bash
+                        # And then install Zig's master branch:
+                        zvm i master
+
+    if (builtin.zig_version.pre == null) @compileError(
+                                         ^~~~~~~~~~~~~
+build.zig:139:31: error: member function expected 3 argument(s), found 4
+    return b.build_root.handle.readFileAlloc(
+           ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/akai/.zvm/0.15.2/lib/std/fs/Dir.zig:1985:5: note: function declared here
+pub fn readFileAlloc(self: Dir, allocator: mem.Allocator, file_path: []const u8, max_bytes: usize) ![]u8 {
+~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+build.zig:241:46: error: member function expected 2 argument(s), found 3
+            var dir = try b.build_root.handle.openDir(b.graph.io, dir_path, .{ .iterate = true });
+                          ~~~~~~~~~~~~~~~~~~~^~~~~~~~
+/home/akai/.zvm/0.15.2/lib/std/fs/Dir.zig:1444:5: note: function declared here
+pub fn openDir(self: Dir, sub_path: []const u8, args: OpenOptions) OpenError!Dir {
+~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
 
 # ### MISC. CHORES ### #
 

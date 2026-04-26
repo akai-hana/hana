@@ -15,7 +15,7 @@ const SpiralDirection = enum(u2) {
     up,    // Split horizontally: window on bottom, remainder above.
 
     inline fn next(self: SpiralDirection) SpiralDirection {
-        return @enumFromInt(@intFromEnum(self) +% 1);
+        return @enumFromInt(@intFromEnum(self) +% 1); // 2-bit wrapping; 4 variants
     }
 };
 
@@ -30,8 +30,8 @@ pub fn tileWithOffset(
 ) void {
     if (windows.len == 0) return;
 
-    const m  = state.margins();
-    const b2 = 2 *| m.border;
+    const m       = state.margins();
+    const border2 = 2 *| m.border;
 
     var x: i32 = @intCast(m.gap);
     var y: i32 = @intCast(y_offset +| m.gap);
@@ -41,12 +41,12 @@ pub fn tileWithOffset(
 
     for (windows, 0..) |win, i| {
         // Remaining area too small to split: stack all overflow windows here.
-        if (w < m.gap * 2 + b2 or h < m.gap * 2 + b2) {
+        if (w < m.gap * 2 + border2 or h < m.gap * 2 + border2) {
             const overflow_rect = utils.Rect{
                 .x      = @intCast(x),
                 .y      = @intCast(y),
-                .width  = if (w > b2) w - b2 else constants.MIN_WINDOW_DIM,
-                .height = if (h > b2) h - b2 else constants.MIN_WINDOW_DIM,
+                .width  = if (w > border2) w - border2 else constants.MIN_WINDOW_DIM,
+                .height = if (h > border2) h - border2 else constants.MIN_WINDOW_DIM,
             };
             for (windows[i..]) |overflow_win| layouts.configureWithHints(ctx, overflow_win, overflow_rect);
             return;
@@ -57,28 +57,24 @@ pub fn tileWithOffset(
             layouts.configureWithHints(ctx, win, .{
                 .x      = @intCast(x),
                 .y      = @intCast(y),
-                .width  = w -| b2,
-                .height = h -| b2,
+                .width  = w -| border2,
+                .height = h -| border2,
             });
             return;
         }
 
-        splitAndAdvance(ctx, win, dir, b2, m.gap, &x, &y, &w, &h);
+        splitAndAdvance(ctx, win, dir, border2, m.gap, &x, &y, &w, &h);
         dir = dir.next();
     }
 }
 
-// ============================================================================
-// Private helpers
-// ============================================================================
-
 /// Place `win` in its split half and advance the remaining area cursor.
 inline fn splitAndAdvance(
-    ctx: *const layouts.LayoutCtx,
-    win: u32,
-    dir: SpiralDirection,
-    b2:  u16,
-    gap: u16,
+    ctx:     *const layouts.LayoutCtx,
+    win:     u32,
+    dir:     SpiralDirection,
+    border2: u16,
+    gap:     u16,
     x: *i32, y: *i32, w: *u16, h: *u16,
 ) void {
     switch (dir) {
@@ -86,7 +82,7 @@ inline fn splitAndAdvance(
             const win_w = (w.* -| gap) / 2;
             layouts.configureWithHints(ctx, win, .{
                 .x = @intCast(x.*), .y = @intCast(y.*),
-                .width = win_w -| b2, .height = h.* -| b2,
+                .width = win_w -| border2, .height = h.* -| border2,
             });
             x.* += @as(i32, @intCast(win_w + gap));
             w.*  = w.* -| (win_w + gap);
@@ -95,7 +91,7 @@ inline fn splitAndAdvance(
             const win_h = (h.* -| gap) / 2;
             layouts.configureWithHints(ctx, win, .{
                 .x = @intCast(x.*), .y = @intCast(y.*),
-                .width = w.* -| b2, .height = win_h -| b2,
+                .width = w.* -| border2, .height = win_h -| border2,
             });
             y.* += @as(i32, @intCast(win_h + gap));
             h.*  = h.* -| (win_h + gap);
@@ -105,7 +101,7 @@ inline fn splitAndAdvance(
             layouts.configureWithHints(ctx, win, .{
                 .x = @intCast(x.* + @as(i32, @intCast(w.* - win_w))),
                 .y = @intCast(y.*),
-                .width = win_w -| b2, .height = h.* -| b2,
+                .width = win_w -| border2, .height = h.* -| border2,
             });
             w.* = w.* -| (win_w + gap); // x stays; shrink from the right
         },
@@ -114,7 +110,7 @@ inline fn splitAndAdvance(
             layouts.configureWithHints(ctx, win, .{
                 .x = @intCast(x.*),
                 .y = @intCast(y.* + @as(i32, @intCast(h.* - win_h))),
-                .width = w.* -| b2, .height = win_h -| b2,
+                .width = w.* -| border2, .height = win_h -| border2,
             });
             h.* = h.* -| (win_h + gap); // y stays; shrink from the bottom
         },

@@ -11,8 +11,8 @@ const events    = @import("events");
 const config    = @import("config");
 const constants = @import("constants");
 
-const scale = if (build.has_scale) @import("scale") else struct {};
-const debug = if (build.has_debug) @import("debug") else struct {};
+const scale = if (build.has_scale) @import("scale");
+const debug = if (build.has_debug) @import("debug");
 
 const input = @import("input");
 

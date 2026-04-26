@@ -4,7 +4,7 @@
 const std   = @import("std");
 const build = @import("build_options");
 
-const minimize = if (build.has_minimize) @import("minimize") else struct {};
+const minimize = if (build.has_minimize) @import("minimize");
 
 
 // Fixed-size ordered window list.

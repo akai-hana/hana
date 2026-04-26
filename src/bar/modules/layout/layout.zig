@@ -5,7 +5,7 @@ const core    = @import("core");
 const types   = @import("types");
 const drawing = @import("drawing");
 const build   = @import("build_options");
-const tiling  = if (build.has_tiling) @import("tiling") else struct {};
+const tiling  = if (build.has_tiling) @import("tiling");
 
 /// Returns the icon string for the given layout.
 /// Uses anytype so this function is only instantiated when tiling is present,
