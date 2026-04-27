@@ -1,0 +1,17 @@
+# single-dir codebase
+dev/codebase/*
+
+# zig garbage
+.zig-cache/
+zig-out/
+
+# make garbage
+*.orig
+*.rej
+
+# vim garbage
+*.swp
+*.swo
+
+# other garbage
+*.xml
