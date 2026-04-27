@@ -41,14 +41,14 @@ pub fn tileWithOffset(
 
     // New window: snap viewport right so it is immediately visible.
     // Killed window: the clamp below is sufficient.
-    if (n > state.scroll_prev_n) {
-        state.scrolling_offset = max_off;
+    if (n > state.scroll.prev_n) {
+        state.scroll.offset = max_off;
     }
-    state.scroll_prev_n = n;
+    state.scroll.prev_n = n;
 
     // Clamp keeps the offset in [0, max_off] after manual scrolling or kills.
-    state.scrolling_offset = std.math.clamp(state.scrolling_offset, 0, max_off);
-    const scroll: i32 = state.scrolling_offset;
+    state.scroll.offset = std.math.clamp(state.scroll.offset, 0, max_off);
+    const scroll: i32 = state.scroll.offset;
 
     const content_h: u16 = calcContentH(screen_h, m);
     const win_y: i32     = @as(i32, @intCast(y_offset)) + @as(i32, @intCast(m.gap));
@@ -58,6 +58,8 @@ pub fn tileWithOffset(
     const gap_i32:  i32 = @intCast(m.gap);
     const gap_half: i32 = @intCast(m.gap / 2);
     const border2:  i32 = 2 * @as(i32, @intCast(m.border));
+
+    var defer_slot = layouts.DeferredConfigure.init(ctx);
 
     for (windows, 0..) |win, i| {
         const col: i32 = @intCast(i);
@@ -75,11 +77,9 @@ pub fn tileWithOffset(
         else
             constants.MIN_WINDOW_DIM;
 
-        const right: i32 = x + avail + border2; // right edge the X server clips against
+        const right: i32 = x + avail + border2;
 
-        // Completely off-screen: park the window. Use sentinel when x overflows i16
-        // (avoids sending a garbage position to the X server); otherwise configure at
-        // the true position to keep the cache coherent.
+        // Completely off-screen: park the window.
         if (x >= sw_i32 or right <= 0) {
             if (x < I16_MIN or x > I16_MAX) {
                 _ = core.xcb.xcb_configure_window(
@@ -87,26 +87,26 @@ pub fn tileWithOffset(
                     core.xcb.XCB_CONFIG_WINDOW_X,
                     &[_]u32{@bitCast(constants.OFFSCREEN_X_POSITION)},
                 );
-                // Invalidate so the next on-screen retile always reconfigures.
                 ctx.cache.getOrPut(win).value_ptr.rect = tiling.zero_rect;
             } else {
-                layouts.configureWithHints(ctx, win, .{
-                    .x      = @intCast(x),
-                    .y      = @intCast(win_y),
-                    .width  = content_w,
-                    .height = content_h,
-                });
+                const rect = utils.Rect{
+                    .x = @intCast(x), .y = @intCast(win_y),
+                    .width = content_w, .height = content_h,
+                };
+                if (!defer_slot.capture(ctx, win, rect))
+                    layouts.configureWithHints(ctx, win, rect);
             }
             continue;
         }
 
-        layouts.configureWithHints(ctx, win, .{
-            .x      = @intCast(x),
-            .y      = @intCast(win_y),
-            .width  = content_w,
-            .height = content_h,
-        });
+        const rect = utils.Rect{
+            .x = @intCast(x), .y = @intCast(win_y),
+            .width = content_w, .height = content_h,
+        };
+        if (!defer_slot.capture(ctx, win, rect))
+            layouts.configureWithHints(ctx, win, rect);
     }
+    defer_slot.flush(ctx);
 }
 
 /// Height of each window: full screen height minus top + bottom gap and borders.

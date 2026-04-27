@@ -54,6 +54,48 @@ const fibonacci = if (build.has_fibonacci) @import("fibonacci") else LayoutStub;
 const leaf       = if (build.has_leaf)       @import("leaf")       else LayoutStub;
 const scroll     = if (build.has_scroll)     @import("scroll")     else LayoutStub;
 
+// Comptime verification that every layout module (or its LayoutStub fallback)
+// exports a `tileWithOffset` function with the exact signature the dispatcher
+// `invokeLayout` requires.  This fires a compile error — not a runtime panic —
+// the moment a new layout module is added or an existing one's signature drifts,
+// before any tests are run.  Without this check, a duck-typed mismatch only
+// surfaces if the mismatched layout is selected at runtime in a test run that
+// actually exercises it.
+comptime {
+    const LayoutModule = type;
+    const expected_params = .{
+        *const layouts.LayoutCtx, // ctx
+        *State,                   // state
+        []const u32,              // windows
+        u16,                      // screen_w
+        u16,                      // screen_h
+        u16,                      // y_offset
+    };
+    const layout_modules = [_]LayoutModule{ master, monocle, grid, fibonacci, leaf, scroll };
+    for (layout_modules) |Mod| {
+        if (!@hasDecl(Mod, "tileWithOffset")) {
+            @compileError(@typeName(Mod) ++ " must export `tileWithOffset`");
+        }
+        const fn_info = @typeInfo(@TypeOf(Mod.tileWithOffset));
+        if (fn_info != .@"fn") {
+            @compileError(@typeName(Mod) ++ ".tileWithOffset must be a function");
+        }
+        const params = fn_info.@"fn".params;
+        if (params.len != expected_params.len) {
+            @compileError(@typeName(Mod) ++ ".tileWithOffset has wrong parameter count");
+        }
+        // Parameter type checks — each must match the expected type exactly.
+        for (expected_params, 0..) |ExpT, i| {
+            if (params[i].type) |ActT| {
+                if (ActT != ExpT) {
+                    @compileError(@typeName(Mod) ++ ".tileWithOffset parameter " ++
+                        std.fmt.comptimePrint("{d}", .{i}) ++ " type mismatch");
+                }
+            }
+        }
+    }
+}
+
 // Module constants
 
 const max_master_width_ratio: f32  = 0.95; // prevents master from consuming the full screen
@@ -90,6 +132,30 @@ pub const LayoutVariants = struct {
     grid:    GridVariant    = .rigid,
 };
 
+/// All scroll-layout-specific runtime state, grouped to make it clear
+/// which fields are only meaningful while `layout == .scroll`.  When a
+/// different layout is active these fields are dormant but retain their
+/// last values so that switching back to scroll restores the viewport
+/// position the user left it at.
+///
+/// Kept on State rather than being heap-allocated so that the WM never
+/// touches an allocator during normal operation.  The size cost is
+/// negligible (16 bytes) and the separation makes future removal of the
+/// scroll layout a one-field delete instead of a multi-site grep.
+pub const ScrollState = struct {
+    /// Horizontal pixel offset of the scroll viewport.
+    /// Clamped by scroll.tileWithOffset on every retile.
+    offset:       i32   = 0,
+    /// Window count seen on the last scroll retile.
+    /// Used to detect new windows and snap the viewport to them.
+    prev_n:       usize = 0,
+    /// The window that held focus just before the current one, inside the
+    /// scroll layout.  Updated on every real A→B focus transition.  Used
+    /// by takePrevFocusedForScroll so closing the focused window restores
+    /// focus to the previous one rather than falling back to list order.
+    prev_focused: ?u32  = null,
+};
+
 pub const State = struct {
     is_enabled:       bool,
     layout:           Layout,
@@ -113,20 +179,9 @@ pub const State = struct {
     enabled_layouts:       [6]Layout,
     enabled_layout_count:  u8,
 
-    /// Pixel offset applied by the scroll layout.
-    /// Clamped by scroll.tileWithOffset on every retile.
-    scrolling_offset: i32,
-
-    /// Window count seen on the last scroll-layout retile.
-    /// Used by scroll.tileWithOffset to detect spawns and auto-follow new windows.
-    scroll_prev_n: usize,
-
-    /// The window that held focus immediately before the current one, within
-    /// the scroll layout.  Updated by updateWindowFocus on every real A→B
-    /// transition (not on clearFocus).  Used by takePrevFocusedForScroll so
-    /// that closing the focused window in scroll layout restores focus to the
-    /// previously focused window rather than falling back to tracking-list order.
-    prev_focused: ?u32,
+    /// Scroll-layout runtime state, grouped so its lifetime and ownership are
+    /// explicit.  Dormant (but preserved) when layout != .scroll.
+    scroll: ScrollState,
 
     /// Per-workspace geometry validity bitmask (64 bits -> up to 64 workspaces).
     ///
@@ -147,15 +202,12 @@ pub const State = struct {
     /// applyBorderColor (border). O(1) lookup per window per retile.
     cache: layouts.CacheMap,
 
-    // Scratch buffers — fixed-size arrays embedded in State (BSS, zero allocation).
+    // Scratch buffer — fixed-size array embedded in State (BSS, zero allocation).
     //
     // Reused across retile calls to avoid per-call stack pressure.
-    //   scratch_wins   — [max_workspace_windows]u32   single-workspace window list
-    //   retile_wins    — [max_workspaces * max_workspace_windows]u32  flattened 2-D per-workspace lists
-    //   retile_lens    — [max_workspaces]usize         fill counters for retile_wins rows
-    scratch_wins:  [max_workspace_windows]u32,
-    retile_wins:   [max_workspaces * max_workspace_windows]u32,
-    retile_lens:   [max_workspaces]usize,
+    //   scratch_wins — [max_workspace_windows]u32   single-workspace window list;
+    //                  also used by retileAllWorkspaces for per-workspace collection.
+    scratch_wins: [max_workspace_windows]u32,
 
     pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.gap_width, .border = self.border_width };
@@ -419,28 +471,20 @@ pub inline fn markDirty() void {
 pub fn retileCurrentWorkspace() void {
     const s = getState();
     if (!s.is_enabled) {
-        // Tiling is disabled but windows are still tracked. The workspace
-        // switcher routes them through this function for restore, so we bring
-        // them back to their last known positions via the geometry cache.
         _ = restoreWorkspaceGeom();
         return;
     }
-    retile(calcScreenArea(), null);
+    retileImpl(calcScreenArea(), .{});
     s.is_dirty = false;
 }
 
 /// Like retileCurrentWorkspace, but passes `defer_win` through to the layout
 /// context so that window is configured LAST inside every column/stack it
-/// appears in.  Used by swap_master to ensure the shrinking window (old master
-/// moving into the stack) fills its new slot before the growing window (new
-/// master) vacates its old one — eliminating the one-frame wallpaper gap.
+/// appears in.  Used by swap_master to eliminate the one-frame wallpaper gap.
 pub fn retileCurrentWorkspaceDeferred(defer_win: ?u32) void {
     const s = getState();
-    if (!s.is_enabled) {
-        _ = restoreWorkspaceGeom();
-        return;
-    }
-    retileDeferred(calcScreenArea(), null, defer_win);
+    if (!s.is_enabled) { _ = restoreWorkspaceGeom(); return; }
+    retileImpl(calcScreenArea(), .{ .defer_win = defer_win });
     s.is_dirty = false;
 }
 
@@ -453,6 +497,19 @@ pub fn retileIfDirty() void {
 
 /// Retile all workspaces in one pass, updating the cache for each.
 /// Skips the current workspace (handled separately) and any fullscreen workspace.
+///
+/// Previously this function built a flattened 2-D window-list array
+/// (retile_wins[max_workspaces * max_workspace_windows]) in a first pass using
+/// bitmask iteration, then processed each workspace in a second pass.  That
+/// required 32 KB of BSS scratch space and was sensitive to the interaction
+/// between the two passes.
+///
+/// Now: a single loop collects each workspace's windows into scratch_wins (128 B
+/// of already-available BSS) immediately before invoking the layout.  The
+/// tradeoff — O(workspaces × all_windows) instead of O(all_windows) — is
+/// acceptable because both counts are bounded small (≤64 workspaces, ≤128
+/// windows per workspace) and this path only runs on workspace switch, not on
+/// every keypress.
 pub fn retileAllWorkspaces() void {
     const s = getState();
     if (!s.is_enabled) return;
@@ -461,41 +518,8 @@ pub fn retileAllWorkspaces() void {
     const ws_count    = tracking.getWorkspaceCount();
     const current_ws  = tracking.getCurrentWorkspace() orelse return;
     const ws_state_opt = if (!core.config.tiling.global_layout) workspaces.getState() else null;
-    const ctx         = makeLayoutCtx(s);
+    var   ctx         = makeLayoutCtx(s);
     const effective_ws = @min(ws_count, max_workspaces);
-
-    @memset(s.retile_lens[0..effective_ws], 0);
-
-    // Build per-workspace window lists in one pass.  For each window, obtain
-    // its workspace bitmask and iterate only over set bits using @ctz (count
-    // trailing zeros) — for the common case of one workspace per window this
-    // performs exactly one iteration rather than up to max_workspaces (64).
-    // Windows on multiple workspaces (tags) still visit each workspace exactly
-    // once via the bit-clear loop idiom (bits &= bits - 1).
-    const ws_range_mask: u64 = if (effective_ws >= 64)
-        ~@as(u64, 0)
-    else
-        (@as(u64, 1) << @intCast(effective_ws)) - 1;
-
-    for (s.windows.items()) |win| {
-        const mask = tracking.getWindowWorkspaceMask(win) orelse continue;
-        var bits = mask & ws_range_mask;
-        while (bits != 0) {
-            const ws_bit: u8 = @intCast(@ctz(bits));
-            bits &= bits - 1; // clear lowest set bit
-            if (s.retile_lens[ws_bit] < max_workspace_windows) {
-                s.retile_wins[ws_bit * max_workspace_windows + s.retile_lens[ws_bit]] = win;
-                s.retile_lens[ws_bit] += 1;
-            } else {
-                // Overflow: the per-workspace window list is full. This window
-                // will retain stale geometry after the workspace switch — log
-                // a warning so the condition is diagnosable. Every other
-                // overflow path in this subsystem (CacheMap.getOrPut,
-                // hasWindowBufCapacity) logs; this one must too.
-                debug.warn("retileAllWorkspaces: ws {} window list full, dropping 0x{x}", .{ ws_bit, win });
-            }
-        }
-    }
 
     var ws_idx: u8 = 0;
     while (ws_idx < effective_ws) : (ws_idx += 1) {
@@ -504,9 +528,9 @@ pub fn retileAllWorkspaces() void {
             if (fullscreen.getForWorkspace(ws_idx)) |_| continue;
         }
 
-        const n = s.retile_lens[ws_idx];
+        const n = collectWorkspaceWindows(s, &s.scratch_wins, ws_idx);
         if (n == 0) continue;
-        const ws_windows = s.retile_wins[ws_idx * max_workspace_windows ..][0..n];
+        const ws_windows = s.scratch_wins[0..n];
 
         const saved_width = s.master_width;
         const saved_count = s.master_count;
@@ -530,17 +554,10 @@ pub fn retileInactiveWorkspace(ws_idx: u8) void {
     if (!build.has_workspaces) return;
 
     const ws_state = workspaces.getState() orelse return;
+    if (ws_idx == ws_state.current) { retileCurrentWorkspace(); return; }
 
-    if (ws_idx == ws_state.current) {
-        retileCurrentWorkspace();
-        return;
-    }
+    retileImpl(calcScreenArea(), .{ .for_ws = ws_idx });
 
-    retile(calcScreenArea(), ws_idx);
-
-    // Push windows back offscreen while their workspace is inactive.
-    // Do NOT invalidate the cache: restoreWorkspaceGeom will find the
-    // valid bit set and replay positions in one batch.
     const bit = tracking.workspaceBit(ws_idx);
     for (tracking.allWindows()) |entry| {
         if (entry.mask & bit != 0) utils.pushWindowOffscreen(core.conn, entry.win);
@@ -549,48 +566,24 @@ pub fn retileInactiveWorkspace(ws_idx: u8) void {
 
 /// Compute tiled geometry bypassing the `!is_enabled` guard, then restore
 /// `s.layout`. Used by the workspace switcher when floating mode is active and
-/// the geometry cache is stale — this pre-populates the cache with correct
-/// tiled positions so the float-restore path can use `getWindowGeom` instead
-/// of falling back to the default float position.
+/// the geometry cache is stale — pre-populates the cache so float-restore can
+/// use `getWindowGeom` instead of falling back to the default float position.
 pub fn retileForRestore() void {
     const s = getState();
     const saved = s.layout;
     s.layout = s.prev_layout;
-    retile(calcScreenArea(), null);
+    retileImpl(calcScreenArea(), .{});
     s.layout = saved;
     s.is_dirty = false;
 }
 
 /// Retile the current workspace, merging `border_width` into each geometry
 /// configure_window call. Used exclusively by reloadConfig so that BORDER_WIDTH
-/// and X|Y|W|H are sent as a single request per window inside the server grab,
-/// saving one XCB round-trip per window compared to a separate explicit loop.
+/// and X|Y|W|H are sent as a single request per window inside the server grab.
 fn retileCurrentWorkspaceReload(border_width: u16) void {
     const s = getState();
     if (!s.is_enabled) return;
-
-    const screen     = calcScreenArea();
-    const target_ws: u8 = @intCast(tracking.getCurrentWorkspace() orelse return);
-
-    if (build.has_fullscreen) {
-        if (fullscreen.getForWorkspace(target_ws)) |_| return;
-    }
-
-    const ws_count   = collectWorkspaceWindows(s, &s.scratch_wins, null);
-    const ws_windows = s.scratch_wins[0..ws_count];
-    if (ws_windows.len == 0) return;
-
-    var ctx = makeLayoutCtx(s);
-    ctx.border_width = border_width;
-
-    const wss = workspaces.getState();
-    invokeLayout(
-        selectLayout(s, wss, target_ws, core.config.tiling.global_layout),
-        &ctx, s, ws_windows, screen,
-    );
-
-    s.last_retile_area = screen;
-    markWorkspaceGeomValid(s, target_ws);
+    retileImpl(calcScreenArea(), .{ .border_width = border_width });
     s.is_dirty = false;
 }
 
@@ -758,7 +751,7 @@ pub fn stepScrollView(delta: i32) void {
     const s = getState();
     if (s.layout != .scroll) return;
     const slot_w: i32 = @intCast(core.screen.width_in_pixels / 2);
-    s.scrolling_offset += delta * slot_w;
+    s.scroll.offset += delta * slot_w;
     retileCurrentWorkspace();
 }
 
@@ -790,19 +783,19 @@ fn snapScrollOffsetToWindow(s: *State, win: u32) bool {
     const max_off: i32 = @max(0, n_i32 * slot_w - sw_i32);
 
     const win_left:  i32 = fi_i32 * slot_w;
-    const scroll_off = s.scrolling_offset;
+    const scroll_off = s.scroll.offset;
 
     // Already fully visible — left edge is inside [scroll_off, scroll_off + slot_w].
     if (win_left >= scroll_off and win_left <= scroll_off + slot_w) return false;
 
     const new_scroll: i32 = if (win_left > scroll_off + slot_w)
-        win_left - slot_w   // window goes to right half; predecessor fills left
+        win_left - slot_w
     else
-        win_left;           // window goes to left half;  successor  fills right
+        win_left;
 
     const clamped = std.math.clamp(new_scroll, 0, max_off);
     if (clamped == scroll_off) return false;
-    s.scrolling_offset = clamped;
+    s.scroll.offset = clamped;
     return true;
 }
 
@@ -874,24 +867,8 @@ pub fn swapWithMasterFollowFocusGetWins() ?struct { displaced: ?u32, ws_wins: []
 /// swap-master action path performs one collect instead of two.
 pub fn retileCurrentWorkspaceDeferredPrebuilt(ws_wins: []const u32, defer_win: ?u32) void {
     const s = getState();
-    if (!s.is_enabled) {
-        _ = restoreWorkspaceGeom();
-        return;
-    }
-    const screen = calcScreenArea();
-    const target_ws: u8 = @intCast(tracking.getCurrentWorkspace() orelse return);
-    if (build.has_fullscreen) {
-        if (fullscreen.getForWorkspace(target_ws)) |_| return;
-    }
-    if (ws_wins.len == 0) return;
-    const ctx = makeLayoutCtxDeferred(s, defer_win);
-    const wss = workspaces.getState();
-    invokeLayout(
-        selectLayout(s, wss, target_ws, core.config.tiling.global_layout),
-        &ctx, s, ws_wins, screen,
-    );
-    s.last_retile_area = screen;
-    markWorkspaceGeomValid(s, target_ws);
+    if (!s.is_enabled) { _ = restoreWorkspaceGeom(); return; }
+    retileImpl(calcScreenArea(), .{ .defer_win = defer_win, .pre_built = ws_wins });
     s.is_dirty = false;
 }
 
@@ -927,7 +904,7 @@ pub fn updateWindowFocus(old_focused: ?u32, new_focused: ?u32) void {
     // closed — we must NOT update prev_focused there, because A is about to be
     // removed and prev_focused should still point to the last window before A.
     if (old_focused != null and new_focused != null) {
-        s.prev_focused = old_focused;
+        s.scroll.prev_focused = old_focused;
     }
 
     for ([2]?u32{ old_focused, new_focused }) |opt| {
@@ -952,8 +929,8 @@ pub fn takePrevFocusedForScroll() ?u32 {
     if (comptime !build.has_scroll) return null;
     const s = getState();
     if (s.layout != .scroll) return null;
-    const prev = s.prev_focused orelse return null;
-    s.prev_focused = null;
+    const prev = s.scroll.prev_focused orelse return null;
+    s.scroll.prev_focused = null;
     return prev;
 }
 
@@ -1065,13 +1042,9 @@ fn initState() State {
         .is_dirty         = false,
         .workspace_geom_valid_bits = 0,
         .last_retile_area = zero_rect,
-        .scrolling_offset = 0,
-        .scroll_prev_n    = 0,
-        .prev_focused     = null,
+        .scroll           = .{},
         .cache            = .{},
         .scratch_wins     = undefined,
-        .retile_wins      = undefined,
-        .retile_lens      = undefined,
     };
 }
 
@@ -1082,24 +1055,15 @@ fn getBorderColorForWindow(win: u32) u32 {
     return getState().borderColor(win);
 }
 
+/// Build a LayoutCtx for a normal retile.  defer_configure and border_width
+/// are left at their defaults (null); retileImpl sets them from RetileOpts
+/// after this call returns, keeping the construction site minimal.
 inline fn makeLayoutCtx(s: *State) layouts.LayoutCtx {
     return .{
         .conn             = core.conn,
         .cache            = &s.cache,
         .get_border_color = getBorderColorForWindow,
-        .defer_configure  = null,
-    };
-}
-
-/// Like makeLayoutCtx but sets defer_configure so the named window is emitted
-/// last in every column/stack, preventing it from vacating its slot before the
-/// shrinking window has filled the adjacent slot.
-inline fn makeLayoutCtxDeferred(s: *State, defer_win: ?u32) layouts.LayoutCtx {
-    return .{
-        .conn             = core.conn,
-        .cache            = &s.cache,
-        .get_border_color = getBorderColorForWindow,
-        .defer_configure  = defer_win,
+        .focused_win      = focus.getFocused(),
     };
 }
 
@@ -1168,35 +1132,51 @@ inline fn resolveMasterCount(s: *const State, ws_state: ?*WsState, ws_idx: u8) u
 
 // Core retile
 
-/// Core retile. `for_ws`: when non-null, process that specific workspace instead
-/// of the current one.
-fn retile(screen: utils.Rect, for_ws: ?u8) void {
-    retileDeferred(screen, for_ws, null);
-}
+/// Options for the single core retile implementation.  All public retile
+/// entry points are thin wrappers that fill in this struct and call retileImpl,
+/// eliminating the near-duplicate logic that previously lived across four
+/// private functions (retile, retileDeferred, retileCurrentWorkspaceReload,
+/// retileCurrentWorkspaceDeferredPrebuilt).
+const RetileOpts = struct {
+    /// Target workspace.  Null = current workspace.
+    for_ws:       ?u8           = null,
+    /// When non-null, this window's configure_window call is emitted last
+    /// within every column/stack group it belongs to.
+    defer_win:    ?u32          = null,
+    /// When non-null, XCB_CONFIG_WINDOW_BORDER_WIDTH is merged into the
+    /// per-window geometry request.  Set only during reloadConfig.
+    border_width: ?u16          = null,
+    /// When non-null, skip collectWorkspaceWindows and use this list directly.
+    /// The caller guarantees the slice contents match the current workspace.
+    pre_built:    ?[]const u32  = null,
+};
 
-/// Like retile but sets LayoutCtx.defer_configure = defer_win.
-/// The named window is configured last inside every column/stack it appears in.
-fn retileDeferred(screen: utils.Rect, for_ws: ?u8, defer_win: ?u32) void {
+/// Single implementation underlying every public retile entry point.
+fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
     const s = getState();
 
-    const target_ws: u8 = for_ws orelse
+    const target_ws: u8 = opts.for_ws orelse
         @intCast(tracking.getCurrentWorkspace() orelse return);
 
     if (build.has_fullscreen) {
         if (fullscreen.getForWorkspace(target_ws)) |_| return;
     }
 
-    const ws_count   = collectWorkspaceWindows(s, &s.scratch_wins, for_ws);
-    const ws_windows = s.scratch_wins[0..ws_count];
+    const ws_windows: []const u32 = if (opts.pre_built) |pb| pb else blk: {
+        const n = collectWorkspaceWindows(s, &s.scratch_wins, opts.for_ws);
+        break :blk s.scratch_wins[0..n];
+    };
     if (ws_windows.len == 0) return;
 
-    const ctx = makeLayoutCtxDeferred(s, defer_win);
+    var ctx = makeLayoutCtx(s);
+    ctx.defer_configure = opts.defer_win;
+    ctx.border_width    = opts.border_width;
 
     const wss = workspaces.getState();
 
     const saved_width = s.master_width;
     const saved_count = s.master_count;
-    if (for_ws != null) {
+    if (opts.for_ws != null) {
         s.master_width = resolveMasterWidth(s, wss, target_ws);
         s.master_count = resolveMasterCount(s, wss, target_ws);
     }
