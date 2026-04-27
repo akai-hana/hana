@@ -49,8 +49,13 @@ pub const WindowData = struct {
 
     /// Returns false when the rect is zeroed, indicating the entry is stale or
     /// has not yet been populated by a retile pass.
+    ///
+    /// Both dimensions must be non-zero: a rect with width=0 but height=200 is
+    /// still degenerate and must not be treated as a valid on-screen position.
+    /// Using OR here would let monocle skip the offscreen-push for such a window,
+    /// allowing it to bleed through a transparent top window.
     pub fn hasValidRect(self: WindowData) bool {
-        return self.rect.width != 0 or self.rect.height != 0;
+        return self.rect.width != 0 and self.rect.height != 0;
     }
 };
 
@@ -61,18 +66,7 @@ const hash_table_mask: usize = hash_table_cap - 1;
 const hash_shift:      u5    = 23;  // 32 - log2(512)
 const EMPTY_WIN:       u32   = 0;   // XCB_NONE; never a real window ID
 
-/// Overflow sentinel used by `CacheMap.getOrPut` when the hard cap is exceeded.
-///
-/// Returning a pointer to this throwaway slot lets every call-site proceed
-/// without a null-check while guaranteeing no live cache entry is corrupted.
-/// The affected window simply misses the dedup check and receives a redundant
-/// configure_window on the next retile — an unconditionally correct outcome.
-///
-/// SINGLE-THREADED ASSUMPTION: two concurrent overflows would alias to the same
-/// pointer.  The WM is single-threaded for all geometry operations.
-/// If that invariant ever changes, this sentinel must become per-call or the
-/// overflow path must return an error.
-var overflow_sentinel: WindowData = .{};
+
 
 /// Open-addressing hash table mapping window IDs to their last geometry,
 /// border color, and WM_NORMAL_HINTS constraints — all three in one slot.
@@ -92,6 +86,19 @@ pub const CacheMap = struct {
 
     slots: [hash_table_cap]Slot = std.mem.zeroes([hash_table_cap]Slot),
     count: usize = 0,
+
+    /// Per-instance overflow sentinel for `getOrPut`.
+    ///
+    /// Keeping the sentinel on the CacheMap instance (rather than as a module-
+    /// level global) eliminates the aliasing hazard: if two different call sites
+    /// both overflow the same cache in the same synchronous call chain, they no
+    /// longer receive a pointer to the same storage.  Each overflow writes and
+    /// returns a pointer to *this instance's* sentinel, which is stable for the
+    /// duration of a single `getOrPut` call (the WM is single-threaded; the
+    /// call is not re-entrant).  The affected window misses the dedup check and
+    /// receives a redundant configure_window on the next retile — correct.
+
+    overflow_sentinel: WindowData = .{},
 
     /// Knuth's multiplicative hash for 32-bit keys, producing a 9-bit index
     /// (log2(512) = 9) into the hash table.  Distributes XCB's near-sequential
@@ -114,8 +121,8 @@ pub const CacheMap = struct {
             if (slot.win == EMPTY_WIN) {
                 if (self.count >= cache_capacity) {
                     debug.err("CacheMap: capacity exceeded, dropping cache for 0x{x}", .{win});
-                    overflow_sentinel = .{};
-                    return .{ .found_existing = false, .value_ptr = &overflow_sentinel };
+                    self.overflow_sentinel = .{};
+                    return .{ .found_existing = false, .value_ptr = &self.overflow_sentinel };
                 }
                 slot.* = .{ .win = win, .data = .{} };
                 self.count += 1;
@@ -232,6 +239,12 @@ pub const LayoutCtx = struct {
     /// into the geometry configure_window call, reducing 3 requests/window to 2.
     /// Set only during reloadConfig retile; null for all normal retile passes.
     border_width: ?u16 = null,
+    /// The currently focused window, supplied by tiling.zig via focus.getFocused().
+    /// Used by monocle to raise the correct window rather than the arbitrary list
+    /// tail.  Null when the layout context is constructed outside the normal
+    /// retile path (e.g. restoreWorkspaceGeom) — monocle falls back to the list
+    /// tail in that case, preserving the previous behaviour.
+    focused_win: ?u32 = null,
 };
 
 /// Returns true when both rects have identical coordinates and dimensions.
@@ -260,6 +273,18 @@ fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32,
         if (comptime raise) {
             _ = xcb.xcb_configure_window(ctx.conn, win,
                 xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+        }
+        // Apply border color even when geometry is degenerate.  Without this,
+        // a window whose hints shrink its dimensions to zero gets stuck with a
+        // stale border color permanently: every retile takes this early exit
+        // before reaching the border block below, so the color is never updated.
+        if (ctx.get_border_color) |getBorderColor| {
+            const color = getBorderColor(win);
+            if (!gop.found_existing or gop.value_ptr.border != color) {
+                gop.value_ptr.border = color;
+                _ = xcb.xcb_change_window_attributes(ctx.conn, win,
+                    xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
+            }
         }
         return;
     }
