@@ -25,7 +25,7 @@ pub fn tileWithOffset(
 
     // When no stack exists the master pane takes the full width.
     const master_w: u16 = if (stack_n > 0)
-        @intFromFloat(@as(f32, @floatFromInt(screen_w)) * state.master_width)
+        @intFromFloat(@round(@as(f32, @floatFromInt(screen_w)) * state.master_width))
     else
         screen_w;
 

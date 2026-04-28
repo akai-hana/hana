@@ -464,7 +464,7 @@ pub fn configureWithHintsAndRaise(ctx: *const LayoutCtx, win: u32, rect: utils.R
 ///
 /// Usage pattern (inside a layout's main window loop):
 ///
-///     var defer_slot = DeferredConfigure.init(ctx);
+///     var defer_slot = DeferredConfigure.init();
 ///     for (windows) |win| {
 ///         if (defer_slot.capture(win, computed_rect)) continue;
 ///         configureWithHints(ctx, win, computed_rect);
@@ -478,8 +478,8 @@ pub const DeferredConfigure = struct {
     pending_win:  u32        = 0,
     pending_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
 
-    /// Initialise from ctx.  If defer_configure is null, the slot is inert.
-    pub inline fn init(_: *const LayoutCtx) DeferredConfigure { return .{}; }
+    /// Initialise an inert slot.
+    pub inline fn init() DeferredConfigure { return .{}; }
 
     /// If `win` is the deferred window, store `rect` and return true (skip the
     /// normal configureWithHints call).  Otherwise return false.
@@ -518,6 +518,7 @@ pub const DeferredConfigure = struct {
 /// snap to whole character cells; the base is 0 rather than min_width since
 /// we are no longer enforcing the declared minimum.
 fn applyHintsToRect(rect: utils.Rect, h: SizeHints) utils.Rect {
+    if (isEmptySizeHints(h)) return rect; // fast path for unconstrained windows
     var w:  u16 = rect.width;
     var ht: u16 = rect.height;
 

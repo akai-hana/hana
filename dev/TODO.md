@@ -38,6 +38,10 @@ pub fn openDir(self: Dir, sub_path: []const u8, args: OpenOptions) OpenError!Dir
 
 # ### MISC. CHORES ### #
 
+- disallow minimize.zig from minimizing windows that aren't on the user's current workspace
+
+- compare hana's geometry pixel rounding strategy to dwm's
+
 - when cycling between layouts using toggleLayout/toggleLayoutReverse (core.zig, config.zig, input.zig), make it so that mouse hovering doesn't steal focus at windows being re-positioned, if it was previously positioned on one window but the layout cycling made it touch a different one. (focus.zig, window.zig, tracking.zig)
 
 - when doing toggle_float (mod+middle_click), i want the window to be tiled to the area where it is closest to. what this means is that, if there's already another window tiled, and i do toggle_float with the floating window located onto the left half of the screen, then it should be tiled onto the left. if it's to the right, then tiled to the right. you should take its middle/center of the floating window to be tiled, and decide where to tile it based off of that coordinates. it should work on any tiling layout. 
