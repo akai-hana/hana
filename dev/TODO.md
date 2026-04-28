@@ -3,8 +3,6 @@
 
 # ### HIGH-PRIORITY ### #
 
-[04-26] poruko: continue
-
 # *** #
 - add floating as a layout that one can cycle into
 # *** #
