@@ -59,7 +59,7 @@ pub fn tileWithOffset(
     const gap_half: i32 = @intCast(m.gap / 2);
     const border2:  i32 = 2 * @as(i32, @intCast(m.border));
 
-    var defer_slot = layouts.DeferredConfigure.init(ctx);
+    var defer_slot = layouts.DeferredConfigure.init();
 
     for (windows, 0..) |win, i| {
         const col: i32 = @intCast(i);

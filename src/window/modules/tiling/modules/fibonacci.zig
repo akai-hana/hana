@@ -39,7 +39,7 @@ pub fn tileWithOffset(
     var h: u16 = screen_h -| m.gap *| 2;
     var dir: SpiralDirection = .right;
 
-    var defer_slot = layouts.DeferredConfigure.init(ctx);
+    var defer_slot = layouts.DeferredConfigure.init();
 
     for (windows, 0..) |win, i| {
         // Remaining area too small to split: stack all overflow windows here.
