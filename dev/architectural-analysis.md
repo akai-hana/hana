@@ -202,7 +202,7 @@ configureWithHintsImpl should check .is_overflow and skip the cache write, falli
 When w < gap*2 + border2 or h < gap*2 + border2, all remaining windows are placed at identical geometry via a loop for (windows[i..]) |overflow_win|. This means the 5th through Nth windows on a small screen are all stacked at the same coordinates with no visual differentiation — worse than monocle, which at least raises the top window. Users see one window and have no indication that more are hidden.
 
 Fix: Fall through to monocle behaviour for overflow windows — use configureWithHintsAndRaise on the focused window, push the rest offscreen.
-10. grid.zig's calcGridShape special-cases n=3 but no other values
+~~10. grid.zig's calcGridShape special-cases n=3 but no other values~~ ✅ **FIXED** — replaced with aspect-ratio-weighted formula.
 
 calcGridShape returns {cols:3, rows:1} for n=3 specifically. The comment says this avoids "a 2×2 grid with a dead cell." But n=5 produces a 3×2 grid with one dead cell, n=7 produces a 3×3 with two dead cells, n=10 produces a 4×3 with two dead cells — none of these are special-cased. The fix for n=3 is also inconsistent with n=4 (which produces a 2×2 with no dead cells — correct) and n=6 (which produces a 3×2 with no dead cells — also correct). The real issue is that the ceiling-sqrt algorithm always produces square or nearly-square grids, ignoring screen aspect ratio entirely. A 1920×1080 screen would benefit from more columns than rows.
 
@@ -340,7 +340,7 @@ DeferredConfigure disappears because ordering is controlled by the caller during
 
 
 ## Post-structural flaws
-20. [Bug] master.zig has an asymmetric gap when master_side == .right
+20. ~~[Bug] **FIXED** master.zig has an asymmetric gap when master_side == .right~~
 
 This is a genuine bug, not a design shortcoming. The master pane's inner width is always computed as:
 
