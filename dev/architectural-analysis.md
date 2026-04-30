@@ -428,16 +428,6 @@ const right_w: u16 = (w -| gap) - left_w;
 
 The fixes listed above have non-trivial dependencies. Implementing them in the wrong order means redoing work. Below is a recommended phased sequence.
 
-### Phase 1 — isolated, no dependencies (do these first)
-
-These can each be merged independently in any order without touching anything else.
-
-- Flaw #7: Enforce min-size in the space distribution pre-pass — compute total minimum height/width required before tiling, reduce available space, distribute the remainder. This is self-contained per layout module and has no dependency on the structural phases. **Note: this implementation is provisional.** The pre-pass will be written against each module's existing inline gap arithmetic. Phase 5 replaces all of that arithmetic with FRegion calls, and the two interfaces are different enough that the Phase 1 implementation will not port directly. An implementer must revisit flaw #7 after Phase 5 and rewrite the pre-pass against the FRegion model. Treat the Phase 1 implementation as a correctness baseline and test fixture, not as final code.
-- Flaw #14: Unify the two scroll.zig offscreen sub-paths under the normal defer_slot path with a clamped x coordinate.
-- Flaw #6 (warning only): Add the debug.warn truncation log inside collectWorkspaceWindows.
-- Flaw #20: Fix the master_side == .right gap asymmetry in master.zig.
-- Flaw #9: Replace fibonacci overflow stacking with raise-and-hide behaviour: call configureWithHintsAndRaise on the focused window among the overflow set, push the rest offscreen using the existing offscreen parking coordinates. Do NOT forward to monocle's tileWithOffset directly — that creates a calling-convention coupling that Phase 6 must then undo. The monocle-forwarding option is correct only after Phase 6 when layouts become pure geometry functions.
-
 ### Phase 2 — State decomposition (prerequisite for phase 3)
 
 Decompose State into LayoutConfig, GeomCache, and retained State as described in flaw #2. This is a mechanical refactor: the struct fields do not change, they move. Every call site that takes *State must be updated to take the appropriate sub-struct pointer. The comptime signature verification in tiling.zig will catch any layout module that was incorrectly updated. Do not change any logic in this phase — only restructure ownership. This phase is a prerequisite for the signature change in phase 3.

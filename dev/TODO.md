@@ -3,7 +3,9 @@
 
 # ### HIGH-PRIORITY ### #
 
-6f6e
+a25: continue tiling sub-system
+iesfm: fix 3
+pig: window dragging truncation
 
 # *** #
 - add floating as a layout that one can cycle into
