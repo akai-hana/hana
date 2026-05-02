@@ -16,6 +16,10 @@ pig: window dragging truncation
 # *** #
 - the file imports on bar.zig are extremely messy. pending to sort them out. i want the files to be cleaner than they actually are.
 # *** #
+- limit dragging to monitor refresh rate
+# *** #
+- focusing on the windows of some programs (like wine games) shares mouse input, but not keyboard input with them, in the case there's more than one window on the workspace (e.g. one firefox window, where this does work like most programs, and one wine window, which is "special" in that it doesn't really work like other programs' windows). why is this? is there a way to solve this so that wine works flawlessly too, like other programs?
+# *** #
 
 ```
 ❯ zig build -Drelease=true --color on --error-style minimal -freference-trace=0
