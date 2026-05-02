@@ -1903,3 +1903,4 @@ pub fn reloadBorders() void {
     if (!build.has_workspaces) return;
     for (tracking.allWindows()) |entry| applyBorder(entry.win);
 }
+

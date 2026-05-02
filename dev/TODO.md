@@ -3,6 +3,8 @@
 
 # ### HIGH-PRIORITY ### #
 
+akhatsu: continue [sunday]
+
 a25: continue tiling sub-system
 iesfm: fix 3
 pig: window dragging truncation
