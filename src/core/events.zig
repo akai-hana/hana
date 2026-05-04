@@ -274,7 +274,7 @@ fn handleConfigReload() !void {
     grabKeybindings();
 
     // Rebuild after the swap so borrowed key slices point into the new config's memory.
-    window.rebuildRulesMap();
+    window.buildRulesMap();
 
     debug.info("Reload complete", .{});
 }

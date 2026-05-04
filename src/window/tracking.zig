@@ -19,7 +19,7 @@ pub const Tracking = struct {
     /// silently dropped from tiling and workspace membership with an error log.
     ///
     /// If 64 is regularly too small for your workflow, increase this value and
-    /// rebuild.  The struct is stack-allocated, so the cost is 4 × capacity bytes
+    /// rebuild.  The struct is stack-allocated, so the cost is 4 x capacity bytes
     /// per Workspace instance — 256 bytes at capacity = 64, 512 bytes at 128.
     const capacity = 64;
 

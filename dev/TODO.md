@@ -3,11 +3,7 @@
 
 # ### HIGH-PRIORITY ### #
 
-akhatsu: continue [sunday]
-
-a25: continue tiling sub-system
-iesfm: fix 3
-pig: window dragging truncation
+89sk: continue PHASE 3
 
 # *** #
 - add floating as a layout that one can cycle into
