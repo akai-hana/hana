@@ -1,6 +1,14 @@
 ### hana's TODO list! ###
 # In here i write the things i want to do to not lose track of the different ideas i come up with while developing
 
+akhts
+
+in other parts of my code i have similar issues, with some functions doing a true/false flag, others enums, and others just two similar functions with slightly different names for different use-cases. i want to change all of these cases to one global function that does one action, then another function that handles its own edge-case responsibility accordingly, just like what you did now. can you please give me an AI prompt that can help me go through all my codebase and resolve all of these cases?
+
+a25
+
+the solution you provided keeps calling the kernel as fast as it can, with the difference that it evvaluates on each call whether it's yet time to update or not. this feels like a bad solution to the problem. instead of this, could you make it instead so that when dragging is ongoing (that is, when the user is holding the dragging keybind), a clock is activated, that loops itself at the same rate as the refresh rate? this way the kernel isn't called on constantly and the evaluation is only done on the refresh rate, but kernel calls are only done at the rate of refresh rate. does this make sense? 
+
 # ### HIGH-PRIORITY ### #
 
 89sk: continue PHASE 3
