@@ -165,7 +165,7 @@ Mod+Shift+B = "toggle_bar_position"    # top/bottom
 # Program binds
 
 ## Misc
-Mod+A       = "MOZ_USE_XINPUT2=1 firefox"
+Mod+A       = "~/.local/bin/firefox-sync.sh xpmraevm.default-default; MOZ_USE_XINPUT2=1 firefox"
 Mod+Shift+A = "{kill} firefox"
 
 Mod+S       = "flatpak run org.equicord.equibop"
