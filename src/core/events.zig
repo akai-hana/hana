@@ -294,13 +294,12 @@ fn combinedTimeoutMs(blink_ms: i32) i32 {
 
 /// Ticks the clock and cursor blink on poll timeout, then flushes to the compositor.
 fn handleTimerEvents(cursor_is_blinking: bool) void {
-    if (build.has_bar) {
-        const drew = bar.checkClockUpdate() or cursor_is_blinking;
-        if (cursor_is_blinking) {
-            prompt.blinkTick();
-            bar.submitDraw();
-        }
-        if (drew) _ = xcb.xcb_flush(core.conn);
+    // poll() now times out only for cursor blink; the clock thread
+    // signals the bar render thread directly via checkClockUpdate().
+    if (build.has_bar and cursor_is_blinking) {
+        prompt.blinkTick();
+        bar.submitDraw();
+        _ = xcb.xcb_flush(core.conn);
     }
 }
 
