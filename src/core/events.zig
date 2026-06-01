@@ -80,9 +80,9 @@ pub fn dispatch(event_type: u8, event: *anyopaque) void {
 
 // Signal handling
 
-/// Converts any signal value — enum or integer — to its raw u8 number.
+/// Converts a signal enum value to its raw u8 number.
 inline fn sigToU8(sig: anytype) u8 {
-    return @intCast(if (@typeInfo(@TypeOf(sig)) == .@"enum") @intFromEnum(sig) else sig);
+    return @intCast(@intFromEnum(sig));
 }
 
 /// Async-signal-safe handler: writes the signal number as a byte to the pipe.
@@ -248,6 +248,15 @@ fn applyConfig(new_config: *types.Config) !void {
     }
 }
 
+/// Validates domain invariants on a freshly loaded config.
+/// Belongs here until config.zig grows a first-party validate() function.
+fn validateConfig(cfg: *const types.Config) !void {
+    if (cfg.tiling.master_count == 0) {
+        debug.err("Invalid config: master_count must be > 0, keeping old", .{});
+        return error.InvalidConfig;
+    }
+}
+
 /// Loads and validates a new config, then applies it atomically.
 /// On failure, the old config remains active.
 fn handleConfigReload() !void {
@@ -259,10 +268,7 @@ fn handleConfigReload() !void {
     };
     errdefer new_config.deinit(core.alloc);
 
-    if (new_config.tiling.master_count == 0) {
-        debug.err("Invalid config: master_count must be > 0, keeping old", .{});
-        return error.InvalidConfig;
-    }
+    try validateConfig(&new_config);
     try applyConfig(&new_config);
 
     var old_config = core.config;
