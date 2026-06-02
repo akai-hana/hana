@@ -175,9 +175,12 @@ Mod+D       = "ghostty"
 Mod+I       = "xeyes"
 Mod+Shift+D = "{kill} ghostty"
 
-# Noita
-Mod+Z       = "flatpak run com.valvesoftware.Steam steam://rungameid/881100"
-Mod+Shift+Z = "pkill noita"
+#Mod+Z       = "flatpak run com.valvesoftware.Steam steam://rungameid/881100" # Noita
+#Mod+Shift+Z = "pkill noita"
+
+# Minecraft Beta
+Mod+Z = "distrobox enter aur -- prismlauncher"
+Mod+Shift+Z = "pkill -9 prismlauncher"
 
 # Mod+Z       = "cd ~/Games/isaac-repentance+; wine isaac-ng.exe"
 # Mod+Shift+Z = "pkill isaac-ng"
@@ -229,7 +232,7 @@ Mod+Shift+Escape = "emergency_recover" #TODO: remove. this is hacky and assumes 
 # Launchers
 4 = ["OpenTabletDriver.UX"]
 # Games
-5 = ["steam", "steam.exe", "wine", "proton", "noita", "noita.exe", "osu!", "DDNet", "isaac-ng.exe"]
+5 = ["steam", "steam.exe", "wine", "proton", "noita", "noita.exe", "osu!", "DDNet", "isaac-ng.exe", "java", "Minecraft"]
 # Editors
 6 = ["emacs"]
 # Media
