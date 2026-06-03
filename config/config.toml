@@ -180,7 +180,7 @@ Mod+Shift+D = "{kill} ghostty"
 
 # Minecraft Beta
 Mod+Z = "distrobox enter aur -- prismlauncher"
-Mod+Shift+Z = "pkill -9 prismlauncher"
+Mod+Shift+Z = "distrobox enter aur -- ~/Games/factorio-vanilla"
 
 # Mod+Z       = "cd ~/Games/isaac-repentance+; wine isaac-ng.exe"
 # Mod+Shift+Z = "pkill isaac-ng"
