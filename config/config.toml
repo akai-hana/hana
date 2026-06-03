@@ -193,7 +193,7 @@ Mod+C       = "flatpak run com.valvesoftware.Steam steam://rungameid/1229490"
 Mod+Shift+C = "{kill} steam"
 
 Mod+V       = "flatpak run com.github.th_ch.youtube_music"
-Mod+Shift+V = "{kill} youtube-music"
+Mod+Shift+V = "distrobox enter aur -- stremio-enhanced"
 
 Mod+Y       = "thunar"
 Mod+Shift+Y = "{kill} thunar"
