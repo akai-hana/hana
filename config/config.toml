@@ -186,7 +186,7 @@ Mod+Shift+Z = "distrobox enter aur -- ~/Games/factorio-vanilla"
 # Mod+Shift+Z = "pkill isaac-ng"
 
 Mod+X       = "~/Games/t-client/DDNet"
-Mod+Shift+X = "{kill} DDNet"
+Mod+Shift+X = "~/Games/etterna/Etterna"
 
 # ULTRAKILL
 Mod+C       = "flatpak run com.valvesoftware.Steam steam://rungameid/1229490"
