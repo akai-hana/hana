@@ -3,16 +3,15 @@
 
 const std = @import("std");
 
-const core      = @import("core");
-    const xcb   = core.xcb;
+const core = @import("core");
+const xcb = core.xcb;
 const constants = @import("constants");
 
 const debug = @import("debug");
 
-
 const max_property_length = constants.PROPERTY_MAX_LENGTH;
 /// Passed as the `delete` argument to xcb_get_property; 0 means do not consume the property.
-const property_no_delete  = constants.PROPERTY_NO_DELETE;
+const property_no_delete = constants.PROPERTY_NO_DELETE;
 
 // Process lifecycle signals
 //
@@ -27,10 +26,14 @@ pub var running = std.atomic.Value(bool).init(true);
 pub var should_reload = std.atomic.Value(bool).init(false);
 
 /// Signals the main event loop to exit cleanly.
-pub inline fn quit() void { running.store(false, .release); }
+pub inline fn quit() void {
+    running.store(false, .release);
+}
 
 /// Signals the main event loop to reload the user config.
-pub inline fn reload() void { should_reload.store(true, .release); }
+pub inline fn reload() void {
+    should_reload.store(true, .release);
+}
 
 /// Atomically consumes the reload flag.
 /// Returns true exactly once per request, whichever call path checks first wins.
@@ -40,12 +43,11 @@ pub inline fn consumeReload() bool {
 
 // Geometry operations
 
-
 /// Position and dimensions of a managed window, relative to the root window (the total display area).
 pub const Rect = struct {
-    x:      i16,
-    y:      i16,
-    width:  u16,
+    x: i16,
+    y: i16,
+    width: u16,
     height: u16,
 
     /// Constructs a Rect from an XCB geometry reply.
@@ -61,7 +63,7 @@ pub const Rect = struct {
 
 /// Gap and border widths applied around a tiled window.
 pub const Margins = struct {
-    gap:    u16,
+    gap: u16,
     border: u16,
 };
 
@@ -69,10 +71,13 @@ pub const Margins = struct {
 /// Use `window.configureWindowGeom` when border_width must change atomically.
 pub inline fn configureWindow(conn: *xcb.xcb_connection_t, win: u32, rect: Rect) void {
     const coord = struct {
-        inline fn u(v: i16) u32 { return @bitCast(@as(i32, v)); }
+        inline fn u(v: i16) u32 {
+            return @bitCast(@as(i32, v));
+        }
     }.u;
     _ = xcb.xcb_configure_window(
-        conn, win,
+        conn,
+        win,
         xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
             xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT,
         &[_]u32{ coord(rect.x), coord(rect.y), rect.width, rect.height },
@@ -90,26 +95,26 @@ pub inline fn normalizeModifiers(state: u16) u16 {
 // Field names match X11 atom strings exactly so getAtomCached can resolve them with a single @field call:
 // No switch, no redundant enum, no second place to add entries when a new atom is needed.
 const AtomCache = struct {
-    @"WM_PROTOCOLS":             u32,
-    @"WM_DELETE_WINDOW":         u32,
-    @"WM_TAKE_FOCUS":            u32,
-    @"_NET_WM_NAME":             u32,
-    @"UTF8_STRING":              u32,
-    @"WM_CLASS":                 u32,
+    WM_PROTOCOLS: u32,
+    WM_DELETE_WINDOW: u32,
+    WM_TAKE_FOCUS: u32,
+    _NET_WM_NAME: u32,
+    UTF8_STRING: u32,
+    WM_CLASS: u32,
     // Bar window property atoms
     // Batched here so setWindowProperties pays zero X round-trips rather than 10 serial ones.
-    @"_NET_WM_STRUT_PARTIAL":    u32,
-    @"_NET_WM_WINDOW_TYPE":      u32,
-    @"_NET_WM_WINDOW_TYPE_DOCK": u32,
-    @"_NET_WM_STATE":            u32,
-    @"_NET_WM_STATE_FULLSCREEN": u32,
-    @"_NET_WM_STATE_ABOVE":      u32,
-    @"_NET_WM_STATE_STICKY":     u32,
-    @"_NET_WM_ALLOWED_ACTIONS":  u32,
-    @"_NET_WM_ACTION_CLOSE":     u32,
-    @"_NET_WM_ACTION_ABOVE":     u32,
-    @"_NET_WM_ACTION_STICK":     u32,
-    @"_NET_WM_PID":              u32,
+    _NET_WM_STRUT_PARTIAL: u32,
+    _NET_WM_WINDOW_TYPE: u32,
+    _NET_WM_WINDOW_TYPE_DOCK: u32,
+    _NET_WM_STATE: u32,
+    _NET_WM_STATE_FULLSCREEN: u32,
+    _NET_WM_STATE_ABOVE: u32,
+    _NET_WM_STATE_STICKY: u32,
+    _NET_WM_ALLOWED_ACTIONS: u32,
+    _NET_WM_ACTION_CLOSE: u32,
+    _NET_WM_ACTION_ABOVE: u32,
+    _NET_WM_ACTION_STICK: u32,
+    _NET_WM_PID: u32,
 };
 
 var atom_cache: ?AtomCache = null;
@@ -187,8 +192,7 @@ pub fn monotonicNs() u64 {
 /// Moves `win` to the offscreen holding area (outside visible display bounds).
 /// Uses only XCB_CONFIG_WINDOW_X.
 pub inline fn pushWindowOffscreen(conn: *xcb.xcb_connection_t, win: u32) void {
-    _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X,
-        &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+    _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
 }
 
 /// Ungrabs the X server and flushes pending requests.
@@ -202,14 +206,15 @@ pub inline fn ungrabAndFlush(conn: *xcb.xcb_connection_t) void {
 /// Returns a slice into `buffer.items` on success, or null if the property is absent, empty, or not 8-bit encoded.
 /// The buffer is cleared before each use, so the caller can allocate it once and pass it across repeated calls.
 pub fn fetchPropertyToBuffer(
-    conn:      *xcb.xcb_connection_t,
-    window:    u32,
-    atom:      u32,
+    conn: *xcb.xcb_connection_t,
+    window: u32,
+    atom: u32,
     atom_type: u32,
-    buffer:    *std.ArrayListUnmanaged(u8),
+    buffer: *std.ArrayListUnmanaged(u8),
     allocator: std.mem.Allocator,
 ) !?[]const u8 {
-    const reply = xcb.xcb_get_property_reply(conn,
+    const reply = xcb.xcb_get_property_reply(
+        conn,
         xcb.xcb_get_property(conn, property_no_delete, window, atom, atom_type, 0, max_property_length),
         null,
     ) orelse return null;

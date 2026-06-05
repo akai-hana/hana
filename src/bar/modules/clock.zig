@@ -14,19 +14,19 @@
 //! The sleep uses a pthread condition variable so stopThread() returns
 //! promptly (typically < 1 ms) rather than waiting up to one full second.
 
-const std     = @import("std");
-const core    = @import("core");
-const types   = @import("types");
+const std = @import("std");
+const core = @import("core");
+const types = @import("types");
 const drawing = @import("drawing");
-const bar     = @import("bar");
-const debug   = @import("debug");
+const bar = @import("bar");
+const debug = @import("debug");
 
 const c = @cImport(@cInclude("time.h"));
 
 pub const CLOCK_MEASURE_STRING: []const u8 = "0000-00-00 00:00:00";
 
 var last_formatted_time: [20]u8 = undefined;
-var last_formatted_sec:  i64    = -1;
+var last_formatted_sec: i64 = -1;
 
 // ---------------------------------------------------------------------------
 // Thread state
@@ -36,10 +36,10 @@ var last_formatted_sec:  i64    = -1;
 // sleep primitive.  Zero-initialised (.{}) is PTHREAD_MUTEX/COND_INITIALIZER
 // on Linux; no explicit init call is required.  The default cond clock is
 // CLOCK_REALTIME, which is exactly what we want for second-aligned deadlines.
-var clock_mutex:  std.c.pthread_mutex_t = .{};
-var clock_cond:   std.c.pthread_cond_t  = .{};
-var clock_quit:   bool                  = false;
-var clock_thread: ?std.Thread           = null;
+var clock_mutex: std.c.pthread_mutex_t = .{};
+var clock_cond: std.c.pthread_cond_t = .{};
+var clock_quit: bool = false;
+var clock_thread: ?std.Thread = null;
 
 // ---------------------------------------------------------------------------
 // Public lifecycle API
@@ -48,7 +48,7 @@ var clock_thread: ?std.Thread           = null;
 /// Spawns the dedicated clock thread.
 /// Safe to call after a preceding stopThread().
 pub fn startThread() void {
-    clock_quit  = false;
+    clock_quit = false;
     clock_thread = std.Thread.spawn(.{}, runClockThread, .{}) catch |e| {
         debug.err("Clock thread spawn failed: {s}", .{@errorName(e)});
         return;
@@ -64,7 +64,10 @@ pub fn stopThread() void {
     clock_quit = true;
     _ = std.c.pthread_cond_signal(&clock_cond);
     _ = std.c.pthread_mutex_unlock(&clock_mutex);
-    if (clock_thread) |t| { t.join(); clock_thread = null; }
+    if (clock_thread) |t| {
+        t.join();
+        clock_thread = null;
+    }
     debug.info("Clock thread stopped", .{});
 }
 
@@ -79,7 +82,9 @@ pub fn updateTimerState() void {}
 
 /// No-op: the clock thread drives ticks directly and no longer participates
 /// in the main event loop's poll() timeout calculation.
-pub fn pollTimeoutMs() i32 { return -1; }
+pub fn pollTimeoutMs() i32 {
+    return -1;
+}
 
 // ---------------------------------------------------------------------------
 // Thread body
@@ -92,8 +97,8 @@ fn sleepInterruptible(ns: u64) void {
     var deadline: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(.REALTIME, &deadline);
     const new_nsec = @as(u64, @intCast(deadline.nsec)) + ns;
-    deadline.sec  += @intCast(new_nsec / std.time.ns_per_s);
-    deadline.nsec  = @intCast(new_nsec % std.time.ns_per_s);
+    deadline.sec += @intCast(new_nsec / std.time.ns_per_s);
+    deadline.nsec = @intCast(new_nsec % std.time.ns_per_s);
 
     _ = std.c.pthread_mutex_lock(&clock_mutex);
     while (!clock_quit) {
@@ -165,7 +170,7 @@ fn formatTime(buf: []u8, sec: i64) ![]const u8 {
     if (c.localtime_r(&raw_sec, &tm_buf)) |local_ts| {
         return try std.fmt.bufPrint(buf, TIME_FMT, .{
             @as(u32, @intCast(local_ts.*.tm_year + 1900)),
-            @as(u32, @intCast(local_ts.*.tm_mon  + 1)),
+            @as(u32, @intCast(local_ts.*.tm_mon + 1)),
             @as(u32, @intCast(local_ts.*.tm_mday)),
             @as(u32, @intCast(local_ts.*.tm_hour)),
             @as(u32, @intCast(local_ts.*.tm_min)),
@@ -175,13 +180,13 @@ fn formatTime(buf: []u8, sec: i64) ![]const u8 {
 
     // UTC fallback — localtime_r() returned null (timezone data unavailable).
     const epoch_day = @divFloor(sec, std.time.s_per_day);
-    const day_sec   = @mod(sec, std.time.s_per_day);
+    const day_sec = @mod(sec, std.time.s_per_day);
     const civil_day = std.time.epoch.EpochDay{ .day = @intCast(epoch_day) };
-    const year_day  = civil_day.calculateYearDay();
+    const year_day = civil_day.calculateYearDay();
     const month_day = year_day.calculateMonthDay();
 
     const hour: u32 = @intCast(@divFloor(day_sec, std.time.s_per_hour));
-    const min:  u32 = @intCast(@divFloor(@mod(day_sec, std.time.s_per_hour), std.time.s_per_min));
+    const min: u32 = @intCast(@divFloor(@mod(day_sec, std.time.s_per_hour), std.time.s_per_min));
     const secs: u32 = @intCast(@mod(day_sec, std.time.s_per_min));
 
     return try std.fmt.bufPrint(buf, TIME_FMT, .{

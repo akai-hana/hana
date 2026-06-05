@@ -1,14 +1,14 @@
 //! hana's main loop
 //! Entry point to and orchestrator of all hana's subsystems.
 
-const std   = @import("std");
+const std = @import("std");
 const build = @import("build_options");
 
-const core    = @import("core");
-    const xcb = core.xcb;
-const utils     = @import("utils");
-const events    = @import("events");
-const config    = @import("config");
+const core = @import("core");
+const xcb = core.xcb;
+const utils = @import("utils");
+const events = @import("events");
+const config = @import("config");
 const constants = @import("constants");
 
 const scale = if (build.has_scale) @import("scale");
@@ -24,7 +24,6 @@ const bar = if (build.has_bar) @import("bar") else struct {
     pub fn updateTimerState() void {}
 };
 
-
 /// hana's startup sequence and event-loop entry point.
 pub fn main() !void {
     const x = try connectToX();
@@ -32,10 +31,10 @@ pub fn main() !void {
 
     // Written at startup and then read-only for the processes' lifetime.
     // Stored on core so every module can access them without threading them through every call site.
-    core.conn   = x.conn;
+    core.conn = x.conn;
     core.screen = x.screen;
-    core.root   = x.root;
-    core.alloc  = std.heap.c_allocator;
+    core.root = x.root;
+    core.alloc = std.heap.c_allocator;
     if (build.has_scale) core.dpi_info = scale.detectDpi(x.conn, x.screen);
 
     input.setup(x.conn, x.screen, x.root);
@@ -84,9 +83,9 @@ pub fn main() !void {
 
 /// X server connection context returned by connectToX.
 const X = struct {
-    conn:   *xcb.xcb_connection_t,
+    conn: *xcb.xcb_connection_t,
     screen: *xcb.xcb_screen_t,
-    root:   core.WindowId,
+    root: core.WindowId,
 };
 
 /// Opens an X server connection, fetches screen 0, and registers hana as the WM.
@@ -103,13 +102,14 @@ fn connectToX() !X {
         return error.X11ConnectionFailed;
     }
 
-    const screen = xcb.xcb_setup_roots_iterator(xcb.xcb_get_setup(conn)).data
-        orelse return error.X11ScreenFailed;
+    const screen = xcb.xcb_setup_roots_iterator(xcb.xcb_get_setup(conn)).data orelse return error.X11ScreenFailed;
 
     // Claim SubstructureRedirectMask on the root window to become the WM.
     // The X server rejects this if another WM already holds it.
     const cookie = xcb.xcb_change_window_attributes_checked(
-        conn, screen.*.root, xcb.XCB_CW_EVENT_MASK,
+        conn,
+        screen.*.root,
+        xcb.XCB_CW_EVENT_MASK,
         &[_]u32{constants.EventMasks.ROOT_WINDOW},
     );
     if (xcb.xcb_request_check(conn, cookie)) |err| {
