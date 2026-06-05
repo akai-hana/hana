@@ -78,6 +78,15 @@ pub const Value = union(enum) {
 };
 
 pub const Section = struct {
+    /// The section's name as it appears in the config file.
+    ///
+    /// LIFETIME WARNING: this slice is a non-owning alias — it points into the
+    /// key string owned by the parent `Document.sections` map.  Reading `.name`
+    /// after the owning `Document.deinit()` call is use-after-free.  Callers
+    /// that need the name beyond the document's lifetime must duplicate it.
+    /// If you only need the name for diagnostic messages, read it before any
+    /// deinit.  External code should prefer `Document.getSection` and work with
+    /// the returned `*const Section` while the `Document` is alive.
     name: []const u8,
     pairs: std.StringHashMap(Value),
 
@@ -143,9 +152,7 @@ pub const Document = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
 // Document merging
-// ---------------------------------------------------------------------------
 
 /// Deep-copies a Value; string and array contents are newly allocated.
 /// Integer, boolean, color, and scalable values are plain copies.

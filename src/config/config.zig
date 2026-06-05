@@ -21,9 +21,11 @@ const carousel = if (build.has_carousel) @import("carousel") else struct {
 
 const parseColor = parser.parseColor;
 
-/// Returns `default` when the key is absent, out of range, or the wrong type.
+/// Returns `default` when the key is absent, the wrong type, or out of range.
 /// Out-of-range values log a warning and return the default (not clamped).
-fn get(
+/// The name `getInRange` is intentional: callers can see at a glance that
+/// min/max bounds are enforced, not just a plain key lookup.
+fn getInRange(
     comptime T: type,
     section: *const parser.Section,
     key: []const u8,
@@ -119,8 +121,8 @@ fn processIncludes(allocator: std.mem.Allocator, dst: *parser.Document, src_doc:
     const includes = inc_val.asArray() orelse return;
     for (includes) |item| {
         const rel = item.asString() orelse continue;
-        if (std.mem.indexOfScalar(u8, rel, '/') == null or !std.mem.endsWith(u8, rel, ".toml")) {
-            debug.warn("include '{s}': must contain '/' and end in .toml — skipping", .{rel});
+        if (!std.mem.endsWith(u8, rel, ".toml")) {
+            debug.warn("include '{s}': path must end in .toml — skipping", .{rel});
             continue;
         }
         const abs = try std.fs.path.join(allocator, &.{ dir_path, rel });
@@ -232,10 +234,22 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
     if (loadConfigFromDir(allocator, local_dir)) |cfg| return cfg else |_| {}
     const xdg_path = try std.fs.path.join(allocator, &.{ xdg_dir, "config.toml" });
     defer allocator.free(xdg_path);
-    if (loadConfig(allocator, xdg_path)) |cfg| return cfg else |_| {}
+    if (loadConfig(allocator, xdg_path)) |cfg| return cfg else |err| {
+        if (err != error.FileNotFound)
+            std.debug.print(
+                "hana: config file '{s}' found but failed to load: {}; falling back\n",
+                .{ xdg_path, err },
+            );
+    }
     const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
     defer allocator.free(local);
-    if (loadConfig(allocator, local)) |cfg| return cfg else |_| {}
+    if (loadConfig(allocator, local)) |cfg| return cfg else |err| {
+        if (err != error.FileNotFound)
+            std.debug.print(
+                "hana: config file '{s}' found but failed to load: {}; falling back\n",
+                .{ local, err },
+            );
+    }
     debug.info("No config found, using fallback with auto-detection", .{});
     return try loadFallbackConfig(allocator);
 }
@@ -415,10 +429,14 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
         const t = std.mem.trim(u8, token, " \t");
         if (t.len == 0) continue;
         if (t.len == 3 and t[1] == '-') {
-            var c = t[0];
+            var ch = t[0];
             const end = t[2];
-            while (c <= end) : (c += 1)
-                try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, c, suffix }));
+            if (ch > end) {
+                debug.warn("Keybind glob '{s}': descending range '{c}-{c}', skipping", .{ key_pattern, ch, end });
+                continue;
+            }
+            while (ch <= end) : (ch += 1)
+                try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, ch, suffix }));
         } else {
             try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ prefix, t, suffix }));
         }
@@ -598,6 +616,19 @@ pub inline fn finalizeConfig(cfg: *types.Config, screen: *core.xcb.xcb_screen_t)
 }
 
 /// Resolves keysyms to keycodes and warns about duplicate bindings.
+///
+/// LIFETIME CONTRACT: every Action pointer stored in `g_keybind_map` below
+/// borrows from the `keybindings` slice of the *current* `types.Config`.
+/// The required teardown order is therefore:
+///   1. `deinitKeybindMap`  — clears map entries (Action pointers become dangling)
+///   2. `config.deinit`     — frees the Actions the pointers referenced
+///
+/// This ordering is enforced by the LIFO `defer` sequence in `main.zig`:
+///   defer config.deinit(alloc);            // runs second
+///   defer config.deinitKeybindMap(alloc);  // runs first (LIFO)
+///
+/// TODO: migrate to a `KeybindResolver` struct owned by `Config` so that the
+/// compiler enforces the lifetime rather than relying on defer ordering.
 // Persistent O(1) dispatch table: (modifiers << 32 | keysym) → *const Action.
 // Built by resolveKeybindings and retained across the lifetime of each config.
 // Cleared and rebuilt on every config reload before the old config is freed,
@@ -659,12 +690,12 @@ fn parseDrag(doc: *const parser.Document, cfg: *types.Config) void {
 
 fn parseWorkspaces(doc: *const parser.Document, cfg: *types.Config) void {
     const section = doc.getSection("bar.modules.workspaces") orelse doc.getSection("workspaces") orelse return;
-    cfg.workspaces.count = get(u8, section, "count", 9, 1, null);
+    cfg.workspaces.count = getInRange(u8, section, "count", 9, 1, null);
 }
 
 fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
     const section = doc.getSection("tiling") orelse return;
-    cfg.tiling.enabled = get(bool, section, "enabled", true, null, null);
+    cfg.tiling.enabled = getInRange(bool, section, "enabled", true, null, null);
     if (section.get("layouts")) |layouts_value| {
         if (layouts_value.asArray()) |arr| {
             for (cfg.tiling.layouts.items) |layout| allocator.free(layout);
@@ -681,7 +712,7 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
         // it — no separate `allocated_layout` sentinel is needed.
         for (cfg.tiling.layouts.items) |l| allocator.free(l);
         cfg.tiling.layouts.clearRetainingCapacity();
-        const layout_str = get([]const u8, section, "layout", "master_left", null, null);
+        const layout_str = getInRange([]const u8, section, "layout", "master_left", null, null);
         try cfg.tiling.layouts.append(allocator, try allocator.dupe(u8, layout_str));
         cfg.tiling.layout = cfg.tiling.layouts.items[0];
     }
@@ -694,11 +725,11 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
     cfg.tiling.border_unfocused = getColor(aesthetic_src, "border_unfocused", 0x383C4A);
     const master_src = doc.getSection("tiling.layouts.master-stack") orelse section;
     const dedicated = master_src != section; // true when [tiling.layouts.master-stack] exists
-    cfg.tiling.master_count = get(u8, master_src, if (dedicated) "count" else "master_count", 1, 1, null);
+    cfg.tiling.master_count = getInRange(u8, master_src, if (dedicated) "count" else "master_count", 1, 1, null);
     if (master_src.getString(if (dedicated) "side" else "master_side")) |s| cfg.tiling.master_side = types.MasterSide.fromString(s) orelse .left;
     cfg.tiling.master_width = master_src.getScalable(if (dedicated) "width" else "master_width") orelse parser.ScalableValue.percentage(50.0);
     parseTilingVariants(doc, cfg);
-    cfg.tiling.global_layout = get(bool, section, "global_layout", false, null, null);
+    cfg.tiling.global_layout = getInRange(bool, section, "global_layout", false, null, null);
 
     // Per-workspace master count overrides: [tiling.layouts.master-stack.counts]
     // workspace_number (1-based) = count
@@ -760,10 +791,17 @@ fn parseTilingVariants(doc: *const parser.Document, cfg: *types.Config) void {
     };
 }
 
+/// Parses a UTF-8 indicator string into a fixed 3-byte array.
+/// Copies the first complete codepoint only (up to 3 bytes); 4-byte codepoints
+/// (e.g. most emoji) do not fit in 3 bytes and are silently replaced by spaces.
+/// Using `std.unicode.utf8ByteSequenceLength` prevents the previous truncation
+/// bug where a 4-byte emoji was sliced at 3 bytes, producing invalid UTF-8.
 inline fn parseIndicator(raw: []const u8) [3]u8 {
     var ind: [3]u8 = "   ".*;
-    const n = @min(raw.len, 3);
-    @memcpy(ind[0..n], raw[0..n]);
+    if (raw.len == 0) return ind;
+    const cp_len: usize = std.unicode.utf8ByteSequenceLength(raw[0]) catch 1;
+    const n = @min(cp_len, 3);
+    if (n <= raw.len) @memcpy(ind[0..n], raw[0..n]);
     return ind;
 }
 
@@ -923,7 +961,16 @@ fn parseTransparency(value: parser.Value) f32 {
     if (value.asInt()) |i| {
         if (i == 0) return 0.0;
         if (i >= 2 and i <= 100) return @as(f32, @floatFromInt(i)) / 100.0;
-        if (i == 1) debug.info("Transparency set to 1 (fully opaque)", .{}) else debug.warn("Invalid transparency value {} (must be 0–100), using default", .{i});
+        if (i == 1) {
+            // `transparency = 1` is ambiguous: it could mean 1% opacity (like the
+            // range 2–100) or the floating-point 1.0 (fully opaque).  We treat it
+            // as fully opaque to be conservative, but warn the user explicitly so
+            // they can use `1%` for 1% opacity or `1.0` for fully opaque instead.
+            debug.warn("Transparency value 1 is ambiguous (1% opacity or 1.0 fully opaque?); " ++
+                "treating as 1.0 (fully opaque). Use '1%' for 1%% opacity.", .{});
+        } else {
+            debug.warn("Invalid transparency value {} (must be 0–100), using default", .{i});
+        }
         return 1.0;
     }
     if (value.asScalable()) |s| return if (s.is_percentage) s.value / 100.0 else s.value;
@@ -950,11 +997,11 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *typ
         }
     };
     const section = doc.getSection("bar") orelse return;
-    cfg.bar.enabled = get(bool, section, "enabled", true, null, null);
+    cfg.bar.enabled = getInRange(bool, section, "enabled", true, null, null);
     if (section.getString("position")) |pos_str|
         cfg.bar.bar_position = std.meta.stringToEnum(types.BarScreenPosition, pos_str) orelse .top;
     cfg.bar.height = section.getScalable("height"); // null = auto from font metrics
-    try set.assignStr(allocator, &cfg.allocated_font, &cfg.bar.font, get([]const u8, section, "font", "monospace:size=10", null, null));
+    try set.assignStr(allocator, &cfg.allocated_font, &cfg.bar.font, getInRange([]const u8, section, "font", "monospace:size=10", null, null));
     if (section.get("fonts")) |v| if (v.asArray()) |arr| {
         for (cfg.bar.fonts.items) |font| allocator.free(font);
         cfg.bar.fonts.clearRetainingCapacity();
@@ -966,8 +1013,8 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *typ
     cfg.bar.spacing = section.getScalable("segment_spacing") orelse parser.ScalableValue.absolute(12.0);
     inline for (BAR_COLOR_FIELDS) |field|
         @field(cfg.bar, field.name) = getColor(section, field.name, field.default);
-    try set.assignStr(allocator, &cfg.allocated_clock_format, &cfg.bar.clock_format, get([]const u8, section, "clock_format", "%Y-%m-%d %H:%M:%S", null, null));
-    try set.assignStr(allocator, &cfg.allocated_drun_prompt, &cfg.bar.drun_prompt, get([]const u8, section, "drun_prompt", "run: ", null, null));
+    try set.assignStr(allocator, &cfg.allocated_clock_format, &cfg.bar.clock_format, getInRange([]const u8, section, "clock_format", "%Y-%m-%d %H:%M:%S", null, null));
+    try set.assignStr(allocator, &cfg.allocated_drun_prompt, &cfg.bar.drun_prompt, getInRange([]const u8, section, "drun_prompt", "run: ", null, null));
     cfg.bar.indicator_size = section.getScalable("indicator_size") orelse parser.ScalableValue.percentage(20.0);
     cfg.bar.workspace_tag_width = section.getScalable("workspace_tag_width") orelse parser.ScalableValue.percentage(100.0);
     if (section.getString("indicator_location")) |loc_str| {
@@ -1028,9 +1075,9 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *typ
         }
     }
     // Carousel: enabled flag, scroll_speed (px/s, min 1), carousel_refresh_rate (Hz, 0 = auto-detect via RandR).
-    carousel.setCarouselEnabled(get(bool, section, "carousel_enabled", true, null, null));
-    carousel.setScrollSpeed(@as(f64, @floatFromInt(get(u16, section, "scroll_speed", 125, 1, null))));
-    carousel.setRefreshRateOverride(@as(f64, @floatFromInt(get(u16, section, "carousel_refresh_rate", 0, null, null))));
+    carousel.setCarouselEnabled(getInRange(bool, section, "carousel_enabled", true, null, null));
+    carousel.setScrollSpeed(@as(f64, @floatFromInt(getInRange(u16, section, "scroll_speed", 125, 1, null))));
+    carousel.setRefreshRateOverride(@as(f64, @floatFromInt(getInRange(u16, section, "carousel_refresh_rate", 0, null, null))));
 }
 
 fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Section, cfg: *types.Config) !void {
@@ -1070,7 +1117,9 @@ fn parseBarLayout(allocator: std.mem.Allocator, doc: *const parser.Document, cfg
         if (layout_section.get("segments")) |sv| if (sv.asArray()) |seg_arr|
             for (seg_arr) |item| if (item.asString()) |s|
                 if (std.meta.stringToEnum(types.BarSegment, s)) |segment|
-                    try bar_layout.segments.append(allocator, segment);
+                    try bar_layout.segments.append(allocator, segment)
+                else
+                    debug.warn("Unknown bar segment '{s}', skipping", .{s});
         if (bar_layout.segments.items.len > 0) {
             try cfg.bar.layout.append(allocator, bar_layout);
         } else {

@@ -311,6 +311,8 @@ pub fn colonInput(vs: *const VimState) ?[]const u8 {
     return vs.pending.colon_buf[0..vs.pending.colon_len];
 }
 
+/// Insert `slice` at the cursor, advancing cursor by the bytes written.
+/// Truncates silently when the buffer would overflow: at most `max_input - 1 - len` bytes are inserted.
 pub fn insertSlice(vs: *VimState, slice: []const u8) void {
     const n = @min(slice.len, vs.max_input - 1 - vs.len);
     if (n == 0) return;
@@ -441,7 +443,7 @@ pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
                 return .none;
             },
             else => {
-                //TODO: why 0x20 and 0x7e?
+                // 0x20..0x7e is the printable ASCII range (space through tilde).
                 if (sym >= 0x20 and sym <= 0x7e and vs.pending.colon_len < vs.pending.colon_buf.len) {
                     vs.pending.colon_buf[vs.pending.colon_len] = @truncate(sym);
                     vs.pending.colon_len += 1;

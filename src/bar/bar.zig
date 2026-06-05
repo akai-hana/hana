@@ -4,7 +4,6 @@
 const std = @import("std");
 const build = @import("build_options");
 
-// core/
 const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
@@ -12,21 +11,17 @@ const constants = @import("constants");
 const scale = @import("scale");
 const debug = @import("debug");
 
-// config/
 const types = @import("types");
 
-// window/
 const tracking = @import("tracking");
 const focus = @import("focus");
 const fullscreen = @import("fullscreen");
 const minimize = @import("minimize");
 const workspaces = @import("workspaces");
 
-// floating/
 const drag = @import("drag");
 const window = @import("window");
 
-// tiling/
 const tiling = @import("tiling");
 
 const drawing = @import("drawing");
@@ -109,12 +104,12 @@ pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 
 // Constants
 
-const minBarHeight: u32 = 20;
-const maxBarHeight: u32 = 200;
-const defaultBarHeight: u32 = 24;
-const fallbackWorkspacesWidth: u16 = 270;
-const layoutWidth: u16 = 60;
-const titleMinWidth: u16 = 100;
+const MIN_BAR_HEIGHT: u32 = scale.BAR_MIN_HEIGHT_PX; // canonical value defined in scale.zig
+const MAX_BAR_HEIGHT: u32 = 200;
+const DEFAULT_BAR_HEIGHT: u32 = 24;
+const FALLBACK_WORKSPACES_WIDTH: u16 = 270;
+const LAYOUT_WIDTH: u16 = 60;
+const TITLE_MIN_WIDTH: u16 = 100;
 
 // Core data structures
 
@@ -354,9 +349,9 @@ const State = struct {
             .workspaces => if (build.has_tags and snap.workspace_count > 0)
                 @intCast(snap.workspace_count * tags.getCachedWorkspaceWidth())
             else
-                fallbackWorkspacesWidth,
-            .layout, .variants => layoutWidth,
-            .title => titleMinWidth,
+                FALLBACK_WORKSPACES_WIDTH,
+            .layout, .variants => LAYOUT_WIDTH,
+            .title => TITLE_MIN_WIDTH,
             .clock => self.layout_cache.clock_width,
         };
     }
@@ -375,7 +370,7 @@ const State = struct {
                         snap.windowTitle(0)
                     else
                         "";
-                break :blk try prompt.draw(r.dc, r.config, r.height, x, width orelse titleMinWidth, self.win.conn, snap.focused_window, snap.focused_title.items, minimized_title, snap.current_workspace_windows.items, &snap.minimized_windows, snap.window_title_data.items, snap.window_title_ends.items, &self.title_cache.title, &self.title_cache.title_window, snap.is_title_invalidated, r.allocator);
+                break :blk try prompt.draw(r.dc, r.config, r.height, x, width orelse TITLE_MIN_WIDTH, self.win.conn, snap.focused_window, snap.focused_title.items, minimized_title, snap.current_workspace_windows.items, &snap.minimized_windows, snap.window_title_data.items, snap.window_title_ends.items, &self.title_cache.title, &self.title_cache.title_window, snap.is_title_invalidated, r.allocator);
             },
             .clock => if (build.has_clock) try clock.draw(r.dc, r.config, r.height, x) else x,
         };
@@ -475,7 +470,7 @@ const State = struct {
                     }
                 },
                 .center => {
-                    const remaining = @max(titleMinWidth, self.render.width -| x -| right_total -| scaled_spacing);
+                    const remaining = @max(TITLE_MIN_WIDTH, self.render.width -| x -| right_total -| scaled_spacing);
                     for (lay.segments.items) |seg| {
                         const w = if (seg == .title) remaining else self.measureSegmentWidth(snap, seg);
                         if (seg == .title) {
@@ -1012,8 +1007,8 @@ fn calcBarHeight() !u16 {
         }
         return height;
     }
-    const m = measureFontMetrics() orelse return defaultBarHeight;
-    return @intCast(std.math.clamp(@as(u32, @intCast(m.asc + m.desc)), minBarHeight, maxBarHeight));
+    const m = measureFontMetrics() orelse return DEFAULT_BAR_HEIGHT;
+    return @intCast(std.math.clamp(@as(u32, @intCast(m.asc + m.desc)), MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
 }
 
 fn createDrawContext(setup: BarWindowSetup, height: u16) !*drawing.DrawContext {
@@ -1089,7 +1084,7 @@ pub fn reload() void {
         deinit();
         return;
     }
-    const height = calcBarHeight() catch defaultBarHeight;
+    const height = calcBarHeight() catch DEFAULT_BAR_HEIGHT;
     const y_pos = calcBarYPos(height);
     const setup = createBarWindow(height, y_pos);
     applyReload(old, setup, height) catch |err| {

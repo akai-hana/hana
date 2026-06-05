@@ -82,9 +82,7 @@ const MIN_WINDOW_DIM = constants.MIN_WINDOW_DIM;
 /// Maximum depth when walking the X11 window tree in findManagedWindow.
 const MAX_WINDOW_TREE_DEPTH = constants.MAX_WINDOW_TREE_DEPTH;
 
-// ---------------------------------------------------------------------------
 // Spawn queue
-// ---------------------------------------------------------------------------
 //
 // Tracks pending (workspace, pid) assignments for newly-mapped windows.
 // Lives here (window.zig) because it is exclusively accessed by this module.
@@ -209,9 +207,7 @@ fn removeWindowGeom(win: u32) void {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Geometry helpers
-// ---------------------------------------------------------------------------
 
 /// Screen-space position of a window's top-left corner.
 /// X11 coordinates are signed (windows may be partially off-screen or on a
@@ -270,7 +266,6 @@ pub fn getGeometry(conn: *xcb.xcb_connection_t, win: u32) ?utils.Rect {
     return utils.Rect.fromXcb(reply);
 }
 
-// ---------------------------------------------------------------------------
 // ICCCM focus property cache
 //
 // Keyed by window ID; populated at map time via `populateFocusCacheFromCookies`.
@@ -281,7 +276,6 @@ pub fn getGeometry(conn: *xcb.xcb_connection_t, win: u32) ?utils.Rect {
 // `InputModel` (focus routing) and `wm_delete` (close protocol) are both derived from
 // WM_PROTOCOLS, so they are populated together in a single scan.
 // See the flat-array implementation below for rationale over AutoHashMap.
-// ---------------------------------------------------------------------------
 
 /// The four ICCCM focus delivery modes (§4.1.7), determined by the combination of
 /// WM_HINTS.input and WM_TAKE_FOCUS presence in WM_PROTOCOLS.
@@ -647,9 +641,7 @@ fn queryWMHintsAcceptsInput(conn: *xcb.xcb_connection_t, win: u32) bool {
     return parseWMHintsInputFromData(hints, reply.*.value_len);
 }
 
-// ---------------------------------------------------------------------------
 // WM_CLASS
-// ---------------------------------------------------------------------------
 
 /// The two components of the X11 WM_CLASS property (ICCCM §4.1.2.5).
 /// Both slices are heap-allocated and must be freed via deinit.
@@ -663,9 +655,7 @@ pub const WMClass = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
 // Child window resolution
-// ---------------------------------------------------------------------------
 //
 // Electron, Qt, GTK, and similar toolkits create one or more child windows
 // beneath their managed toplevel for rendering.  When a ButtonPress or

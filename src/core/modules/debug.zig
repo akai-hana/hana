@@ -28,8 +28,12 @@ fn emitLog(src: std.builtin.SourceLocation, comptime kind: LogKind, comptime fmt
     switch (kind) {
         .err => std.log.err("[{s}] " ++ fmt, .{module} ++ args),
         .warn => std.log.warn("[{s}] " ++ fmt, .{module} ++ args),
+        // Use std.log.info so that all log levels go through the same handler
+        // (respecting any custom log handler the embedder installs and compile-time
+        // log-level filtering).  Previously this branch used std.debug.print with
+        // hardcoded ANSI escape codes, which bypassed log routing entirely.
+        .info => std.log.info("[{s}] " ++ fmt, .{module} ++ args),
         .debug_log => std.log.debug("[{s}] " ++ fmt, .{module} ++ args),
-        .info => std.debug.print("\x1b[32m[{s}]\x1b[0m " ++ fmt ++ "\n", .{module} ++ args),
     }
 }
 

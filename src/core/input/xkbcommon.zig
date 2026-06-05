@@ -129,7 +129,17 @@ fn retrySetup(xcb_conn: *anyopaque) !void {
     return error.XkbSetupFailed;
 }
 
-/// Returns true if `km` has at least 40 reachable keysyms in the 8..128 range.
+/// Minimum number of reachable keysyms in the X11 keycode range 8..128 that
+/// hana considers a "fully populated" keymap.
+///
+/// A healthy keymap typically has ≥ 100 reachable keysyms in this range.  40 is
+/// chosen deliberately low so that minimal or embedded keymaps (e.g. on
+/// headless build machines) are still accepted, while an empty keymap returned
+/// by a failed or still-initialising XKB extension (common during early startup)
+/// is rejected and retried.
+const MIN_KEYMAP_SYMBOLS: u32 = 40;
+
+/// Returns true if `km` has at least MIN_KEYMAP_SYMBOLS reachable keysyms in the 8..128 range.
 /// Guards against accepting a partially-initialised keymap on early startup.
 fn keymapHasEnoughSymbols(km: *xkb_keymap) bool {
     const test_state = xkb.xkb_state_new(km) orelse return false;
@@ -139,7 +149,7 @@ fn keymapHasEnoughSymbols(km: *xkb_keymap) bool {
         if (xkb.xkb_state_key_get_one_sym(test_state, @intCast(kc)) != xkb.XKB_KEY_NoSymbol)
             valid_keys += 1;
     }
-    return valid_keys >= 40;
+    return valid_keys >= MIN_KEYMAP_SYMBOLS;
 }
 
 /// Retries keymap creation up to MAX_ATTEMPTS times, accepting only a

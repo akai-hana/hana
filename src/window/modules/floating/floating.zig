@@ -26,7 +26,10 @@ const bar = if (build.has_bar) @import("bar") else struct {
 // 64 covers the typical maximum window count on a single workspace while
 // keeping the two per-batch stack arrays (needs_query + cookies) well under
 // 1 KB of combined stack space.
-const BATCH = 64; //TODO: is there a better solution to handle this problem, other than arbitrarily defining 64? i feel like this just isn't the best solution to the problem.
+// TODO: Replace the hardcoded BATCH limit with a dynamic approach.
+// 64 covers typical workspace sizes, but an ArrayListUnmanaged would
+// handle arbitrarily large window counts without silent truncation.
+const BATCH = 64;
 
 /// Centre any window that is still at the X default origin (0, 0).
 /// Windows the user has already moved are left untouched.

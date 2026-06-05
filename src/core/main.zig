@@ -50,7 +50,10 @@ pub fn main() !void {
         core.config.bar.scaled_font_size = scale.scaleFontSize(core.config.bar.font_size, x.screen);
 
     try utils.initAtomCache(x.conn);
-    //TODO: make sure this doesn't need a defer
+    // No defer needed: atom values are plain integers (xcb_atom_t) with no heap
+    // allocation on our side.  The X server's atom table is global per-server and
+    // persists until the server itself exits; xcb_disconnect (deferred above)
+    // tears down the connection and the server frees all server-side resources.
 
     try events.setupSignalPipe();
     defer events.deinitSignalPipe();

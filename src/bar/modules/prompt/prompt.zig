@@ -107,11 +107,12 @@ pub fn isActive() bool {
     return g.is_active;
 }
 
-/// Returns true when the prompt is active in insert mode, signalling that
-/// the bar should schedule a periodic redraw for the cursor blink animation.
 /// Returns the milliseconds until the next blink toggle, or -1 if the cursor
 /// blink animation is not running.  Pass this (combined with the clock timeout)
 /// to poll() so the event loop wakes up exactly when a redraw is needed.
+/// Only returns a non-negative value when the prompt is active in insert mode
+/// or colon-command mode, signalling that the bar should schedule a periodic
+/// redraw for the cursor blink animation.
 pub fn blinkPollTimeoutMs() i32 {
     if (!g.is_active) return -1;
     if (g.vim_state.mode == .insert or (build.has_vim and vim.colonInput(&g.vim_state) != null))
@@ -489,9 +490,6 @@ fn loadCompletions() void {
     }.lt);
 }
 
-/// Binary search for the first `comp_names` entry >= prefix.
-/// Used as the starting point for prefix scanning in `updateGhost`,
-/// and as the basis for `compExistsExact`.
 /// Binary searches the sorted completion table for the first entry ≥ `prefix`.
 /// Returns the insertion index (0..comp_count) — use with compExistsExact for lookup.
 fn compLowerBound(prefix: []const u8) usize {
@@ -762,6 +760,17 @@ fn spawnCommand(cmd: []const u8) void {
 
 // Private — basic insert-mode editing (used when build.has_vim = false)
 
+// Integer aliases matching vim.zig's private constants so switch arms compile
+// against the same keysym values without repeating raw hex literals.
+const XK_Escape = @intFromEnum(vim.XK.Escape);
+const XK_Return = @intFromEnum(vim.XK.Return);
+const XK_BackSpace = @intFromEnum(vim.XK.BackSpace);
+const XK_Delete = @intFromEnum(vim.XK.Delete);
+const XK_Left = @intFromEnum(vim.XK.Left);
+const XK_Right = @intFromEnum(vim.XK.Right);
+const XK_Home = @intFromEnum(vim.XK.Home);
+const XK_End = @intFromEnum(vim.XK.End);
+
 /// Insert `slice` at the cursor position, advancing cursor by the bytes written.
 fn insertBasic(vs: *vim.VimState, slice: []const u8) void {
     const n = @min(slice.len, vs.max_input - 1 - vs.len);
@@ -778,33 +787,33 @@ fn insertBasic(vs: *vim.VimState, slice: []const u8) void {
 /// Return (spawn), and Escape (deactivate).
 fn handleInsertBasic(vs: *vim.VimState, sym: xcb.xcb_keysym_t) vim.Action {
     switch (sym) {
-        0xff1b => return .deactivate, // Escape
-        0xff0d => return .spawn, // Return
-        0xff08 => {
-            if (vs.cursor > 0) { // BackSpace
+        XK_Escape => return .deactivate,
+        XK_Return => return .spawn,
+        XK_BackSpace => {
+            if (vs.cursor > 0) {
                 std.mem.copyForwards(u8, vs.buf[vs.cursor - 1 .. vs.len - 1], vs.buf[vs.cursor..vs.len]);
                 vs.len -= 1;
                 vs.cursor -= 1;
             }
         },
-        0xffff => {
-            if (vs.cursor < vs.len) { // Delete
+        XK_Delete => {
+            if (vs.cursor < vs.len) {
                 std.mem.copyForwards(u8, vs.buf[vs.cursor .. vs.len - 1], vs.buf[vs.cursor + 1 .. vs.len]);
                 vs.len -= 1;
             }
         },
-        0xff51 => {
+        XK_Left => {
             if (vs.cursor > 0) vs.cursor -= 1;
-        }, // Left
-        0xff53 => {
+        },
+        XK_Right => {
             if (vs.cursor < vs.len) vs.cursor += 1;
-        }, // Right
-        0xff50 => {
+        },
+        XK_Home => {
             vs.cursor = 0;
-        }, // Home
-        0xff57 => {
+        },
+        XK_End => {
             vs.cursor = vs.len;
-        }, // End
+        },
         else => {
             if (sym >= 0x20 and sym <= 0x7e)
                 insertBasic(vs, &[1]u8{@truncate(sym)});

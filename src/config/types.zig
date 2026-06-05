@@ -442,6 +442,13 @@ pub const Config = struct {
             "allocated_font",              "allocated_clock_format",
             "allocated_indicator_focused", "allocated_indicator_unfocused",
             "allocated_drun_prompt",
-        }) |field| if (@field(self, field)) |s| a.free(s);
+        }) |field| {
+            // Catch field renames or deletions at compile time: if this string no
+            // longer names a real Config field, the build fails with a clear error
+            // rather than silently skipping the free.
+            comptime if (!@hasField(Config, field))
+                @compileError("Config.deinit: '" ++ field ++ "' is not a field of Config; update the list");
+            if (@field(self, field)) |s| a.free(s);
+        }
     }
 };

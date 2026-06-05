@@ -58,8 +58,18 @@ pub const DpiInfo = struct {
     }
 };
 
-// Process-wide singletons. `undefined` fields must be set by main() before use;
-// behaviour is only safety-checked in Debug/ReleaseSafe builds.
+// Process-wide singletons.
+//
+// INVARIANT: every field below is `undefined` until main() initialises it.
+// In Debug/ReleaseSafe builds an out-of-order access panics; in ReleaseFast
+// the compiler may assume these are fully initialised and silently mis-compile
+// any access that races with startup (e.g. a module-level `comptime` block or
+// a test that imports `core` without calling main first).
+//
+// To eliminate this class of bug entirely, consider migrating to the
+// `?State` pattern used in `tiling.zig`, where each field is a nullable
+// pointer initialised to null and unwrapped with `.?` at every use site —
+// producing a safe panic in all build modes on premature access.
 pub var conn: *xcb.xcb_connection_t = undefined;
 pub var screen: *xcb.xcb_screen_t = undefined;
 pub var root: WindowId = undefined;

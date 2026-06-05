@@ -56,12 +56,12 @@ const LayoutStub = struct {
     ) void {}
 };
 
-const master = if (build.has_master) @import("master") else LayoutStub;
-const monocle = if (build.has_monocle) @import("monocle") else LayoutStub;
-const grid = if (build.has_grid) @import("grid") else LayoutStub;
+const master    = if (build.has_master)    @import("master")    else LayoutStub;
+const monocle   = if (build.has_monocle)   @import("monocle")   else LayoutStub;
+const grid      = if (build.has_grid)      @import("grid")      else LayoutStub;
 const fibonacci = if (build.has_fibonacci) @import("fibonacci") else LayoutStub;
-const leaf = if (build.has_leaf) @import("leaf") else LayoutStub;
-const scroll = if (build.has_scroll) @import("scroll") else LayoutStub;
+const leaf      = if (build.has_leaf)      @import("leaf")      else LayoutStub;
+const scroll    = if (build.has_scroll)    @import("scroll")    else LayoutStub;
 
 // Comptime verification that every layout module (or its LayoutStub fallback)
 // exports a `tileWithOffset` function with the exact signature the dispatcher

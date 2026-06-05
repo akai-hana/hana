@@ -1,5 +1,17 @@
 //! Text rendering library bindings
 //! Cairo/Pango/GLib C bindings for bar rendering.
+//!
+//! These bindings are declared manually as `pub extern fn` rather than via
+//! `@cImport` because the Cairo/Pango/GLib headers are not guaranteed to be
+//! present in all build environments.  All signatures were verified against:
+//!   cairo  1.18.x  (libcairo2-dev)
+//!   pango  1.52.x  (libpango1.0-dev)
+//!   glib   2.80.x  (libglib2.0-dev)
+//!
+//! When updating any signature, cross-check it against the installed headers
+//! and bump the version note above.  A wrong return type (e.g. `?*T` vs `*T`)
+//! is a silent miscompilation in ReleaseFast.  If headers are available in the
+//! build environment, prefer replacing this file with `@cImport`/`@cInclude`.
 
 const core = @import("core");
 const xcb = core.xcb;
