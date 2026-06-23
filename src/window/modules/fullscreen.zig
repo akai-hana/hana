@@ -24,6 +24,8 @@ const tiling = if (build.has_tiling) @import("tiling");
 
 const bar = if (build.has_bar) @import("bar") else struct {
     pub fn setBarState(_: anytype) void {}
+    pub fn prerenderForShow() void {}
+    pub fn commitShowInsideGrab() void {}
 };
 
 // Shim: returns false when minimize is compiled out (bare import resolves to void).
@@ -392,7 +394,12 @@ fn exitFullscreenCommit(win: u32, ws: u8) void {
 
     removeForWorkspace(ws);
 
-    bar.setBarState(.show_fullscreen);
+    // Bar visibility is managed by the caller via the two-phase API:
+    //   bar.prerenderForShow()      — before xcb_grab_server (X round-trips safe here)
+    //   bar.commitShowInsideGrab()  — inside the grab (blit + map, no round-trips)
+    // Keeping the draw outside the grab prevents captureStateIntoSlot's implicit
+    // XCB flush from delivering xcb_grab_server early and stalling the compositor
+    // for the duration of the Cairo render.
 
     const win_is_tiled = if (build.has_tiling) tiling.isWindowTiled(win) else false;
     // Tiled: geometry managed by tiling engine; applyBorder restores border.
@@ -435,12 +442,20 @@ pub fn enterFullscreen(win: u32, saved_geom: ?core.WindowGeometry) void {
 }
 
 /// Exit fullscreen for `win`. No-op if not currently fullscreen. Targets `win`
-/// explicitly (unlike toggle()) for event-driven call sites. No pre-grab needed.
+/// explicitly (unlike toggle()) for event-driven call sites.
 pub fn exitFullscreen(win: u32) void {
     const ws = workspaceFor(win) orelse return;
+    // Hoist bar pre-render before the grab: captureStateIntoSlot may issue X
+    // round-trips for title fetches, which trigger an implicit XCB flush.  If
+    // xcb_grab_server were already queued at flush time, the compositor would be
+    // frozen for the full Cairo render — causing the visible lag on fullscreen exit
+    // that the toggle path avoids by drawing before grabbing.
+    bar.prerenderForShow();
     _ = xcb.xcb_grab_server(core.conn);
     exitFullscreenCommit(win, ws);
     restoreFloatingWindows(win);
+    bar.commitShowInsideGrab();
+    if (build.has_tiling) tiling.retileCurrentWorkspace();
     utils.ungrabAndFlush(core.conn);
 }
 

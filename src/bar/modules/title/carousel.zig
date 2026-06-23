@@ -250,7 +250,9 @@ pub fn drawScrollingTitle(
     // Recover text_w from the live entry when the title hasn't changed,
     // avoiding a Pango measurement on the common steady-state path.
     const text_w: u16 = if (!title_invalidated) blk: {
-        if (render.single) |e| break :blk e.cycle_w - carousel_gap_px;
+        if (render.single) |e| {
+            if (e.window == window) break :blk e.cycle_w - carousel_gap_px;
+        }
         break :blk dc.measureTextWidth(text);
     } else dc.measureTextWidth(text);
 

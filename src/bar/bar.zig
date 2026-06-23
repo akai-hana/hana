@@ -1213,6 +1213,42 @@ pub fn redrawInsideGrab() void {
     s.is_dirty = false;
 }
 
+/// Pre-render phase for a fullscreen exit: captures bar state (may issue X
+/// round-trips for title fetches) and renders to the off-screen pixmap.
+///
+/// Call BEFORE xcb_grab_server.  captureStateIntoSlot's round-trips trigger an
+/// implicit XCB flush; if xcb_grab_server were already queued, that flush would
+/// deliver it early — holding the grab for the entire Cairo render and allowing
+/// the compositor to miss a vsync.  By calling this before the grab the send
+/// buffer is empty when the flush fires, matching the pattern the toggle path
+/// already uses.
+///
+/// Sets is_visible = true so that prepareSnapshot() does not short-circuit.
+/// Pair with commitShowInsideGrab() inside the grab.
+pub fn prerenderForShow() void {
+    const s = gBar.state orelse return;
+    s.is_visible = true;
+    s.title_cache.is_invalidated = true; // force carousel reset from pos 0 on re-show
+    gBar.pending_force_full_redraw = true;
+    // Render to pixmap; round-trips in captureStateIntoSlot fire here on an
+    // empty send buffer, not inside a grab.
+    submitRenderBlocking();
+}
+
+/// Commit phase for a fullscreen show: queues xcb_copy_area and maps the bar
+/// window atomically with the caller's ungrabAndFlush().
+///
+/// Call INSIDE xcb_grab_server, after prerenderForShow().  Caller is responsible
+/// for retile and ungrabAndFlush().
+pub fn commitShowInsideGrab() void {
+    const s = gBar.state orelse return;
+    s.render.dc.blitQueued();
+    _ = xcb.xcb_map_window(core.conn, s.win.win_id);
+    s.is_dirty = false;
+    debug.info("Bar shown (show_fullscreen)", .{});
+    if (build.has_clock) clock.updateTimerState();
+}
+
 pub fn raiseBar() void {
     if (gBar.state) |s|
         _ = xcb.xcb_configure_window(s.win.conn, s.win.win_id, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
