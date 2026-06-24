@@ -253,37 +253,40 @@ pub const Region = struct {
         };
     }
 
+    /// Shared partition loop for `splitH` and `splitV`.
+    ///
+    /// When `horiz` is true the region is sliced along the Y axis (rows);
+    /// when false along the X axis (columns).  The comptime parameter means
+    /// the compiler sees two fully specialised copies with no runtime branching.
+    fn splitAxis(comptime horiz: bool, r: Region, n: u16, gap: u16, buf: []Region) void {
+        std.debug.assert(buf.len >= n);
+        if (n == 0) return;
+        const total_gap = gap *| (n -| 1);
+        const avail: u16 = (if (horiz) r.h else r.w) -| total_gap;
+        var pos: i32 = if (horiz) r.y else r.x;
+        for (0..n) |i| {
+            const idx: u16 = @intCast(i);
+            // Distribute remainder pixel by using the cumulative-slice formula:
+            // slice_i = floor((i+1)*avail/n) - floor(i*avail/n)
+            const dim: u16 = ((idx + 1) * avail / n) -| (idx * avail / n);
+            buf[i] = if (horiz)
+                .{ .x = r.x, .y = pos, .w = r.w, .h = dim }
+            else
+                .{ .x = pos, .y = r.y, .w = dim, .h = r.h };
+            pos += @intCast(dim + gap);
+        }
+    }
+
     /// Split `r` horizontally into `n` equal rows separated by `gap` pixels.
     /// Returns a stack-allocated array of `n` regions; caller supplies the
     /// buffer.  `buf.len` must be >= `n`.
     pub fn splitH(r: Region, n: u16, gap: u16, buf: []Region) void {
-        std.debug.assert(buf.len >= n);
-        if (n == 0) return;
-        const total_gap = gap *| (n -| 1);
-        const avail: u16 = r.h -| total_gap;
-        var y: i32 = r.y;
-        for (0..n) |i| {
-            const idx: u16 = @intCast(i);
-            // Distribute remainder pixel to the last slice.
-            const row_h: u16 = ((idx + 1) * avail / n) -| (idx * avail / n);
-            buf[i] = .{ .x = r.x, .y = y, .w = r.w, .h = row_h };
-            y += @intCast(row_h + gap);
-        }
+        splitAxis(true, r, n, gap, buf);
     }
 
     /// Split `r` vertically into `n` equal columns separated by `gap` pixels.
     pub fn splitV(r: Region, n: u16, gap: u16, buf: []Region) void {
-        std.debug.assert(buf.len >= n);
-        if (n == 0) return;
-        const total_gap = gap *| (n -| 1);
-        const avail: u16 = r.w -| total_gap;
-        var x: i32 = r.x;
-        for (0..n) |i| {
-            const idx: u16 = @intCast(i);
-            const col_w: u16 = ((idx + 1) * avail / n) -| (idx * avail / n);
-            buf[i] = .{ .x = x, .y = r.y, .w = col_w, .h = r.h };
-            x += @intCast(col_w + gap);
-        }
+        splitAxis(false, r, n, gap, buf);
     }
 
     /// Split `r` into left and right halves with `gap` between them.

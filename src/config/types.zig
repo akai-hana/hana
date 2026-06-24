@@ -193,6 +193,11 @@ pub const TilingConfig = struct {
 
 // Bar types
 
+/// Default accent color used by several BarConfig fields.
+/// Declared once here so every field referencing it has a single source of truth;
+/// changing the theme default is a one-line edit.
+const DEFAULT_ACCENT: Color = 0x61AFEF;
+
 /// Where in the workspace cell the activity indicator is drawn.
 pub const IndicatorLocation = enum {
     up,
@@ -266,6 +271,14 @@ pub const BarLayout = struct {
     }
 };
 
+/// Free every owned string in `list`, then deinit the list itself.
+/// Extracted to avoid repeating the same two-step pattern for every
+/// `ArrayList([]const u8)` field in `BarConfig.deinit`.
+fn freeStringList(list: *std.ArrayList([]const u8), allocator: std.mem.Allocator) void {
+    for (list.items) |s| allocator.free(s);
+    list.deinit(allocator);
+}
+
 pub const BarConfig = struct {
     enabled: bool = true,
 
@@ -291,12 +304,12 @@ pub const BarConfig = struct {
     urgent_bg: Color = 0xFF0000,
     urgent_fg: Color = 0xFFFFFF,
 
-    accent_color: Color = 0x61AFEF,
-    workspaces_accent: Color = 0x61AFEF,
-    title_accent_color: Color = 0x61AFEF,
+    accent_color: Color = DEFAULT_ACCENT,
+    workspaces_accent: Color = DEFAULT_ACCENT,
+    title_accent_color: Color = DEFAULT_ACCENT,
     title_unfocused_accent: Color = 0x222222,
-    title_minimized_accent: Color = 0x61AFEF,
-    clock_accent: Color = 0x61AFEF,
+    title_minimized_accent: Color = DEFAULT_ACCENT,
+    clock_accent: Color = DEFAULT_ACCENT,
 
     workspace_icons: std.ArrayList([]const u8) = .empty,
     indicator_size: parser.ScalableValue = parser.ScalableValue.percentage(30.0),
@@ -322,10 +335,8 @@ pub const BarConfig = struct {
     transparency: f32 = 1.0,
 
     pub fn deinit(self: *BarConfig, allocator: std.mem.Allocator) void {
-        for (self.workspace_icons.items) |s| allocator.free(s);
-        self.workspace_icons.deinit(allocator);
-        for (self.fonts.items) |s| allocator.free(s);
-        self.fonts.deinit(allocator);
+        freeStringList(&self.workspace_icons, allocator);
+        freeStringList(&self.fonts, allocator);
         for (self.layout.items) |*item| item.deinit(allocator);
         self.layout.deinit(allocator);
     }
