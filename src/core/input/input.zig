@@ -453,6 +453,11 @@ fn forkIntermediate(exec_pipe_write: c_int, pid_pipe_write: c_int, cmd_z: [*:0]c
 }
 
 /// Creates an O_CLOEXEC|O_NONBLOCK pipe pair atomically via pipe2.
+///
+/// NOTE: events.zig contains a structurally identical `createPipe()` function
+/// returning [2]std.posix.fd_t.  On Linux, fd_t aliases c_int, so the two are
+/// byte-equivalent.  Both should be consolidated into a single `utils.makePipe()`
+/// returning [2]std.posix.fd_t when utils.zig is next modified.
 fn makePipe() ![2]c_int {
     const flags = std.os.linux.O{ .CLOEXEC = true, .NONBLOCK = true };
     var fds: [2]c_int = undefined;

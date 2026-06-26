@@ -212,6 +212,21 @@ pub fn loadConfigFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !ty
     return cfg;
 }
 
+/// Attempt to load a single config file at `path`.
+/// Returns the config on success, null on FileNotFound, and prints a warning
+/// then returns null for any other error — eliminating the repeated
+/// try/print/fall-through pattern in loadConfigDefault.
+inline fn tryLoadConfig(allocator: std.mem.Allocator, path: []const u8) ?types.Config {
+    return loadConfig(allocator, path) catch |err| {
+        if (err != error.FileNotFound)
+            std.debug.print(
+                "hana: config file '{s}' found but failed to load: {}; falling back\n",
+                .{ path, err },
+            );
+        return null;
+    };
+}
+
 /// Loads config in priority order: (1) ~/.config/hana/, (2) ./config/, (3) ~/.config/hana/config.toml,
 /// (4) ./config.toml, (5) embedded fallback.
 pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
@@ -234,22 +249,10 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
     if (loadConfigFromDir(allocator, local_dir)) |cfg| return cfg else |_| {}
     const xdg_path = try std.fs.path.join(allocator, &.{ xdg_dir, "config.toml" });
     defer allocator.free(xdg_path);
-    if (loadConfig(allocator, xdg_path)) |cfg| return cfg else |err| {
-        if (err != error.FileNotFound)
-            std.debug.print(
-                "hana: config file '{s}' found but failed to load: {}; falling back\n",
-                .{ xdg_path, err },
-            );
-    }
+    if (tryLoadConfig(allocator, xdg_path)) |cfg| return cfg;
     const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
     defer allocator.free(local);
-    if (loadConfig(allocator, local)) |cfg| return cfg else |err| {
-        if (err != error.FileNotFound)
-            std.debug.print(
-                "hana: config file '{s}' found but failed to load: {}; falling back\n",
-                .{ local, err },
-            );
-    }
+    if (tryLoadConfig(allocator, local)) |cfg| return cfg;
     debug.info("No config found, using fallback with auto-detection", .{});
     return try loadFallbackConfig(allocator);
 }
@@ -1131,31 +1134,15 @@ fn parseBarLayout(allocator: std.mem.Allocator, doc: *const parser.Document, cfg
 }
 
 fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+    // [workspace.rules]: key is either a class name (value = ws int) or
+    // a workspace number (value = class array). Both directions call addRule.
     if (doc.getSection("workspace.rules")) |rules_section| {
-        var iter = rules_section.pairs.iterator();
-        while (iter.next()) |entry| {
-            const ws_num = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
-                const ws = entry.value_ptr.*.asInt() orelse continue;
-                if (!validateWorkspace(@intCast(ws), cfg.workspaces.count, entry.key_ptr.*)) continue;
-                try addRule(allocator, cfg, entry.key_ptr.*, @intCast(ws));
-                continue;
-            };
-            if (!validateWorkspace(ws_num, cfg.workspaces.count, entry.key_ptr.*)) continue;
-            if (entry.value_ptr.*.asArray()) |arr| {
-                for (arr) |item| {
-                    if (item.asString()) |class_name| try addRule(allocator, cfg, class_name, ws_num);
-                }
-            }
-        }
+        try parseWorkspaceRuleSection(allocator, cfg, rules_section);
     }
 
+    // [rules]: simple class → workspace mapping (key = class, value = ws int).
     if (doc.getSection("rules")) |rules_section| {
-        var iter = rules_section.pairs.iterator();
-        while (iter.next()) |entry| {
-            const ws_num = entry.value_ptr.*.asInt() orelse continue;
-            if (!validateWorkspace(@intCast(ws_num), cfg.workspaces.count, entry.key_ptr.*)) continue;
-            try addRule(allocator, cfg, entry.key_ptr.*, @intCast(ws_num));
-        }
+        try parseSimpleRuleSection(allocator, cfg, rules_section);
     }
 
     var section_iter = doc.sections.iterator();
@@ -1172,5 +1159,43 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *t
         var iter = entry.value_ptr.pairs.iterator();
         while (iter.next()) |class_entry|
             try addRule(allocator, cfg, class_entry.key_ptr.*, ws_num);
+    }
+}
+
+/// Handle the [workspace.rules] section where the key may be a class name
+/// (integer value → workspace) or a workspace number (array value → classes).
+fn parseWorkspaceRuleSection(
+    allocator: std.mem.Allocator,
+    cfg: *types.Config,
+    rules_section: *const parser.Section,
+) !void {
+    var iter = rules_section.pairs.iterator();
+    while (iter.next()) |entry| {
+        const ws_num = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
+            const ws = entry.value_ptr.*.asInt() orelse continue;
+            if (!validateWorkspace(@intCast(ws), cfg.workspaces.count, entry.key_ptr.*)) continue;
+            try addRule(allocator, cfg, entry.key_ptr.*, @intCast(ws));
+            continue;
+        };
+        if (!validateWorkspace(ws_num, cfg.workspaces.count, entry.key_ptr.*)) continue;
+        if (entry.value_ptr.*.asArray()) |arr| {
+            for (arr) |item| {
+                if (item.asString()) |class_name| try addRule(allocator, cfg, class_name, ws_num);
+            }
+        }
+    }
+}
+
+/// Handle the [rules] section: each entry maps a class name to a workspace int.
+fn parseSimpleRuleSection(
+    allocator: std.mem.Allocator,
+    cfg: *types.Config,
+    rules_section: *const parser.Section,
+) !void {
+    var iter = rules_section.pairs.iterator();
+    while (iter.next()) |entry| {
+        const ws_num = entry.value_ptr.*.asInt() orelse continue;
+        if (!validateWorkspace(@intCast(ws_num), cfg.workspaces.count, entry.key_ptr.*)) continue;
+        try addRule(allocator, cfg, entry.key_ptr.*, @intCast(ws_num));
     }
 }

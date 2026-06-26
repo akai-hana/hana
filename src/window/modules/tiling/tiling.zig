@@ -1169,24 +1169,35 @@ fn selectLayout(s: *State, ws_state: ?*WsState, ws_idx: u8, is_global: bool) Lay
 /// Returns the master width for `ws_idx` in per-workspace mode.
 /// Falls back to the current global value for workspaces that have not yet
 /// had their width adjusted (master_width == null).
+/// Generic resolver for per-workspace config overrides.
+///
+/// Reads `s.config.<field>` as the global fallback and
+/// `ws_state.workspaces[ws_idx].<field>` (optional) as the per-workspace override.
+/// Both functions below delegate here to eliminate the duplicated five-arm guard.
+inline fn resolveWorkspaceValue(
+    comptime field: []const u8,
+    comptime T: type,
+    s: *const State,
+    ws_state: ?*WsState,
+    ws_idx: u8,
+) T {
+    const global: T = @field(s.config, field);
+    if (!build.has_workspaces) return global;
+    if (core.config.tiling.global_layout) return global;
+    const wss = ws_state orelse return global;
+    if (ws_idx >= wss.workspaces.len) return global;
+    if (@field(wss.workspaces[ws_idx], field)) |v| return v;
+    return global;
+}
+
 inline fn resolveMasterWidth(s: *const State, ws_state: ?*WsState, ws_idx: u8) f32 {
-    if (!build.has_workspaces) return s.config.master_width;
-    if (core.config.tiling.global_layout) return s.config.master_width;
-    const wss = ws_state orelse return s.config.master_width;
-    if (ws_idx >= wss.workspaces.len) return s.config.master_width;
-    if (wss.workspaces[ws_idx].master_width) |mw| return mw;
-    return s.config.master_width;
+    return resolveWorkspaceValue("master_width", f32, s, ws_state, ws_idx);
 }
 
 /// Returns the master count for `ws_idx` in per-workspace mode.
 /// Falls back to the current global value for workspaces that have no override.
 inline fn resolveMasterCount(s: *const State, ws_state: ?*WsState, ws_idx: u8) u8 {
-    if (!build.has_workspaces) return s.config.master_count;
-    if (core.config.tiling.global_layout) return s.config.master_count;
-    const wss = ws_state orelse return s.config.master_count;
-    if (ws_idx >= wss.workspaces.len) return s.config.master_count;
-    if (wss.workspaces[ws_idx].master_count) |mc| return mc;
-    return s.config.master_count;
+    return resolveWorkspaceValue("master_count", u8, s, ws_state, ws_idx);
 }
 
 // Core retile

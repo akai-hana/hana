@@ -278,15 +278,20 @@ fn setWindowMask(s: *State, win: u32, new_mask: u64) void {
     }
 }
 
-/// Retile the current workspace (when tiling is active) and redraw the bar,
-/// wrapped in a server grab so the compositor never observes a partial retile
-/// frame.  Replaces the old naked xcb_flush pattern; ungrabAndFlush delivers
-/// the batch atomically at the end.
-inline fn retileAndScheduleFlush() void {
-    _ = xcb.xcb_grab_server(core.conn);
+/// Inner body of retile+redraw+flush — runs inside an already-held server grab.
+/// Always pair with an xcb_grab_server call before this and do any fire-and-forget
+/// window operations (map, evict) between the grab and this call.
+inline fn retileRedrawAndFlush() void {
     if (build.has_tiling and core.config.tiling.enabled) tiling.retileCurrentWorkspace();
     bar.redrawInsideGrab();
     utils.ungrabAndFlush(core.conn);
+}
+
+/// Grab the server, retile, redraw the bar, and flush atomically.
+/// Use when no per-window operation is needed before the retile.
+inline fn retileAndScheduleFlush() void {
+    _ = xcb.xcb_grab_server(core.conn);
+    retileRedrawAndFlush();
 }
 
 /// `move_window` action — Mod+Shift+N. Hard-moves `win` to `target_ws` exclusively,
@@ -363,9 +368,7 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
             // the window has vanished but the remaining windows haven't reflowed.
             _ = xcb.xcb_grab_server(core.conn);
             evictWindow(win);
-            if (build.has_tiling and core.config.tiling.enabled) tiling.retileCurrentWorkspace();
-            bar.redrawInsideGrab();
-            utils.ungrabAndFlush(core.conn);
+            retileRedrawAndFlush();
         } else {
             if (build.has_tiling) tiling.invalidateWsGeomBit(target_ws);
             bar.scheduleRedraw();
@@ -383,9 +386,7 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
             // mapped but not yet positioned by the tiling engine.
             _ = xcb.xcb_grab_server(core.conn);
             _ = xcb.xcb_map_window(core.conn, win);
-            if (build.has_tiling and core.config.tiling.enabled) tiling.retileCurrentWorkspace();
-            bar.redrawInsideGrab();
-            utils.ungrabAndFlush(core.conn);
+            retileRedrawAndFlush();
         } else {
             if (build.has_tiling) tiling.invalidateWsGeomBit(target_ws);
             bar.scheduleRedraw();
@@ -701,26 +702,18 @@ fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8) void {
     if (tiling_active) {
         if (!core.config.tiling.global_layout) tiling.applyWorkspaceLayout(ws);
 
-        if (tiling.restoreWorkspaceGeom()) {
-            // Restore succeeded: invalidate only windows shared with the old workspace —
-            // their cache holds stale tiling positions from that workspace.
-            const bit = tracking.workspaceBit(ws.id);
-            for (tracking.allWindows()) |entry| {
-                const win = entry.win;
-                if (entry.mask & bit == 0) continue;
-                if (tiling.isWindowTiled(win) and tracking.isWindowOnWorkspace(win, old_ws))
-                    tiling.invalidateGeomCache(win);
-            }
-        } else {
-            // Restore failed: invalidate all tiled windows and force a full retile.
-            const bit = tracking.workspaceBit(ws.id);
-            for (tracking.allWindows()) |entry| {
-                const win = entry.win;
-                if (entry.mask & bit == 0) continue;
-                if (tiling.isWindowTiled(win)) tiling.invalidateGeomCache(win);
-            }
-            tiling.retileCurrentWorkspace();
+        // Unified invalidation loop: on success, only shared windows (also on old_ws)
+        // need invalidation; on failure, all tiled windows are invalidated for a full retile.
+        const restore_ok = tiling.restoreWorkspaceGeom();
+        const bit = tracking.workspaceBit(ws.id);
+        for (tracking.allWindows()) |entry| {
+            const win = entry.win;
+            if (entry.mask & bit == 0) continue;
+            if (!tiling.isWindowTiled(win)) continue;
+            if (restore_ok and !tracking.isWindowOnWorkspace(win, old_ws)) continue;
+            tiling.invalidateGeomCache(win);
         }
+        if (!restore_ok) tiling.retileCurrentWorkspace();
     } else if (build.has_tiling and tiling.isFloatingLayout()) {
         // Floating layout: the tiling engine is disabled for window management
         // but windows on inactive workspaces may have had their geometry cache

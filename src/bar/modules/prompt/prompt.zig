@@ -992,6 +992,16 @@ fn drawActive(
     // Clip post-cursor text 2 px before the pill so ink never bleeds into it.
     const ellipsis_end_x: u16 = scroll_end_x -| 2;
 
+    // Caret geometry — cached since font metrics and bar height are constant
+    // between reloads.  Hoisted before the pill and insert-mode branches so the
+    // lazy-init runs at most once regardless of which branch executes first.
+    if (g.cached_caret_top == null) {
+        const asc, const desc = dc.getMetrics();
+        const font_h: u16 = @intCast(@max(0, @as(i32, asc) + @as(i32, desc)));
+        g.cached_caret_top = (height -| font_h) / 2;
+        g.cached_caret_h = @min(font_h, height);
+    }
+
     if (pill_w > 0 and text_end_x >= pill_w) {
         const pill_x: u16 = text_end_x - pill_w;
         if (pill_x >= text_left_x) {
@@ -1011,12 +1021,7 @@ fn drawActive(
                 }
                 // Blinking thin caret — same geometry as the insert-mode caret
                 // in the main text area so both look identical.
-                if (g.cached_caret_top == null) {
-                    const asc, const desc = dc.getMetrics();
-                    const font_h: u16 = @intCast(@max(0, @as(i32, asc) + @as(i32, desc)));
-                    g.cached_caret_top = (height -| font_h) / 2;
-                    g.cached_caret_h = @min(font_h, height);
-                }
+                // (Caret geometry was already computed before the pill branch.)
                 const caret_top = g.cached_caret_top.?;
                 const caret_h = g.cached_caret_h.?;
                 const pill_inner_end: i32 = @as(i32, pill_x) + @as(i32, pill_w) - @as(i32, pill_h_pad);
@@ -1123,14 +1128,7 @@ fn drawActive(
         if (pre_cur_text.len > 0)
             try drawSpan(dc, &px, text_left_x, scroll_end_x, baseline, pre_cur_text, fg);
 
-        // Caret geometry — cached since font metrics and bar height are constant
-        // between reloads.
-        if (g.cached_caret_top == null) {
-            const asc, const desc = dc.getMetrics();
-            const font_h: u16 = @intCast(@max(0, @as(i32, asc) + @as(i32, desc)));
-            g.cached_caret_top = (height -| font_h) / 2;
-            g.cached_caret_h = @min(font_h, height);
-        }
+        // Caret geometry was pre-computed before the mode branches below.
         const caret_top = g.cached_caret_top.?;
         const caret_h = g.cached_caret_h.?;
 

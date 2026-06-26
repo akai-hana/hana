@@ -69,6 +69,24 @@ fn resetState() void {
     g_float_saves_len = 0;
 }
 
+/// Consume an intern-atom cookie and return the resulting atom,
+/// or XCB_ATOM_NONE if the reply is null. Centralises the consume-assign-free
+/// pattern that was previously repeated for each atom in init().
+fn internAtom(cookie: xcb.xcb_intern_atom_cookie_t) xcb.xcb_atom_t {
+    const r = xcb.xcb_intern_atom_reply(core.conn, cookie, null) orelse
+        return xcb.XCB_ATOM_NONE;
+    defer std.c.free(r);
+    return r.*.atom;
+}
+
+/// Returns true when the reply geometry indicates the window is parked
+/// offscreen. Used by both saveFloatingWindowGeoms and fetchWindowGeom so
+/// the sentinel check is not duplicated.
+inline fn isOffscreenReply(r: *const xcb.xcb_get_geometry_reply_t) bool {
+    return r.x < constants.OFFSCREEN_SENTINEL_MIN or
+        r.y < constants.OFFSCREEN_SENTINEL_MIN;
+}
+
 pub fn init() void {
     resetState();
 
@@ -76,14 +94,8 @@ pub fn init() void {
     // Batch both requests before consuming either reply so the round-trips overlap.
     const ck_state = xcb.xcb_intern_atom(core.conn, 0, "_NET_WM_STATE".len, "_NET_WM_STATE");
     const ck_fs = xcb.xcb_intern_atom(core.conn, 0, "_NET_WM_STATE_FULLSCREEN".len, "_NET_WM_STATE_FULLSCREEN");
-    if (xcb.xcb_intern_atom_reply(core.conn, ck_state, null)) |r| {
-        g_net_wm_state = r.*.atom;
-        std.c.free(r);
-    }
-    if (xcb.xcb_intern_atom_reply(core.conn, ck_fs, null)) |r| {
-        g_net_wm_state_fullscreen = r.*.atom;
-        std.c.free(r);
-    }
+    g_net_wm_state = internAtom(ck_state);
+    g_net_wm_state_fullscreen = internAtom(ck_fs);
 }
 
 pub fn deinit() void {
@@ -204,8 +216,7 @@ fn fetchWindowGeom(win: u32) core.WindowGeometry {
 
     // Also reject zero-size geometry: a window mapped but not yet sized reports
     // width=0/height=0; saving and restoring those dimensions would leave it invisible.
-    if (reply.*.x < constants.OFFSCREEN_SENTINEL_MIN or
-        reply.*.y < constants.OFFSCREEN_SENTINEL_MIN or
+    if (isOffscreenReply(reply) or
         reply.*.width == 0 or
         reply.*.height == 0) return default;
 
@@ -273,8 +284,7 @@ fn saveFloatingWindowGeoms(skip_win: u32) void {
         const reply = xcb.xcb_get_geometry_reply(core.conn, cookie, null) orelse continue;
         defer std.c.free(reply);
         // Skip windows that are already offscreen (e.g. during a fullscreen switch).
-        if (reply.*.x < constants.OFFSCREEN_SENTINEL_MIN or
-            reply.*.y < constants.OFFSCREEN_SENTINEL_MIN) continue;
+        if (isOffscreenReply(reply)) continue;
         g_float_saves[g_float_saves_len] = .{
             .win = w,
             .rect = .{ .x = reply.*.x, .y = reply.*.y, .width = reply.*.width, .height = reply.*.height },

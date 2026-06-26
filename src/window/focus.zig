@@ -736,6 +736,12 @@ fn collectVisibleWindows() usize {
     return len;
 }
 
+/// Returns the next (forward=true) or previous (forward=false) index in a
+/// circular list of `len` elements, starting from `idx`.
+inline fn cycleIndex(comptime forward: bool, idx: usize, len: usize) usize {
+    return if (forward) (idx + 1) % len else (idx + len - 1) % len;
+}
+
 /// Shared implementation for focus cycling.
 /// forward=true  → next  (Mod+k, ascending  order)
 /// forward=false → prev  (Mod+j, descending order)
@@ -750,8 +756,7 @@ fn focusCycle(comptime forward: bool) void {
         std.mem.indexOfScalar(u32, wins, w) orelse sentinel
     else
         sentinel;
-    const next_idx = if (forward) (idx + 1) % len else (idx + len - 1) % len;
-    setFocus(wins[next_idx], .user_command);
+    setFocus(wins[cycleIndex(forward, idx, len)], .user_command);
 }
 
 /// Cycle focus to the next visible window (Mod+k — moves right/forward).
@@ -773,7 +778,7 @@ fn moveWindowCycle(comptime forward: bool) void {
     const wins = cycle_buf[0..len];
     const focused = state.focused_window orelse return;
     const idx = std.mem.indexOfScalar(u32, wins, focused) orelse return;
-    const target = if (forward) wins[(idx + 1) % len] else wins[(idx + len - 1) % len];
+    const target = wins[cycleIndex(forward, idx, len)];
     tiling.swapWindowsById(focused, target);
 }
 

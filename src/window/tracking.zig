@@ -270,23 +270,29 @@ pub fn allWindows() []const Entry {
     return g_windows.items;
 }
 
+/// Shared iteration core for workspace-window counting.
+/// When `stop_at_first` is true, returns 1 as soon as any match is found (early-exit).
+/// When false, counts all matches.
+fn iterWindowsOnWorkspace(ws_idx: u8, comptime stop_at_first: bool) usize {
+    const bit = workspaceBit(ws_idx);
+    var n: usize = 0;
+    for (g_windows.items) |e| {
+        if (e.mask & bit != 0) {
+            n += 1;
+            if (comptime stop_at_first) return n;
+        }
+    }
+    return n;
+}
+
 /// True when at least one window has ws_idx set in its mask.
 pub fn hasWindowsOnWorkspace(ws_idx: u8) bool {
-    const bit = workspaceBit(ws_idx);
-    for (g_windows.items) |e| {
-        if (e.mask & bit != 0) return true;
-    }
-    return false;
+    return iterWindowsOnWorkspace(ws_idx, true) > 0;
 }
 
 /// Count of windows that have ws_idx set in their mask.
 pub fn countWindowsOnWorkspace(ws_idx: u8) usize {
-    const bit = workspaceBit(ws_idx);
-    var n: usize = 0;
-    for (g_windows.items) |e| {
-        if (e.mask & bit != 0) n += 1;
-    }
-    return n;
+    return iterWindowsOnWorkspace(ws_idx, false);
 }
 
 // Workspace bitmask helpers

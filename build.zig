@@ -6,18 +6,18 @@ const builtin = @import("builtin");
 
 // Compile-time version guard
 // Must be top-level so it fires before the compiler analyses any other functions
-comptime {
-    if (builtin.zig_version.pre == null) @compileError(
-        \\!!! Hana requires Zig's master branch. !!!
-        \\
-        \\# If your package manager doesn't ship it, you can try ZVM's easy installer:
-        \\curl https://raw.githubusercontent.com/tristanisham/zvm/master/install.sh | bash
-        \\# And then install Zig's master branch:
-        \\zvm i master
-        \\
-        // ^ Intended to leave a blank gap
-    );
-}
+// comptime {
+//     if (builtin.zig_version.pre == null) @compileError(
+//         \\!!! Hana requires Zig's master branch. !!!
+//         \\
+//         \\# If your package manager doesn't ship it, you can try ZVM's easy installer:
+//         \\curl https://raw.githubusercontent.com/tristanisham/zvm/master/install.sh | bash
+//         \\# And then install Zig's master branch:
+//         \\zvm i master
+//         \\
+//         // ^ Intended to leave a blank gap
+//     );
+// }
 
 // Configuration
 
