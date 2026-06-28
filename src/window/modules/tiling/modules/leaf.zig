@@ -76,8 +76,7 @@ fn tileRegion(
             .width = if (w > b2) w - b2 else constants.MIN_WINDOW_DIM,
             .height = if (h > b2) h - b2 else constants.MIN_WINDOW_DIM,
         };
-        if (!defer_slot.capture(ctx, windows[0], rect))
-            layouts.configureWithHints(ctx, windows[0], rect);
+        defer_slot.emit(ctx, windows[0], rect);
         return;
     }
 

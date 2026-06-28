@@ -463,14 +463,17 @@ pub fn configureWithHintsAndRaise(ctx: *const LayoutCtx, win: u32, rect: utils.R
 ///
 ///     var defer_slot = DeferredConfigure.init();
 ///     for (windows) |win| {
-///         if (defer_slot.capture(win, computed_rect)) continue;
-///         configureWithHints(ctx, win, computed_rect);
+///         defer_slot.emit(ctx, win, computed_rect);
 ///     }
 ///     defer_slot.flush(ctx);
 ///
 /// The deferred window's rect is stored on the stack.  If no window in the
 /// loop matches `ctx.defer_configure`, `capture` is always false and `flush`
 /// is a no-op, so layouts that never call swap_master pay zero cost.
+///
+/// Use `emit` for the common case above.  `capture` is exposed separately for
+/// the rare callers that need to branch on whether a window was deferred
+/// (e.g. to skip other per-window work for it) before deciding what to do.
 pub const DeferredConfigure = struct {
     pending_win: u32 = 0,
     pending_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
@@ -491,6 +494,21 @@ pub const DeferredConfigure = struct {
             }
         }
         return false;
+    }
+
+    /// Emit `rect` for `win`: captures it in this slot when `win` is the
+    /// deferred window, otherwise configures it immediately via
+    /// `configureWithHints`.
+    ///
+    /// This is the single shared implementation of the "capture-or-configure"
+    /// pattern every layout module needs around its main window loop — each
+    /// module previously redefined an identical local `emitRect` helper (or
+    /// inlined the same two-line conditional) to get this behaviour. Calling
+    /// `defer_slot.emit(ctx, win, rect)` instead keeps that pattern defined in
+    /// exactly one place.
+    pub inline fn emit(self: *DeferredConfigure, ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
+        if (!self.capture(ctx, win, rect))
+            configureWithHints(ctx, win, rect);
     }
 
     /// Emit the deferred configure call (if any).  Must be called once after

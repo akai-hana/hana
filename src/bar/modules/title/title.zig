@@ -12,11 +12,7 @@ const types = @import("types");
 
 const drawing = @import("drawing");
 const carousel = @import("carousel");
-const tiling = if (@import("build_options").has_tiling) @import("tiling") else struct {
-    pub fn getWindowGeom(_: u32) ?@import("utils").Rect {
-        return null;
-    }
-};
+const tiling = @import("tiling");
 
 // Module constants
 

@@ -84,7 +84,7 @@ pub fn tileWithOffset(
                 .width = content_w,
                 .height = content_h,
             };
-            emitRect(ctx, win, &defer_slot, rect);
+            defer_slot.emit(ctx, win, rect);
             continue;
         }
 
@@ -94,22 +94,9 @@ pub fn tileWithOffset(
             .width = content_w,
             .height = content_h,
         };
-        emitRect(ctx, win, &defer_slot, rect);
+        defer_slot.emit(ctx, win, rect);
     }
     defer_slot.flush(ctx);
-}
-
-/// Emit `rect` for `win`: captures it in the deferred slot if possible,
-/// otherwise configures it immediately. Shared by both the off-screen park
-/// path and the visible path so the pattern is not repeated inline.
-inline fn emitRect(
-    ctx: *const layouts.LayoutCtx,
-    win: u32,
-    defer_slot: *layouts.DeferredConfigure,
-    rect: utils.Rect,
-) void {
-    if (!defer_slot.capture(ctx, win, rect))
-        layouts.configureWithHints(ctx, win, rect);
 }
 
 /// Height of each window: full screen height minus top + bottom gap and borders.

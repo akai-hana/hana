@@ -84,7 +84,7 @@ pub fn tileWithOffset(
                 .width = w -| border2,
                 .height = h -| border2,
             };
-            emitRect(ctx, win, &defer_slot, rect);
+            defer_slot.emit(ctx, win, rect);
             defer_slot.flush(ctx);
             return;
         }
@@ -93,23 +93,6 @@ pub fn tileWithOffset(
         dir = dir.next();
     }
     defer_slot.flush(ctx);
-}
-
-/// Emits a window placement: stores `rect` in `defer_slot` when `win` is the
-/// deferred window (so the caller can flush it last), otherwise configures the
-/// window immediately via `configureWithHints`.
-///
-/// This one-liner is the repeated emit pattern across all four spiral directions
-/// in `splitAndAdvance`, the last-window branch in `tileWithOffset`, and the
-/// same pattern in other tiling modules (scroll.zig, grid.zig).  Extracting it
-/// here keeps the pattern uniform and removes six identical conditional copies.
-inline fn emitRect(
-    ctx: *const layouts.LayoutCtx,
-    win: u32,
-    defer_slot: *layouts.DeferredConfigure,
-    rect: utils.Rect,
-) void {
-    if (!defer_slot.capture(ctx, win, rect)) layouts.configureWithHints(ctx, win, rect);
 }
 
 /// Place `win` in its split half and advance the remaining area cursor.
@@ -136,7 +119,7 @@ inline fn splitAndAdvance(
                 .width = win_w -| border2,
                 .height = h.* -| border2,
             };
-            emitRect(ctx, win, defer_slot, rect);
+            defer_slot.emit(ctx, win, rect);
             x.* += @as(i32, @intCast(win_w + gap));
             w.* = w.* -| (win_w + gap);
         },
@@ -148,7 +131,7 @@ inline fn splitAndAdvance(
                 .width = w.* -| border2,
                 .height = win_h -| border2,
             };
-            emitRect(ctx, win, defer_slot, rect);
+            defer_slot.emit(ctx, win, rect);
             y.* += @as(i32, @intCast(win_h + gap));
             h.* = h.* -| (win_h + gap);
         },
@@ -160,7 +143,7 @@ inline fn splitAndAdvance(
                 .width = win_w -| border2,
                 .height = h.* -| border2,
             };
-            emitRect(ctx, win, defer_slot, rect);
+            defer_slot.emit(ctx, win, rect);
             w.* = w.* -| (win_w + gap);
         },
         .up => {
@@ -171,7 +154,7 @@ inline fn splitAndAdvance(
                 .width = w.* -| border2,
                 .height = win_h -| border2,
             };
-            emitRect(ctx, win, defer_slot, rect);
+            defer_slot.emit(ctx, win, rect);
             h.* = h.* -| (win_h + gap);
         },
     }

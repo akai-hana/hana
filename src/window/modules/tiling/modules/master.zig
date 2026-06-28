@@ -46,19 +46,6 @@ pub fn tileWithOffset(
     tileStack(ctx, windows[master_n..], stack_x, y_offset, screen_w -| master_w, screen_h, m);
 }
 
-/// Emit `rect` for `win`: captures it in the deferred slot when possible,
-/// otherwise configures immediately. Eliminates the repeated inline conditional
-/// in tileColumn and tileStackExtra.
-inline fn emitRect(
-    ctx: *const layouts.LayoutCtx,
-    win: u32,
-    deferred: *layouts.DeferredConfigure,
-    rect: utils.Rect,
-) void {
-    if (!deferred.capture(ctx, win, rect))
-        layouts.configureWithHints(ctx, win, rect);
-}
-
 /// Tile a vertical column of `windows` at a fixed x position with a fixed
 /// content width. Used for both the master pane and the simple stack path.
 ///
@@ -87,7 +74,7 @@ fn tileColumn(
             .width = inner_w,
             .height = windowHeight(row, count, avail),
         };
-        emitRect(ctx, win, &deferred, rect);
+        deferred.emit(ctx, win, rect);
     }
     deferred.flush(ctx);
 }
@@ -155,7 +142,7 @@ fn tileStackExtra(
                 .width = col_inner_w,
                 .height = row_h,
             };
-            emitRect(ctx, windows[win_idx], &deferred, rect);
+            deferred.emit(ctx, windows[win_idx], rect);
         }
     }
     deferred.flush(ctx);

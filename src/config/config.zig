@@ -2,8 +2,6 @@
 //! Loads, parses, and validates TOML config files.
 
 const std = @import("std");
-const build = @import("build_options");
-
 const core = @import("core");
 const types = @import("types");
 const constants = @import("constants");
@@ -13,11 +11,7 @@ const xkbcommon = @import("xkbcommon");
 
 const parser = @import("parser");
 
-const carousel = if (build.has_carousel) @import("carousel") else struct {
-    pub fn setCarouselEnabled(_: bool) void {}
-    pub fn setScrollSpeed(_: f64) void {}
-    pub fn setRefreshRateOverride(_: f64) void {}
-};
+const carousel = @import("carousel");
 
 const parseColor = parser.parseColor;
 
@@ -324,6 +318,8 @@ fn buildConfigFromDoc(allocator: std.mem.Allocator, doc: *const parser.Document)
     try parseBar(allocator, doc, &cfg);
     try parseRules(allocator, doc, &cfg);
     parseDrag(doc, &cfg);
+    parseFullscreen(doc, &cfg);
+    parseMinimize(doc, &cfg);
     return cfg;
 }
 
@@ -688,13 +684,30 @@ pub fn load(allocator: std.mem.Allocator, screen: *core.xcb.xcb_screen_t, xkb_st
 
 fn parseDrag(doc: *const parser.Document, cfg: *types.Config) void {
     const section = doc.getSection("drag") orelse return;
+    cfg.drag_enabled = getInRange(bool, section, "enabled", true, null, null);
     cfg.snap_distance = section.getScalable("snap_distance") orelse parser.ScalableValue.absolute(8.0);
 }
 
 fn parseWorkspaces(doc: *const parser.Document, cfg: *types.Config) void {
     const section = doc.getSection("bar.modules.workspaces") orelse doc.getSection("workspaces") orelse return;
+    cfg.workspaces.enabled = getInRange(bool, section, "enabled", true, null, null);
     cfg.workspaces.count = getInRange(u8, section, "count", 9, 1, null);
 }
+
+/// Parses the [fullscreen] and [minimize] sections, each currently exposing
+/// only an `enabled` toggle. These replace the old has_fullscreen /
+/// has_minimize build flags — the subsystems are always compiled in now;
+/// this is just whether their behavior and keybindings are active.
+fn parseFullscreen(doc: *const parser.Document, cfg: *types.Config) void {
+    const section = doc.getSection("fullscreen") orelse return;
+    cfg.fullscreen_enabled = getInRange(bool, section, "enabled", true, null, null);
+}
+
+fn parseMinimize(doc: *const parser.Document, cfg: *types.Config) void {
+    const section = doc.getSection("minimize") orelse return;
+    cfg.minimize_enabled = getInRange(bool, section, "enabled", true, null, null);
+}
+
 
 fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
     const section = doc.getSection("tiling") orelse return;
@@ -1001,6 +1014,7 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *typ
     };
     const section = doc.getSection("bar") orelse return;
     cfg.bar.enabled = getInRange(bool, section, "enabled", true, null, null);
+    cfg.bar.vim_mode = getInRange(bool, section, "vim_mode", true, null, null);
     if (section.getString("position")) |pos_str|
         cfg.bar.bar_position = std.meta.stringToEnum(types.BarScreenPosition, pos_str) orelse .top;
     cfg.bar.height = section.getScalable("height"); // null = auto from font metrics

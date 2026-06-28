@@ -2,7 +2,6 @@
 //! Handles entering, exiting, toggling, and querying fullscreen state for windows.
 
 const std = @import("std");
-const build = @import("build_options");
 
 const core = @import("core");
 const xcb = core.xcb;
@@ -15,24 +14,14 @@ const window = @import("window");
 const tracking = @import("tracking");
 const focus = @import("focus");
 
-const minimize = if (build.has_minimize) @import("minimize");
+const minimize = @import("minimize");
 // Note: workspaces dispatch is handled through tracking.workspaceBit /
 // tracking.allWindows inside forEachWindowOnCurrentWorkspace; a top-level
 // workspaces import is not needed here.
 
-const tiling = if (build.has_tiling) @import("tiling");
+const tiling = @import("tiling");
 
-const bar = if (build.has_bar) @import("bar") else struct {
-    pub fn setBarState(_: anytype) void {}
-    pub fn prerenderForShow() void {}
-    pub fn commitShowInsideGrab() void {}
-};
-
-// Shim: returns false when minimize is compiled out (bare import resolves to void).
-// Prevents a compile error on minimize.isMinimized when build.has_minimize is false.
-inline fn isMinimized(win: u32) bool {
-    return if (build.has_minimize) minimize.isMinimized(win) else false;
-}
+const bar = @import("bar");
 
 // Fullscreen types
 
@@ -157,10 +146,10 @@ pub fn forEachFullscreen(cb: anytype) void {
 }
 
 // Calls `ctx.call(window_id)` for every window on the current workspace except
-// `skip`. Uses the workspace window list when has_workspaces is set, otherwise
+// `skip`. Uses the workspace window list when workspaces are enabled, otherwise
 // falls back to the global iterator. `ctx` is anytype — zero overhead at call sites.
 fn forEachWindowOnCurrentWorkspace(skip: u32, ctx: anytype) void {
-    if (build.has_workspaces) {
+    if (core.config.workspaces.enabled) {
         const cur = tracking.getCurrentWorkspace() orelse return;
         const bit = tracking.workspaceBit(cur);
         for (tracking.allWindows()) |entry| {
@@ -185,7 +174,7 @@ fn forEachWindowOnCurrentWorkspace(skip: u32, ctx: anytype) void {
 /// Falls back to a centred quarter-screen default if the reply fails, the
 /// window is offscreen, or reports zero dimensions.
 fn fetchWindowGeom(win: u32) core.WindowGeometry {
-    if (build.has_tiling) {
+    {
         if (tiling.getWindowGeom(win)) |rect| {
             const bw: u16 = if (tiling.getStateOpt()) |ts| ts.config.border_width else 0;
             return .{
@@ -253,8 +242,8 @@ fn saveFloatingWindowGeoms(skip_win: u32) void {
         cookies: *[MAX_FLOAT_SAVES]xcb.xcb_get_geometry_cookie_t,
 
         fn call(self: @This(), w: u32) void {
-            if (isMinimized(w)) return;
-            if (build.has_tiling) if (tiling.isWindowTiled(w)) return;
+            if (minimize.isMinimized(w)) return;
+            if (tiling.isWindowTiled(w)) return;
             if (self.n.* >= MAX_FLOAT_SAVES) {
                 self.truncated.* = true;
                 return;
@@ -313,8 +302,8 @@ fn restoreFloatingWindows(skip_win: u32) void {
         pos_y: u32,
 
         fn call(self: @This(), w: u32) void {
-            if (isMinimized(w)) return;
-            if (build.has_tiling) if (tiling.isWindowTiled(w)) return;
+            if (minimize.isMinimized(w)) return;
+            if (tiling.isWindowTiled(w)) return;
             // Do NOT call window.getWindowGeom here: we are inside xcb_grab_server
             // and a synchronous xcb_get_geometry round-trip would deadlock.
             // Windows absent from g_float_saves fall back to the default position.
@@ -362,7 +351,7 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     const PushCtx = struct {
         fn call(_: @This(), w: u32) void {
             utils.pushWindowOffscreen(core.conn, w);
-            if (build.has_tiling) {
+            {
                 // Only invalidate tiled windows — floating windows' cache entries
                 // hold the geometry we need to restore on exit.
                 if (tiling.isWindowTiled(w)) tiling.invalidateGeomCache(w);
@@ -387,7 +376,7 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     // Evict the fullscreen window itself; its cache still holds the pre-fullscreen
     // tiled rect. On exit retile would compute the same rect, get a hit, and skip
     // configure_window, leaving the window stuck at fullscreen dimensions.
-    if (build.has_tiling) tiling.invalidateGeomCache(win);
+    tiling.invalidateGeomCache(win);
 
     bar.setBarState(.hide_fullscreen);
 
@@ -411,7 +400,7 @@ fn exitFullscreenCommit(win: u32, ws: u8) void {
     // XCB flush from delivering xcb_grab_server early and stalling the compositor
     // for the duration of the Cairo render.
 
-    const win_is_tiled = if (build.has_tiling) tiling.isWindowTiled(win) else false;
+    const win_is_tiled = tiling.isWindowTiled(win);
     // Tiled: geometry managed by tiling engine; applyBorder restores border.
     // Floating: configureWindowGeom restores position + size + border atomically.
     if (!win_is_tiled) window.configureWindowGeom(core.conn, win, saved);
@@ -443,6 +432,7 @@ pub fn cleanupFullscreenForMove(win: u32, src_ws: u8) void {
 /// minimized fullscreen window); pass null to fetch it from the tiling cache
 /// or a live round-trip (the common path for new fullscreen requests).
 pub fn enterFullscreen(win: u32, saved_geom: ?core.WindowGeometry) void {
+    if (!core.config.fullscreen_enabled) return;
     const ws = tracking.getCurrentWorkspace() orelse return;
     const geom = saved_geom orelse fetchWindowGeom(win);
     saveFloatingWindowGeoms(win);
@@ -465,7 +455,7 @@ pub fn exitFullscreen(win: u32) void {
     exitFullscreenCommit(win, ws);
     restoreFloatingWindows(win);
     bar.commitShowInsideGrab();
-    if (build.has_tiling) tiling.retileCurrentWorkspace();
+    tiling.retileCurrentWorkspace();
     utils.ungrabAndFlush(core.conn);
 }
 

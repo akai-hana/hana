@@ -2,9 +2,8 @@
 //! Maintains the registry of all managed windows and their workspace assignments.
 
 const std = @import("std");
-const build = @import("build_options");
 
-const minimize = if (build.has_minimize) @import("minimize");
+const minimize = @import("minimize");
 
 // Fixed-size ordered window list.
 // Used by Workspace in workspaces.zig; kept here so it can be imported from
@@ -351,20 +350,16 @@ pub inline fn isOnCurrentWorkspace(win: u32) bool {
 /// Declared as a plain fn (not inline) so it can be passed as a *const fn(u32)bool.
 pub fn isOnCurrentWorkspaceAndVisible(win: u32) bool {
     if (!isOnCurrentWorkspace(win)) return false;
-    return if (build.has_minimize) !minimize.isMinimized(win) else true;
+    return !minimize.isMinimized(win);
 }
 
 /// Returns the first non-minimized window in `windows`, or null if all are minimized.
 ///
-/// This function lives in tracking.zig rather than minimize.zig because
-/// tracking.zig is always compiled in, making it safely importable by modules
-/// such as focus.zig that need to store a *const fn pointer without a comptime
-/// gate at every storage site.  minimize.zig is optional and cannot be
-/// unconditionally imported.
-///
-/// Declared as a plain fn so minimize.zig can store it as a function pointer.
+/// This function lives in tracking.zig rather than minimize.zig for layering
+/// reasons: minimize.zig already imports tracking.zig, so the reverse import
+/// would be circular if this lived there instead. Declared as a plain fn so
+/// minimize.zig can store it as a function pointer.
 pub fn firstNonMinimized(windows: []const u32) ?u32 {
-    if (comptime !build.has_minimize) return if (windows.len > 0) windows[0] else null;
     for (windows) |win| {
         if (!minimize.isMinimized(win)) return win;
     }
