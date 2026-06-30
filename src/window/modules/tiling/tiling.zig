@@ -248,15 +248,15 @@ pub fn init() void {
 }
 
 pub fn deinit() void {
-    // State holds only fixed arrays and value types; nothing to free.
+    if (state) |*s| s.geom.cache.deinit();
     state = null;
 }
 
 pub fn reloadConfig() void {
     const s = getState();
     const saved_windows = s.windows;
+    s.geom.cache.deinit();
 
-    // initState is infallible: scratch buffers are fixed arrays in BSS.
     // Config changes invalidate every cached rect and border color, so we
     // want the fresh empty cache initState produces. The only field that
     // must survive the rebuild is the live window list.
@@ -314,7 +314,7 @@ pub fn reloadConfig() void {
 /// The hints live inside the same flat-array entry as the window's geometry and
 /// border color, so no separate table scan is needed inside configureWithHints.
 pub fn cacheSizeHints(win: u32, hints: layouts.SizeHints) void {
-    getState().geom.cache.cacheHints(win, hints);
+    layouts.cacheHints(&getState().geom.cache, win, hints);
 }
 
 // Window management
@@ -359,8 +359,9 @@ pub fn addWindow(window_id: u32) void {
     // spawn path, costing one extra XCB round-trip per window open.
 
     // Pre-populate the cache so the immediately-following retile does not
-    // re-send the border pixel. getOrPut is infallible on the flat-array cache.
-    const gop = s.geom.cache.getOrPut(window_id);
+    // re-send the border pixel.
+    const gop = s.geom.cache.getOrPut(window_id) catch return;
+    if (!gop.found_existing) gop.value_ptr.* = .{};
     gop.value_ptr.border = border_color;
 }
 
@@ -612,8 +613,9 @@ pub fn restoreWorkspaceGeom() bool {
     if (!layouts.rectsEqual(current_screen, s.geom.last_retile_area)) return false;
 
     // Pass 1 — validate all cache entries before emitting any XCB calls.
-    // getPtr returns a stable pointer (CacheMap never reallocates) so we can
-    // collect pointers here and dereference them safely in pass 2.
+    // getPtr pointers stay valid through pass 2 because no insertion happens
+    // into the cache between collecting them here and dereferencing them below
+    // (AutoHashMap pointers are only invalidated by insertion/rehash).
     var wd_ptrs: [max_workspace_windows]*layouts.WindowData = undefined;
     for (ws_windows, 0..) |win, i| {
         const wd = s.geom.cache.getPtr(win) orelse return false;
@@ -1049,7 +1051,7 @@ fn initState() State {
         },
         .windows = .{},
         .geom = .{
-            .cache = .{},
+            .cache = layouts.CacheMap.init(cs.alloc),
             .workspace_geom_valid_bits = 0,
             .last_retile_area = zero_rect,
             .scratch_wins = undefined,
@@ -1217,7 +1219,8 @@ fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
 
 /// Change the border pixel for `win` only when `color` differs from the cached value.
 fn applyBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u32) void {
-    const gop = s.geom.cache.getOrPut(win);
+    const gop = s.geom.cache.getOrPut(win) catch return;
+    if (!gop.found_existing) gop.value_ptr.* = .{};
     if (gop.found_existing and gop.value_ptr.border == color) return;
     gop.value_ptr.border = color;
     _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
@@ -1453,7 +1456,9 @@ fn swapWithMasterCore(s: *State, pos: FocusMasterPos) ?u32 {
 }
 
 fn updateCacheRect(s: *State, win: u32, rect: utils.Rect) void {
-    s.geom.cache.getOrPut(win).value_ptr.rect = rect;
+    const gop = s.geom.cache.getOrPut(win) catch return;
+    if (!gop.found_existing) gop.value_ptr.* = .{};
+    gop.value_ptr.rect = rect;
 }
 
 /// Set the geometry-valid bit for `ws_idx`, indicating the cache is correct for that workspace.
