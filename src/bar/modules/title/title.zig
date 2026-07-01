@@ -64,8 +64,14 @@ const WindowInfo = struct {
 
 // Public input types
 
-/// Stable per-call rendering context: geometry, draw state, and connection.
-/// Constructed once per bar frame and shared between `draw()` and `drawCached()`.
+/// Stable per-call rendering context: geometry, draw state, connection, and
+/// (on the `draw()` path) the bar slot's title cache.
+///
+/// Constructed once per bar frame and shared between `draw()` and
+/// `drawCached()`. `cached_title` / `cached_title_window` are left at their
+/// null default on the `drawCached()` path, which never updates the cache —
+/// only `draw()` passes them, merging what used to be a separate `TitleCache`
+/// struct that every caller had to construct and pass alongside this one.
 pub const TitleRenderContext = struct {
     dc: *drawing.DrawContext,
     config: types.BarConfig,
@@ -73,6 +79,14 @@ pub const TitleRenderContext = struct {
     start_x: u16,
     width: u16,
     conn: *xcb.xcb_connection_t,
+
+    /// Backing buffer updated by `draw()` on each full render; the bar passes
+    /// its contents as `snapshot.focused_title` in subsequent `drawCached()`
+    /// calls. Null on the `drawCached()` path (read-only; no cache update).
+    cached_title: ?*std.ArrayListUnmanaged(u8) = null,
+    /// Window ID `cached_title` was fetched for; used to detect when
+    /// `focused_title` belongs to a new window. Null alongside `cached_title`.
+    cached_title_window: ?*?u32 = null,
 };
 
 /// Per-frame volatile snapshot captured on the main thread.
@@ -109,19 +123,6 @@ pub const TitleSnapshot = struct {
     }
 };
 
-/// Mutable title cache owned by the bar slot.
-///
-/// `cached_title`        — backing buffer updated by `draw()` on each full
-///                          render; the bar passes its contents as
-///                          `snapshot.focused_title` in subsequent `drawCached()`
-///                          calls.
-/// `cached_title_window` — window ID the buffer was fetched for; used to
-///                          detect when `focused_title` belongs to a new window.
-pub const TitleCache = struct {
-    cached_title: *std.ArrayListUnmanaged(u8),
-    cached_title_window: *?u32,
-};
-
 // Private helpers
 
 /// Extract a UTF-8 string from an XCB get_property reply and dupe it into
@@ -138,12 +139,11 @@ fn extractPropertyString(
     return try allocator.dupe(u8, ptr[0..@intCast(len)]);
 }
 
-/// Shared body for draw() and drawCached(). Accepts a nullable cache so it
-/// can be called from both paths without duplicating the preamble or footer.
+/// Shared body for draw() and drawCached(). `ctx.cached_title` is non-null
+/// only on the draw() path, so this works unmodified for both callers.
 fn drawInner(
     ctx: TitleRenderContext,
     snapshot: TitleSnapshot,
-    cache: ?TitleCache,
     allocator: std.mem.Allocator,
     title_invalidated: bool,
 ) !u16 {
@@ -152,7 +152,7 @@ fn drawInner(
     if (emptyWorkspace(ctx, window_count)) |end_x| return end_x;
 
     if (window_count == 1) {
-        try drawSingleWindow(ctx, snapshot, cache, allocator, title_invalidated);
+        try drawSingleWindow(ctx, snapshot, allocator, title_invalidated);
     } else {
         try drawSegmentedTitles(ctx, snapshot, allocator, title_invalidated);
     }
@@ -164,19 +164,19 @@ fn drawInner(
 
 /// Draw the title segment.
 ///
-/// Updates `cache` as a side-effect so `drawCached()` has a valid slice on
-/// the next tick.
+/// Updates `ctx.cached_title` / `ctx.cached_title_window` as a side-effect so
+/// `drawCached()` has a valid slice on the next tick. Caller must set both to
+/// non-null — see `TitleRenderContext`.
 ///
 /// `title_invalidated` must be true whenever the focused window's title
 /// property changed since the last draw.
 pub fn draw(
     ctx: TitleRenderContext,
     snapshot: TitleSnapshot,
-    cache: TitleCache,
     allocator: std.mem.Allocator,
     title_invalidated: bool,
 ) !u16 {
-    return drawInner(ctx, snapshot, cache, allocator, title_invalidated);
+    return drawInner(ctx, snapshot, allocator, title_invalidated);
 }
 
 /// Draw the title segment using already-cached state.
@@ -185,7 +185,8 @@ pub fn draw(
 /// Unlike `draw()`, this function:
 ///   - uses `snapshot.focused_title` as a read-only slice; the caller is
 ///     responsible for passing the bar slot's cached buffer contents here.
-///   - never updates the title cache (`draw()` is responsible for keeping it current).
+///   - never updates the title cache: `ctx.cached_title` / `ctx.cached_title_window`
+///     must be left null (`draw()` is responsible for keeping the cache current).
 ///   - always passes `title_invalidated = false` to the carousel, since this
 ///     path only re-renders existing state.
 ///   - passes `minimized_title = ""` in the snapshot (the minimized title is not
@@ -195,7 +196,7 @@ pub fn drawCached(
     snapshot: TitleSnapshot,
     allocator: std.mem.Allocator,
 ) !u16 {
-    return drawInner(ctx, snapshot, null, allocator, false);
+    return drawInner(ctx, snapshot, allocator, false);
 }
 
 // Public API — title pre-fetch (main thread only)
@@ -251,13 +252,12 @@ inline fn emptyWorkspace(ctx: TitleRenderContext, count: usize) ?u16 {
 
 /// Shared rendering logic for both `draw()` and `drawCached()`.
 ///
-/// `cache` is non-null on the `draw()` path and is updated as a side-effect.
-/// `cache` is null on the `drawCached()` path (read-only; no cache update).
-/// `title_invalidated` is always false on the `drawCached()` path.
+/// `ctx.cached_title` is non-null on the `draw()` path and is updated as a
+/// side-effect. It is null on the `drawCached()` path (read-only; no cache
+/// update). `title_invalidated` is always false on the `drawCached()` path.
 fn drawSingleWindow(
     ctx: TitleRenderContext,
     snapshot: TitleSnapshot,
-    cache: ?TitleCache,
     allocator: std.mem.Allocator,
     title_invalidated: bool,
 ) !void {
@@ -319,12 +319,13 @@ fn drawSingleWindow(
     if (snapshot.focused_title.len == 0) return;
 
     // Update the bar slot's title cache for the next drawCached() tick.
-    // Only the draw() path passes a non-null cache.
-    if (cache) |slot| {
-        if (title_invalidated or slot.cached_title_window.* != snapshot.focused_window) {
-            slot.cached_title.clearRetainingCapacity();
-            slot.cached_title.appendSlice(allocator, snapshot.focused_title) catch {};
-            slot.cached_title_window.* = snapshot.focused_window;
+    // Only the draw() path passes non-null cache fields.
+    if (ctx.cached_title) |buf| {
+        const window_slot = ctx.cached_title_window.?;
+        if (title_invalidated or window_slot.* != snapshot.focused_window) {
+            buf.clearRetainingCapacity();
+            buf.appendSlice(allocator, snapshot.focused_title) catch {};
+            window_slot.* = snapshot.focused_window;
         }
     }
 

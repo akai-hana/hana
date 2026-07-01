@@ -347,6 +347,8 @@ pub fn draw(
             .start_x = start_x,
             .width = width,
             .conn = conn,
+            .cached_title = cached_title,
+            .cached_title_window = cached_title_window,
         },
         .{
             .focused_window = focused_window,
@@ -356,10 +358,6 @@ pub fn draw(
             .minimized_set = minimized_set,
             .window_title_data = window_title_data,
             .window_title_ends = window_title_ends,
-        },
-        .{
-            .cached_title = cached_title,
-            .cached_title_window = cached_title_window,
         },
         allocator,
         title_invalidated,

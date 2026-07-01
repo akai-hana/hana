@@ -282,26 +282,17 @@ pub fn reloadConfig() void {
         // frame where some windows have the new border width but the layout has
         // not yet been recalculated.
         //
-        // Current-workspace windows: BORDER_WIDTH is merged into the geometry
-        // configure_window call inside retileCurrentWorkspaceReload, saving one
-        // XCB round-trip per window vs. the old separate-loop approach.
-        //
-        // Inactive-workspace windows: they only receive a geometry
-        // configure_window when their workspace is next activated, so they
-        // MUST get an explicit BORDER_WIDTH send here — otherwise the new
-        // border width is never applied to them.
+        // BORDER_WIDTH is sent explicitly to every tiled window here, then the
+        // normal retile path recalculates geometry separately. This trades one
+        // extra XCB request per window (vs. the previous merge into the
+        // geometry configure_window call) for a retile path that no longer
+        // needs to know about border width at all.
         const conn = core.getState().conn;
         _ = xcb.xcb_grab_server(conn);
-        const current_ws = tracking.getCurrentWorkspace();
         for (ns.windows.items()) |win| {
-            // Skip current-workspace windows: retileCurrentWorkspaceReload
-            // merges BORDER_WIDTH into their geometry request below.
-            if (current_ws) |cws| {
-                if (tracking.isWindowOnWorkspace(win, @intCast(cws))) continue;
-            }
             _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{ns.config.border_width});
         }
-        retileCurrentWorkspaceReload(ns.config.border_width);
+        retileCurrentWorkspace();
         bar.redrawInsideGrab();
         utils.ungrabAndFlush(conn);
     }
@@ -543,6 +534,7 @@ pub fn retileAllWorkspaces() void {
         defer s.config.master_count = saved_count;
 
         invokeLayout(selectLayout(s, ws_state_opt, ws_idx, core.getState().config.tiling.global_layout), &ctx, s, ws_windows, screen);
+        updateBorders(s, ws_windows);
         markWorkspaceGeomValid(s, ws_idx);
     }
 
@@ -581,16 +573,6 @@ pub fn retileForRestore() void {
     s.config.layout = s.config.prev_layout;
     retileImpl(calcScreenArea(), .{});
     s.config.layout = saved;
-    s.is_dirty = false;
-}
-
-/// Retile the current workspace, merging `border_width` into each geometry
-/// configure_window call. Used exclusively by reloadConfig so that BORDER_WIDTH
-/// and X|Y|W|H are sent as a single request per window inside the server grab.
-fn retileCurrentWorkspaceReload(border_width: u16) void {
-    const s = getState();
-    if (!s.is_enabled) return;
-    retileImpl(calcScreenArea(), .{ .border_width = border_width });
     s.is_dirty = false;
 }
 
@@ -1062,19 +1044,12 @@ fn initState() State {
 
 // Layout dispatch helpers
 
-/// Stable function-pointer target for `LayoutCtx.get_border_color`.
-fn getBorderColorForWindow(win: u32) u32 {
-    return getState().borderColor(win);
-}
-
-/// Build a LayoutCtx for a normal retile.  defer_configure and border_width
-/// are left at their defaults (null); retileImpl sets them from RetileOpts
-/// after this call returns, keeping the construction site minimal.
+/// Build a LayoutCtx for a normal retile. defer_win is left at its default
+/// (null); retileImpl sets it from RetileOpts after this call returns.
 inline fn makeLayoutCtx(s: *State) layouts.LayoutCtx {
     return .{
         .conn = core.getState().conn,
         .cache = &s.geom.cache,
-        .get_border_color = getBorderColorForWindow,
         .focused_win = focus.getFocused(),
     };
 }
@@ -1157,17 +1132,15 @@ inline fn resolveMasterCount(s: *const State, ws_state: ?*WsState, ws_idx: u8) u
 /// Options for the single core retile implementation.  All public retile
 /// entry points are thin wrappers that fill in this struct and call retileImpl,
 /// eliminating the near-duplicate logic that previously lived across four
-/// private functions (retile, retileDeferred, retileCurrentWorkspaceReload,
+/// private functions (retile, retileDeferred, retileForWorkspace,
 /// retileCurrentWorkspaceDeferredPrebuilt).
 const RetileOpts = struct {
     /// Target workspace.  Null = current workspace.
     for_ws: ?u8 = null,
-    /// When non-null, this window's configure_window call is emitted last
-    /// within every column/stack group it belongs to.
+    /// When non-null, threaded into LayoutCtx.defer_win so the named window's
+    /// configure_window call lands last within whatever column/stack group it
+    /// belongs to. Used by swap_master to eliminate the one-frame wallpaper gap.
     defer_win: ?u32 = null,
-    /// When non-null, XCB_CONFIG_WINDOW_BORDER_WIDTH is merged into the
-    /// per-window geometry request.  Set only during reloadConfig.
-    border_width: ?u16 = null,
     /// When non-null, skip collectWorkspaceWindows and use this list directly.
     /// The caller guarantees the slice contents match the current workspace.
     pre_built: ?[]const u32 = null,
@@ -1189,8 +1162,7 @@ fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
     if (ws_windows.len == 0) return;
 
     var ctx = makeLayoutCtx(s);
-    ctx.defer_configure = opts.defer_win;
-    ctx.border_width = opts.border_width;
+    ctx.defer_win = opts.defer_win;
 
     const wss = workspaces.getState();
 
@@ -1210,6 +1182,8 @@ fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
         ws_windows,
         screen,
     );
+
+    updateBorders(s, ws_windows);
 
     s.geom.last_retile_area = screen;
     markWorkspaceGeomValid(s, target_ws);

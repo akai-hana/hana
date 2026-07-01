@@ -199,36 +199,31 @@ pub const Region = struct {
 /// Carries the XCB connection and geometry cache by pointer so layout modules
 /// do not depend on module-level globals, making their dependencies explicit
 /// and their behaviour independently verifiable.
+///
+/// Border-color updates are no longer threaded through this struct: colors
+/// are refreshed in a dedicated pass after the layout runs (see `tiling.zig`'s
+/// `updateBorders`). `border_width` is gone too — reloadConfig now sends it
+/// as an explicit, separate XCB request rather than smuggling it through here.
 pub const LayoutCtx = struct {
     conn: *xcb.xcb_connection_t,
     /// Pointer into tiling.State.cache. Always non-null during a retile pass.
     cache: *CacheMap,
-    /// When non-null, `configureWithHints` emits a border-color change in the same
-    /// cache scan, eliminating the separate updateBorders pass and halving the
-    /// number of linear searches over CacheMap per window per retile.
-    /// Set by `makeLayoutCtx` during a normal retile; null in contexts that
-    /// do not have focus/border information (e.g. direct utils.configureWindow
-    /// calls in restoreWorkspaceGeom).
-    get_border_color: ?*const fn (win: u32) u32 = null,
-    /// When non-null, layout modules should emit this window's configure_window
-    /// call LAST within each column or stack group it belongs to.
-    ///
-    /// Used by swap_master to avoid a one-frame wallpaper gap: after swapping
-    /// the focused window into the master slot the growing window (new master)
-    /// must not vacate its old stack slot until the shrinking window (old master)
-    /// has already been configured into that slot.  Setting defer_configure to
-    /// the new master achieves this ordering without changing geometry arithmetic.
-    defer_configure: ?u32 = null,
-    /// When non-null, `configureWithHints` merges XCB_CONFIG_WINDOW_BORDER_WIDTH
-    /// into the geometry configure_window call, reducing 3 requests/window to 2.
-    /// Set only during reloadConfig retile; null for all normal retile passes.
-    border_width: ?u16 = null,
     /// The currently focused window, supplied by tiling.zig via focus.getFocused().
     /// Used by monocle to raise the correct window rather than the arbitrary list
-    /// tail.  Null when the layout context is constructed outside the normal
+    /// tail. Null when the layout context is constructed outside the normal
     /// retile path (e.g. restoreWorkspaceGeom) — monocle falls back to the list
     /// tail in that case, preserving the previous behaviour.
     focused_win: ?u32 = null,
+    /// When non-null, names the window whose configure_window call must be the
+    /// LAST one sent during this retile, so it doesn't vacate its old slot
+    /// until every other window — in particular the one taking its place —
+    /// has already been moved. Set by swap_master via tiling.zig's
+    /// retileCurrentWorkspaceDeferred(Prebuilt) to eliminate a one-frame
+    /// wallpaper gap. Layout modules check this directly with a plain `if`
+    /// at their configure call site instead of going through a shared
+    /// capture/emit/flush abstraction — there is exactly one window to defer,
+    /// so the inline check is simpler than the type it replaces.
+    defer_win: ?u32 = null,
 };
 
 /// Returns true when both rects have identical coordinates and dimensions.
@@ -241,10 +236,6 @@ pub inline fn rectsEqual(a: utils.Rect, b: utils.Rect) bool {
 /// `raise` is a comptime bool — the compiler eliminates the dead branch, so
 /// codegen is identical to the previous two-function approach with zero runtime
 /// cost. The two public entry points are thin wrappers that instantiate this.
-///
-/// When `ctx.border_width` is non-null, the BORDER_WIDTH value is merged into
-/// the geometry configure_window call, reducing 3 XCB requests per window to 2.
-/// This is only set during reloadConfig; it is null for all normal retile passes.
 fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
     // Single probe: gop.value_ptr.hints holds any cached WM_NORMAL_HINTS
     // constraints alongside the geometry and border dedup data.
@@ -259,17 +250,6 @@ fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32,
         debug.err("Invalid rect for window 0x{x}: {}x{} at {},{}", .{ win, effective.width, effective.height, effective.x, effective.y });
         if (comptime raise) {
             _ = xcb.xcb_configure_window(ctx.conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
-        }
-        // Apply border color even when geometry is degenerate.  Without this,
-        // a window whose hints shrink its dimensions to zero gets stuck with a
-        // stale border color permanently: every retile takes this early exit
-        // before reaching the border block below, so the color is never updated.
-        if (ctx.get_border_color) |getBorderColor| {
-            const color = getBorderColor(win);
-            if (!gop.found_existing or gop.value_ptr.border != color) {
-                gop.value_ptr.border = color;
-                _ = xcb.xcb_change_window_attributes(ctx.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
-            }
         }
         return;
     }
@@ -287,18 +267,6 @@ fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32,
                 effective.height,
                 xcb.XCB_STACK_MODE_ABOVE,
             });
-        } else if (ctx.border_width) |bw| {
-            // Merge BORDER_WIDTH into the geometry request — saves one XCB round-trip
-            // per window during reloadConfig (the only caller that sets border_width).
-            _ = xcb.xcb_configure_window(ctx.conn, win, xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
-                xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
-                xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{
-                @bitCast(@as(i32, effective.x)),
-                @bitCast(@as(i32, effective.y)),
-                effective.width,
-                effective.height,
-                bw,
-            });
         } else {
             utils.configureWindow(ctx.conn, win, effective);
         }
@@ -306,17 +274,12 @@ fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32,
         // Geometry unchanged (cache hit) — only raise; no intermediate state possible.
         _ = xcb.xcb_configure_window(ctx.conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
     }
-
-    const getBorderColor = ctx.get_border_color orelse return;
-    const color = getBorderColor(win);
-    if (gop.found_existing and gop.value_ptr.border == color) return;
-    gop.value_ptr.border = color;
-    _ = xcb.xcb_change_window_attributes(ctx.conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{color});
 }
 
 /// Apply geometry to `win`, clamped to its WM_NORMAL_HINTS constraints.
-/// Skips the XCB round-trip when the rect is unchanged; updates border color
-/// in the same probe when `ctx.get_border_color` is set.
+/// Skips the XCB round-trip when the rect is unchanged. Border color is no
+/// longer updated here — call `tiling.zig`'s border-refresh pass after the
+/// layout has run.
 pub fn configureWithHints(ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
     configureWithHintsImpl(false, ctx, win, rect);
 }
@@ -328,69 +291,6 @@ pub fn configureWithHints(ctx: *const LayoutCtx, win: u32, rect: utils.Rect) voi
 pub fn configureWithHintsAndRaise(ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
     configureWithHintsImpl(true, ctx, win, rect);
 }
-
-/// Per-layout helper that implements the `defer_configure` contract for any
-/// layout module without changing that layout's geometry arithmetic.
-///
-/// Usage pattern (inside a layout's main window loop):
-///
-///     var defer_slot = DeferredConfigure.init();
-///     for (windows) |win| {
-///         defer_slot.emit(ctx, win, computed_rect);
-///     }
-///     defer_slot.flush(ctx);
-///
-/// The deferred window's rect is stored on the stack.  If no window in the
-/// loop matches `ctx.defer_configure`, `capture` is always false and `flush`
-/// is a no-op, so layouts that never call swap_master pay zero cost.
-///
-/// Use `emit` for the common case above.  `capture` is exposed separately for
-/// the rare callers that need to branch on whether a window was deferred
-/// (e.g. to skip other per-window work for it) before deciding what to do.
-pub const DeferredConfigure = struct {
-    pending_win: u32 = 0,
-    pending_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
-
-    /// Initialise an inert slot.
-    pub inline fn init() DeferredConfigure {
-        return .{};
-    }
-
-    /// If `win` is the deferred window, store `rect` and return true (skip the
-    /// normal configureWithHints call).  Otherwise return false.
-    pub inline fn capture(self: *DeferredConfigure, ctx: *const LayoutCtx, win: u32, rect: utils.Rect) bool {
-        if (ctx.defer_configure) |dw| {
-            if (dw == win) {
-                self.pending_win = win;
-                self.pending_rect = rect;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /// Emit `rect` for `win`: captures it in this slot when `win` is the
-    /// deferred window, otherwise configures it immediately via
-    /// `configureWithHints`.
-    ///
-    /// This is the single shared implementation of the "capture-or-configure"
-    /// pattern every layout module needs around its main window loop — each
-    /// module previously redefined an identical local `emitRect` helper (or
-    /// inlined the same two-line conditional) to get this behaviour. Calling
-    /// `defer_slot.emit(ctx, win, rect)` instead keeps that pattern defined in
-    /// exactly one place.
-    pub inline fn emit(self: *DeferredConfigure, ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
-        if (!self.capture(ctx, win, rect))
-            configureWithHints(ctx, win, rect);
-    }
-
-    /// Emit the deferred configure call (if any).  Must be called once after
-    /// the main window loop has configured all other windows.
-    pub inline fn flush(self: *const DeferredConfigure, ctx: *const LayoutCtx) void {
-        if (self.pending_win != 0)
-            configureWithHints(ctx, self.pending_win, self.pending_rect);
-    }
-};
 
 /// Apply ICCCM §4.1.2.3 hint passes to a raw rect.
 ///
