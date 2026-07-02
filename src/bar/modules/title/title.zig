@@ -104,23 +104,12 @@ pub const TitleSnapshot = struct {
     current_ws_wins: []const u32,
     minimized_set: *const std.AutoHashMapUnmanaged(u32, void),
 
-    /// Pre-fetched window titles captured on the main thread (Issue #2).
-    /// Flat byte buffer; `window_title_ends[i]` is the exclusive end offset of
-    /// the i-th title inside `window_title_data`.  Empty slices signal that no
-    /// pre-fetched data is available (e.g. the drawCached fast path before the
-    /// title cache has been populated with multi-window data).
-    window_title_data: []const u8 = &.{},
-    window_title_ends: []const u32 = &.{},
-
-    /// Returns the pre-fetched title for `current_ws_wins[idx]`, or an empty
-    /// slice when pre-fetched data is unavailable or `idx` is out of range.
-    pub fn windowTitle(self: *const TitleSnapshot, idx: usize) []const u8 {
-        if (idx >= self.window_title_ends.len) return &.{};
-        const end: usize = self.window_title_ends[idx];
-        const start: usize = if (idx == 0) 0 else self.window_title_ends[idx - 1];
-        if (start > self.window_title_data.len or end > self.window_title_data.len) return &.{};
-        return self.window_title_data[start..end];
-    }
+    /// Pre-fetched window titles captured on the main thread, indexed parallel
+    /// to `current_ws_wins` (i.e. `titles[i]` is the title of `current_ws_wins[i]`).
+    /// An empty slice signals that no pre-fetched data is available (e.g. the
+    /// drawCached fast path before the title cache has been populated with
+    /// multi-window data).
+    titles: []const []const u8 = &.{},
 };
 
 // Private helpers
@@ -370,10 +359,10 @@ fn drawSegmentedTitles(
     }
 
     // Determine whether pre-fetched title data is available.
-    // When window_title_ends is populated with the correct count of entries,
-    // all N title round-trips are skipped on the render thread (they were
-    // already fetched on the main thread in captureStateIntoSlot).
-    const has_prefetched_titles = snapshot.window_title_ends.len >= win_count;
+    // When titles is populated with the correct count of entries, all N title
+    // round-trips are skipped on the render thread (they were already fetched
+    // on the main thread in captureStateIntoSlot).
+    const has_prefetched_titles = snapshot.titles.len >= win_count;
 
     atoms.ensureResolved();
     const net_atom = atoms.net_wm_name;
@@ -461,7 +450,7 @@ fn drawSegmentedTitles(
         } else .{ .x = std.math.maxInt(i16), .y = std.math.maxInt(i16), .width = 0, .height = 0 };
 
         const title_str: []const u8 = if (has_prefetched_titles)
-            snapshot.windowTitle(i)
+            snapshot.titles[i]
         else
             titles[i] orelse "";
 
