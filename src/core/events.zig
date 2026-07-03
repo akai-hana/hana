@@ -48,10 +48,19 @@ fn handlePropertyNotify(event: *anyopaque) void {
     window.handlePropertyNotify(e);
 }
 
-/// Routes ConfigureNotify to the fullscreen deferred-bar-hide logic.
+/// Routes ConfigureNotify to the fullscreen deferred-bar-hide/show logic.
 fn handleConfigureNotify(event: *anyopaque) void {
     const e: *xcb.xcb_configure_notify_event_t = @ptrCast(@alignCast(event));
     fullscreen.notifyConfigureIfPending(e.window, e.width, e.height);
+}
+
+/// Notifies fullscreen of the destroyed window before delegating to window.zig.
+/// This clears any pending deferred bar-show for a window that exits fullscreen
+/// and is then destroyed before it can send a ConfigureNotify.
+fn handleDestroyNotify(event: *anyopaque) void {
+    const e: *xcb.xcb_destroy_notify_event_t = @ptrCast(@alignCast(event));
+    fullscreen.onWindowGone(e.window);
+    window.handleDestroyNotify(e);
 }
 
 /// O(1) dispatch via a comptime-built table indexed by XCB event type (low 7 bits).
@@ -64,7 +73,7 @@ const dispatch_table = blk: {
     table[xcb.XCB_MAP_REQUEST] = asHandler(window.handleMapRequest);
     table[xcb.XCB_CONFIGURE_REQUEST] = asHandler(window.handleConfigureRequest);
     table[xcb.XCB_UNMAP_NOTIFY] = asHandler(window.handleUnmapNotify);
-    table[xcb.XCB_DESTROY_NOTIFY] = asHandler(window.handleDestroyNotify);
+    table[xcb.XCB_DESTROY_NOTIFY] = asHandler(handleDestroyNotify);
     table[xcb.XCB_CLIENT_MESSAGE] = asHandler(window.handleClientMessage);
 
     table[xcb.XCB_KEY_PRESS] = asHandler(input.handleKeyPress);

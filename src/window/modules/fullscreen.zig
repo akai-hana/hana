@@ -54,6 +54,12 @@ var g_float_saves_len: usize = 0;
 /// notifyConfigureIfPending and resetState.
 var g_pending_bar_hide_win: u32 = 0;
 
+/// Window that has exited fullscreen and been retiled but has not yet sent a
+/// ConfigureNotify confirming its new (non-fullscreen) dimensions.  Zero when
+/// no window is pending.  Set in exitFullscreen after retile; cleared in
+/// notifyConfigureIfPending, resetState, and onWindowGone.
+var g_pending_bar_show_win: u32 = 0;
+
 // EWMH atoms for _NET_WM_STATE_FULLSCREEN — interned once in init().
 var g_net_wm_state: xcb.xcb_atom_t = xcb.XCB_ATOM_NONE;
 var g_net_wm_state_fullscreen: xcb.xcb_atom_t = xcb.XCB_ATOM_NONE;
@@ -63,6 +69,7 @@ fn resetState() void {
     g_slots = @splat(null);
     g_float_saves_len = 0;
     g_pending_bar_hide_win = 0;
+    g_pending_bar_show_win = 0;
 }
 
 /// Consume an intern-atom cookie and return the resulting atom,
@@ -389,6 +396,10 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     // configure_window, leaving the window stuck at fullscreen dimensions.
     tiling.invalidateGeomCache(win);
 
+    // Cancel any pending deferred bar-show from a previous exit: entering
+    // fullscreen again means the bar should stay hidden.
+    g_pending_bar_show_win = 0;
+
     // Defer hiding the bar until the window confirms its new geometry via
     // ConfigureNotify, so heavy clients (e.g. Discord) don't expose the
     // raw background during their repaint delay.
@@ -439,6 +450,8 @@ pub fn cleanupFullscreenForMove(win: u32, src_ws: u8) void {
     const fs_info = getForWorkspace(src_ws) orelse return;
     if (fs_info.window != win) return;
 
+    // Cancel deferred bar-show if one was in flight for this window.
+    g_pending_bar_show_win = 0;
     bar.setBarState(.show_fullscreen);
     restoreFloatingWindows(win);
     window.applyBorder(win);
@@ -464,18 +477,23 @@ pub fn enterFullscreen(win: u32, saved_geom: ?core.WindowGeometry) void {
 /// explicitly (unlike toggle()) for event-driven call sites.
 pub fn exitFullscreen(win: u32) void {
     const ws = workspaceFor(win) orelse return;
-    // Hoist bar pre-render before the grab: captureStateIntoSlot may issue X
-    // round-trips for title fetches, which trigger an implicit XCB flush.  If
-    // xcb_grab_server were already queued at flush time, the compositor would be
-    // frozen for the full Cairo render — causing the visible lag on fullscreen exit
-    // that the toggle path avoids by drawing before grabbing.
-    bar.prerenderForShow();
+    // Do NOT prerender+commitShowInsideGrab here.  The fullscreen window was
+    // raised (XCB_STACK_MODE_ABOVE) on enter; if we map the bar before the
+    // window has repainted at its new tiled size, the still-raised window
+    // occludes the bar until repaint completes — exactly the same class of
+    // race as the enter-fullscreen bar-hide delay, just in reverse.
+    //
+    // Instead we defer the bar show until the window confirms its new
+    // (non-fullscreen) dimensions via ConfigureNotify, identically to how
+    // the bar hide is deferred on enter.
     const conn = core.getState().conn;
     _ = xcb.xcb_grab_server(conn);
     exitFullscreenCommit(win, ws);
     restoreFloatingWindows(win);
-    bar.commitShowInsideGrab();
     tiling.retileCurrentWorkspace();
+    // Record the pending show AFTER retile so the window ID is set before
+    // the grab is released and ConfigureNotify can arrive.
+    g_pending_bar_show_win = win;
     utils.ungrabAndFlush(conn);
 }
 
@@ -516,17 +534,48 @@ pub fn toggle() void {
 }
 
 /// Called from the ConfigureNotify handler in events.zig.
-/// Hides the bar if `win` is the window we were waiting for and its reported
-/// dimensions now match the screen.  Safe to call for every ConfigureNotify —
-/// it is a no-op when no fullscreen transition is pending or the dimensions
-/// do not yet match.
+/// Drives both deferred bar transitions:
+///   • hide: fired when the window confirms fullscreen dimensions (enter path)
+///   • show: fired when the window confirms non-fullscreen dimensions (exit path)
+/// Safe to call for every ConfigureNotify — no-ops when no transition is pending
+/// or the dimensions do not match the expected state.
 pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
-    if (g_pending_bar_hide_win == 0 or g_pending_bar_hide_win != win) return;
-
     const cs = core.getState();
-    if (width != @as(u16, @intCast(cs.screen.width_in_pixels)) or
-        height != @as(u16, @intCast(cs.screen.height_in_pixels))) return;
+    const screen_w = @as(u16, @intCast(cs.screen.width_in_pixels));
+    const screen_h = @as(u16, @intCast(cs.screen.height_in_pixels));
 
-    g_pending_bar_hide_win = 0;
-    bar.setBarState(.hide_fullscreen);
+    // Deferred bar hide (enter-fullscreen path): window must report exactly
+    // screen dimensions before we hide the bar.
+    if (g_pending_bar_hide_win != 0 and g_pending_bar_hide_win == win) {
+        if (width == screen_w and height == screen_h) {
+            g_pending_bar_hide_win = 0;
+            bar.setBarState(.hide_fullscreen);
+        }
+        return;
+    }
+
+    // Deferred bar show (exit-fullscreen path): window must report dimensions
+    // that are no longer fullscreen before we show the bar.  This fires as
+    // soon as the retile configure_window is acknowledged — before the
+    // window has repainted — so the bar appears exactly when the window
+    // starts rendering at its new tiled size.
+    if (g_pending_bar_show_win != 0 and g_pending_bar_show_win == win) {
+        if (width != screen_w or height != screen_h) {
+            g_pending_bar_show_win = 0;
+            bar.setBarState(.show_fullscreen);
+        }
+    }
+}
+
+/// Called when a window is destroyed.  Clears any pending deferred bar
+/// operation for that window so the bar does not stay permanently hidden.
+/// The hide case (enter-fullscreen) is already cleaned up by exitFullscreenCommit
+/// (called from the destroy handler via exitFullscreen); this function exists
+/// solely for the show case (exit-fullscreen), where the window may be
+/// destroyed after exitFullscreen returns but before ConfigureNotify arrives.
+pub fn onWindowGone(win: u32) void {
+    if (g_pending_bar_show_win == win) {
+        g_pending_bar_show_win = 0;
+        bar.setBarState(.show_fullscreen);
+    }
 }
