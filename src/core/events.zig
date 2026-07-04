@@ -108,22 +108,9 @@ fn signalHandler(signo: std.os.linux.SIG) callconv(.c) void {
     _ = std.os.linux.write(signal_pipe[1], &[_]u8{sigToU8(signo)}, 1);
 }
 
-/// Creates a pipe with O_NONBLOCK | O_CLOEXEC on both ends via pipe2(2).
-fn createPipe() ![2]std.posix.fd_t {
-    var fds: [2]std.posix.fd_t = undefined;
-    const flags = std.os.linux.O{ .CLOEXEC = true, .NONBLOCK = true };
-    switch (std.posix.errno(std.os.linux.pipe2(&fds, flags))) {
-        .SUCCESS => {},
-        .MFILE => return error.ProcessFdQuotaExceeded,
-        .NFILE => return error.SystemFdQuotaExceeded,
-        else => |err| return std.posix.unexpectedErrno(err),
-    }
-    return fds;
-}
-
 /// Creates the signal self-pipe and installs handlers for SIGHUP/SIGTERM/SIGINT/SIGCHLD.
 pub fn setupSignalPipe() !void {
-    signal_pipe = try createPipe();
+    signal_pipe = try utils.makePipe();
 
     const sa: std.posix.Sigaction = .{
         .handler = .{ .handler = signalHandler },
@@ -271,26 +258,6 @@ fn applyConfig(new_config: *types.Config) !void {
     bar.reload();
 }
 
-/// Validates domain invariants on a freshly loaded config.
-/// Belongs here until config.zig grows a first-party validate() function.
-fn validateConfig(cfg: *const types.Config) !void {
-    if (cfg.tiling.master_count == 0) {
-        debug.err("Invalid config: master_count must be > 0, keeping old", .{});
-        return error.InvalidConfig;
-    }
-    // master_width is stored as a ScalableValue; normalise to [0,1] for the check.
-    const mw = cfg.tiling.master_width;
-    const mw_ratio: f32 = if (mw.is_percentage) mw.value / 100.0 else mw.value;
-    if (mw_ratio < constants.MIN_MASTER_WIDTH or mw_ratio > 1.0) {
-        debug.err("Invalid config: master_width ratio {d:.3} out of [{d:.2}, 1.0], keeping old", .{ mw_ratio, constants.MIN_MASTER_WIDTH });
-        return error.InvalidConfig;
-    }
-    if (cfg.workspaces.count < 1) {
-        debug.err("Invalid config: workspace count must be >= 1, keeping old", .{});
-        return error.InvalidConfig;
-    }
-}
-
 /// Loads and validates a new config, then applies it atomically.
 /// On failure, the old config remains active.
 fn handleConfigReload() !void {
@@ -303,7 +270,7 @@ fn handleConfigReload() !void {
     };
     errdefer new_config.deinit(cs.alloc);
 
-    try validateConfig(&new_config);
+    try config.validate(&new_config);
     try applyConfig(&new_config);
 
     var old_config = cs.config;

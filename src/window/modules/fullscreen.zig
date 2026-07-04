@@ -16,7 +16,7 @@ const focus = @import("focus");
 
 const minimize = @import("minimize");
 // Note: workspaces dispatch is handled through tracking.workspaceBit /
-// tracking.allWindows inside forEachWindowOnCurrentWorkspace; a top-level
+// tracking.allWindows inside windowsOnCurrentWorkspace; a top-level
 // workspaces import is not needed here.
 
 const tiling = @import("tiling");
@@ -160,24 +160,35 @@ pub fn forEachFullscreen(cb: anytype) void {
         if (slot) |info| cb(@intCast(i), info);
 }
 
-// Calls `ctx.call(window_id)` for every window on the current workspace except
-// `skip`. Uses the workspace window list when workspaces are enabled, otherwise
-// falls back to the global iterator. `ctx` is anytype — zero overhead at call sites.
-fn forEachWindowOnCurrentWorkspace(skip: u32, ctx: anytype) void {
-    if (core.getState().config.workspaces.enabled) {
-        const cur = tracking.getCurrentWorkspace() orelse return;
-        const bit = tracking.workspaceBit(cur);
-        for (tracking.allWindows()) |entry| {
-            if (entry.mask & bit == 0) continue;
-            if (entry.win == skip) continue;
-            ctx.call(entry.win);
+/// Iterates windows on the current workspace, skipping `skip`. Uses the
+/// workspace window list when workspaces are enabled, otherwise falls back
+/// to the global window list.
+const WorkspaceWindowIter = struct {
+    entries: []const tracking.Entry,
+    idx: usize = 0,
+    skip: u32,
+    filtered: bool,
+    bit: u64 = 0,
+
+    fn next(self: *@This()) ?u32 {
+        while (self.idx < self.entries.len) {
+            const entry = self.entries[self.idx];
+            self.idx += 1;
+            if (self.filtered and entry.mask & self.bit == 0) continue;
+            if (entry.win == self.skip) continue;
+            return entry.win;
         }
-    } else {
-        for (tracking.allWindows()) |entry| {
-            if (entry.win == skip) continue;
-            ctx.call(entry.win);
-        }
+        return null;
     }
+};
+
+fn windowsOnCurrentWorkspace(skip: u32) WorkspaceWindowIter {
+    if (core.getState().config.workspaces.enabled) {
+        const cur = tracking.getCurrentWorkspace() orelse
+            return .{ .entries = &.{}, .skip = skip, .filtered = true };
+        return .{ .entries = tracking.allWindows(), .skip = skip, .filtered = true, .bit = tracking.workspaceBit(cur) };
+    }
+    return .{ .entries = tracking.allWindows(), .skip = skip, .filtered = false };
 }
 
 // Geometry helpers
@@ -249,33 +260,19 @@ fn saveFloatingWindowGeoms(skip_win: u32) void {
     var n: usize = 0;
     var truncated: bool = false;
 
-    // Uses forEachWindowOnCurrentWorkspace for workspace dispatch.
     // Overflow past MAX_FLOAT_SAVES is logged rather than silently dropped.
-    const CollectCtx = struct {
-        n: *usize,
-        truncated: *bool,
-        wins: *[MAX_FLOAT_SAVES]u32,
-        cookies: *[MAX_FLOAT_SAVES]xcb.xcb_get_geometry_cookie_t,
-
-        fn call(self: @This(), w: u32) void {
-            if (minimize.isMinimized(w)) return;
-            if (tiling.isWindowTiled(w)) return;
-            if (self.n.* >= MAX_FLOAT_SAVES) {
-                self.truncated.* = true;
-                return;
-            }
-            self.wins[self.n.*] = w;
-            self.cookies[self.n.*] = xcb.xcb_get_geometry(core.getState().conn, w);
-            self.n.* += 1;
+    var it = windowsOnCurrentWorkspace(skip_win);
+    while (it.next()) |w| {
+        if (minimize.isMinimized(w)) continue;
+        if (tiling.isWindowTiled(w)) continue;
+        if (n >= MAX_FLOAT_SAVES) {
+            truncated = true;
+            continue;
         }
-    };
-
-    forEachWindowOnCurrentWorkspace(skip_win, CollectCtx{
-        .n = &n,
-        .truncated = &truncated,
-        .wins = &wins,
-        .cookies = &cookies,
-    });
+        wins[n] = w;
+        cookies[n] = xcb.xcb_get_geometry(core.getState().conn, w);
+        n += 1;
+    }
 
     if (truncated) debug.warn(
         "saveFloatingWindowGeoms: more than {d} floating windows on workspace; " ++
@@ -312,26 +309,22 @@ fn getSavedFloatGeom(win: u32) ?utils.Rect {
 fn restoreFloatingWindows(skip_win: u32) void {
     const pos = window.floatDefaultPos();
 
-    // Workspace dispatch is handled by forEachWindowOnCurrentWorkspace.
-    const RestoreCtx = struct {
-        pos_x: u32,
-        pos_y: u32,
+    const pos_x: u32 = @intCast(pos.x);
+    const pos_y: u32 = @intCast(pos.y);
 
-        fn call(self: @This(), w: u32) void {
-            if (minimize.isMinimized(w)) return;
-            if (tiling.isWindowTiled(w)) return;
-            // Do NOT call window.getWindowGeom here: we are inside xcb_grab_server
-            // and a synchronous xcb_get_geometry round-trip would deadlock.
-            // Windows absent from g_float_saves fall back to the default position.
-            if (getSavedFloatGeom(w)) |r| {
-                utils.configureWindow(core.getState().conn, w, r);
-            } else {
-                _ = xcb.xcb_configure_window(core.getState().conn, w, xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{ self.pos_x, self.pos_y });
-            }
+    var it = windowsOnCurrentWorkspace(skip_win);
+    while (it.next()) |w| {
+        if (minimize.isMinimized(w)) continue;
+        if (tiling.isWindowTiled(w)) continue;
+        // Do NOT call window.getWindowGeom here: we are inside xcb_grab_server
+        // and a synchronous xcb_get_geometry round-trip would deadlock.
+        // Windows absent from g_float_saves fall back to the default position.
+        if (getSavedFloatGeom(w)) |r| {
+            utils.configureWindow(core.getState().conn, w, r);
+        } else {
+            _ = xcb.xcb_configure_window(core.getState().conn, w, xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{ pos_x, pos_y });
         }
-    };
-
-    forEachWindowOnCurrentWorkspace(skip_win, RestoreCtx{ .pos_x = @intCast(pos.x), .pos_y = @intCast(pos.y) });
+    }
 
     g_float_saves_len = 0;
 }
@@ -363,18 +356,14 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
         .saved_geometry = geom,
     });
 
-    // Push every other window offscreen; workspace dispatch is through the shared helper.
-    const PushCtx = struct {
-        fn call(_: @This(), w: u32) void {
-            utils.pushWindowOffscreen(core.getState().conn, w);
-            {
-                // Only invalidate tiled windows — floating windows' cache entries
-                // hold the geometry we need to restore on exit.
-                if (tiling.isWindowTiled(w)) tiling.invalidateGeomCache(w);
-            }
-        }
-    };
-    forEachWindowOnCurrentWorkspace(win, PushCtx{});
+    // Push every other window offscreen; workspace dispatch is through the shared iterator.
+    var it = windowsOnCurrentWorkspace(win);
+    while (it.next()) |w| {
+        utils.pushWindowOffscreen(core.getState().conn, w);
+        // Only invalidate tiled windows — floating windows' cache entries
+        // hold the geometry we need to restore on exit.
+        if (tiling.isWindowTiled(w)) tiling.invalidateGeomCache(w);
+    }
 
     // Configure and raise the fullscreen window BEFORE hiding the bar.
     // Deferring the bar hide until ConfigureNotify ensures heavy clients
