@@ -231,6 +231,37 @@ pub inline fn rectsEqual(a: utils.Rect, b: utils.Rect) bool {
     return a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height;
 }
 
+/// Sends `rect` for `win` immediately via `configureWithHints`, unless `win`
+/// is the window named by `ctx.defer_win` — in which case the rect is
+/// stashed into `deferred_rect` for the caller to send once, after every
+/// other window in this retile pass (see `LayoutCtx.defer_win` for why this
+/// exists: it eliminates swap_master's one-frame wallpaper gap).
+///
+/// Shared by every tiling layout that honours `defer_win`. Before being
+/// unified here it was reimplemented independently as a local copy in
+/// fibonacci, and re-derived inline in master, grid, leaf, and scroll.
+pub inline fn emitOrDefer(ctx: *const LayoutCtx, win: u32, rect: utils.Rect, deferred_rect: *?utils.Rect) void {
+    if (ctx.defer_win == win) {
+        deferred_rect.* = rect;
+    } else {
+        configureWithHints(ctx, win, rect);
+    }
+}
+
+/// Shrinks `dim` by `margin` (gap and/or border allowance), floored to
+/// `constants.MIN_WINDOW_DIM` so a layout never hands a client a zero or
+/// negative size when margins exceed the available space.
+///
+/// Shared by every tiling layout that turns a slot dimension into window
+/// content size. Before being unified here it was reimplemented independently
+/// as `calcInnerWidth` (master), `cellToWindowSize` (grid), `calcContentH`
+/// (scroll), and re-derived inline in leaf, monocle, and fibonacci's overflow
+/// path — all doing the identical `if (dim > margin) dim - margin else
+/// MIN_WINDOW_DIM` check under different names.
+pub inline fn shrinkClamped(dim: u16, margin: u16) u16 {
+    return if (dim > margin) dim - margin else constants.MIN_WINDOW_DIM;
+}
+
 /// Shared implementation for configureWithHints and configureWithHintsAndRaise.
 ///
 /// `raise` is a comptime bool — the compiler eliminates the dead branch, so

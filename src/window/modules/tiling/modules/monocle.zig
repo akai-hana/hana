@@ -2,7 +2,6 @@
 //! Stacks all windows fullscreen, showing only the topmost one, with optional gap insets.
 
 const core = @import("core");
-const constants = @import("constants");
 const utils = @import("utils");
 const layouts = @import("layouts");
 const tiling = @import("tiling");
@@ -46,8 +45,8 @@ pub fn tileWithOffset(
     const top_rect = utils.Rect{
         .x = @intCast(inset),
         .y = @intCast(y_offset +| inset),
-        .width = if (screen_w > total_margin) screen_w - total_margin else constants.MIN_WINDOW_DIM,
-        .height = if (screen_h > total_margin) screen_h - total_margin else constants.MIN_WINDOW_DIM,
+        .width = layouts.shrinkClamped(screen_w, total_margin),
+        .height = layouts.shrinkClamped(screen_h, total_margin),
     };
 
     layouts.configureWithHintsAndRaise(ctx, top_win, top_rect);
