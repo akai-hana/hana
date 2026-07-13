@@ -180,6 +180,14 @@ pub inline fn setLastEventTime(t: u32) void {
 // maintained for external consumers (e.g. subsystems that forward timestamps
 // to input-method frameworks) rather than for use inside this module.
 
+/// Sets X input focus to `win`, always with CurrentTime (0) rather than a
+/// real event timestamp — see "Timestamp handling" above for why a real
+/// timestamp risks the request being silently ignored, or an Electron/Qt app
+/// forwarding a stale timestamp back to its own internal XSetInputFocus call.
+inline fn focusNow(conn: *xcb.xcb_connection_t, win: u32) void {
+    _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0); // CurrentTime
+}
+
 /// Direct write to suppress_reason.
 ///
 /// Use this for cases where suppression must be cleared or set independently
@@ -315,13 +323,7 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
 
     const conn = core.getState().conn;
 
-    if (flags.set_input_focus)
-        // Always CurrentTime (0): the X server interprets CurrentTime as "now"
-        // and bypasses its timestamp-ordering check entirely.  Passing a real
-        // event timestamp risks rejection if it predates the server's last
-        // focus-change time, and also risks Electron/Qt apps forwarding a stale
-        // timestamp back to XSetInputFocus on their internal widget.
-        _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0); // CurrentTime
+    if (flags.set_input_focus) focusNow(conn, win);
 
     if (flags.raise)
         _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
@@ -470,7 +472,7 @@ pub fn drainPendingConfirm() void {
     // rather than silently degrading into an unresponsive window.
     std.log.debug("focus: confirm retry for 0x{x}: focus={} (expected > 1), retrying once", .{ win, c.*.focus });
 
-    _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0); // CurrentTime
+    focusNow(conn, win);
     window.sendWMTakeFocus(conn, win, 0); // CurrentTime
 }
 
@@ -524,7 +526,7 @@ fn sendFocusProtocol(win: u32) void {
     const model = window.getInputModelCached(conn, win);
     if (model == .no_input) return;
     if (model != .globally_active) {
-        _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0); // CurrentTime
+        focusNow(conn, win);
     }
     // Always advertise the active window, regardless of input model.
     // Without this, a globally_active window that has stolen focus would leave
@@ -563,13 +565,13 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
             // sendFocusProtocol(sel) reclaims focus with no active opponent.
             if (is_offscreen_steal) {
                 const cs = core.getState();
-                _ = xcb.xcb_set_input_focus(cs.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, cs.root, 0); // CurrentTime
+                focusNow(cs.conn, cs.root);
             }
             sendFocusProtocol(sel);
         }
     } else if (is_offscreen_steal) {
         const cs = core.getState();
-        _ = xcb.xcb_set_input_focus(cs.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, cs.root, 0); // CurrentTime
+        focusNow(cs.conn, cs.root);
         advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
     }
 }
@@ -610,7 +612,7 @@ pub fn clearFocus() void {
     state.focused_window = null;
     state.suppress_reason = .none;
     const cs = core.getState();
-    _ = xcb.xcb_set_input_focus(cs.conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, cs.root, 0); // CurrentTime
+    focusNow(cs.conn, cs.root);
     carousel.notifyFocusChanged(null);
     bar.scheduleFocusRedraw(null);
     advertiseActiveWindow(xcb.XCB_WINDOW_NONE);

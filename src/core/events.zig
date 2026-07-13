@@ -254,7 +254,6 @@ fn applyConfig(new_config: *types.Config) !void {
 
     window.reloadBorders();
     tiling.reloadConfig();
-    bar.updateTimerState();
     bar.reload();
 }
 
@@ -289,19 +288,10 @@ fn handleConfigReload() !void {
 
 // Event loop
 
-/// Returns the shortest timeout across all subsystems, or -1 to block indefinitely.
-fn combinedTimeoutMs(blink_ms: i32) i32 {
-    const clock_ms = bar.pollTimeoutMs();
-    if (clock_ms < 0) return blink_ms;
-    if (blink_ms < 0) return clock_ms;
-
-    return @min(clock_ms, blink_ms);
-}
-
 /// Ticks the clock and cursor blink on poll timeout, then flushes to the compositor.
 fn handleTimerEvents(cursor_is_blinking: bool) void {
-    // poll() now times out only for cursor blink; the clock thread
-    // signals the bar render thread directly via checkClockUpdate().
+    // poll() now times out only for cursor blink; the clock and carousel
+    // threads draw directly via bar.checkClockUpdate()/bar.tickCarousel().
     if (cursor_is_blinking) {
         prompt.blinkTick();
         bar.submitDraw();
@@ -344,7 +334,7 @@ pub fn run() !void {
     while (utils.running.load(.acquire)) {
         const blink_ms = prompt.blinkPollTimeoutMs();
         const cursor_is_blinking = blink_ms >= 0;
-        const poll_rc = std.os.linux.poll(&fds, fds.len, combinedTimeoutMs(blink_ms));
+        const poll_rc = std.os.linux.poll(&fds, fds.len, blink_ms);
         const ready: usize = switch (std.posix.errno(poll_rc)) {
             .SUCCESS => @intCast(poll_rc),
             .INTR => continue,

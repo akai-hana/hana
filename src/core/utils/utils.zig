@@ -218,32 +218,76 @@ pub fn makePipe() ![2]std.posix.fd_t {
     return fds;
 }
 
-// pthread_condattr_t and related functions are not exposed by std.c in this
-// Zig version, so we declare them directly against libc. Used only by
-// initMonotonicCondvar below.
-const pthread_condattr_t = opaque {};
-extern "c" fn pthread_condattr_init(attr: *pthread_condattr_t) c_int;
-extern "c" fn pthread_condattr_setclock(attr: *pthread_condattr_t, clock_id: c_int) c_int;
-extern "c" fn pthread_condattr_destroy(attr: *pthread_condattr_t) c_int;
-extern "c" fn pthread_cond_init(cond: *std.c.pthread_cond_t, attr: *const pthread_condattr_t) c_int;
-
-/// Re-initialises `cond` to use CLOCK_MONOTONIC as its clock, so that a
-/// subsequent `pthread_cond_timedwait` on it can use a monotonic deadline
-/// (immune to wall-clock adjustments). Must be called once before any
-/// timed wait; safe to call on a freshly zero-initialised pthread_cond_t.
+/// Blocking mutex backed by pthread_mutex_t; `.{}` is safe (= PTHREAD_MUTEX_INITIALIZER).
 ///
-/// This exists as a standalone helper because std.c does not expose
-/// pthread_condattr_t on this Zig version, so setting up a non-default
-/// clock requires eight lines of raw C interop: a stack-allocated opaque
-/// attr buffer, init/setclock/destroy calls, and the cond_init call itself.
-pub fn initMonotonicCondvar(cond: *std.c.pthread_cond_t) void {
-    var attr_buf: [64]u8 align(8) = @splat(0);
-    const attr: *pthread_condattr_t = @ptrCast(&attr_buf);
-    _ = pthread_condattr_init(attr);
-    _ = pthread_condattr_setclock(attr, @intFromEnum(std.os.linux.CLOCK.MONOTONIC));
-    _ = pthread_cond_init(cond, attr);
-    _ = pthread_condattr_destroy(attr);
-}
+/// Zig 0.16 removed std.Thread.Mutex/Condition (replaced by std.Io.Mutex,
+/// which requires threading an std.Io handle through every lock/unlock call
+/// site — too invasive for the small, self-contained locking bar.zig and
+/// carousel.zig need). This is a minimal handle-free substitute, shared
+/// between both instead of each defining its own copy.
+pub const Mutex = struct {
+    inner: std.c.pthread_mutex_t = .{},
+    pub fn lock(m: *Mutex) void {
+        _ = std.c.pthread_mutex_lock(&m.inner);
+    }
+    pub fn unlock(m: *Mutex) void {
+        _ = std.c.pthread_mutex_unlock(&m.inner);
+    }
+};
+
+/// Condition variable backed by pthread_cond_t; `.{}` is safe (= PTHREAD_COND_INITIALIZER).
+/// Call `initMonotonic()` on any instance that will use `timedWait`.
+pub const Condition = struct {
+    inner: std.c.pthread_cond_t = .{},
+
+    // pthread_condattr_t and related functions are not exposed by std.c on
+    // this Zig version, so they're declared directly against libc here.
+    const pthread_condattr_t = opaque {};
+    extern "c" fn pthread_condattr_init(attr: *pthread_condattr_t) c_int;
+    extern "c" fn pthread_condattr_setclock(attr: *pthread_condattr_t, clock_id: c_int) c_int;
+    extern "c" fn pthread_condattr_destroy(attr: *pthread_condattr_t) c_int;
+    extern "c" fn pthread_cond_init(cond: *std.c.pthread_cond_t, attr: *const pthread_condattr_t) c_int;
+
+    /// Re-initialises this condition variable to use CLOCK_MONOTONIC as its
+    /// clock, so that a subsequent `timedWait` can use a monotonic deadline
+    /// (immune to wall-clock adjustments). Must be called once before any
+    /// `timedWait` call; safe to call on a freshly zero-initialised instance,
+    /// and safe to call again later (e.g. on every config reload) as long as
+    /// no thread is currently blocked in `wait`/`timedWait` on it.
+    pub fn initMonotonic(c: *Condition) void {
+        var attr_buf: [64]u8 align(8) = @splat(0);
+        const attr: *pthread_condattr_t = @ptrCast(&attr_buf);
+        _ = pthread_condattr_init(attr);
+        _ = pthread_condattr_setclock(attr, @intFromEnum(std.os.linux.CLOCK.MONOTONIC));
+        _ = pthread_cond_init(&c.inner, attr);
+        _ = pthread_condattr_destroy(attr);
+    }
+
+    pub fn wait(c: *Condition, m: *Mutex) void {
+        _ = std.c.pthread_cond_wait(&c.inner, &m.inner);
+    }
+
+    /// Waits up to `timeout_ns` nanoseconds; returns error.Timeout on expiry.
+    /// Uses a CLOCK_MONOTONIC absolute deadline — requires that `initMonotonic()`
+    /// was called on this instance at startup.
+    pub fn timedWait(c: *Condition, m: *Mutex, timeout_ns: u64) error{Timeout}!void {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        // Saturating add prevents overflow when timeout_ns is near u64 max.
+        const new_nsec = @as(u64, @intCast(ts.nsec)) +| timeout_ns;
+        ts.sec += @intCast(new_nsec / std.time.ns_per_s);
+        ts.nsec = @intCast(new_nsec % std.time.ns_per_s);
+        const rc = std.c.pthread_cond_timedwait(&c.inner, &m.inner, @ptrCast(&ts));
+        if (rc == std.posix.E.TIMEDOUT) return error.Timeout;
+    }
+
+    pub fn signal(c: *Condition) void {
+        _ = std.c.pthread_cond_signal(&c.inner);
+    }
+    pub fn broadcast(c: *Condition) void {
+        _ = std.c.pthread_cond_broadcast(&c.inner);
+    }
+};
 
 /// Fetches an 8-bit X11 window property into a caller-supplied reuse buffer.
 /// Returns a slice into `buffer.items` on success, or null if the property is absent, empty, or not 8-bit encoded.
