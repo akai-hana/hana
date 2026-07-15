@@ -289,6 +289,80 @@ pub const Condition = struct {
     }
 };
 
+// Bounded collections
+//
+// Four call sites across the codebase (window.zig's focus-property cache and
+// child-window cache, minimize.zig's minimized-window record, input.zig's
+// pending-spawn table) each independently hand-rolled the same shape: a
+// fixed-capacity array plus a length, with linear-scan find, append, and
+// remove-and-compact. BoundedList consolidates that into one generic type so
+// a future fix to e.g. swap-remove semantics only needs to happen once.
+
+/// Generic fixed-capacity, allocation-free collection backed by a plain
+/// array. At the small counts these call sites deal with (tens to low
+/// hundreds of entries), a linear scan beats a hash table: cache-local,
+/// branch-predictor-friendly, and with no allocator or OOM error surface.
+pub fn BoundedList(comptime T: type, comptime capacity: usize) type {
+    return struct {
+        items: [capacity]T = undefined,
+        len: usize = 0,
+
+        const Self = @This();
+
+        /// Mutable view over the live portion of the backing array.
+        pub fn slice(self: *Self) []T {
+            return self.items[0..self.len];
+        }
+
+        /// Read-only view over the live portion of the backing array.
+        pub fn constSlice(self: *const Self) []const T {
+            return self.items[0..self.len];
+        }
+
+        /// Returns the index of the first item for which `match(context, item)`
+        /// is true, or null if none matches. `context` is typically the search
+        /// key (e.g. a window ID) and `match` a plain (non-closure) function —
+        /// the same context+comptime-predicate shape `std.sort.pdq` uses.
+        pub fn indexOf(self: *const Self, context: anytype, comptime match: fn (@TypeOf(context), T) bool) ?usize {
+            for (self.items[0..self.len], 0..) |item, i| {
+                if (match(context, item)) return i;
+            }
+            return null;
+        }
+
+        /// Appends `item` if there's room. Returns false and leaves the
+        /// collection untouched if full — callers decide whether a full
+        /// collection is worth a warning or a silent fallback.
+        pub fn append(self: *Self, item: T) bool {
+            if (self.len >= capacity) return false;
+            self.items[self.len] = item;
+            self.len += 1;
+            return true;
+        }
+
+        /// O(1) removal that does *not* preserve the relative order of the
+        /// remaining elements — the slot at `i` is filled with the current
+        /// last element. Use when ordering carries no meaning (caches, sets).
+        pub fn swapRemove(self: *Self, i: usize) void {
+            self.len -= 1;
+            self.items[i] = self.items[self.len];
+        }
+
+        /// O(n) removal that preserves the relative order of the remaining
+        /// elements. Use when insertion order is meaningful, e.g. LIFO/FIFO
+        /// replay.
+        pub fn orderedRemove(self: *Self, i: usize) void {
+            self.len -= 1;
+            std.mem.copyForwards(T, self.items[i..self.len], self.items[i + 1 .. self.len + 1]);
+        }
+
+        /// Resets to empty without touching capacity or contents of unused slots.
+        pub fn clear(self: *Self) void {
+            self.len = 0;
+        }
+    };
+}
+
 /// Fetches an 8-bit X11 window property into a caller-supplied reuse buffer.
 /// Returns a slice into `buffer.items` on success, or null if the property is absent, empty, or not 8-bit encoded.
 /// The buffer is cleared before each use, so the caller can allocate it once and pass it across repeated calls.

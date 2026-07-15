@@ -241,20 +241,23 @@ const CacheSlot = struct {
     props: CachedProps,
 };
 
-var cache_slots: [MAX_WINDOW_CACHE]CacheSlot = undefined;
-var cache_len: usize = 0;
+var cache_slots: utils.BoundedList(CacheSlot, MAX_WINDOW_CACHE) = .{};
 var cache_ready: bool = false;
+
+fn matchCacheSlotId(win: u32, slot: CacheSlot) bool {
+    return slot.id == win;
+}
 
 /// Initializes the per-window focus property cache.
 /// No allocator required — the backing store is a module-level static array.
 pub fn initInputModelCache() void {
-    cache_len = 0;
+    cache_slots.clear();
     cache_ready = true;
 }
 
 /// Cleans up the per-window focus property cache.
 pub fn deinitInputModelCache() void {
-    cache_len = 0;
+    cache_slots.clear();
     cache_ready = false;
 }
 
@@ -331,22 +334,14 @@ fn extractWMHintsInput(
 /// Swap-remove keeps the live region dense so subsequent scans stay short.
 pub inline fn uncacheWindowFocusProps(win: u32) void {
     if (!cache_ready) return;
-    for (cache_slots[0..cache_len], 0..) |slot, i| {
-        if (slot.id == win) {
-            cache_len -= 1;
-            cache_slots[i] = cache_slots[cache_len];
-            return;
-        }
-    }
+    if (cache_slots.indexOf(win, matchCacheSlotId)) |i| cache_slots.swapRemove(i);
 }
 
 /// Returns the cached focus properties for `win`, or null on a cache miss.
 inline fn getCachedProps(win: u32) ?CachedProps {
     if (!cache_ready) return null;
-    for (cache_slots[0..cache_len]) |slot| {
-        if (slot.id == win) return slot.props;
-    }
-    return null;
+    const i = cache_slots.indexOf(win, matchCacheSlotId) orelse return null;
+    return cache_slots.items[i].props;
 }
 
 /// Inserts or updates the cache entry for `win`.
@@ -354,16 +349,11 @@ inline fn getCachedProps(win: u32) ?CachedProps {
 /// Silently drops the entry when the cache is full — the live-query fallback is always correct.
 fn putCachedProps(win: u32, props: CachedProps) void {
     if (!cache_ready) return;
-    for (cache_slots[0..cache_len]) |*slot| {
-        if (slot.id == win) {
-            slot.props = props;
-            return;
-        }
+    if (cache_slots.indexOf(win, matchCacheSlotId)) |i| {
+        cache_slots.items[i].props = props;
+        return;
     }
-    if (cache_len < MAX_WINDOW_CACHE) {
-        cache_slots[cache_len] = .{ .id = win, .props = props };
-        cache_len += 1;
-    } else {
+    if (!cache_slots.append(.{ .id = win, .props = props })) {
         debug.warn("Focus cache full, falling back to live queries", .{});
     }
 }
@@ -616,33 +606,30 @@ const CHILD_CACHE_CAP: usize = 64;
 
 const ChildEntry = struct { child: u32, managed: u32 };
 
-var child_cache: [CHILD_CACHE_CAP]ChildEntry = undefined;
-var child_cache_len: usize = 0;
+var child_cache: utils.BoundedList(ChildEntry, CHILD_CACHE_CAP) = .{};
+
+fn matchChildEntry(child: u32, e: ChildEntry) bool {
+    return e.child == child;
+}
 
 /// Record that `child` resolves to `managed` so future tree walks are skipped.
 fn cacheChildWindow(child: u32, managed: u32) void {
     if (child == managed) return; // direct hit — not a child, nothing to cache
-    for (child_cache[0..child_cache_len]) |*e| {
-        if (e.child == child) {
-            e.managed = managed;
-            return;
-        } // update in place
+    if (child_cache.indexOf(child, matchChildEntry)) |i| {
+        child_cache.items[i].managed = managed; // update in place
+        return;
     }
-    if (child_cache_len < CHILD_CACHE_CAP) {
-        child_cache[child_cache_len] = .{ .child = child, .managed = managed };
-        child_cache_len += 1;
-    }
-    // At cap: silently drop — the tree walk fallback is always correct.
+    // At cap, append silently drops — the tree walk fallback is always correct.
+    _ = child_cache.append(.{ .child = child, .managed = managed });
 }
 
 /// Remove all entries whose managed toplevel is `managed_win`.
 /// Called from unmanageWindow so stale child entries don't linger.
 pub fn evictChildCache(managed_win: u32) void {
     var i: usize = 0;
-    while (i < child_cache_len) {
-        if (child_cache[i].managed == managed_win) {
-            child_cache_len -= 1;
-            child_cache[i] = child_cache[child_cache_len];
+    while (i < child_cache.len) {
+        if (child_cache.items[i].managed == managed_win) {
+            child_cache.swapRemove(i);
         } else {
             i += 1;
         }
@@ -662,13 +649,12 @@ pub fn findManagedWindow(conn: *xcb.xcb_connection_t, win: u32, is_managed: *con
     if (is_managed(win)) return win;
 
     // Fast path: child-window cache hit (common for Electron/Qt after first hover).
-    for (child_cache[0..child_cache_len]) |e| {
-        if (e.child == win) {
-            // Validate: if the cached managed window was since unmanaged (race),
-            // is_managed will return false and we fall through to the tree walk.
-            if (is_managed(e.managed)) return e.managed;
-            break; // stale entry — fall through to tree walk
-        }
+    if (child_cache.indexOf(win, matchChildEntry)) |i| {
+        // Validate: if the cached managed window was since unmanaged (race),
+        // is_managed will return false and we fall through to the tree walk.
+        const managed = child_cache.items[i].managed;
+        if (is_managed(managed)) return managed;
+        // stale entry — fall through to tree walk
     }
 
     // Slow path: walk the X11 window tree. Each iteration is one blocking

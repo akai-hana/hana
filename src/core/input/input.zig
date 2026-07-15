@@ -452,29 +452,15 @@ const PendingSpawn = struct {
 };
 
 // std.BoundedArray was removed from the standard library (gone as of the
-// Zig 0.16 toolchain this project targets), so a minimal local stand-in is
-// unavoidable here rather than optional. Kept deliberately small: no
-// AutoHashMap-esque hidden allocations, just a fixed buffer and length.
-fn BoundedArray(comptime T: type, comptime cap: usize) type {
-    return struct {
-        buffer: [cap]T = undefined,
-        len: usize = 0,
-        pub fn appendAssumeCapacity(self: *@This(), item: T) void {
-            self.buffer[self.len] = item;
-            self.len += 1;
-        }
-        pub fn slice(self: *@This()) []T {
-            return self.buffer[0..self.len];
-        }
-    };
-}
-
-var g_pending: BoundedArray(PendingSpawn, MAX_PENDING_SPAWNS) = .{};
+// Zig 0.16 toolchain this project targets); utils.BoundedList is the shared
+// fixed-buffer-plus-length stand-in used everywhere this shape is needed, so
+// there's no longer a local reimplementation here.
+var g_pending: utils.BoundedList(PendingSpawn, MAX_PENDING_SPAWNS) = .{};
 
 /// Swap-removes the entry at `i`; caller must `continue` the drain loop after.
+/// Order doesn't matter here — pending spawns aren't replayed in sequence.
 inline fn removePending(i: usize) void {
-    g_pending.len -= 1;
-    if (i != g_pending.len) g_pending.buffer[i] = g_pending.buffer[g_pending.len];
+    g_pending.swapRemove(i);
 }
 
 /// Spawns `cmd` as a detached grandchild (double-fork). Returns immediately —
@@ -524,15 +510,14 @@ fn executeShellCommand(cmd: []const u8) !void {
     // spawn-crossing suppression. Reply is drained lazily by mapWindowToScreen.
     window.prefetchSpawnPointer();
 
-    if (g_pending.len < MAX_PENDING_SPAWNS) {
-        g_pending.appendAssumeCapacity(.{
-            .pid = pid,
-            .pid_fd = pid_fds[0],
-            .exec_fd = exec_fds[0],
-            .grandchild = -1,
-            .spawn_ws = spawn_ws,
-        });
-    } else {
+    const queued = g_pending.append(.{
+        .pid = pid,
+        .pid_fd = pid_fds[0],
+        .exec_fd = exec_fds[0],
+        .grandchild = -1,
+        .spawn_ws = spawn_ws,
+    });
+    if (!queued) {
         // Table full: close the read ends we won't track.
         _ = c.close(pid_fds[0]);
         _ = c.close(exec_fds[0]);
