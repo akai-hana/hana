@@ -506,9 +506,10 @@ fn executeShellCommand(cmd: []const u8) !void {
     _ = c.close(exec_fds[1]);
     _ = c.close(pid_fds[1]);
 
-    // Fire xcb_query_pointer now to snapshot cursor position for
-    // spawn-crossing suppression. Reply is drained lazily by mapWindowToScreen.
-    window.prefetchSpawnPointer();
+    // Cursor position for spawn-crossing suppression is queried synchronously
+    // by window.mapWindowToScreen when the MapRequest actually arrives, rather
+    // than prefetched here at key-press time: MapRequest is a one-time event
+    // per window, so that round-trip isn't worth pipelining ahead of time.
 
     const queued = g_pending.append(.{
         .pid = pid,
