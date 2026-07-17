@@ -309,8 +309,9 @@ fn handleXcbEvents() void {
 
     // Drain any spawn pipes that became readable during this event batch.
     // This catches the common case where SIGCHLD and the MapRequest arrive in
-    // the same poll wakeup: exec_pipe EOF will be readable before SIGCHLD fires,
-    // so registerSpawn runs before handleMapRequest needs the spawn queue entry.
+    // the same poll wakeup: the spawn pipe's EOF will be readable before
+    // SIGCHLD fires, so registerSpawn runs before handleMapRequest needs the
+    // spawn queue entry.
     input.drainPendingSpawns();
 
     tiling.retileIfDirty();

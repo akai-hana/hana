@@ -61,10 +61,11 @@ const MAX_WINDOW_TREE_DEPTH = constants.MAX_WINDOW_TREE_DEPTH;
 // Lives here (window.zig) because it is exclusively accessed by this module.
 //
 // Implemented as a module-level std.ArrayListUnmanaged so there is one logical
-// allocation rather than two (the old design heap-allocated a SpawnQueue node
-// that itself heap-allocated its backing slice, plus stored a redundant alloc
-// field).  The allocator is stored once at module level (g_alloc) and used for
-// both the spawn queue and any other window-module lifetime allocations.
+// allocation rather than two: a heap-allocated node with its own
+// heap-allocated backing slice, plus a redundant alloc field, would cost an
+// extra allocation for no benefit.  The allocator is stored once at module
+// level (g_alloc) and used for both the spawn queue and any other
+// window-module lifetime allocations.
 //
 // The list is capped at SPAWN_QUEUE_CAP entries.  Exceeding the cap logs an
 // error and drops the entry; it never terminates the process.
@@ -642,9 +643,9 @@ pub fn evictChildCache(managed_win: u32) void {
 /// rendering, so button events may arrive on a child rather than the managed parent.
 ///
 /// Fast path: checks the child-window cache first. On a hit, returns the cached
-/// managed ancestor with zero XCB calls — eliminating the 2–3 blocking
-/// xcb_query_tree round-trips that previously fired on every hover over an
-/// Electron/Qt child window.
+/// managed ancestor with zero XCB calls, avoiding the 2–3 blocking
+/// xcb_query_tree round-trips that a full tree walk on every hover over an
+/// Electron/Qt child window would otherwise cost.
 pub fn findManagedWindow(conn: *xcb.xcb_connection_t, win: u32, is_managed: *const fn (u32) bool) u32 {
     // Fast path: direct managed window (most common case — no child involved).
     if (is_managed(win)) return win;
@@ -693,7 +694,8 @@ fn populateAtomCache() void {
 /// (Re)build the workspace-rule fast-lookup map from the current config.
 /// Keys are borrowed slices pointing into the config's allocations and remain
 /// valid until the next rebuild.  If a class name appears in multiple rules,
-/// the first rule wins (consistent with the old linear scan).
+/// the first rule wins, matching the semantics of a plain linear scan through
+/// the rule list.
 pub fn buildRulesMap() void {
     const alloc = g_alloc orelse return;
     g_rules_map.clearRetainingCapacity();
@@ -986,8 +988,8 @@ fn snapshotSpawnCursorFromReply(ptr_reply: ?*xcb.xcb_query_pointer_reply_t, supp
 ///
 /// On weak hardware, retileCurrentWorkspace can take 5–20 ms for a full
 /// workspace.  Moving it outside the grab means the X server and compositor
-/// are not locked for that duration, eliminating the compositor stall that
-/// previously caused visible frame drops on every spawn.
+/// are not locked for that duration, avoiding the compositor stall that
+/// would otherwise cause visible frame drops on every spawn.
 fn mapWindowToScreen(win: u32) void {
     const cs = core.getState();
     const conn = cs.conn;
@@ -1143,12 +1145,12 @@ fn unmanageWindow(win: u32) void {
     evictChildCache(win);
 
     // Fire the pointer query and drain the reply *before* grabbing the
-    // server.  The old code fired the cookie here but drained the reply
-    // inside focusWindowUnderPointer (via xcb_query_pointer_reply), which
-    // caused an implicit XCB output-buffer flush inside the grab — releasing
-    // all queued configure_window / set_input_focus requests to the
-    // compositor before xcb_ungrab_server.  Pre-draining here keeps the
-    // grab atomic.  The pointer position is at most microseconds staler.
+    // server.  Draining the reply inside the grab (e.g. from within
+    // focusWindowUnderPointer via xcb_query_pointer_reply) would trigger an
+    // implicit XCB output-buffer flush inside the grab — releasing all
+    // queued configure_window / set_input_focus requests to the compositor
+    // before xcb_ungrab_server.  Pre-draining here keeps the grab atomic.
+    // The pointer position is at most microseconds staler.
     const ptr_reply: ?*xcb.xcb_query_pointer_reply_t = if (was_focused) blk: {
         const cookie = xcb.xcb_query_pointer(cs.conn, cs.root);
         break :blk xcb.xcb_query_pointer_reply(cs.conn, cookie, null);
@@ -1157,9 +1159,9 @@ fn unmanageWindow(win: u32) void {
 
     _ = xcb.xcb_grab_server(cs.conn);
 
-    // tiling.removeWindow now unconditionally evicts the combined cache entry
-    // (geometry + border + size hints), so the separate evictSizeHints call
-    // that previously existed here is no longer needed.
+    // tiling.removeWindow unconditionally evicts the combined cache entry
+    // (geometry + border + size hints), so no separate evictSizeHints call
+    // is needed here.
     tiling.removeWindow(win);
     minimize.untrackWindow(win);
     wsRemoveWindow(win);
@@ -1294,9 +1296,10 @@ fn sendConfigureNotify(win: u32, geom: WindowGeometry) void {
 ///      (x=0, y=0, width=screen_width, height=screen_height, border_width=0).
 ///      The tiling cache for a fullscreen window is intentionally invalidated on
 ///      enter (so retile skips it), so path 1 misses and we arrive here.
-///      Previously this fell through to the blocking xcb_get_geometry path,
-///      costing one server round-trip per ConfigureRequest — a problem for
-///      video players and screensavers that poll their size continuously.
+///      Handling it directly here avoids falling through to the blocking
+///      xcb_get_geometry path, which would cost one server round-trip per
+///      ConfigureRequest — a problem for video players and screensavers that
+///      poll their size continuously.
 ///
 ///   3. True cache miss — one blocking xcb_get_geometry round-trip.  This should
 ///      only occur for floating windows that have never been retiled and are not
@@ -1415,9 +1418,9 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
 inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
     if (focus.getSuppressReason() != .window_spawn) return false;
     // Consume the suppression flag unconditionally: it is a one-shot guard that
-    // only applies to the first crossing event after a spawn.  Previously the
-    // flag was only cleared when the cursor had moved, which could suppress all
-    // future hover-focus events if the cursor stayed at the exact spawn pixel.
+    // only applies to the first crossing event after a spawn.  Clearing it
+    // only when the cursor had moved would instead suppress all future
+    // hover-focus events if the cursor stayed at the exact spawn pixel.
     focus.setSuppressReason(.none);
     return root_x == spawn_cursor.x and root_y == spawn_cursor.y;
 }
@@ -1513,9 +1516,10 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
 
     if (event.atom != atoms.wm_protocols and event.atom != xcb.XCB_ATOM_WM_HINTS) return;
     // Re-query and store the updated focus properties in the window-level cache
-    // (CacheSlot array).  Calling focus.invalidateInputModelCache only cleared
-    // focus.zig's side, leaving the CacheSlot stale until the window was
-    // destroyed — so future getCachedProps hits would return the old model.
+    // (CacheSlot array).  focus.invalidateInputModelCache only clears
+    // focus.zig's side; without this call the CacheSlot would stay stale
+    // until the window is destroyed, and future getCachedProps hits would
+    // return an outdated model.
     _ = queryAndCacheProps(conn, event.window);
 }
 

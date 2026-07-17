@@ -443,7 +443,8 @@ const State = struct {
             debug.warnOnErr(e, "drawClockOnly");
         // renderOnly() flushes Cairo to the off-screen pixmap; blitAndFlush()
         // copies only the clock region to the window and calls xcb_flush.
-        // This replaces the old blit() + main-thread xcb_flush pattern.
+        // Splitting the flush this way avoids a full-window blit plus a
+        // separate main-thread xcb_flush call.
         self.render.dc.renderOnly();
         self.render.dc.blitAndFlush(clock_x, self.layout_cache.clock_width);
     }
@@ -675,8 +676,8 @@ fn submitDrawBlockingFull() void {
 }
 
 /// Invalidates the title carousel cache and triggers a full redraw.
-/// Replaces the three repeated (is_invalidated = true; submitDrawBlockingFull())
-/// pairs in setBarState and applyReload with a single named call site.
+/// Shared by setBarState and applyReload, which would otherwise each repeat
+/// an (is_invalidated = true; submitDrawBlockingFull()) pair inline.
 fn submitFullRedrawWithCarouselReset(s: *State) void {
     s.title_cache.is_invalidated = true;
     submitDrawBlockingFull();
@@ -686,9 +687,8 @@ inline fn ungrabAndFlush() void {
     utils.ungrabAndFlush(core.getState().conn);
 }
 
-/// Draws and blits to the window. Historically distinguished from submitDraw
-/// by waiting for a separate render thread to finish; now that drawing always
-/// happens inline on the calling thread, both are the same call.
+/// Draws and blits to the window. Drawing always happens inline on the
+/// calling thread, so this is identical to submitDraw.
 pub fn submitDrawBlocking() void {
     performDraw(true);
 }

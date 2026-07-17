@@ -30,9 +30,9 @@ pub fn tileWithOffset(
     // window not in this workspace's list, fall back to the list tail so that
     // monocle still shows *something* rather than raising nothing.
     //
-    // The old behaviour of unconditionally using windows[len-1] was wrong:
-    // closing the visible window in monocle could surface an arbitrary background
-    // window instead of the one the user previously interacted with.
+    // Falling back to windows[len-1] unconditionally would be wrong: closing
+    // the visible window in monocle could then surface an arbitrary background
+    // window instead of the one the user last interacted with.
     const top_win: u32 = blk: {
         if (ctx.focused_win) |f| {
             for (windows) |w| {
@@ -60,9 +60,9 @@ pub fn tileWithOffset(
 /// `restoreWorkspaceGeom` does not replay a stale on-screen position.
 ///
 /// Accepts the full `windows` slice and skips `top_win` by ID rather than
-/// requiring the caller to pre-slice — this avoids the previous assumption that
-/// top_win is always the last element, which was no longer true once focus-
-/// tracking was introduced.
+/// requiring the caller to pre-slice — top_win may be anywhere in the slice
+/// once focus-tracking is taken into account, not necessarily the last
+/// element.
 fn pushBackgroundWindowsOffscreen(
     ctx: *const layouts.LayoutCtx,
     windows: []const u32,

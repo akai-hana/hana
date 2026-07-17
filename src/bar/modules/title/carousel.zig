@@ -509,9 +509,10 @@ fn buildCarouselEntry(
 /// This distributes 0 px and 1 px advances evenly across frames (Bresenham
 /// pattern) rather than clustering all the fractional debt into occasional
 /// larger jumps.  At 125 px/s on a 165 Hz display the raw advance is
-/// ≈0.758 px/frame; the old floor() approach produced a freeze every ~4–5
-/// frames followed by a 1 px snap.  The accumulator ensures every frame moves
-/// either 0 or 1 px in an optimally spaced sequence with no clustering.
+/// ≈0.758 px/frame; simply flooring that value each frame would instead
+/// produce a freeze every ~4–5 frames followed by a 1 px snap.  The
+/// accumulator ensures every frame moves either 0 or 1 px in an optimally
+/// spaced sequence with no clustering.
 ///
 /// Caller must hold a mutable pointer to the entry (`*CarouselEntry`).
 fn advanceCarouselOffset(e: *CarouselEntry, now_ns: u64) u16 {

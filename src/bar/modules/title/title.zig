@@ -70,8 +70,9 @@ const WindowInfo = struct {
 /// Constructed once per bar frame and shared between `draw()` and
 /// `drawCached()`. `cached_title` / `cached_title_window` are left at their
 /// null default on the `drawCached()` path, which never updates the cache —
-/// only `draw()` passes them, merging what used to be a separate `TitleCache`
-/// struct that every caller had to construct and pass alongside this one.
+/// only `draw()` passes them. Folding the cache fields directly into this
+/// struct avoids a separate `TitleCache` struct that every caller would
+/// otherwise have to construct and pass alongside this one.
 pub const TitleRenderContext = struct {
     dc: *drawing.DrawContext,
     config: types.BarConfig,
@@ -116,9 +117,9 @@ pub const TitleSnapshot = struct {
 // Private helpers
 
 /// Extract a UTF-8 string from an XCB get_property reply and dupe it into
-/// `allocator`. Returns null when the reply carries no bytes, avoiding the
-/// identical three-line extract-and-dupe block that was previously written
-/// in both Phase 2 and Phase 3 of drawSegmentedTitles.
+/// `allocator`. Returns null when the reply carries no bytes. Shared by
+/// Phase 2 and Phase 3 of drawSegmentedTitles instead of duplicating an
+/// identical three-line extract-and-dupe block in each.
 fn extractPropertyString(
     r: *xcb.xcb_get_property_reply_t,
     allocator: std.mem.Allocator,

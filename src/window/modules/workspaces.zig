@@ -108,11 +108,11 @@ fn layoutFromName(name: []const u8) TilingLayout {
 /// Initializes global workspace state.  Returns error.OutOfMemory if the
 /// workspace slice cannot be allocated; callers should treat this as fatal.
 pub fn init() !void {
-    // Runtime equivalent of the old has_workspaces build flag: collapse to a
-    // single implicit workspace. Every switch/tag/move action already
-    // no-ops on an out-of-range target (see the `target_ws >= s.workspaces.len`
-    // guards below), so this one line reproduces the old "absent" behavior
-    // without any further branching elsewhere.
+    // When workspaces are disabled, collapse to a single implicit workspace.
+    // Every switch/tag/move action already no-ops on an out-of-range target
+    // (see the `target_ws >= s.workspaces.len` guards below), so this one
+    // line reproduces the "disabled" behavior without any further branching
+    // elsewhere.
     const cs = core.getState();
     const count = if (cs.config.workspaces.enabled) cs.config.workspaces.count else 1;
     const wss = try cs.alloc.alloc(Workspace, count);

@@ -51,7 +51,7 @@ var clock_thread: ?std.Thread = null;
 
 /// Returns the current CLOCK_REALTIME timespec.
 /// Analogous to `monotonicTs()` in utils.zig; centralises the two-line
-/// clock_gettime call that previously appeared three times in this file.
+/// clock_gettime call shared by every caller in this file.
 inline fn realtimeTs() std.os.linux.timespec {
     var ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(.REALTIME, &ts);

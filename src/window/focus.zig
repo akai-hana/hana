@@ -684,9 +684,10 @@ pub fn drainPointerSync() void {
     defer std.c.free(reply);
     const child = reply.*.child;
     if (child == 0 or child == cs.root or !window.isValidManagedWindow(child)) return;
-    // BUG FIX: if the stale pointer reply contains a window from a workspace
-    // that is no longer current (e.g., the reply was fired before a workspace
-    // switch), silently discard it — do not redirect focus to an offscreen window.
+    // A stale pointer reply may reference a window from a workspace that is
+    // no longer current (e.g., if the reply arrives after a workspace
+    // switch); silently discard it in that case — do not redirect focus to
+    // an offscreen window.
     if (!tracking.isOnCurrentWorkspace(child)) return;
     setFocus(child, .pointer_sync);
 }

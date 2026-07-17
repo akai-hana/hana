@@ -205,7 +205,7 @@ pub inline fn ungrabAndFlush(conn: *xcb.xcb_connection_t) void {
 /// Creates a pipe with O_NONBLOCK | O_CLOEXEC on both ends via pipe2(2).
 ///
 /// Shared by input.zig (double-fork spawn plumbing) and events.zig (signal
-/// self-pipe) — both previously defined byte-equivalent copies of this.
+/// self-pipe), avoiding byte-equivalent copies of this in each.
 pub fn makePipe() ![2]std.posix.fd_t {
     var fds: [2]std.posix.fd_t = undefined;
     const flags = std.os.linux.O{ .CLOEXEC = true, .NONBLOCK = true };
