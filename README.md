@@ -125,6 +125,6 @@ apt install libgtk-3-dev xorg-dev libxcb-cursor-dev libxcb-keysyms1-dev libxkbco
 
 <div align="center">
 
-made with <3 by akai_hana
+</> with <3 by akai_hana
 
 </div>
