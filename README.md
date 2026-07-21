@@ -5,8 +5,6 @@
 
 ![](https://raw.githubusercontent.com/hana-wm/hana/dev/dev/demonstration.gif)
 
-<sub>*TODO: replace this with a tiling demonstration gif*</sub>
-
 </div>
 
 > [!NOTE]
