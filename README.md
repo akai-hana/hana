@@ -119,7 +119,7 @@ zig build
 apt install libgtk-3-dev xorg-dev libxcb-cursor-dev libxcb-keysyms1-dev libxkbcommon-x11-dev
 ```
 
-`#`
+*more distros later :)*
 
 ---
 
