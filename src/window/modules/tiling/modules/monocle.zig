@@ -23,24 +23,26 @@ pub fn tileWithOffset(
     const inset: u16 = if (state.config.layout_variants.monocle == .gaps) m.gap else 0;
     const total_margin = m.border * 2 + inset * 2;
 
-    // Raise the focused window if it's present in this workspace (ctx.focused_win
-    // is null when, e.g., restoreWorkspaceGeom builds a bare LayoutCtx without
-    // focus info); otherwise fall back to the list tail. The naive "always use
-    // the tail" would be wrong on close: closing the visible window should
-    // surface the window the user last focused, not an arbitrary background one.
+    // Pick the top (visible) window: prefer the focused window, falling back
+    // to the list tail if focus info is unavailable. On close, this ensures
+    // the last-focused window resurfaces rather than an arbitrary one.
     //
-    // Note: a focus change alone doesn't retile — monocle hides windows by
-    // pushing them offscreen (pushBackgroundWindowsOffscreen below), not by
-    // lowering stack order, so a plain raise is a no-op here. tiling.zig's
-    // snapScrollToFocused() must retile on every focus-cycle keypress (it
-    // special-cases .monocle) for this to actually swap the visible window.
+    // A focus change alone doesn't retile, since monocle hides windows via
+    // offscreen positioning rather than stack order — snapScrollToFocused()
+    // in tiling.zig retiles on focus-cycle keypresses to compensate.
     const top_win: u32 = blk: {
+        // A brand-new window has no cache entry yet. Prefer it over a
+        // possibly-stale ctx.focused_win, which may not have caught up to
+        // the new window yet — otherwise it gets pushed offscreen below.
+        const tail = windows[windows.len - 1];
+        if (ctx.cache.get(tail) == null) break :blk tail;
+
         if (ctx.focused_win) |f| {
             for (windows) |w| {
                 if (w == f) break :blk f;
             }
         }
-        break :blk windows[windows.len - 1];
+        break :blk tail;
     };
 
     const top_rect = utils.Rect{
@@ -55,15 +57,10 @@ pub fn tileWithOffset(
     pushBackgroundWindowsOffscreen(ctx, windows, top_win);
 }
 
-/// Push all windows except `top_win` off the visible screen area so they never
-/// show through a transparent top window.  Skips windows already known to be
-/// offscreen to avoid redundant round-trips; invalidates their cache rect so
-/// `restoreWorkspaceGeom` does not replay a stale on-screen position.
-///
-/// Accepts the full `windows` slice and skips `top_win` by ID rather than
-/// requiring the caller to pre-slice — top_win may be anywhere in the slice
-/// once focus-tracking is taken into account, not necessarily the last
-/// element.
+/// Push all windows except `top_win` offscreen so they never show through a
+/// transparent top window. Skips windows already offscreen to avoid redundant
+/// round-trips, and invalidates their cached rect so `restoreWorkspaceGeom`
+/// doesn't replay a stale on-screen position.
 fn pushBackgroundWindowsOffscreen(
     ctx: *const layouts.LayoutCtx,
     windows: []const u32,
