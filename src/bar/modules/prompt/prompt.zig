@@ -333,7 +333,7 @@ pub fn draw(
     current_ws_wins: []const u32,
     minimized_set: *const std.AutoHashMapUnmanaged(u32, void),
     titles: []const []const u8,
-    cached_title: *std.ArrayList(u8),
+    cached_title: *std.ArrayListUnmanaged(u8),
     cached_title_window: *?u32,
     title_invalidated: bool,
     allocator: std.mem.Allocator,

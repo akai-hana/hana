@@ -6,7 +6,6 @@ const std = @import("std");
 const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
-const constants = @import("constants");
 const scale = @import("scale");
 const debug = @import("debug");
 
@@ -156,11 +155,8 @@ const WindowCtx = struct {
     win_id: u32,
     colormap: u32,
     net_wm_name_atom: xcb.xcb_atom_t,
-    last_monitored_window: ?u32 = null,
 
     fn deinit(self: *WindowCtx) void {
-        if (self.last_monitored_window) |win|
-            _ = xcb.xcb_change_window_attributes(self.conn, win, xcb.XCB_CW_EVENT_MASK, &[_]u32{constants.EventMasks.MANAGED_WINDOW});
         if (self.colormap != 0) _ = xcb.xcb_free_colormap(self.conn, self.colormap);
     }
 };
@@ -315,6 +311,19 @@ const State = struct {
         };
     }
 
+    /// Draws `segment`, catching and logging any error instead of propagating it.
+    /// On failure, returns `x` unchanged — the same signal drawSegment's callers
+    /// already use for "this segment drew nothing" — so a single broken segment
+    /// (bad config value, transient allocation failure, ...) can neither corrupt
+    /// the layout of the segments around it nor abort the rest of the frame,
+    /// leaving the off-screen pixmap partially drawn and never blitted.
+    fn drawSegmentSafe(self: *State, snap: *const BarSnapshot, segment: types.BarSegment, x: u16, width: ?u16) u16 {
+        return self.drawSegment(snap, segment, x, width) catch |e| {
+            debug.warnOnErr(e, "bar drawSegment");
+            return x;
+        };
+    }
+
     /// Returns true when `seg` should be skipped because its data has not changed
     /// since the last frame and a full redraw is not required.
     inline fn shouldSkipSegment(snap: *const BarSnapshot, seg: types.BarSegment) bool {
@@ -340,7 +349,7 @@ const State = struct {
             right_x -= seg_w;
             if (pending_gap) right_x -= scaled_spacing;
             if (segments[i] == .clock) self.layout_cache.clock_x = right_x;
-            const drew_to = try self.drawSegment(snap, segments[i], right_x, null);
+            const drew_to = self.drawSegmentSafe(snap, segments[i], right_x, null);
             const drew = drew_to != right_x;
 
             if (drew and pending_gap) {
@@ -402,7 +411,7 @@ const State = struct {
                         continue;
                     }
                     const x_before = x;
-                    x = try self.drawSegment(snap, seg, x, null);
+                    x = self.drawSegmentSafe(snap, seg, x, null);
                     if (x != x_before) {
                         self.render.dc.fillRect(x, 0, scaled_spacing, self.render.height, self.render.config.bg);
                         x += scaled_spacing;
@@ -422,7 +431,7 @@ const State = struct {
                             continue;
                         }
                         const x_before = x;
-                        x = try self.drawSegment(snap, seg, x, w);
+                        x = self.drawSegmentSafe(snap, seg, x, w);
                         if (seg != .title and x != x_before) {
                             self.render.dc.fillRect(x, 0, scaled_spacing, self.render.height, self.render.config.bg);
                             x += scaled_spacing;
@@ -1177,11 +1186,17 @@ fn isTilingActive() bool {
 fn retileAllWorkspaces(effective_visible: bool) void {
     // Temporarily expose the effective visibility so tiling code that reads
     // isVisible() sees the intended value rather than the transitional state.
-    if (gBar.state) |st| {
-        const saved = st.is_visible;
-        st.is_visible = effective_visible;
-        defer st.is_visible = saved;
-    }
+    //
+    // NOTE: the save/restore is scoped to the whole function, not to this
+    // `if` block — a `defer` written inside `if (gBar.state) |st| { ... }`
+    // would fire as soon as that block ends (i.e. immediately, before any
+    // retiling below runs), which would silently defeat this override.
+    const st_opt = gBar.state;
+    const saved_visible = if (st_opt) |st| st.is_visible else false;
+    if (st_opt) |st| st.is_visible = effective_visible;
+    defer if (st_opt) |st| {
+        st.is_visible = saved_visible;
+    };
     if (!core.getState().config.workspaces.enabled) {
         tiling.retileCurrentWorkspace();
         return;
