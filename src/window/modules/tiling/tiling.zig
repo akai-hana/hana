@@ -438,6 +438,26 @@ pub fn retileCurrentWorkspaceDeferred(defer_win: ?u32) void {
     s.is_dirty = false;
 }
 
+/// Like retileCurrentWorkspace, but overrides LayoutCtx.focused_win with
+/// `pending_focus` instead of reading focus.getFocused().
+///
+/// Used by window.zig's spawn path: a newly-mapped window is retiled before
+/// focus.setFocus runs on it (retiling is deliberately kept outside the
+/// atomic map/focus/border grab — see mapWindowToScreen), so
+/// focus.getFocused() would still report the previously-focused window at
+/// retile time. Passing the spawning window here keeps focus-driven layouts
+/// (e.g. monocle raising the focused window) in sync with the window that is
+/// about to actually receive focus, instead of lagging by one retile.
+pub fn retileCurrentWorkspaceWithPendingFocus(pending_focus: u32) void {
+    const s = getState();
+    if (!s.is_enabled) {
+        _ = restoreWorkspaceGeom();
+        return;
+    }
+    retileImpl(calcScreenArea(), .{ .focus_override = pending_focus });
+    s.is_dirty = false;
+}
+
 /// Retile the current workspace only when state has been marked dirty.
 pub fn retileIfDirty() void {
     const s = getState();
@@ -1057,6 +1077,11 @@ const RetileOpts = struct {
     /// configure_window call lands last within whatever column/stack group it
     /// belongs to. Used by swap_master to eliminate the one-frame wallpaper gap.
     defer_win: ?u32 = null,
+    /// When non-null, overrides LayoutCtx.focused_win instead of reading
+    /// focus.getFocused(). Used by the spawn path (retileCurrentWorkspaceWithPendingFocus)
+    /// to hand a freshly-mapped window to the layout before focus.setFocus
+    /// has actually run on it.
+    focus_override: ?u32 = null,
 };
 
 /// Single implementation underlying every public retile entry point.
@@ -1075,6 +1100,7 @@ fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
     var deferred: ?utils.Rect = null;
     var ctx = makeLayoutCtx(s, &deferred);
     ctx.defer_win = opts.defer_win;
+    if (opts.focus_override) |f| ctx.focused_win = f;
 
     const wss = workspaces.getState();
 

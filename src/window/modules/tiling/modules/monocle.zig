@@ -27,22 +27,19 @@ pub fn tileWithOffset(
     // to the list tail if focus info is unavailable. On close, this ensures
     // the last-focused window resurfaces rather than an arbitrary one.
     //
-    // A focus change alone doesn't retile, since monocle hides windows via
+    // (A focus change alone doesn't retile, since monocle hides windows via
     // offscreen positioning rather than stack order — snapScrollToFocused()
-    // in tiling.zig retiles on focus-cycle keypresses to compensate.
+    // in tiling.zig retiles on focus-cycle keypresses to compensate. On
+    // spawn, window.zig's mapWindowToScreen passes the new window in as
+    // ctx.focused_win via retileCurrentWorkspaceWithPendingFocus, since
+    // focus.setFocus for it hasn't run yet at retile time.)
     const top_win: u32 = blk: {
-        // A brand-new window has no cache entry yet. Prefer it over a
-        // possibly-stale ctx.focused_win, which may not have caught up to
-        // the new window yet — otherwise it gets pushed offscreen below.
-        const tail = windows[windows.len - 1];
-        if (ctx.cache.get(tail) == null) break :blk tail;
-
         if (ctx.focused_win) |f| {
             for (windows) |w| {
                 if (w == f) break :blk f;
             }
         }
-        break :blk tail;
+        break :blk windows[windows.len - 1];
     };
 
     const top_rect = utils.Rect{

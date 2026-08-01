@@ -929,9 +929,15 @@ fn mapWindowToScreen(win: u32) void {
     // but the grab below immediately follows and will issue the final correct
     // geometry atomically before the first MapNotify, so no incorrect frame
     // is ever displayed to the user.
+    //
+    // focus.setFocus(win, ...) below hasn't run yet at this point, so
+    // focus.getFocused() would still report the previously-focused window.
+    // Pass `win` explicitly as the pending focus target so focus-driven
+    // layouts (e.g. monocle) treat the new window as focused immediately,
+    // instead of lagging by one retile.
     if (tilingActive()) {
         tiling.addWindow(win);
-        tiling.retileCurrentWorkspace();
+        tiling.retileCurrentWorkspaceWithPendingFocus(win);
     } else {
         if (fullscreen.hasAnyFullscreen()) {
             utils.pushWindowOffscreen(conn, win);
