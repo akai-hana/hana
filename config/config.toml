@@ -168,8 +168,8 @@ Mod+Shift+B = "toggle_bar_position"    # top/bottom
 Mod+A       = "MOZ_USE_XINPUT2=1 firefox"
 Mod+Shift+A = "~/.local/bin/firefox-sync.sh xpmraevm.default-default; {kill} firefox"
 
-Mod+S       = "flatpak run org.equicord.equibop"
-Mod+Shift+S = "{kill} equibop"
+Mod+S       = "equibop"
+Mod+Shift+S = "{kill} electron"
 
 Mod+D       = "ghostty"
 Mod+I       = "xeyes"
@@ -178,8 +178,8 @@ Mod+Shift+D = "{kill} ghostty"
 #Mod+Z       = "flatpak run com.valvesoftware.Steam steam://rungameid/881100" # Noita
 #Mod+Shift+Z = "pkill noita"
 
-# Minecraft Beta
-Mod+Z = "distrobox enter aur -- prismlauncher"
+# Minecraft
+Mod+Z = "prismlauncher"
 Mod+Shift+Z = "distrobox enter aur -- ~/Games/factorio-vanilla"
 
 # Mod+Z       = "cd ~/Games/isaac-repentance+; wine isaac-ng.exe"
