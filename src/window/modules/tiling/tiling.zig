@@ -71,9 +71,8 @@ pub const LayoutVariants = struct {
     grid: GridVariant = .rigid,
 };
 
-/// Scroll-layout runtime state. Now defined in scroll.zig (alongside the
-/// scroll layout's other logic); re-exported here under its original name
-/// so `tiling.ScrollState` call sites are unaffected.
+/// Scroll-layout runtime state, defined in scroll.zig alongside the scroll
+/// layout's other logic, re-exported here as `tiling.ScrollState`.
 pub const ScrollState = scroll.State;
 
 /// Layout configuration: all user-adjustable parameters that control which
@@ -549,8 +548,7 @@ pub fn restoreWorkspaceGeom() bool {
         wd_ptrs[i] = wd;
     }
 
-    // Pass 2 — configure + border in one loop (replaces the previous separate
-    // configureWindow pass and updateBorders pass).
+    // Pass 2 — configure and apply border color in a single loop.
     const conn = core.getState().conn;
     for (ws_windows, wd_ptrs[0..ws_windows.len]) |win, wd| {
         utils.configureWindow(conn, win, wd.rect);
@@ -805,11 +803,10 @@ const layout_cycle_array: [types.LAYOUT_TABLE.len]Layout = blk: {
 const layout_cycle: []const Layout = &layout_cycle_array;
 
 /// Resolves a config-file layout name (canonical or alias, e.g. "master-stack",
-/// "master", "monocle") to its `Layout` tag. Driven by types.LAYOUT_TABLE — the
+/// "master", "monocle") to its `Layout` tag. Driven by types.LAYOUT_TABLE, the
 /// single source of truth also used by config.zig's isKnownLayout/canonicalLayout
-/// and workspaces.zig's layout-name resolution — instead of a hand-rolled copy
-/// of the same name<->tag mapping. Linear scan: StaticStringMap would carry
-/// comptime build complexity for no runtime gain at n=6 (+ a couple aliases).
+/// and workspaces.zig's layout-name resolution. A linear scan over the table
+/// is plenty fast at n=6 (plus a couple aliases).
 pub inline fn layoutFromString(name: []const u8) ?Layout {
     for (types.LAYOUT_TABLE) |entry| {
         if (std.mem.eql(u8, name, entry.name)) return entry.tag;
@@ -987,9 +984,9 @@ inline fn resolveWorkspaceOverride(
 
 /// Scope guard for temporarily overriding s.config.master_width/master_count
 /// (e.g. to the per-workspace values while retiling a workspace that isn't
-/// the active one) and restoring the previous values on `deinit()`. Removes
-/// the repeated save-two-fields / defer-restore-two-fields block that used to
-/// appear at every retile call site that needs a workspace-scoped override.
+/// the active one) and restoring the previous values on `deinit()`. Every
+/// retile call site that needs a workspace-scoped override uses this instead
+/// of its own save/restore block.
 const MasterConfigScope = struct {
     s: *State,
     saved_width: f32,

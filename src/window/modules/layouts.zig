@@ -84,8 +84,7 @@ pub inline fn rectsEqual(a: utils.Rect, b: utils.Rect) bool {
 
 /// Send `rect` for `win` now via configureWithHints, unless `win` is
 /// `ctx.defer_win` — then stash it in `ctx.deferred` for `invokeLayout` to
-/// send last. Every defer_win-aware layout calls this instead of duplicating
-/// the check.
+/// send last. Called by every defer_win-aware layout.
 pub inline fn emitOrDefer(ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
     if (ctx.defer_win == win) {
         ctx.deferred.* = rect;
