@@ -14,15 +14,10 @@ const carousel = @import("carousel");
 
 // Module state
 //
-// All mutable focus state is grouped into a single State struct so that:
-//   • init() can reset everything in one assignment (no scattered field resets).
-//   • Tests can construct a State and pass *State to internal helpers without
-//     requiring a live XCB connection.
-//   • The encapsulation boundary is obvious — no scattered module-level vars.
-//
-// There is still exactly one focus context per process (the single module-level
-// `state` variable). The struct is for reset discipline and future testability,
-// not for multi-context support.
+// Grouped into a single State struct for reset discipline and testability
+// (full rationale: docs/focus.md). Invariant: exactly one focus context per
+// process (the single module-level `state` variable) -- this struct is for
+// reset/test ergonomics, not multi-context support.
 
 const State = struct {
     focused_window: ?u32 = null,
@@ -147,35 +142,15 @@ pub inline fn setLastEventTime(t: u32) void {
     state.last_event_time = t;
 }
 
-// Timestamp handling
+// Timestamp handling — full rationale: docs/focus.md
 //
-// CRITICAL: setLastEventTime MUST be called with enter_event.time BEFORE
-// calling setFocus(.mouse_enter).  If it is only called for button and key
-// events, g_last_event_time will be from the last click/keystroke, not the
-// current hover event.
-//
-// Why this matters:
-//   1. The WM sends xcb_set_input_focus(win, T_enter).
-//      X server: last-focus-change-time = T_enter.
-//   2. The WM sends WM_TAKE_FOCUS(win, state.last_event_time).
-//      If state.last_event_time is an old button-press timestamp T_old < T_enter,
-//      the app (e.g. Discord, Prism Launcher) receives WM_TAKE_FOCUS with T_old
-//      and calls XSetInputFocus(internal_widget, T_old).
-//   3. X server: T_old < last-focus-change-time (T_enter) -> request IGNORED.
-//   4. The app's internal focus widget never gets focus; the app appears
-//      unresponsive to hover even though the X server reported success for
-//      the WM's own xcb_set_input_focus.
-//
-// Terminals and Firefox are often immune: terminals are passive (no
-// WM_TAKE_FOCUS, so no app-side XSetInputFocus to fail), and Firefox may use
-// CurrentTime rather than the WM-provided timestamp.  Electron apps (Discord)
-// and Qt apps (Prism Launcher) strictly use the provided timestamp per ICCCM.
-//
-// dwm avoids this entirely by always passing CurrentTime (0) everywhere,
-// which the X server interprets as "now" and bypasses the ordering check.
-// focus.zig follows the same approach.  state.last_event_time is therefore
-// maintained for external consumers (e.g. subsystems that forward timestamps
-// to input-method frameworks) rather than for use inside this module.
+// CRITICAL (load-bearing): setLastEventTime MUST be called with
+// enter_event.time BEFORE calling setFocus(.mouse_enter), and focus.zig
+// itself must always pass CurrentTime (0) to xcb_set_input_focus /
+// WM_TAKE_FOCUS rather than state.last_event_time. Getting either half of
+// this wrong causes WM_TAKE_FOCUS to carry a stale timestamp, which strict
+// ICCCM clients (Electron, Qt) silently ignore — the app appears
+// unresponsive to hover focus even though the WM's own request succeeded.
 
 /// Sets X input focus to `win`, always with CurrentTime (0) rather than a
 /// real event timestamp — see "Timestamp handling" above for why a real

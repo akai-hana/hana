@@ -479,7 +479,7 @@ const State = struct {
     }
 
     fn drawClockOnly(self: *State) void {
-                const clock_x = self.layout_cache.clock_x orelse return;
+        const clock_x = self.layout_cache.clock_x orelse return;
         _ = clock.draw(self.render.dc, self.render.config, self.render.height, clock_x) catch |e|
             debug.warnOnErr(e, "drawClockOnly");
         // renderOnly() flushes Cairo to the off-screen pixmap; blitAndFlush()
@@ -491,7 +491,7 @@ const State = struct {
     }
 
     fn drawTitleOnly(self: *State, new_focused: ?u32) void {
-                if (prompt.isActive()) return;
+        if (prompt.isActive()) return;
         if (!self.title_cache.is_layout_valid or self.title_cache.title_width == 0) return;
         self.title_cache.focused_window = new_focused;
 
@@ -1276,7 +1276,10 @@ fn retileAllWorkspaces(effective_visible: bool) void {
         return;
     }
     const ws_state = workspaces.getState() orelse return;
-    if (!isTilingActive()) { tiling.retileCurrentWorkspace(); return; }
+    if (!isTilingActive()) {
+        tiling.retileCurrentWorkspace();
+        return;
+    }
     for (ws_state.workspaces, 0..) |_, idx| {
         if (!tracking.hasWindowsOnWorkspace(@intCast(idx))) continue;
         if (fullscreen.getForWorkspace(@intCast(idx)) != null) continue;

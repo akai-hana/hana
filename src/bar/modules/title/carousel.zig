@@ -357,9 +357,7 @@ pub fn drawScrollingTitle(
     // changed) vs. an in-place colour update vs. no action.
     const geom_stale: bool = blk: {
         const e = render.single orelse break :blk true;
-        break :blk e.window != window or title_invalidated
-            or e.cycle_w != cycle_w or e.geom.seg_x != geom.seg_x
-            or e.geom.seg_w != geom.seg_w or e.geom.avail_w != geom.avail_w;
+        break :blk e.window != window or title_invalidated or e.cycle_w != cycle_w or e.geom.seg_x != geom.seg_x or e.geom.seg_w != geom.seg_w or e.geom.avail_w != geom.avail_w;
     };
 
     if (geom_stale) {
@@ -426,9 +424,7 @@ pub fn drawSegmentedCarousel(
     const geom_stale: bool = blk: {
         if (externally_invalidated) break :blk true;
         const e = render.seg orelse break :blk true;
-        break :blk e.window != window or title_invalidated
-            or e.cycle_w != cycle_w or e.geom.seg_x != geom.seg_x
-            or e.geom.seg_w != geom.seg_w or e.geom.avail_w != geom.avail_w;
+        break :blk e.window != window or title_invalidated or e.cycle_w != cycle_w or e.geom.seg_x != geom.seg_x or e.geom.seg_w != geom.seg_w or e.geom.avail_w != geom.avail_w;
     };
 
     if (geom_stale) {

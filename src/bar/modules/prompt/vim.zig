@@ -137,8 +137,8 @@ const Awaiting = union(enum) {
 /// Accumulated state for the in-progress normal-mode command.
 /// Reset atomically between commands via `resetPendingCmd`.
 const PendingCmd = struct {
-    count: u32 = 0,    // Digit accumulator
-    op: u8 = 0,        // Pending operator ('d'/'c'/'y')
+    count: u32 = 0, // Digit accumulator
+    op: u8 = 0, // Pending operator ('d'/'c'/'y')
     op_count: u32 = 0, // Count when operator was armed
 
     /// What the engine is waiting for from the next keystroke.
@@ -853,9 +853,9 @@ const MotionKeyResult = struct {
 /// (find_kind, find_ch, has_g_prefix, dot_eligible) directly on the returned
 /// literal before returning it.
 inline fn commitMotion(vs: *VimState, mr: MotionResult) MotionKeyResult {
-    const op  = vs.pending.op;
+    const op = vs.pending.op;
     const opc = vs.pending.op_count;
-    const mc  = vs.pending.count;
+    const mc = vs.pending.count;
     resetPendingCmd(vs);
     return .{ .mr = mr, .op = op, .op_count = opc, .motion_count = mc };
 }

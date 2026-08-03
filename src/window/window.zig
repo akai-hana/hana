@@ -1349,6 +1349,16 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
     return root_x == spawn_cursor.x and root_y == spawn_cursor.y;
 }
 
+/// Single logging seam for the EnterNotify hover-focus path below — likely the
+/// highest-frequency event path in the WM (every pointer motion across a
+/// window boundary). Replaces what used to be ~9 separate debug.info() calls
+/// interleaved with the filtering logic in handleEnterNotify/maybeFocusWindow;
+/// collapsing each to a single line here keeps the trace available without
+/// the density making the branches themselves hard to scan.
+inline fn logEnterDecision(comptime tag: []const u8, win: u32, comptime outcome: []const u8) void {
+    debug.info("[" ++ tag ++ "] 0x{x} -> " ++ outcome, .{win});
+}
+
 /// Attempt to focus `win` via the hover (EnterNotify) path.
 ///
 /// Guards against workspace membership and minimize state before calling
@@ -1356,42 +1366,39 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
 /// EnterNotify path: lightweight, no raise, no confirm.
 inline fn maybeFocusWindow(win: u32) void {
     if (!isOnCurrentWorkspace(win)) {
-        debug.info("[MAYBE_FOCUS] 0x{x} -> skipped: not on current workspace", .{win});
+        logEnterDecision("MAYBE_FOCUS", win, "skipped: not on current workspace");
         return;
     }
     if (minimize.isMinimized(win)) {
-        debug.info("[MAYBE_FOCUS] 0x{x} -> skipped: minimized", .{win});
+        logEnterDecision("MAYBE_FOCUS", win, "skipped: minimized");
         return;
     }
-    debug.info("[MAYBE_FOCUS] 0x{x} -> setFocus(.mouse_enter)", .{win});
+    logEnterDecision("MAYBE_FOCUS", win, "setFocus(.mouse_enter)");
     focus.setFocus(win, .mouse_enter);
 }
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     focus.setLastEventTime(event.time);
-    debug.info("[ENTER] win=0x{x} mode={} detail={} root_x={} root_y={}", .{
-        event.event, event.mode, event.detail, event.root_x, event.root_y,
-    });
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
         event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR)
     {
-        debug.info("[ENTER] -> filtered: mode={} detail={}", .{ event.mode, event.detail });
+        logEnterDecision("ENTER", event.event, "filtered: mode/detail");
         return;
     }
     if (drag.isDragging()) {
-        debug.info("[ENTER] -> filtered: dragging", .{});
+        logEnterDecision("ENTER", event.event, "filtered: dragging");
         return;
     }
     if (suppressSpawnCrossing(event.root_x, event.root_y)) {
-        debug.info("[ENTER] -> filtered: spawn crossing suppressed", .{});
+        logEnterDecision("ENTER", event.event, "filtered: spawn crossing suppressed");
         return;
     }
     if (focus.shouldSuppressEnterNotify()) {
-        debug.info("[ENTER] -> filtered: focus suppressed for hover", .{});
+        logEnterDecision("ENTER", event.event, "filtered: focus suppressed for hover");
         return;
     }
     const managed = findManagedWindow(core.getState().conn, event.event, tracking.isManaged);
-    debug.info("[ENTER] -> resolved managed=0x{x}", .{managed});
+    logEnterDecision("ENTER", managed, "resolved -> maybeFocusWindow");
     maybeFocusWindow(managed);
 }
 
@@ -1507,13 +1514,13 @@ fn parseSizeHintsIntoCache(
     }
 
     tiling.cacheSizeHints(win, .{
-            .max_width = max_width,
-            .max_height = max_height,
-            .inc_width = inc_width,
-            .inc_height = inc_height,
-            .min_aspect = min_aspect,
-            .max_aspect = max_aspect,
-        });
+        .max_width = max_width,
+        .max_height = max_height,
+        .inc_width = inc_width,
+        .inc_height = inc_height,
+        .min_aspect = min_aspect,
+        .max_aspect = max_aspect,
+    });
 }
 
 // Window borders
@@ -1562,9 +1569,9 @@ fn sweepWorkspaceBorders(comptime skip_tiled: bool) void {
     const cur = tracking.getCurrentWorkspace() orelse return;
     const cur_bit = tracking.workspaceBit(cur);
     const conn = core.getState().conn;
-    for (tracking.allWindows()) |_entry| {
-        const win = _entry.win;
-        if (_entry.mask & cur_bit == 0) continue;
+    for (tracking.allWindows()) |entry| {
+        const win = entry.win;
+        if (entry.mask & cur_bit == 0) continue;
         if (comptime skip_tiled) {
             if (core.getState().config.tiling.enabled and tiling.isWindowTiled(win)) continue;
             _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{borderColor(win)});
