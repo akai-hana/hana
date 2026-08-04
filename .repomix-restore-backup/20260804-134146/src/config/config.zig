@@ -1,0 +1,1459 @@
+//! Configuration interpreter
+//! Loads, parses, and validates TOML config files.
+
+const std = @import("std");
+const core = @import("core");
+const types = @import("types");
+const constants = @import("constants");
+const debug = @import("debug");
+
+const xkbcommon = @import("xkbcommon");
+
+const parser = @import("parser");
+
+const carousel = @import("carousel");
+
+const parseColor = parser.parseColor;
+
+/// Returns `default` when the key is absent, the wrong type, or out of range.
+/// Out-of-range values log a warning and return the default (not clamped).
+/// The name `getInRange` is intentional: callers can see at a glance that
+/// min/max bounds are enforced, not just a plain key lookup.
+fn getInRange(
+    comptime T: type,
+    section: *const parser.Section,
+    key: []const u8,
+    default: T,
+    comptime min: ?T,
+    comptime max: ?T,
+) T {
+    const value = switch (T) {
+        bool => section.getBool(key) orelse return default,
+        []const u8 => section.getString(key) orelse return default,
+        u8, u16, u32, usize => blk: {
+            const i = section.getInt(key) orelse return default;
+            break :blk @as(T, @intCast(i));
+        },
+        else => @compileError("Unsupported type"),
+    };
+    if (comptime min) |m| if (value < m) {
+        debug.warn("Value for '{s}' ({any}) below minimum ({any}), using default", .{ key, value, m });
+        return default;
+    };
+    if (comptime max) |m| if (value > m) {
+        debug.warn("Value for '{s}' ({any}) above maximum ({any}), using default", .{ key, value, m });
+        return default;
+    };
+    return value;
+}
+
+/// Resolves a color from a section key, accepting `#RRGGBB`, `0xRRGGBB`, or an integer.
+inline fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
+    const value = section.get(key) orelse return default;
+    if (value.asColor()) |c| return c;
+    if (value.asString()) |s| return parseColor(s) catch {
+        debug.warn("Invalid color for {s}: '{s}'", .{ key, s });
+        return default;
+    };
+    if (value.asInt()) |i| if (i >= 0 and i <= 0xFFFFFF) return @intCast(i);
+    return default;
+}
+
+/// Like getInRange, but for ScalableValue fields (item 7).
+///
+/// Percentage and absolute ScalableValues have different natural upper
+/// bounds (a percentage sensibly stays near 0..200; an absolute pixel value
+/// has no meaningful ceiling), so this only enforces a lower bound on the raw
+/// `.value` — every field routed through this today just needs to reject a
+/// negative pixel/percentage value from being handed to rendering/layout code
+/// (e.g. `gap_width = -50`). Returns `default` (unclamped) and logs a warning
+/// when out of range, matching getInRange's behavior for integers.
+fn getScalableInRange(
+    section: *const parser.Section,
+    key: []const u8,
+    default: parser.ScalableValue,
+    comptime min: f32,
+) parser.ScalableValue {
+    const value = section.getScalable(key) orelse return default;
+    if (value.value < min) {
+        debug.warn("Value for '{s}' ({d}) below minimum ({d}), using default", .{ key, value.value, min });
+        return default;
+    }
+    return value;
+}
+
+inline fn validateWorkspace(ws_num: usize, max: usize, context: []const u8) bool {
+    if (ws_num < 1 or ws_num > max) {
+        debug.warn("Rule workspace {} for '{s}' exceeds count {}, skipping", .{ ws_num, context, max });
+        return false;
+    }
+    return true;
+}
+
+/// Validates a 1-based workspace number parsed from a per-workspace override
+/// (the `layouts` array's workspace-list syntax, or
+/// `[tiling.layouts.master-stack.counts]`) against both the syntactic 1..255
+/// range and constants.MAX_WORKSPACES — the hard ceiling enforced by
+/// workspaces.zig's fixed-size override lookup tables and tiling.zig's u64
+/// workspace_geom_valid_bits bitmask (item 4).
+///
+/// Checking the MAX_WORKSPACES bound here, at parse time, means an override
+/// that can never take effect is reported immediately via a warning, instead
+/// of being accepted silently here only to be silently dropped later when
+/// workspaces.init() builds its lookup tables.
+inline fn checkWorkspaceOverrideBound(ws_1based: usize, context: []const u8) bool {
+    if (ws_1based < 1 or ws_1based > 255) {
+        debug.warn("{s}: workspace {} out of range, skipping", .{ context, ws_1based });
+        return false;
+    }
+    if (ws_1based - 1 >= constants.MAX_WORKSPACES) {
+        debug.warn(
+            "{s}: workspace {} exceeds the {}-workspace limit (MAX_WORKSPACES); override would never apply, skipping",
+            .{ context, ws_1based, constants.MAX_WORKSPACES },
+        );
+        return false;
+    }
+    return true;
+}
+
+inline fn addRule(allocator: std.mem.Allocator, cfg: *types.Config, class_name: []const u8, ws_num: usize) !void {
+    try cfg.workspaces.rules.append(allocator, .{
+        .class_name = try allocator.dupe(u8, class_name),
+        .workspace = @intCast(ws_num - 1),
+    });
+}
+
+fn initDefaultBarLayout(allocator: std.mem.Allocator, cfg: *types.Config) !void {
+    const defaults = [_]struct { pos: types.BarSegmentAnchor, seg: types.BarSegment }{
+        .{ .pos = .left, .seg = .workspaces },
+        .{ .pos = .center, .seg = .title },
+        .{ .pos = .right, .seg = .clock },
+    };
+    for (defaults) |d| {
+        var layout = types.BarLayout{ .position = d.pos, .segments = .empty };
+        try layout.segments.append(allocator, d.seg);
+        try cfg.bar.layout.append(allocator, layout);
+    }
+}
+
+/// Maximum bytes accepted from a single .toml file (1 MiB).
+const MAX_FILE_BYTES = 1024 * 1024;
+
+/// Reads the file at `path` into a freshly allocated slice owned by the caller.
+/// Returns `error.FileTooLarge` when the file exceeds `MAX_FILE_BYTES`.
+///
+/// This always allocates the full MAX_FILE_BYTES + 1 ceiling up front, then
+/// reallocs down to the actual size — more allocation than a small config
+/// file strictly needs, but config loading only happens at startup and on
+/// explicit reload, so it's not worth the extra `stat()`-then-allocate
+/// complexity (and the accompanying TOCTOU re-check against a file that could
+/// grow between stat() and read()) for a cost this low-frequency. Left as-is
+/// per item 15 in the config-subsystem review, which calls this out as
+/// optional.
+fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const io = std.Options.debug_io;
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
+        if (err == error.FileNotFound) debug.info("Not found: {s}", .{path});
+        return err;
+    };
+    defer file.close(io);
+    const buf = try allocator.alloc(u8, MAX_FILE_BYTES + 1);
+    errdefer allocator.free(buf);
+    const n = try file.readPositionalAll(io, buf, 0);
+    if (n > MAX_FILE_BYTES) {
+        allocator.free(buf);
+        return error.FileTooLarge;
+    }
+    return allocator.realloc(buf, n) catch buf[0..n];
+}
+
+/// Merges files listed in `include = [...]` from `src_doc` into `dst`; `dir_path` is the base for relative paths.
+///
+/// Includes are resolved one level deep only: an included file's own
+/// `include = [...]` directive is not processed. This is intentional, not an
+/// oversight — it keeps the include graph trivially easy to reason about
+/// (no possibility of an include cycle, so no cycle-detection machinery is
+/// needed) at the cost of not supporting chained includes. If recursive
+/// includes are ever wanted, this function will need to call itself on each
+/// `inc_doc` after parsing it, threading through a visited-canonical-path set
+/// to detect cycles and a max-depth backstop — warn-and-skip on either,
+/// consistent with the rest of this subsystem's "never crash on bad config"
+/// philosophy (see item 9 in the config-subsystem review).
+fn processIncludes(allocator: std.mem.Allocator, dst: *parser.Document, src_doc: *const parser.Document, dir_path: []const u8) !void {
+    const inc_val = src_doc.get("include") orelse return;
+    const includes = inc_val.asArray() orelse return;
+    for (includes) |item| {
+        const rel = item.asString() orelse continue;
+        if (!std.mem.endsWith(u8, rel, ".toml")) {
+            debug.warn("include '{s}': path must end in .toml — skipping", .{rel});
+            continue;
+        }
+        const abs = try std.fs.path.join(allocator, &.{ dir_path, rel });
+        defer allocator.free(abs);
+        const raw = readFileAlloc(allocator, abs) catch |err| {
+            debug.warn("include '{s}': could not read: {}", .{ abs, err });
+            continue;
+        };
+        defer allocator.free(raw);
+        if (raw.len == 0) {
+            debug.info("include '{s}': empty, skipping", .{abs});
+            continue;
+        }
+        var inc_doc = parser.parse(allocator, raw) catch |err| {
+            debug.warn("include '{s}': parse error: {}", .{ abs, err });
+            continue;
+        };
+        defer inc_doc.deinit();
+        // Note: inc_doc's own `include` array (if any) is intentionally NOT
+        // processed here — see the doc comment above.
+        try parser.mergeDocumentsInto(allocator, dst, &inc_doc);
+        debug.info("Merged (include): {s}", .{abs});
+    }
+}
+
+fn sliceLessThan(_: void, a: []u8, b: []u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+/// Loads and merges all `*.toml` files directly inside `dir_path` (alphabetical order;
+/// subdirectories only via explicit `include`).  Later files win on scalar conflicts;
+/// arrays accumulate.
+pub fn loadConfigFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !types.Config {
+    var names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (names.items) |n| allocator.free(n);
+        names.deinit(allocator);
+    }
+
+    {
+        const io = std.Options.debug_io;
+        var dir = std.Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound or err == error.NotDir)
+                debug.info("Config dir not found: {s}", .{dir_path});
+            return err;
+        };
+        defer dir.close(io);
+        var it = dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind == .directory) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".toml")) continue;
+            if (std.mem.eql(u8, entry.name, "fallback.toml")) continue;
+            try names.append(allocator, try allocator.dupe(u8, entry.name));
+        }
+    }
+
+    if (names.items.len == 0) {
+        debug.info("No .toml files in config dir: {s}", .{dir_path});
+        return error.FileNotFound;
+    }
+
+    std.mem.sort([]u8, names.items, {}, sliceLessThan);
+    var merged = parser.Document.init(allocator);
+    defer merged.deinit();
+    for (names.items) |name| {
+        const path = try std.fs.path.join(allocator, &.{ dir_path, name });
+        defer allocator.free(path);
+        const raw = readFileAlloc(allocator, path) catch |err| {
+            debug.warn("Skipping '{s}': {}", .{ path, err });
+            continue;
+        };
+        defer allocator.free(raw);
+        if (raw.len == 0) {
+            debug.info("Skipping empty file: {s}", .{path});
+            continue;
+        }
+        var doc = parser.parse(allocator, raw) catch |err| {
+            debug.warn("Parse error in '{s}': {}", .{ path, err });
+            continue;
+        };
+        defer doc.deinit();
+        try parser.mergeDocumentsInto(allocator, &merged, &doc);
+        debug.info("Merged: {s}", .{path});
+        try processIncludes(allocator, &merged, &doc, dir_path);
+    }
+
+    const cfg = try buildConfigFromDoc(allocator, &merged);
+    debug.info("Loaded config from dir: {s} ({} file(s))", .{ dir_path, names.items.len });
+    return cfg;
+}
+
+/// Attempt to load a single config file at `path`.
+/// Returns the config on success, null on FileNotFound, and prints a warning
+/// then returns null for any other error — eliminating the repeated
+/// try/print/fall-through pattern in loadConfigDefault.
+inline fn tryLoadConfig(allocator: std.mem.Allocator, path: []const u8) ?types.Config {
+    return loadConfig(allocator, path) catch |err| {
+        if (err != error.FileNotFound)
+            std.debug.print(
+                "hana: config file '{s}' found but failed to load: {}; falling back\n",
+                .{ path, err },
+            );
+        return null;
+    };
+}
+
+/// Loads config in priority order: (1) ~/.config/hana/, (2) ./config/, (3) ~/.config/hana/config.toml,
+/// (4) ./config.toml, (5) embedded fallback.
+pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "./config";
+    const xdg_config_home = std.c.getenv("XDG_CONFIG_HOME");
+    const config_home = if (xdg_config_home) |ch|
+        std.mem.span(ch)
+    else
+        try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
+    defer if (xdg_config_home == null) allocator.free(config_home);
+    const xdg_dir = try std.fs.path.join(allocator, &.{ config_home, "hana" });
+    defer allocator.free(xdg_dir);
+    if (loadConfigFromDir(allocator, xdg_dir)) |cfg| return cfg else |_| {}
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    _ = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse return error.CurrentWorkingDirectoryUnlinked;
+    const cwd = try allocator.dupe(u8, std.mem.sliceTo(&cwd_buf, 0));
+    defer allocator.free(cwd);
+    const local_dir = try std.fs.path.join(allocator, &.{ cwd, "config" });
+    defer allocator.free(local_dir);
+    if (loadConfigFromDir(allocator, local_dir)) |cfg| return cfg else |_| {}
+    const xdg_path = try std.fs.path.join(allocator, &.{ xdg_dir, "config.toml" });
+    defer allocator.free(xdg_path);
+    if (tryLoadConfig(allocator, xdg_path)) |cfg| return cfg;
+    const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
+    defer allocator.free(local);
+    if (tryLoadConfig(allocator, local)) |cfg| return cfg;
+    debug.info("No config found, using fallback with auto-detection", .{});
+    return try loadFallbackConfig(allocator);
+}
+
+/// Validates domain invariants on a freshly loaded config.
+pub fn validate(cfg: *const types.Config) !void {
+    if (cfg.tiling.master_count == 0) {
+        debug.err("Invalid config: master_count must be > 0, keeping old", .{});
+        return error.InvalidConfig;
+    }
+    // master_width is stored as a ScalableValue; normalise to [0,1] for the check.
+    const mw = cfg.tiling.master_width;
+    const mw_ratio: f32 = if (mw.is_percentage) mw.value / 100.0 else mw.value;
+    if (mw_ratio < constants.MIN_MASTER_WIDTH or mw_ratio > 1.0) {
+        debug.err("Invalid config: master_width ratio {d:.3} out of [{d:.2}, 1.0], keeping old", .{ mw_ratio, constants.MIN_MASTER_WIDTH });
+        return error.InvalidConfig;
+    }
+    if (cfg.workspaces.count < 1) {
+        debug.err("Invalid config: workspace count must be >= 1, keeping old", .{});
+        return error.InvalidConfig;
+    }
+}
+
+/// Reads, parses, and returns the config at `path` (single-file entry point).
+pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !types.Config {
+    const raw = readFileAlloc(allocator, path) catch |err| return err;
+    defer allocator.free(raw);
+    if (raw.len == 0) {
+        debug.info("Empty config file: {s}, using fallback", .{path});
+        return try loadFallbackConfig(allocator);
+    }
+
+    var doc = try parser.parse(allocator, raw);
+    defer doc.deinit();
+    try processIncludes(allocator, &doc, &doc, std.fs.path.dirname(path) orelse ".");
+    const cfg = try buildConfigFromDoc(allocator, &doc);
+    debug.info("Loaded: {s}", .{path});
+    return cfg;
+}
+
+fn loadFallbackConfig(allocator: std.mem.Allocator) !types.Config {
+    const fallback = @import("fallback");
+    const fallback_toml = try fallback.getFallbackToml();
+    var doc = try parser.parse(allocator, fallback_toml);
+    defer doc.deinit();
+    var cfg = try buildConfigFromDoc(allocator, &doc);
+    const terminal = fallback.detectTerminal();
+    for (cfg.keybindings.items) |*kb| {
+        if (kb.action == .exec and std.mem.eql(u8, kb.action.exec, "auto_terminal")) {
+            allocator.free(kb.action.exec);
+            kb.action.exec = try allocator.dupe(u8, terminal);
+        }
+    }
+
+    if (std.mem.eql(u8, cfg.bar.font, "auto")) {
+        const detected_font = try fallback.detectFont(allocator);
+        defer allocator.free(detected_font);
+        const font_size_val: u16 = @intFromFloat(cfg.bar.font_size.value);
+        const font_with_size = try std.fmt.allocPrint(allocator, "{s}:size={}", .{ detected_font, font_size_val });
+        allocator.free(cfg.bar.font);
+        cfg.bar.font = font_with_size;
+    }
+
+    debug.info("Loaded fallback configuration with auto-detection", .{});
+    return cfg;
+}
+
+fn getDefaultConfig(allocator: std.mem.Allocator) types.Config {
+    var cfg: types.Config = .{};
+    const default_layout = allocator.dupe(u8, "master_left") catch "master_left";
+    cfg.tiling.layouts.append(allocator, default_layout) catch |e| debug.warnOnErr(e, "default layout append");
+    cfg.tiling.layout = if (cfg.tiling.layouts.items.len > 0) cfg.tiling.layouts.items[0] else default_layout;
+    for (0..9) |i| {
+        const icon = std.fmt.allocPrint(allocator, "{}", .{i + 1}) catch continue;
+        cfg.bar.workspace_icons.append(allocator, icon) catch |e| debug.warnOnErr(e, "workspace icon append");
+    }
+    initDefaultBarLayout(allocator, &cfg) catch |e| debug.warnOnErr(e, "default bar layout init");
+    return cfg;
+}
+
+/// Builds a Config from a parsed Document: initialises defaults then applies all sections.
+fn buildConfigFromDoc(allocator: std.mem.Allocator, doc: *const parser.Document) !types.Config {
+    var cfg = getDefaultConfig(allocator);
+    parseWorkspaces(doc, &cfg);
+    try parseKeybindings(allocator, doc, &cfg);
+    try parseTiling(allocator, doc, &cfg);
+    try parseBar(allocator, doc, &cfg);
+    try parseRules(allocator, doc, &cfg);
+    parseDrag(doc, &cfg);
+    parseFullscreen(doc, &cfg);
+    parseMinimize(doc, &cfg);
+    return cfg;
+}
+
+const MOD_MAP = std.StaticStringMap(u16).initComptime(.{
+    .{ "super", constants.MOD_SUPER },
+    .{ "mod4", constants.MOD_SUPER },
+    .{ "alt", constants.MOD_ALT },
+    .{ "mod1", constants.MOD_ALT },
+    .{ "control", constants.MOD_CONTROL },
+    .{ "ctrl", constants.MOD_CONTROL },
+    .{ "shift", constants.MOD_SHIFT },
+});
+
+const MOUSE_BUTTON_MAP = std.StaticStringMap(u8).initComptime(.{
+    .{ "button1", 1 },    .{ "left_click", 1 },   .{ "leftclick", 1 },   .{ "left", 1 },
+    .{ "button2", 2 },    .{ "middle_click", 2 }, .{ "middleclick", 2 }, .{ "middle", 2 },
+    .{ "button3", 3 },    .{ "right_click", 3 },  .{ "right", 3 },       .{ "button4", 4 },
+    .{ "scroll_up", 4 },  .{ "scrollup", 4 },     .{ "button5", 5 },     .{ "scroll_down", 5 },
+    .{ "scrolldown", 5 },
+});
+
+inline fn mouseButtonFromName(name: []const u8) ?u8 {
+    return switch (types.lowerStringCI(16, name)) {
+        .too_long => null,
+        .ok => |r| MOUSE_BUTTON_MAP.get(r.slice()),
+    };
+}
+
+const ACTION_MAP = std.StaticStringMap(types.Action).initComptime(.{
+    .{ "close", .close_window },
+    .{ "close_window", .close_window },
+    .{ "kill", .close_window },
+    .{ "reload", .reload_config },
+    .{ "reload_config", .reload_config },
+    .{ "toggle_layout", .toggle_layout },
+    .{ "toggle_layout_reverse", .toggle_layout_reverse },
+    .{ "toggle_bar_visibility", .toggle_bar_visibility },
+    .{ "toggle_bar_position", .toggle_bar_position },
+    .{ "increase_master", .increase_master },
+    .{ "decrease_master", .decrease_master },
+    .{ "increase_master_count", .increase_master_count },
+    .{ "decrease_master_count", .decrease_master_count },
+    .{ "toggle_floating_window", .toggle_floating_window },
+    .{ "toggle_fullscreen", .toggle_fullscreen },
+    .{ "fullscreen", .toggle_fullscreen },
+    .{ "swap_master", .swap_master },
+    .{ "swap_master_focus_swap", .swap_master_focus_swap },
+    .{ "dump_state", .dump_state },
+    .{ "minimize_window", .minimize_window },
+    .{ "minimize", .minimize_window },
+    .{ "unminimize_lifo", .unminimize_lifo },
+    .{ "unminimize_fifo", .unminimize_fifo },
+    .{ "unminimize_all", .unminimize_all },
+    .{ "cycle_layout_variants", .cycle_layout_variants },
+    .{ "cycle_variants", .cycle_layout_variants },
+    .{ "toggle_prompt", .toggle_prompt },
+    .{ "prompt", .toggle_prompt },
+    .{ "all_workspaces", .all_workspaces },
+    .{ "move_to_all_workspaces", .move_to_all_workspaces },
+    .{ "toggle_tag_all", .toggle_tag_all },
+    .{ "focus_next_window", .focus_next_window },
+    .{ "focus_next", .focus_next_window },
+    .{ "focus_prev_window", .focus_prev_window },
+    .{ "focus_prev", .focus_prev_window },
+    .{ "move_window_next", .move_window_next },
+    .{ "move_window_prev", .move_window_prev },
+    .{ "scroll_view_left", .scroll_view_left },
+    .{ "scroll_view_right", .scroll_view_right },
+    .{ "scroll_left", .scroll_view_left }, // short alias
+    .{ "scroll_right", .scroll_view_right }, // short alias
+});
+
+const GlobEntry = struct {
+    key: []const u8,
+    ws_idx: u8, // 1-based position in the expanded list; 0 when there is no glob
+    owned: bool, // true when key was heap-allocated and must be freed by the caller
+};
+
+/// Expands `{…}` glob patterns in a keybind key (e.g. `Mod+{1-4,Q}` -> 5 entries,
+/// comma-separated tokens and single-char ranges supported).  Workspace actions get a
+/// 1-based index appended; other actions are replicated unchanged.
+/// Returns a single unowned entry when no glob is present.
+fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]GlobEntry {
+    const literal = struct {
+        fn singleEntry(a: std.mem.Allocator, key: []const u8) ![]GlobEntry {
+            const e = try a.alloc(GlobEntry, 1);
+            e[0] = .{ .key = key, .ws_idx = 0, .owned = false };
+            return e;
+        }
+    };
+    const lbrace = std.mem.indexOfScalar(u8, key_pattern, '{') orelse return literal.singleEntry(allocator, key_pattern);
+    const rbrace = std.mem.indexOfScalarPos(u8, key_pattern, lbrace + 1, '}') orelse {
+        debug.warn("Keybind glob missing closing '}}\' in '{s}', treating as literal", .{key_pattern});
+        return literal.singleEntry(allocator, key_pattern);
+    };
+    const prefix = key_pattern[0..lbrace];
+    const suffix = key_pattern[rbrace + 1 ..];
+    const inner = key_pattern[lbrace + 1 .. rbrace];
+    var keys: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (keys.items) |k| allocator.free(k);
+        keys.deinit(allocator);
+    }
+
+    var it = std.mem.splitScalar(u8, inner, ',');
+    while (it.next()) |token| {
+        const t = std.mem.trim(u8, token, " \t");
+        if (t.len == 0) continue;
+        if (t.len == 3 and t[1] == '-') {
+            var ch = t[0];
+            const end = t[2];
+            if (ch > end) {
+                debug.warn("Keybind glob '{s}': descending range '{c}-{c}', skipping", .{ key_pattern, ch, end });
+                continue;
+            }
+            while (ch <= end) : (ch += 1)
+                try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, ch, suffix }));
+        } else {
+            try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ prefix, t, suffix }));
+        }
+    }
+
+    if (keys.items.len == 0) {
+        keys.deinit(allocator);
+        return literal.singleEntry(allocator, key_pattern);
+    }
+
+    const entries = try allocator.alloc(GlobEntry, keys.items.len);
+    for (keys.items, 0..) |k, i|
+        entries[i] = .{ .key = k, .ws_idx = @intCast(i + 1), .owned = true };
+    keys.deinit(allocator);
+    return entries;
+}
+
+const WORKSPACE_ACTION_BASES = std.StaticStringMap(void).initComptime(.{
+    .{ "workspace", {} }, .{ "move_to_workspace", {} }, .{ "toggle_tag", {} },
+});
+
+fn resolveAndParseAction(allocator: std.mem.Allocator, cmd: []const u8, ws_idx: u8, kill_placeholder: ?[]const u8) !types.Action {
+    const ws_str: ?[]u8 = if (ws_idx > 0 and WORKSPACE_ACTION_BASES.has(cmd))
+        try std.fmt.allocPrint(allocator, "{s}_{d}", .{ cmd, ws_idx })
+    else
+        null;
+    defer if (ws_str) |s| allocator.free(s);
+    const after_ws = ws_str orelse cmd;
+    if (kill_placeholder) |kp| if (std.mem.indexOf(u8, after_ws, "{kill}") != null) {
+        const final = try std.mem.replaceOwned(u8, allocator, after_ws, "{kill}", kp);
+        defer allocator.free(final);
+        return parseAction(allocator, final);
+    };
+    return parseAction(allocator, after_ws);
+}
+
+fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+    const section = doc.getSection("binds") orelse doc.getSection("Keybindings") orelse return;
+    // Find Mod and kill placeholders with a single pass over the pairs so that
+    // casing in the config file doesn't matter (e.g. "mod", "Mod", "MOD" all work).
+    var mod_placeholder: ?[]const u8 = null;
+    var kill_placeholder: ?[]const u8 = null;
+    {
+        var scan = section.pairs.iterator();
+        while (scan.next()) |e| {
+            if (std.ascii.eqlIgnoreCase(e.key_ptr.*, "Mod"))
+                mod_placeholder = e.value_ptr.*.asString()
+            else if (std.ascii.eqlIgnoreCase(e.key_ptr.*, "kill"))
+                kill_placeholder = e.value_ptr.*.asString();
+        }
+    }
+    var iter = section.pairs.iterator();
+    while (iter.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "Mod")) continue;
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "kill")) continue;
+        const glob_entries = try expandGlobKeys(allocator, entry.key_ptr.*);
+        defer {
+            for (glob_entries) |ge| if (ge.owned) allocator.free(ge.key);
+            allocator.free(glob_entries);
+        }
+        for (glob_entries) |ge| {
+            const keybind_str: []const u8 = blk: {
+                if (mod_placeholder) |mod| if (std.ascii.startsWithIgnoreCase(ge.key, "mod+"))
+                    break :blk try std.fmt.allocPrint(allocator, "{s}+{s}", .{ mod, ge.key["mod+".len..] });
+                break :blk ge.key;
+            };
+            defer if (keybind_str.ptr != ge.key.ptr) allocator.free(keybind_str);
+            const action: types.Action = act: {
+                if (entry.value_ptr.*.asArray()) |arr| {
+                    var acts: std.ArrayList(types.Action) = .empty;
+                    errdefer {
+                        for (acts.items) |*a| a.deinit(allocator);
+                        acts.deinit(allocator);
+                    }
+                    for (arr) |elem| {
+                        const cmd = elem.asString() orelse continue;
+                        try acts.append(allocator, try resolveAndParseAction(allocator, cmd, ge.ws_idx, kill_placeholder));
+                    }
+                    if (acts.items.len == 0) {
+                        acts.deinit(allocator);
+                        continue;
+                    }
+                    if (acts.items.len == 1) {
+                        const only = acts.items[0];
+                        acts.deinit(allocator);
+                        break :act only;
+                    }
+                    break :act .{ .sequence = try acts.toOwnedSlice(allocator) };
+                } else if (entry.value_ptr.*.asString()) |command| {
+                    break :act try resolveAndParseAction(allocator, command, ge.ws_idx, kill_placeholder);
+                } else continue;
+            };
+            const bind = parseBindString(keybind_str) catch |err| {
+                debug.warn("Failed to parse keybind '{s}': {}", .{ keybind_str, err });
+                continue;
+            };
+            switch (bind) {
+                .mouse => |mb| try cfg.mouse_bindings.append(allocator, .{
+                    .modifiers = mb.modifiers,
+                    .button = mb.button,
+                    .action = action,
+                }),
+                .keyboard => |kb| try cfg.keybindings.append(allocator, .{
+                    .modifiers = kb.modifiers,
+                    .keysym = kb.keysym,
+                    .action = action,
+                }),
+            }
+        }
+    }
+}
+
+const BindResult = union(enum) {
+    keyboard: struct { modifiers: u16, keysym: u32 },
+    mouse: struct { modifiers: u16, button: u8 },
+};
+
+/// Parses a `Mods+Key` or `Mods+ButtonName` string into a typed BindResult.
+/// Returns an error when any token is unrecognised.
+fn parseBindString(str: []const u8) !BindResult {
+    var modifiers: u16 = 0;
+    var keysym: ?u32 = null;
+    var button: ?u8 = null;
+    var parts = std.mem.splitScalar(u8, str, '+');
+    while (parts.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t");
+        // Normalise to lowercase so modifier names are case-insensitive.
+        // The buffer is 16 bytes — longer than any modifier name we recognise.
+        var mod_buf: [16]u8 = undefined;
+        const trimmed_lc = std.ascii.lowerString(mod_buf[0..@min(trimmed.len, mod_buf.len)], trimmed);
+        if (MOD_MAP.get(trimmed_lc)) |mod| {
+            modifiers |= mod;
+        } else if (mouseButtonFromName(trimmed)) |btn| {
+            if (button != null) return error.MultipleButtons;
+            button = btn;
+        } else {
+            if (button != null) return error.AmbiguousBinding;
+            if (keysym != null) return error.MultipleKeys;
+            keysym = try keyNameToKeysym(trimmed);
+        }
+    }
+    if (button) |b| {
+        if (keysym != null) return error.AmbiguousBinding;
+        return .{ .mouse = .{ .modifiers = modifiers, .button = b } };
+    }
+    return .{ .keyboard = .{ .modifiers = modifiers, .keysym = keysym orelse return error.NoKeysym } };
+}
+
+fn keyNameToKeysym(name: []const u8) !u32 {
+    if (name.len >= 64) return error.KeyNameTooLong;
+    var buf: [64]u8 = undefined;
+    @memcpy(buf[0..name.len], name);
+    buf[name.len] = 0;
+    const keysym = xkbcommon.xkb_keysym_from_name(@ptrCast(&buf), xkbcommon.XKB_KEYSYM_CASE_INSENSITIVE);
+    return if (keysym == xkbcommon.XKB_KEY_NoSymbol) error.UnknownKeyName else keysym;
+}
+
+inline fn tryParseWorkspace(command: []const u8, prefix: []const u8) ?u8 {
+    if (!std.mem.startsWith(u8, command, prefix)) return null;
+    const num = std.fmt.parseInt(usize, command[prefix.len..], 10) catch return null;
+    if (num < 1 or num > 256) return null;
+    return @intCast(num - 1);
+}
+
+fn parseAction(allocator: std.mem.Allocator, cmd: []const u8) !types.Action {
+    if (ACTION_MAP.get(cmd)) |a| return a;
+    if (tryParseWorkspace(cmd, "workspace_")) |ws| return .{ .switch_workspace = ws };
+    if (tryParseWorkspace(cmd, "move_to_workspace_")) |ws| return .{ .move_to_workspace = ws };
+    if (tryParseWorkspace(cmd, "toggle_tag_")) |ws| return .{ .toggle_tag = ws };
+    return .{ .exec = try allocator.dupe(u8, cmd) };
+}
+
+/// Scales font size and other DPI-dependent fields. Call once the screen is available.
+pub inline fn finalizeConfig(cfg: *types.Config, screen: *core.xcb.xcb_screen_t) void {
+    const scale_module = @import("scale");
+    cfg.bar.scaled_font_size = scale_module.scaleFontSize(cfg.bar.font_size, screen);
+}
+
+/// O(1) keybinding lookup for use on the hot key-press path.
+/// Returns a pointer into the current config's keybindings slice, or null.
+///
+/// This delegates to the current config's embedded `keybind_resolver`
+/// (core.getState().config.keybind_resolver — see KeybindResolver in
+/// types.zig) rather than reading a bare module-level global. Kept as a free
+/// function — rather than requiring every call site to spell out
+/// `core.getState().config.keybind_resolver.lookup(...)` — because it's
+/// called from the hot key-press path in src/core/input/input.zig, which
+/// this config-subsystem review's changes deliberately did not need to touch
+/// (see item 10).
+pub inline fn lookupKeybinding(mods: u16, keysym: u32) ?*const types.Action {
+    return core.getState().config.keybind_resolver.lookup(mods, keysym);
+}
+
+/// Canonical startup/reload entry point: load, resolve keybindings, finalize.
+pub fn load(allocator: std.mem.Allocator, screen: *core.xcb.xcb_screen_t, xkb_state: *xkbcommon.XkbState) !types.Config {
+    var cfg = try loadConfigDefault(allocator);
+    cfg.keybind_resolver.build(cfg.keybindings.items, xkb_state, allocator);
+    finalizeConfig(&cfg, screen);
+    return cfg;
+}
+
+fn parseDrag(doc: *const parser.Document, cfg: *types.Config) void {
+    const section = doc.getSection("drag") orelse return;
+    cfg.drag_enabled = getInRange(bool, section, "enabled", cfg.drag_enabled, null, null);
+    // `cfg` is already initialised from types.Config{} (via getDefaultConfig)
+    // before this runs, so reading the current value as the default is
+    // equivalent to — but doesn't duplicate — the struct default in
+    // types.zig (item 6). getScalableInRange additionally rejects a negative
+    // snap_distance (item 7).
+    cfg.snap_distance = getScalableInRange(section, "snap_distance", cfg.snap_distance, 0.0);
+}
+
+fn parseWorkspaces(doc: *const parser.Document, cfg: *types.Config) void {
+    const section = doc.getSection("bar.modules.workspaces") orelse doc.getSection("workspaces") orelse return;
+    cfg.workspaces.enabled = getInRange(bool, section, "enabled", cfg.workspaces.enabled, null, null);
+    cfg.workspaces.count = getInRange(u8, section, "count", cfg.workspaces.count, 1, null);
+}
+
+/// Parses the [fullscreen] and [minimize] sections, each currently exposing
+/// only an `enabled` toggle. Each of these subsystems is always compiled in;
+/// this toggle only controls whether its behavior and keybindings are active.
+fn parseFullscreen(doc: *const parser.Document, cfg: *types.Config) void {
+    const section = doc.getSection("fullscreen") orelse return;
+    cfg.fullscreen_enabled = getInRange(bool, section, "enabled", cfg.fullscreen_enabled, null, null);
+}
+
+fn parseMinimize(doc: *const parser.Document, cfg: *types.Config) void {
+    const section = doc.getSection("minimize") orelse return;
+    cfg.minimize_enabled = getInRange(bool, section, "enabled", cfg.minimize_enabled, null, null);
+}
+
+
+fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+    const section = doc.getSection("tiling") orelse return;
+    cfg.tiling.enabled = getInRange(bool, section, "enabled", cfg.tiling.enabled, null, null);
+    if (section.get("layouts")) |layouts_value| {
+        if (layouts_value.asArray()) |arr| {
+            for (cfg.tiling.layouts.items) |layout| allocator.free(layout);
+            cfg.tiling.layouts.clearRetainingCapacity();
+            cfg.tiling.workspace_layout_overrides.clearRetainingCapacity();
+            try parseLayoutsArray(allocator, arr, cfg);
+            if (cfg.tiling.layouts.items.len > 0) cfg.tiling.layout = cfg.tiling.layouts.items[0];
+        }
+    } else {
+        // Single-layout path.  Clear the default set by getDefaultConfig so
+        // layouts contains exactly one entry and there is no stale "master_left"
+        // accumulating alongside the user's choice (Issue #11).
+        // `cfg.tiling.layout` points into layouts[0]; TilingConfig.deinit frees
+        // it — no separate `allocated_layout` sentinel is needed.
+        //
+        // NOTE on the "layout" default below: unlike the other fields in this
+        // function, we deliberately do NOT pass `cfg.tiling.layout` as the
+        // getInRange default here. cfg.tiling.layout currently aliases
+        // cfg.tiling.layouts.items[0] — the exact memory freed on the next
+        // line — so reading it after the free (which happens when the
+        // "layout" key is absent and getInRange falls back to its default)
+        // would be a use-after-free. types.TilingConfig{}.layout yields the
+        // identical value (the comptime string literal "master_left") without
+        // aliasing anything that gets freed, so it still single-sources the
+        // default per item 6 while sidestepping that hazard.
+        for (cfg.tiling.layouts.items) |l| allocator.free(l);
+        cfg.tiling.layouts.clearRetainingCapacity();
+        const layout_str = getInRange([]const u8, section, "layout", types.TilingConfig{}.layout, null, null);
+        try cfg.tiling.layouts.append(allocator, try allocator.dupe(u8, layout_str));
+        cfg.tiling.layout = cfg.tiling.layouts.items[0];
+    }
+
+    const aesthetic_src = doc.getSection("tiling.aesthetics") orelse section;
+
+    // gap_width/border_width: ScalableValue fields, so a bare negative value
+    // (`gap_width = -50`) is rejected via getScalableInRange rather than being
+    // silently accepted and handed to layout code as a negative pixel value
+    // (item 7). The "current value" passed as default is safe to read here —
+    // unlike the "layout" string above, nothing frees it first.
+    cfg.tiling.gap_width = getScalableInRange(aesthetic_src, "gap_width", cfg.tiling.gap_width, 0.0);
+    cfg.tiling.border_width = getScalableInRange(aesthetic_src, "border_width", cfg.tiling.border_width, 0.0);
+    cfg.tiling.border_focused = getColor(aesthetic_src, "border_focused", cfg.tiling.border_focused);
+    cfg.tiling.border_unfocused = getColor(aesthetic_src, "border_unfocused", cfg.tiling.border_unfocused);
+    const master_src = doc.getSection("tiling.layouts.master-stack") orelse section;
+    const dedicated = master_src != section; // true when [tiling.layouts.master-stack] exists
+    cfg.tiling.master_count = getInRange(u8, master_src, if (dedicated) "count" else "master_count", cfg.tiling.master_count, 1, null);
+    if (master_src.getString(if (dedicated) "side" else "master_side")) |s| cfg.tiling.master_side = types.MasterSide.fromString(s) orelse .left;
+    // master_width already has its own dedicated ratio check in validate(),
+    // so it only needs the "leave alone when absent" treatment here, not
+    // getScalableInRange (item 7, step 2).
+    if (master_src.getScalable(if (dedicated) "width" else "master_width")) |v| cfg.tiling.master_width = v;
+    parseTilingVariants(doc, cfg);
+    cfg.tiling.global_layout = getInRange(bool, section, "global_layout", cfg.tiling.global_layout, null, null);
+
+    // Per-workspace master count overrides: [tiling.layouts.master-stack.counts]
+    // workspace_number (1-based) = count
+    // Only meaningful when global_layout = false.
+    if (doc.getSection("tiling.layouts.master-stack.counts")) |counts_sec| {
+        cfg.tiling.workspace_master_count_overrides.clearRetainingCapacity();
+        var iter = counts_sec.pairs.iterator();
+        while (iter.next()) |entry| {
+            const ws_1based = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
+                debug.warn("master-stack.counts: invalid workspace key '{s}', skipping", .{entry.key_ptr.*});
+                continue;
+            };
+            if (!checkWorkspaceOverrideBound(ws_1based, "master-stack.counts")) continue;
+            const count_val = entry.value_ptr.*.asInt() orelse {
+                debug.warn("master-stack.counts: non-integer count for workspace {}, skipping", .{ws_1based});
+                continue;
+            };
+            if (count_val < 0 or count_val > 10) {
+                debug.warn("master-stack.counts: count {} for workspace {} out of range [0,10], skipping", .{ count_val, ws_1based });
+                continue;
+            }
+            try cfg.tiling.workspace_master_count_overrides.append(allocator, .{
+                .workspace_idx = @intCast(ws_1based - 1),
+                .count = @intCast(count_val),
+            });
+        }
+    }
+}
+
+/// Reads `variants` from `section` into `field`; warns on unknown values.
+inline fn tryParseVariant(
+    comptime T: type,
+    section: *const parser.Section,
+    layout_name: []const u8,
+    field: *T,
+) void {
+    const v = section.getString("variants") orelse return;
+    field.* = std.meta.stringToEnum(T, v) orelse {
+        debug.warn("Unknown {s} variants '{s}', using default", .{ layout_name, v });
+        return;
+    };
+}
+
+inline fn tryParseIndicator(section: *const parser.Section, field: *?[3]u8) void {
+    if (section.getString("indicator")) |raw| field.* = parseIndicator(raw);
+}
+
+fn parseTilingVariants(doc: *const parser.Document, cfg: *types.Config) void {
+    inline for (.{
+        .{ "tiling.layouts.master-stack", types.MasterVariant, "master-stack", "master_variant", "master_indicator" },
+        .{ "tiling.layouts.monocle", types.MonocleVariant, "monocle", "monocle_variant", "monocle_indicator" },
+        .{ "tiling.layouts.grid", types.GridVariant, "grid", "grid_variant", "grid_indicator" },
+    }) |e| if (doc.getSection(e[0])) |ms| {
+        tryParseVariant(e[1], ms, e[2], &@field(cfg.tiling, e[3]));
+        tryParseIndicator(ms, &@field(cfg.tiling, e[4]));
+    };
+}
+
+/// Parses a UTF-8 indicator string into a fixed 3-byte array.
+/// Copies the first complete codepoint only (up to 3 bytes); 4-byte codepoints
+/// (e.g. most emoji) do not fit in 3 bytes and are silently replaced by spaces.
+/// Using `std.unicode.utf8ByteSequenceLength` prevents the previous truncation
+/// bug where a 4-byte emoji was sliced at 3 bytes, producing invalid UTF-8.
+inline fn parseIndicator(raw: []const u8) [3]u8 {
+    var ind: [3]u8 = "   ".*;
+    if (raw.len == 0) return ind;
+    const cp_len: usize = std.unicode.utf8ByteSequenceLength(raw[0]) catch 1;
+    const n = @min(cp_len, 3);
+    if (n <= raw.len) @memcpy(ind[0..n], raw[0..n]);
+    return ind;
+}
+
+const KNOWN_LAYOUT_SET = std.StaticStringMap(void).initComptime(.{
+    .{ "master-stack", {} }, .{ "monocle", {} }, .{ "grid", {} }, .{ "fibonacci", {} }, .{ "leaf", {} }, .{ "scroll", {} },
+});
+
+/// Returns true if `name` (case-insensitive) is a recognised layout name.
+inline fn isKnownLayout(name: []const u8) bool {
+    return switch (types.lowerStringCI(32, name)) {
+        .too_long => false,
+        .ok => |r| KNOWN_LAYOUT_SET.has(r.slice()),
+    };
+}
+
+/// Returns true if `s` looks like a workspace-number list: only digits, commas, spaces,
+/// and contains at least one digit.
+inline fn isWorkspaceList(s: []const u8) bool {
+    if (s.len == 0) return false;
+    var has_digit = false;
+    for (s) |c| {
+        if (std.ascii.isDigit(c)) {
+            has_digit = true;
+            continue;
+        }
+        if (c != ',' and c != ' ') return false;
+    }
+    return has_digit;
+}
+
+/// Canonicalises a layout name to the plain lowercase form used in the layouts list.
+/// "master_stack" and "master" both become "master-stack".
+inline fn canonicalLayout(name: []const u8, buf: *[32]u8) []const u8 {
+    // An overlong name (see lowerStringCI) is returned unchanged: the caller
+    // immediately passes the result through isKnownLayout, which also uses
+    // lowerStringCI and so also reports `.too_long` (as `false`) for it,
+    // correctly routing an oversized name into the "unknown layout name"
+    // warning path instead of crashing (item 1) or silently truncating.
+    switch (types.lowerStringCI(32, name)) {
+        .too_long => return name,
+        .ok => |r| {
+            const lower = r.slice();
+            if (std.mem.eql(u8, lower, "master_stack") or std.mem.eql(u8, lower, "master"))
+                return "master-stack";
+            @memcpy(buf[0..lower.len], lower);
+            return buf[0..lower.len];
+        },
+    }
+}
+
+/// Parses a variants string for the given layout name into a LayoutVariantOverride.
+/// Returns null and emits a warning when the string is not valid for that layout.
+fn parseLayoutVariant(layout_name: []const u8, variants_str: []const u8) ?types.LayoutVariantOverride {
+    // Named local (rather than capturing inside a switch/if expression) so
+    // `lowered.ok.buf` unambiguously lives for the rest of this function —
+    // lower_layout borrows from it below and is used well past the point a
+    // switch-arm-scoped capture would be.
+    const lowered = types.lowerStringCI(32, layout_name);
+    if (lowered == .too_long) {
+        // Distinguished from "not a known variant-typed layout" (below) so a
+        // config with a genuinely too-long layout name gets a message that
+        // points at the actual problem, instead of looking identical to a
+        // plain typo (item 11).
+        debug.warn("layouts array: layout name '{s}' too long to match against a variant type, ignoring variants '{s}'", .{ layout_name, variants_str });
+        return null;
+    }
+    const lower_layout = lowered.ok.slice();
+    const typed_layouts = .{
+        .{ "master-stack", types.MasterVariant, "master" },
+        .{ "monocle", types.MonocleVariant, "monocle" },
+        .{ "grid", types.GridVariant, "grid" },
+    };
+    inline for (typed_layouts) |entry| {
+        if (std.mem.eql(u8, lower_layout, entry[0])) {
+            const v = std.meta.stringToEnum(entry[1], variants_str) orelse {
+                debug.warn("Unknown {s} variants '{s}' in layouts array, ignoring", .{ entry[0], variants_str });
+                return null;
+            };
+            return @unionInit(types.LayoutVariantOverride, entry[2], v);
+        }
+    }
+    return null;
+}
+
+/// Parses the `layouts` TOML array.  A known layout name starts a new group; the
+/// optional next element is a variants word or a workspace list ("1,3,5"); a third
+/// may follow as a workspace list when the second was a variants.
+/// Plain single-name format ("master-stack") is fully backward-compatible.
+fn parseLayoutsArray(
+    allocator: std.mem.Allocator,
+    arr: []const parser.Value,
+    cfg: *types.Config,
+) !void {
+    var i: usize = 0;
+    while (i < arr.len) : (i += 1) {
+        const name_str = arr[i].asString() orelse {
+            debug.warn("layouts array: expected a string at index {}, skipping", .{i});
+            continue;
+        };
+        var name_buf: [32]u8 = undefined;
+        const canonical = canonicalLayout(name_str, &name_buf);
+        if (!isKnownLayout(canonical)) {
+            if (name_str.len > name_buf.len) {
+                debug.warn("layouts array: layout name '{s}' at index {} is longer than the {}-byte limit, skipping", .{ name_str, i, name_buf.len });
+            } else {
+                debug.warn("layouts array: unknown layout name '{s}' at index {}, skipping", .{ name_str, i });
+            }
+            continue;
+        }
+        // Deduplicate: skip if this exact canonical name is already in the list.
+        // Prevents pointless cycle entries when the user lists the same layout
+        // twice, while still allowing distinct variant entries for the same layout
+        // through separate [tiling.layouts.*] sections.
+        var already_present = false;
+        for (cfg.tiling.layouts.items) |existing| {
+            if (std.mem.eql(u8, existing, canonical)) {
+                already_present = true;
+                break;
+            }
+        }
+        if (already_present) {
+            debug.warn("layouts array: duplicate layout '{s}' at index {}, skipping", .{ canonical, i });
+            continue;
+        }
+        const layout_idx: u8 = @intCast(cfg.tiling.layouts.items.len);
+        try cfg.tiling.layouts.append(allocator, try allocator.dupe(u8, canonical));
+        var variants: ?types.LayoutVariantOverride = null;
+        var ws_list_str: ?[]const u8 = null;
+        if (i + 1 < arr.len) {
+            if (arr[i + 1].asString()) |peek| {
+                if (!isKnownLayout(peek)) {
+                    if (isWorkspaceList(peek)) {
+                        ws_list_str = peek;
+                        i += 1;
+                    } else {
+                        variants = parseLayoutVariant(canonical, peek);
+                        i += 1;
+                        if (i + 1 < arr.len) if (arr[i + 1].asString()) |peek2|
+                            if (isWorkspaceList(peek2)) {
+                                ws_list_str = peek2;
+                                i += 1;
+                            };
+                    }
+                }
+            }
+        }
+        if (ws_list_str) |ws_str| {
+            var ws_iter = std.mem.splitScalar(u8, ws_str, ',');
+            while (ws_iter.next()) |ws_tok| {
+                const trimmed = std.mem.trim(u8, ws_tok, " \t");
+                const ws_1based = std.fmt.parseInt(usize, trimmed, 10) catch {
+                    debug.warn("layouts array: invalid workspace number '{s}' for layout '{s}', skipping", .{ trimmed, canonical });
+                    continue;
+                };
+                if (!checkWorkspaceOverrideBound(ws_1based, "layouts array")) continue;
+                const ws_idx: u8 = @intCast(ws_1based - 1);
+                try cfg.tiling.workspace_layout_overrides.append(allocator, .{
+                    .workspace_idx = ws_idx,
+                    .layout_idx = layout_idx,
+                    .variant = variants,
+                });
+            }
+        }
+    }
+}
+
+// Field names only — no duplicated default literal. getColor's `default`
+// parameter is only consulted when the key is absent, so passing the
+// already-initialised `cfg.bar` field's current value (see parseBar) is
+// exactly the "leave it alone" semantics wanted, with types.zig remaining
+// the single place each of these defaults is written (item 6).
+const BAR_COLOR_FIELDS = [_][]const u8{
+    "bg", "fg", "selected_bg", "selected_fg", "occupied_fg", "urgent_bg", "urgent_fg", "accent_color",
+};
+
+/// Parses bar transparency from integers (0–100), decimals (0.0–1.0),
+/// or percentages (`50%`). Returns a [0.0, 1.0] opacity value.
+///
+/// Previously this manually re-parsed a bare decimal like "0.5" via a
+/// std.fmt.parseFloat fallback on the .string form, because the parser
+/// itself only produced .scalable for %-suffixed values. Now that
+/// Parser.parseValue recognises bare decimal literals natively (item 2),
+/// that fallback is redundant — asScalable() already succeeds for both
+/// "0.5" and "50%" — so this works purely off asInt()/asScalable().
+/// A *quoted* transparency value (e.g. `transparency = "0.5"`) opts out of
+/// the parser's native literal handling and is no longer specially
+/// unwrapped here; it now falls to the default with an explicit warning
+/// rather than being silently re-parsed.
+fn parseTransparency(value: parser.Value) f32 {
+    if (value.asInt()) |i| {
+        if (i == 0) return 0.0;
+        if (i >= 2 and i <= 100) return @as(f32, @floatFromInt(i)) / 100.0;
+        if (i == 1) {
+            // `transparency = 1` is ambiguous: it could mean 1% opacity (like the
+            // range 2–100) or the floating-point 1.0 (fully opaque).  We treat it
+            // as fully opaque to be conservative, but warn the user explicitly so
+            // they can use `1%` for 1% opacity or `1.0` for fully opaque instead.
+            debug.warn("Transparency value 1 is ambiguous (1% opacity or 1.0 fully opaque?); " ++
+                "treating as 1.0 (fully opaque). Use '1%' for 1%% opacity.", .{});
+        } else {
+            debug.warn("Invalid transparency value {} (must be 0–100), using default", .{i});
+        }
+        return 1.0;
+    }
+    if (value.asScalable()) |s| {
+        const f = if (s.is_percentage) s.value / 100.0 else s.value;
+        if (f < 0.0 or f > 1.0) {
+            debug.warn("Invalid transparency value {d} (must be 0.0–1.0 or 0–100%), using default", .{f});
+            return 1.0;
+        }
+        return f;
+    }
+    if (value.asString()) |str|
+        debug.warn("Transparency value '{s}' is quoted; write it unquoted (e.g. transparency = 0.5), using default", .{str});
+    return 1.0;
+}
+
+fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+    // Dupes `val` into `view`. Always allocates — even for the default
+    // literal — so callers never need to track whether a given BarConfig
+    // string field points at a literal or a heap copy; Config.deinit can
+    // free it unconditionally.
+    const set = struct {
+        fn assignStr(a: std.mem.Allocator, view: *[]const u8, val: []const u8) !void {
+            view.* = try a.dupe(u8, val);
+        }
+    };
+    const section = doc.getSection("bar") orelse return;
+    cfg.bar.enabled = getInRange(bool, section, "enabled", cfg.bar.enabled, null, null);
+    cfg.bar.vim_mode = getInRange(bool, section, "vim_mode", cfg.bar.vim_mode, null, null);
+    if (section.getString("position")) |pos_str|
+        cfg.bar.bar_position = std.meta.stringToEnum(types.BarScreenPosition, pos_str) orelse .top;
+    // height: null = auto-calculate from font metrics alone (see the BarConfig
+    // field doc comment). A negative explicit height makes no sense either, so
+    // it is rejected (with a warning) back to that same auto behavior rather
+    // than being passed through to rendering code (item 7).
+    cfg.bar.height = height_blk: {
+        const h = section.getScalable("height") orelse break :height_blk null;
+        if (h.value < 0.0) {
+            debug.warn("Value for 'height' ({d}) below minimum (0), using auto", .{h.value});
+            break :height_blk null;
+        }
+        break :height_blk h;
+    };
+    try set.assignStr(allocator, &cfg.bar.font, getInRange([]const u8, section, "font", cfg.bar.font, null, null));
+    if (section.get("fonts")) |v| if (v.asArray()) |arr| {
+        for (cfg.bar.fonts.items) |font| allocator.free(font);
+        cfg.bar.fonts.clearRetainingCapacity();
+        for (arr) |item| if (item.asString()) |name|
+            try cfg.bar.fonts.append(allocator, try allocator.dupe(u8, name));
+        debug.info("Loaded {} fonts for bar", .{cfg.bar.fonts.items.len});
+    };
+    cfg.bar.font_size = getScalableInRange(section, "font_size", cfg.bar.font_size, 0.0);
+    cfg.bar.spacing = getScalableInRange(section, "segment_spacing", cfg.bar.spacing, 0.0);
+    inline for (BAR_COLOR_FIELDS) |field_name|
+        @field(cfg.bar, field_name) = getColor(section, field_name, @field(cfg.bar, field_name));
+    try set.assignStr(allocator, &cfg.bar.clock_format, getInRange([]const u8, section, "clock_format", cfg.bar.clock_format, null, null));
+    try set.assignStr(allocator, &cfg.bar.drun_prompt, getInRange([]const u8, section, "drun_prompt", cfg.bar.drun_prompt, null, null));
+    // indicator_size: previously fell back to a literal 20.0 here that had
+    // silently drifted from the 30.0 struct default in types.zig (item 3).
+    // Reading the already-initialised current value (30.0, from
+    // getDefaultConfig) instead of restating a literal makes that class of
+    // drift structurally impossible going forward (item 6), and folds in the
+    // same negative-value rejection as the other ScalableValue fields (item 7).
+    cfg.bar.indicator_size = getScalableInRange(section, "indicator_size", cfg.bar.indicator_size, 0.0);
+    cfg.bar.workspace_tag_width = getScalableInRange(section, "workspace_tag_width", cfg.bar.workspace_tag_width, 0.0);
+    if (section.getString("indicator_location")) |loc_str| {
+        cfg.bar.indicator_location = types.IndicatorLocation.fromString(loc_str) orelse blk: {
+            debug.warn("Unknown indicator_location '{s}', using default 'up-left'", .{loc_str});
+            break :blk .up_left;
+        };
+    }
+
+    if (section.get("indicator_padding")) |val| {
+        const f: f32 = if (val.asScalable()) |sv|
+            if (sv.is_percentage) sv.value / 100.0 else sv.value
+        else if (val.asInt()) |i|
+            @as(f32, @floatFromInt(i)) / 100.0
+        else
+            0.1;
+        cfg.bar.indicator_padding = std.math.clamp(f, 0.0, 1.0);
+    }
+    // indicator_focused/unfocused: if only one is set, the other mirrors it.
+    // Always duped (even the literal defaults) so deinit can free unconditionally.
+    const raw_focused = section.getString("indicator_focused");
+    const raw_unfocused = section.getString("indicator_unfocused");
+    try set.assignStr(allocator, &cfg.bar.indicator_focused, raw_focused orelse raw_unfocused orelse cfg.bar.indicator_focused);
+    try set.assignStr(allocator, &cfg.bar.indicator_unfocused, raw_unfocused orelse raw_focused orelse cfg.bar.indicator_unfocused);
+
+    if (section.get("indicator_color")) |_| // null = inherit workspace fg
+        cfg.bar.indicator_color = getColor(section, "indicator_color", cfg.bar.fg);
+    if (section.get("transparency")) |value|
+        cfg.bar.transparency = std.math.clamp(parseTransparency(value), 0.0, 1.0);
+    try parseWorkspaceIcons(allocator, section, cfg);
+    try parseBarLayout(allocator, doc, cfg);
+    // Segment accent colors from [bar.colors], falling back to accent_color / bg.
+    const colors = doc.getSection("bar.colors");
+    const ACCENT_FIELDS = [_]struct { field: []const u8, key: []const u8, fallback: []const u8 }{
+        .{ .field = "workspaces_accent", .key = "workspaces", .fallback = "accent_color" },
+        .{ .field = "title_accent_color", .key = "title", .fallback = "accent_color" },
+        .{ .field = "title_unfocused_accent", .key = "title_unfocused", .fallback = "bg" },
+        .{ .field = "title_minimized_accent", .key = "title_minimized", .fallback = "accent_color" },
+        .{ .field = "clock_accent", .key = "clock", .fallback = "accent_color" },
+    };
+    inline for (ACCENT_FIELDS) |f|
+        @field(cfg.bar, f.field) = if (colors) |c|
+            getColor(c, f.key, @field(cfg.bar, f.fallback))
+        else
+            @field(cfg.bar, f.fallback);
+    if (colors) |c| {
+        const DRUN_COLOR_FIELDS = [_]struct { key: []const u8, fallback: []const u8 }{
+            .{ .key = "drun_bg", .fallback = "bg" },
+            .{ .key = "drun_fg", .fallback = "fg" },
+            .{ .key = "drun_prompt_color", .fallback = "accent_color" },
+        };
+        inline for (DRUN_COLOR_FIELDS) |f| {
+            if (c.get(f.key)) |_|
+                @field(cfg.bar, f.key) = getColor(c, f.key, @field(cfg.bar, f.fallback));
+        }
+    }
+    // Carousel: enabled flag, scroll_speed (px/s, min 1), carousel_refresh_rate (Hz, 0 = auto-detect via RandR).
+    carousel.setCarouselEnabled(getInRange(bool, section, "carousel_enabled", true, null, null));
+    carousel.setScrollSpeed(@as(f64, @floatFromInt(getInRange(u16, section, "scroll_speed", 125, 1, null))));
+    carousel.setRefreshRateOverride(@as(f64, @floatFromInt(getInRange(u16, section, "carousel_refresh_rate", 0, null, null))));
+}
+
+fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Section, cfg: *types.Config) !void {
+    for (cfg.bar.workspace_icons.items) |icon| allocator.free(icon);
+    cfg.bar.workspace_icons.clearRetainingCapacity();
+    if (section.get("icons")) |value| {
+        if (value.asArray()) |arr| {
+            for (arr) |item| {
+                if (item.asString()) |s| {
+                    try cfg.bar.workspace_icons.append(allocator, try allocator.dupe(u8, s));
+                } else if (item.asInt()) |n| {
+                    try cfg.bar.workspace_icons.append(allocator, try std.fmt.allocPrint(allocator, "{}", .{n}));
+                }
+            }
+        } else if (value.asString()) |str| {
+            for (str) |ch|
+                try cfg.bar.workspace_icons.append(allocator, try std.fmt.allocPrint(allocator, "{c}", .{ch}));
+        }
+    }
+
+    while (cfg.bar.workspace_icons.items.len < cfg.workspaces.count) {
+        try cfg.bar.workspace_icons.append(allocator, try std.fmt.allocPrint(allocator, "{}", .{cfg.bar.workspace_icons.items.len + 1}));
+    }
+}
+
+fn parseBarLayout(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+    for (cfg.bar.layout.items) |*item| item.deinit(allocator);
+    cfg.bar.layout.clearRetainingCapacity();
+    const positions = [_]struct { name: []const u8, pos: types.BarSegmentAnchor }{
+        .{ .name = "bar.layout.left", .pos = .left },
+        .{ .name = "bar.layout.center", .pos = .center },
+        .{ .name = "bar.layout.right", .pos = .right },
+    };
+    for (positions) |p| {
+        const layout_section = doc.getSection(p.name) orelse continue;
+        var bar_layout = types.BarLayout{ .position = p.pos, .segments = .empty };
+        if (layout_section.get("segments")) |sv| if (sv.asArray()) |seg_arr|
+            for (seg_arr) |item| if (item.asString()) |s|
+                if (std.meta.stringToEnum(types.BarSegment, s)) |segment|
+                    try bar_layout.segments.append(allocator, segment)
+                else
+                    debug.warn("Unknown bar segment '{s}', skipping", .{s});
+        if (bar_layout.segments.items.len > 0) {
+            try cfg.bar.layout.append(allocator, bar_layout);
+        } else {
+            bar_layout.deinit(allocator);
+        }
+    }
+
+    if (cfg.bar.layout.items.len == 0) try initDefaultBarLayout(allocator, cfg);
+}
+
+fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+    // [workspace.rules]: key is either a class name (value = ws int) or
+    // a workspace number (value = class array). Both directions call addRule.
+    if (doc.getSection("workspace.rules")) |rules_section| {
+        try parseWorkspaceRuleSection(allocator, cfg, rules_section);
+    }
+
+    // [rules]: simple class → workspace mapping (key = class, value = ws int).
+    if (doc.getSection("rules")) |rules_section| {
+        try parseSimpleRuleSection(allocator, cfg, rules_section);
+    }
+
+    var section_iter = doc.sections.iterator();
+    while (section_iter.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const ws_str = if (std.mem.startsWith(u8, name, "workspace.rules."))
+            name["workspace.rules.".len..]
+        else if (std.mem.startsWith(u8, name, "rules."))
+            name["rules.".len..]
+        else
+            continue;
+        const ws_num = std.fmt.parseInt(usize, ws_str, 10) catch continue;
+        if (!validateWorkspace(ws_num, cfg.workspaces.count, name)) continue;
+        var iter = entry.value_ptr.pairs.iterator();
+        while (iter.next()) |class_entry|
+            try addRule(allocator, cfg, class_entry.key_ptr.*, ws_num);
+    }
+}
+
+/// Handle the [workspace.rules] section where the key may be a class name
+/// (integer value → workspace) or a workspace number (array value → classes).
+fn parseWorkspaceRuleSection(
+    allocator: std.mem.Allocator,
+    cfg: *types.Config,
+    rules_section: *const parser.Section,
+) !void {
+    var iter = rules_section.pairs.iterator();
+    while (iter.next()) |entry| {
+        const ws_num = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
+            const ws = entry.value_ptr.*.asInt() orelse continue;
+            if (!validateWorkspace(@intCast(ws), cfg.workspaces.count, entry.key_ptr.*)) continue;
+            try addRule(allocator, cfg, entry.key_ptr.*, @intCast(ws));
+            continue;
+        };
+        if (!validateWorkspace(ws_num, cfg.workspaces.count, entry.key_ptr.*)) continue;
+        if (entry.value_ptr.*.asArray()) |arr| {
+            for (arr) |item| {
+                if (item.asString()) |class_name| try addRule(allocator, cfg, class_name, ws_num);
+            }
+        }
+    }
+}
+
+/// Handle the [rules] section: each entry maps a class name to a workspace int.
+fn parseSimpleRuleSection(
+    allocator: std.mem.Allocator,
+    cfg: *types.Config,
+    rules_section: *const parser.Section,
+) !void {
+    var iter = rules_section.pairs.iterator();
+    while (iter.next()) |entry| {
+        const ws_num = entry.value_ptr.*.asInt() orelse continue;
+        if (!validateWorkspace(@intCast(ws_num), cfg.workspaces.count, entry.key_ptr.*)) continue;
+        try addRule(allocator, cfg, entry.key_ptr.*, @intCast(ws_num));
+    }
+}
+
+// Tests
+
+const testing = std.testing;
+
+/// Parses `content` through the full pipeline (parser.parse -> buildConfigFromDoc)
+/// so every field ends up in the same heap-allocated state a real load would leave
+/// it in, meaning `cfg.deinit(testing.allocator)` is always valid to call — unlike
+/// a bare `types.Config{}` literal, whose string fields are non-heap comptime
+/// literals that Config.deinit's unconditional frees would corrupt.
+fn testBuildConfig(allocator: std.mem.Allocator, content: []const u8) !types.Config {
+    var doc = try parser.parse(allocator, content);
+    defer doc.deinit();
+    return buildConfigFromDoc(allocator, &doc);
+}
+
+test "canonicalLayout does not crash on a layout name longer than 32 bytes (item 1)" {
+    const long_name = "a-layout-name-that-is-way-longer-than-thirty-two-bytes-for-sure";
+    try testing.expect(long_name.len > 32);
+
+    var buf: [32]u8 = undefined;
+    // Must not panic/crash on the oversized name.
+    const canonical = canonicalLayout(long_name, &buf);
+    try testing.expectEqualStrings(long_name, canonical); // returned unchanged, per doc comment
+    try testing.expect(!isKnownLayout(canonical)); // ...and correctly reported as unknown
+}
+
+test "an overlong layout name in the layouts array is skipped, not a crash (items 1, 11)" {
+    const long_name = "a-layout-name-that-is-way-longer-than-thirty-two-bytes-for-sure";
+    const toml = try std.fmt.allocPrint(testing.allocator, "[tiling]\nlayouts = [\"{s}\"]\n", .{long_name});
+    defer testing.allocator.free(toml);
+
+    var cfg = try testBuildConfig(testing.allocator, toml);
+    defer cfg.deinit(testing.allocator);
+
+    // The oversized name never made it into the layouts list; nothing crashed.
+    for (cfg.tiling.layouts.items) |l| try testing.expect(!std.mem.eql(u8, l, long_name));
+}
+
+test "indicator_size defaults to 30.0 (percentage) when absent, matching the struct default (item 3)" {
+    var cfg = try testBuildConfig(testing.allocator, "[bar]\nenabled = true\n");
+    defer cfg.deinit(testing.allocator);
+    try testing.expect(cfg.bar.indicator_size.is_percentage);
+    try testing.expectApproxEqAbs(@as(f32, 30.0), cfg.bar.indicator_size.value, 0.0001);
+}
+
+test "bare decimal ScalableValue fields parse to the exact value written (items 2, 6)" {
+    var cfg = try testBuildConfig(testing.allocator,
+        \\[tiling]
+        \\gap_width = 3.5
+        \\border_width = 2.5
+        \\
+        \\[bar]
+        \\indicator_size = 0.15
+        \\
+    );
+    defer cfg.deinit(testing.allocator);
+    try testing.expectApproxEqAbs(@as(f32, 3.5), cfg.tiling.gap_width.value, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 2.5), cfg.tiling.border_width.value, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 0.15), cfg.bar.indicator_size.value, 0.0001);
+}
+
+test "negative ScalableValue fields are rejected back to their defaults (item 7)" {
+    var cfg = try testBuildConfig(testing.allocator,
+        \\[tiling]
+        \\gap_width = -50
+        \\border_width = -1
+        \\
+        \\[drag]
+        \\snap_distance = -1
+        \\
+        \\[bar]
+        \\segment_spacing = -3
+        \\indicator_size = -1
+        \\workspace_tag_width = -5
+        \\height = -10
+        \\
+    );
+    defer cfg.deinit(testing.allocator);
+    // Every rejected field falls back to its types.zig struct default, not 0
+    // or the (invalid) negative value that was written.
+    try testing.expectApproxEqAbs(@as(f32, 10.0), cfg.tiling.gap_width.value, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 2.0), cfg.tiling.border_width.value, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 8.0), cfg.snap_distance.value, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 12.0), cfg.bar.spacing.value, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 30.0), cfg.bar.indicator_size.value, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 100.0), cfg.bar.workspace_tag_width.value, 0.0001);
+    try testing.expect(cfg.bar.height == null); // rejected back to "auto"
+}
+
+test "a master-stack.counts entry for a workspace beyond MAX_WORKSPACES is skipped (item 4)" {
+    var cfg = try testBuildConfig(testing.allocator,
+        \\[workspaces]
+        \\count = 9
+        \\
+        \\[tiling.layouts.master-stack.counts]
+        \\3 = 2
+        \\70 = 4
+        \\
+    );
+    defer cfg.deinit(testing.allocator);
+
+    var saw_ws3 = false;
+    for (cfg.tiling.workspace_master_count_overrides.items) |o| {
+        if (o.workspace_idx == 2) {
+            saw_ws3 = true;
+            try testing.expectEqual(@as(u8, 2), o.count);
+        }
+        // Workspace 70 (index 69) exceeds constants.MAX_WORKSPACES (64) and
+        // must never appear in the overrides list — it can never be applied
+        // by workspaces.zig's fixed-size lookup table, and config.zig now
+        // warns and skips it at parse time instead of silently keeping a
+        // dead entry around.
+        try testing.expect(o.workspace_idx != 69);
+    }
+    try testing.expect(saw_ws3);
+    try testing.expect(constants.MAX_WORKSPACES == 64);
+}
+
+test "parseLayoutVariant handles an overlong layout name without crashing (item 11)" {
+    const long_name = "a-layout-name-that-is-way-longer-than-thirty-two-bytes-for-sure";
+    try testing.expect(parseLayoutVariant(long_name, "lifo") == null);
+}
+
+test "isKnownLayout and mouseButtonFromName are case-insensitive (item 11)" {
+    try testing.expect(isKnownLayout("MONOCLE"));
+    try testing.expect(isKnownLayout("Grid"));
+    try testing.expect(!isKnownLayout("not-a-real-layout"));
+    try testing.expectEqual(@as(?u8, 1), mouseButtonFromName("LEFT_CLICK"));
+    try testing.expectEqual(@as(?u8, 1), mouseButtonFromName("Left"));
+    try testing.expect(mouseButtonFromName("this-button-name-is-far-too-long-to-fit-in-sixteen-bytes") == null);
+}
