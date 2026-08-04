@@ -77,7 +77,18 @@ fn tileColumn(
     const heights = heights_buf[0..windows.len];
     distributeHeights(ctx, windows, avail, heights);
 
-    var y: u16 = y_offset +| m.gap;
+    // distributeHeights only folds a capped window's unused pixels into
+    // *other* windows in this column. If every window ends up capped
+    // (e.g. a lone fixed-height window on the workspace, or a master/stack
+    // pane that holds just one window), there's nothing left to absorb the
+    // slack, so sum(heights) < avail. Center the resulting stack in the
+    // column instead of leaving all that space stranded at the bottom.
+    var used: u32 = 0;
+    for (heights) |win_h| used += win_h;
+    const dead_space: u32 = @as(u32, avail) -| used;
+    const pad_top: u16 = @intCast(dead_space / 2);
+
+    var y: u16 = y_offset +| m.gap +| pad_top;
     for (windows, 0..) |win, i| {
         const rect = utils.Rect{
             .x = @intCast(x),
