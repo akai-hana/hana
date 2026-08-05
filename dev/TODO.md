@@ -4,10 +4,6 @@
 # ### HIGH-PRIORITY ### #
 
 # *** #
-- make un-fullscreening not be focus stolen by mouse cursor
-# *** #
-- add floating as a layout that one can cycle into
-# *** #
 - both tiling.zig and layouts.zig are really heavy on comments. i believe this ends up harming readability. i don't just want to remove all comments, but i don't want the file to end up being so bloated with them. light commenting, straight to the point and dense with meaningful information, should be the main goal.
 # *** #
 - the file imports on bar.zig are extremely messy. pending to sort them out. i want the files to be cleaner than they actually are.
