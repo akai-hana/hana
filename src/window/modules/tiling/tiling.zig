@@ -75,6 +75,11 @@ pub const LayoutVariants = struct {
 /// layout's other logic, re-exported here as `tiling.ScrollState`.
 pub const ScrollState = scroll.State;
 
+/// Master-layout runtime state (stack top/bottom weight boosts — mod+n/
+/// mod+o), defined in master.zig alongside the master layout's other logic,
+/// re-exported here as `tiling.MasterState`.
+pub const MasterState = master.State;
+
 /// Layout configuration: all user-adjustable parameters that control which
 /// layout is active and how it sizes windows.  Functions that only need to
 /// read or modify layout behaviour should accept *LayoutConfig (or
@@ -150,6 +155,10 @@ pub const State = struct {
     /// Scroll-layout runtime state, grouped so its lifetime and ownership are
     /// explicit.  Dormant (but preserved) when layout != .scroll.
     scroll: ScrollState,
+
+    /// Master-layout runtime state (stack top/bottom weight boosts).
+    /// Dormant (but preserved) when layout != .master.
+    master: MasterState,
 
     pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.config.gap_width, .border = self.config.border_width };
@@ -670,6 +679,39 @@ pub inline fn decreaseMasterWidth() void {
     adjustMasterWidth(-0.025);
 }
 
+// Stack slot balance (mod+n / mod+o)
+//
+// Unlike master_width/master_count, these boosts are not persisted per
+// workspace — they're a single pair of runtime scalars shared across every
+// workspace's master layout, reset back to 0 on config reload (see
+// initState/reloadConfig). Bumping either one invalidates every inactive
+// workspace's cached geometry, same as adjustMasterWidth, since a change
+// here can alter any workspace using the master layout.
+
+const stack_boost_step: f32 = 0.5;
+const max_stack_boost: f32 = 6.0;
+
+/// Grows the stack's topmost (first) window's share of the column height.
+/// Every other stack window's share shrinks to compensate — evenly, so with
+/// 3+ slaves the loss is spread across all of them rather than taken from
+/// just one. See master.State's doc comment for why this falls out of a
+/// single scalar. Bound to mod+n by convention.
+pub fn growTopSlave() void {
+    const s = getState();
+    s.master.stack_top_boost = @min(max_stack_boost, s.master.stack_top_boost + stack_boost_step);
+    s.geom.workspace_geom_valid_bits = 0;
+    retileCurrentWorkspace();
+}
+
+/// Mirror of growTopSlave for the stack's bottommost (last) window. Bound to
+/// mod+o by convention.
+pub fn growBottomSlave() void {
+    const s = getState();
+    s.master.stack_bottom_boost = @min(max_stack_boost, s.master.stack_bottom_boost + stack_boost_step);
+    s.geom.workspace_geom_valid_bits = 0;
+    retileCurrentWorkspace();
+}
+
 /// Shift the scroll-layout viewport left or right by one slot.
 /// `delta` is +1 (right/forward) or -1 (left/backward).
 /// No-op when the current layout is not .scroll.
@@ -897,6 +939,7 @@ fn initState() State {
             .scratch_wins = undefined,
         },
         .scroll = .{},
+        .master = .{},
     };
 }
 

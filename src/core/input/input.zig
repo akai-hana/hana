@@ -254,6 +254,8 @@ fn executeAction(action: *const types.Action) !void {
         .decrease_master,
         .increase_master_count,
         .decrease_master_count,
+        .grow_stack_top,
+        .grow_stack_bottom,
         .swap_master,
         .swap_master_focus_swap,
         .move_window_next,
@@ -318,6 +320,8 @@ fn executeTilingAction(action: *const types.Action) void {
         .decrease_master => withTilingGrab(tiling.decreaseMasterWidth),
         .increase_master_count => withTilingGrab(tiling.increaseMasterCount),
         .decrease_master_count => withTilingGrab(tiling.decreaseMasterCount),
+        .grow_stack_top => withTilingGrab(tiling.growTopSlave),
+        .grow_stack_bottom => withTilingGrab(tiling.growBottomSlave),
 
         .swap_master, .swap_master_focus_swap => executeSwapMaster(action),
 
@@ -669,6 +673,7 @@ fn dumpState() void {
         debug.info("Tiled windows:  {}", .{t.windows.len});
         debug.info("Master count:   {}", .{t.config.master_count});
         debug.info("Master width:   {d:.2}", .{t.config.master_width});
+        debug.info("Stack boost:    top {d:.2} / bottom {d:.2}", .{ t.master.stack_top_boost, t.master.stack_bottom_boost });
     }
 
     debug.info("================================", .{});
