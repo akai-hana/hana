@@ -1,3 +1,0 @@
-Continue. 
-
-Great. Now, you said fullscreen and focus are high ratios, but mostly earned, even though the ratios of hana's implementations are 22x to 24x the length of dwm's. Is there truly nothing that can be done, while preserving hana's strengths?
