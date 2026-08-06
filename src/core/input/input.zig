@@ -673,7 +673,7 @@ fn dumpState() void {
         debug.info("Tiled windows:  {}", .{t.windows.len});
         debug.info("Master count:   {}", .{t.config.master_count});
         debug.info("Master width:   {d:.2}", .{t.config.master_width});
-        debug.info("Stack boost:    top {d:.2} / bottom {d:.2}", .{ t.master.stack_top_boost, t.master.stack_bottom_boost });
+        debug.info("Stack balance:  {d:.2} (+ = top slave grown, - = bottom slave grown)", .{t.config.stack_balance});
     }
 
     debug.info("================================", .{});

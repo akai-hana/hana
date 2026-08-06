@@ -75,11 +75,6 @@ pub const LayoutVariants = struct {
 /// layout's other logic, re-exported here as `tiling.ScrollState`.
 pub const ScrollState = scroll.State;
 
-/// Master-layout runtime state (stack top/bottom weight boosts — mod+n/
-/// mod+o), defined in master.zig alongside the master layout's other logic,
-/// re-exported here as `tiling.MasterState`.
-pub const MasterState = master.State;
-
 /// Layout configuration: all user-adjustable parameters that control which
 /// layout is active and how it sizes windows.  Functions that only need to
 /// read or modify layout behaviour should accept *LayoutConfig (or
@@ -93,6 +88,14 @@ pub const LayoutConfig = struct {
     master_side: types.MasterSide,
     master_width: f32,
     master_count: u8,
+    /// Master layout only: signed balance between the stack's top and bottom
+    /// slave slots. 0 = even split (default). Positive grows the topmost
+    /// slave's share (mod+n), negative grows the bottommost's (mod+o) — see
+    /// master.zig's tileWithOffset for how this maps to per-slot weights.
+    /// A single signed scalar (rather than two independent boosts) means
+    /// mod+n/mod+o partially undo each other instead of compounding to
+    /// squeeze the windows in between toward zero.
+    stack_balance: f32,
     gap_width: u16,
     border_width: u16,
     border_focused: u32,
@@ -119,7 +122,8 @@ pub const GeomCache = struct {
     /// Bit N is set when workspace N's geometry has been pre-computed and the
     /// cache holds correct on-screen positions for all its windows.
     ///
-    /// Cleared by: addWindow, removeWindow, adjustMasterWidth, applyWorkspaceLayout.
+    /// Cleared by: addWindow, removeWindow, adjustMasterWidth, growTopSlave,
+    /// growBottomSlave, applyWorkspaceLayout.
     /// Set by the retile call that immediately follows each of those.
     workspace_geom_valid_bits: u64,
 
@@ -155,10 +159,6 @@ pub const State = struct {
     /// Scroll-layout runtime state, grouped so its lifetime and ownership are
     /// explicit.  Dormant (but preserved) when layout != .scroll.
     scroll: ScrollState,
-
-    /// Master-layout runtime state (stack top/bottom weight boosts).
-    /// Dormant (but preserved) when layout != .master.
-    master: MasterState,
 
     pub inline fn margins(self: *const State) utils.Margins {
         return .{ .gap = self.config.gap_width, .border = self.config.border_width };
@@ -225,6 +225,7 @@ pub fn reloadConfig() void {
             ws.layout = ns.config.layout;
             ws.master_width = null;
             ws.master_count = null;
+            ws.stack_balance = null;
         }
     }
 
@@ -611,10 +612,11 @@ pub fn stepLayoutVariant() void {
 pub fn applyWorkspaceLayout(ws: *const WsWorkspace) void {
     const s = getState();
     const needs_retile =
-        s.config.layout != ws.layout or ws.variants != null or (ws.master_width != null and ws.master_width.? != s.config.master_width) or (ws.master_count != null and ws.master_count.? != s.config.master_count);
+        s.config.layout != ws.layout or ws.variants != null or (ws.master_width != null and ws.master_width.? != s.config.master_width) or (ws.master_count != null and ws.master_count.? != s.config.master_count) or (ws.stack_balance orelse 0) != s.config.stack_balance;
     s.config.layout = ws.layout;
     if (ws.master_width) |mw| s.config.master_width = mw;
     s.config.master_count = ws.master_count orelse core.getState().config.tiling.master_count;
+    s.config.stack_balance = ws.stack_balance orelse 0;
     if (ws.variants) |v| {
         switch (v) {
             .master => |mv| s.config.layout_variants.master = mv,
@@ -681,36 +683,51 @@ pub inline fn decreaseMasterWidth() void {
 
 // Stack slot balance (mod+n / mod+o)
 //
-// Unlike master_width/master_count, these boosts are not persisted per
-// workspace — they're a single pair of runtime scalars shared across every
-// workspace's master layout, reset back to 0 on config reload (see
-// initState/reloadConfig). Bumping either one invalidates every inactive
-// workspace's cached geometry, same as adjustMasterWidth, since a change
-// here can alter any workspace using the master layout.
+// stack_balance lives on LayoutConfig (alongside master_width/master_count)
+// and is persisted per-workspace the same way — see the per-workspace write
+// below and Workspace.stack_balance in workspaces.zig — so, like master
+// width/count, it respects `global_layout`: per-workspace when false (the
+// default), shared across every workspace when true.
+//
+// It's a single signed scalar rather than two independent "grow top" / "grow
+// bottom" counters specifically so mod+n and mod+o partially undo each other
+// instead of compounding: with two independent boosts, alternating mod+n and
+// mod+o with 3+ slaves would grow *both* ends at once and squeeze whatever's
+// in between toward zero, since the windows in the middle only ever lose
+// share to both boosts and never get any of it back. A signed balance can't
+// do that — moving it back toward 0 (either direction) hands share straight
+// back to the middle windows.
 
-const stack_boost_step: f32 = 0.5;
-const max_stack_boost: f32 = 6.0;
+const stack_balance_step: f32 = 0.5;
+const max_stack_balance: f32 = 6.0;
 
-/// Grows the stack's topmost (first) window's share of the column height.
-/// Every other stack window's share shrinks to compensate — evenly, so with
-/// 3+ slaves the loss is spread across all of them rather than taken from
-/// just one. See master.State's doc comment for why this falls out of a
-/// single scalar. Bound to mod+n by convention.
+/// Grows the stack's topmost (first) window's share of the column height by
+/// nudging stack_balance positive. Every other stack window's share shrinks
+/// to compensate — evenly, so with 3+ slaves the loss is spread across all
+/// of them rather than taken from just one. See LayoutConfig.stack_balance's
+/// doc comment for the signed-scalar reasoning. Bound to mod+n by convention.
 pub fn growTopSlave() void {
     const s = getState();
-    s.master.stack_top_boost = @min(max_stack_boost, s.master.stack_top_boost + stack_boost_step);
+    s.config.stack_balance = @min(max_stack_balance, s.config.stack_balance + stack_balance_step);
+    if (!core.getState().config.tiling.global_layout) {
+        if (workspaces.getCurrentWorkspaceObject()) |ws| ws.stack_balance = s.config.stack_balance;
+    }
     s.geom.workspace_geom_valid_bits = 0;
     retileCurrentWorkspace();
 }
 
-/// Mirror of growTopSlave for the stack's bottommost (last) window. Bound to
-/// mod+o by convention.
+/// Mirror of growTopSlave for the stack's bottommost (last) window — nudges
+/// stack_balance negative instead. Bound to mod+o by convention.
 pub fn growBottomSlave() void {
     const s = getState();
-    s.master.stack_bottom_boost = @min(max_stack_boost, s.master.stack_bottom_boost + stack_boost_step);
+    s.config.stack_balance = @max(-max_stack_balance, s.config.stack_balance - stack_balance_step);
+    if (!core.getState().config.tiling.global_layout) {
+        if (workspaces.getCurrentWorkspaceObject()) |ws| ws.stack_balance = s.config.stack_balance;
+    }
     s.geom.workspace_geom_valid_bits = 0;
     retileCurrentWorkspace();
 }
+
 
 /// Shift the scroll-layout viewport left or right by one slot.
 /// `delta` is +1 (right/forward) or -1 (left/backward).
@@ -926,6 +943,7 @@ fn initState() State {
             .master_side = cs.config.tiling.master_side,
             .master_width = calcMasterWidth(),
             .master_count = cs.config.tiling.master_count,
+            .stack_balance = 0,
             .gap_width = scale.scaleBorderWidth(cs.config.tiling.gap_width, screen_height),
             .border_width = scale.scaleBorderWidth(cs.config.tiling.border_width, screen_height),
             .border_focused = cs.config.tiling.border_focused,
@@ -939,7 +957,6 @@ fn initState() State {
             .scratch_wins = undefined,
         },
         .scroll = .{},
-        .master = .{},
     };
 }
 

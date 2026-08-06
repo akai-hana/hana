@@ -7,43 +7,38 @@ const constants = @import("constants");
 const tiling = @import("tiling");
 const layouts = @import("layouts");
 
-/// Master-layout runtime state, persisted on tiling.State (as `.master`)
-/// alongside the other layouts' runtime state (e.g. scroll.State). Only
-/// meaningful while `layout == .master`; otherwise dormant but preserved.
+/// The two adjustable stack-column weights derived from LayoutConfig's
+/// signed `stack_balance` scalar (see that field's doc comment in tiling.zig
+/// for why it's a single signed value rather than two independent boosts).
+/// Bundled together so tileColumn/tileStack only need to thread one extra
+/// parameter through.
 ///
-/// stack_top_boost / stack_bottom_boost bias how tileStack's simple column
-/// path splits height among stack ("slave") windows: every slot starts at
-/// weight 1.0 (an even split, identical to the pre-existing behaviour), and
-/// growTopSlave/growBottomSlave (tiling.zig, bound to mod+n/mod+o) add to the
-/// weight of the first/last slot respectively. Because the *shrink* isn't
-/// subtracted from specific slots but simply falls out of everyone else's
-/// weight becoming a smaller fraction of a larger total, this generalizes
-/// correctly to any slave count without extra bookkeeping:
+/// tileStack's simple column path splits height among stack ("slave")
+/// windows proportionally to weight; every slot starts at weight 1.0 (an
+/// even split, identical to the pre-existing behaviour), and `top`/`bottom`
+/// here add to the weight of the first/last slot respectively. Because the
+/// *shrink* isn't subtracted from specific slots but simply falls out of
+/// everyone else's weight becoming a smaller fraction of a larger total,
+/// this generalizes correctly to any slave count without extra bookkeeping:
 ///   - 2 slaves: boosting one slot's weight directly steals share from the
 ///     other one — matches "grow slave A, shrink slave B" 1:1.
 ///   - 3+ slaves: boosting the top (or bottom) slot's weight shrinks every
 ///     other slot's share by the same proportion, since they all keep equal
 ///     weight (1.0) relative to each other — matches "the rest shrink evenly".
 /// See distributeStackHeightsWeighted for the actual math.
-pub const State = struct {
-    stack_top_boost: f32 = 0,
-    stack_bottom_boost: f32 = 0,
-
-    /// Convenience view used by tileWithOffset to pass both boosts down to
-    /// the stack-tiling path in one value.
-    pub inline fn stackBoost(self: *const State) StackBoost {
-        return .{ .top = self.stack_top_boost, .bottom = self.stack_bottom_boost };
-    }
-};
-
-/// The two adjustable stack-column weights, bundled together so tileColumn/
-/// tileStack only need to thread one extra parameter through.
 pub const StackBoost = struct {
     top: f32 = 0,
     bottom: f32 = 0,
 
     inline fn isZero(self: StackBoost) bool {
         return self.top == 0 and self.bottom == 0;
+    }
+
+    /// `balance` is LayoutConfig.stack_balance: positive boosts the top slot,
+    /// negative boosts the bottom slot, and the two are mutually exclusive by
+    /// construction — exactly one of `top`/`bottom` is ever nonzero.
+    pub inline fn fromBalance(balance: f32) StackBoost {
+        return .{ .top = @max(0, balance), .bottom = @max(0, -balance) };
     }
 };
 
@@ -85,7 +80,7 @@ pub fn tileWithOffset(
     if (stack_n == 0) return;
 
     const stack_x: u16 = if (is_master_on_right) 0 else master_w;
-    tileStack(ctx, windows[master_n..], stack_x, y_offset, screen_w -| master_w, screen_h, m, state.master.stackBoost());
+    tileStack(ctx, windows[master_n..], stack_x, y_offset, screen_w -| master_w, screen_h, m, StackBoost.fromBalance(state.config.stack_balance));
 }
 
 /// Tile a vertical column of `windows` at a fixed x position with a fixed
@@ -203,8 +198,8 @@ fn distributeHeights(ctx: *const layouts.LayoutCtx, windows: []const u32, avail:
 }
 
 /// Weighted counterpart of distributeHeights, used only when the stack has
-/// an active top and/or bottom boost (state.master.stack_top_boost /
-/// stack_bottom_boost — see the master.State doc comment for the weight
+/// an active top and/or bottom boost (LayoutConfig.stack_balance, derived via
+/// StackBoost.fromBalance — see that struct's doc comment for the weight
 /// scheme). Structurally identical to distributeHeights — same iterative
 /// max_height water-filling — except the fair share used for both the
 /// capping check and the final split comes from `windowWeight` instead of a
@@ -326,7 +321,7 @@ fn tileStack(
 /// scope for now since overflow only kicks in once a stack has more windows
 /// than fit one-per-slot.
 ///
-/// NOTE: the mod+n/mod+o stack boost (see master.State) is likewise not
+/// NOTE: the mod+n/mod+o stack boost (LayoutConfig.stack_balance) is likewise not
 /// applied here — "topmost"/"bottommost" stop being well-defined once the
 /// stack wraps into multiple columns, so growTopSlave/growBottomSlave only
 /// affect the stack while it still fits in a single column.
