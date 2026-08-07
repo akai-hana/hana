@@ -8,5 +8,5 @@ while true; do
         --max-commits $max
 
     git push --force-with-lease
-    # max+=1
+    max+=1
 done
