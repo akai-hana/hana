@@ -731,6 +731,11 @@ inline fn withTilingGrab(op: anytype) void {
 /// acted on) — so a second, un-intended keypress (autorepeat, a fast
 /// double-tap, etc.) then lands on that other window instead of the one
 /// the user was just interacting with.
+///
+/// This guarantee depends on suppression staying active until any crossing
+/// events the reflow itself generates have actually been delivered and
+/// filtered — see beginTilingOpSettle's doc comment in focus.zig for why
+/// that can't just be done synchronously here.
 inline fn withTilingGrabKeepFocus(op: anytype) void {
     withTilingGrabImpl(op, false);
 }
@@ -758,11 +763,20 @@ inline fn withTilingGrabImpl(op: anytype, sync_pointer: bool) void {
         // drainPointerSync() consumes on the next event-loop iteration.
         focus.beginPointerSync();
     } else {
-        // No pointer resync — but suppression still needs clearing, or
-        // hover-focus stays masked until some other action happens to call
-        // beginPointerSync (see its own doc comment: it clears suppression
-        // as a side effect, which we're intentionally skipping here).
-        focus.setSuppressReason(.none);
+        // No pointer resync — but suppression still needs clearing eventually,
+        // or hover-focus stays masked until some other action happens to call
+        // beginPointerSync. It must NOT be cleared synchronously here, though:
+        // the configure_window calls queued above by `op()` are not sent to
+        // the X server until ungrabAndFlush below, so clearing suppression
+        // now would turn EnterNotify filtering back off before the server has
+        // even processed the reflow that suppression exists to mask — letting
+        // a real crossing event (e.g. a neighbour window's edge sliding under
+        // a stationary cursor) slip through unfiltered and silently steal
+        // focus. beginTilingOpSettle defers the clear to the next
+        // event-dispatch iteration, after any such event is guaranteed to
+        // have already been dispatched and filtered. See its doc comment in
+        // focus.zig for the full ordering argument.
+        focus.beginTilingOpSettle();
     }
     utils.ungrabAndFlush(conn);
 }
