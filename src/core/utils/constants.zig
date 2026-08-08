@@ -30,9 +30,16 @@ pub const XKB_RETRY_DELAY_MS: u64 = 20;
 // Offscreen positioning
 // Windows on inactive workspaces are parked at OFFSCREEN_X_POSITION so they
 // are hidden without being unmapped (unmapping causes some apps to pause).
-// -4000 clears the widest common display in use today (4K = 3840 px wide) with
-// a small margin; increase if ultra-wide support beyond 4000 px is ever needed.
-pub const OFFSCREEN_X_POSITION: i32 = -4000;
+//
+// X11's ConfigureWindow request encodes x/y as INT16 on the wire (this is
+// also why utils.Rect.x/y are i16), so -32768 is the hard floor for how far
+// off the left edge a window can ever be parked. The previous value, -4000,
+// only cleared a single 3840px-wide (4K) display with a small margin — on a
+// multi-monitor layout with a display to the left of the primary, an
+// ultrawide, or a 5K/6K panel, -4000 can land back inside real screen real
+// estate instead of off it. -30000 clears any realistic combined desktop
+// while leaving headroom below the INT16 floor.
+pub const OFFSCREEN_X_POSITION: i32 = -30000;
 
 /// Lower bound for detecting whether a window is parked offscreen.
 /// A fixed upper bound is intentionally absent: multi-monitor desktops can
