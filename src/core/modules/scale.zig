@@ -90,39 +90,27 @@ pub fn detectDpi(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) DpiInfo
 
     if (readXftDpi(conn, screen)) |xft_dpi| {
         debug.info("Using DPI from X resources (Xft.dpi): {d:.1}", .{xft_dpi});
-        dpi_cache = .{ .dpi = xft_dpi };
-        return dpi_cache.?;
+        const info: DpiInfo = .{ .dpi = xft_dpi };
+        dpi_cache = info;
+        return info;
     }
 
     const geometry_dpi = calcDpiFromGeometry(screen);
-    var dpi = geometry_dpi;
-    if (geometry_dpi < 50.0 or geometry_dpi > 300.0) {
+    const dpi = if (geometry_dpi < 50.0 or geometry_dpi > 300.0) blk: {
         debug.warn("Calculated DPI {d:.1} seems unreasonable, using baseline DPI", .{geometry_dpi});
-        dpi = BASELINE_DPI;
-    } else {
+        break :blk BASELINE_DPI;
+    } else blk: {
         debug.info("Using geometry-calculated DPI: {d:.1}", .{geometry_dpi});
-    }
-
-    dpi_cache = .{ .dpi = dpi };
-    return dpi_cache.?;
-}
-
-/// Scales an integer value by `scale_factor`, rounding to the nearest integer.
-pub fn scaleInt(base_value: anytype, scale_factor: f32) @TypeOf(base_value) {
-    const T = @TypeOf(base_value);
-    return switch (@typeInfo(T)) {
-        .int, .comptime_int => @intFromFloat(@round(@as(f32, @floatFromInt(base_value)) * scale_factor)),
-        else => @compileError("scaleInt() only supports integer types; use scaleToInt() for floats"),
+        break :blk geometry_dpi;
     };
-}
 
-/// Scales a float value by `scale_factor` and rounds to the nearest integer of type `T`.
-pub fn scaleToInt(comptime T: type, base_value: f32, scale_factor: f32) T {
-    return @intFromFloat(@round(base_value * scale_factor));
+    const info: DpiInfo = .{ .dpi = dpi };
+    dpi_cache = info;
+    return info;
 }
 
 /// Scale a border or gap value. Percentages are screen-relative and applied
-/// as-is (no scale_factor, or HiDPI displays would get double-scaled);
+/// as-is (no global scale, or HiDPI displays would get double-scaled);
 /// absolute pixel values pass through unchanged.
 /// See utils.scale_fallback.scaleBorderWidth, the shared source of truth.
 pub fn scaleBorderWidth(value: parser.ScalableValue, reference_dimension: u16) u16 {

@@ -223,7 +223,6 @@ const State = struct {
     is_visible: bool = true,
     is_globally_visible: bool = true,
     is_dirty: bool = false,
-    has_clock_segment: bool,
     /// Title geometry captured by drawAllInner; consumed by drawAll/drawAllNoFlush
     /// to call syncTitleCache after the flush decision.
     title_cache_pending_x: ?u16 = null,
@@ -261,12 +260,6 @@ const State = struct {
             },
             .layout_cache = .{
                 .clock_width = dc.measureTextWidth(clock.CLOCK_MEASURE_STRING) + 2 * config.scaledSegmentPadding(height),
-            },
-            .has_clock_segment = blk: {
-                for (config.layout.items) |lay|
-                    for (lay.segments.items) |seg|
-                        if (seg == .clock) break :blk true;
-                break :blk false;
             },
         };
         try s.title_cache.title.ensureTotalCapacity(allocator, 256);
@@ -818,7 +811,7 @@ fn createBarWindow(height: u16, y_pos: i16) BarWindowSetup {
     const visual_info = if (want_transparency)
         drawing.findVisualByDepth(cs.screen, 32)
     else
-        drawing.VisualInfo{ .visual_type = null, .visual_id = cs.screen.root_visual };
+        drawing.VisualInfo{ .visual_id = cs.screen.root_visual };
     const depth: u8 = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
     const visual_id = visual_info.visual_id;
     const colormap: u32 = if (want_transparency) blk: {
@@ -1060,9 +1053,6 @@ pub fn isBarWindow(win: u32) bool {
 pub fn getBarHeight() u16 {
     return if (gBar.state) |s| s.render.height else 0;
 }
-pub fn hasClockSegment() bool {
-    return if (gBar.state) |s| s.has_clock_segment else false;
-}
 
 /// Schedules a full bar redraw, coalesced via updateIfDirty. Zero X11 I/O on the caller.
 pub fn scheduleRedraw() void {
@@ -1100,41 +1090,6 @@ pub fn redrawInsideGrab() void {
     // Phase 2: queue the blit — will be sent with ungrabAndFlush().
     s.render.dc.blitQueued();
     s.is_dirty = false;
-}
-
-/// Pre-render phase for a fullscreen exit: captures bar state (may issue X
-/// round-trips for title fetches) and renders to the off-screen pixmap.
-///
-/// Call BEFORE xcb_grab_server.  captureStateIntoSlot's round-trips trigger an
-/// implicit XCB flush; if xcb_grab_server were already queued, that flush would
-/// deliver it early — holding the grab for the entire Cairo render and allowing
-/// the compositor to miss a vsync.  By calling this before the grab the send
-/// buffer is empty when the flush fires, matching the pattern the toggle path
-/// already uses.
-///
-/// Sets is_visible = true so that prepareSnapshot() does not short-circuit.
-/// Pair with commitShowInsideGrab() inside the grab.
-pub fn prerenderForShow() void {
-    const s = gBar.state orelse return;
-    s.is_visible = true;
-    s.title_cache.is_invalidated = true; // force carousel reset from pos 0 on re-show
-    gBar.pending_force_full_redraw = true;
-    // Render to pixmap; round-trips in captureStateIntoSlot fire here on an
-    // empty send buffer, not inside a grab.
-    submitRenderBlocking();
-}
-
-/// Commit phase for a fullscreen show: queues xcb_copy_area and maps the bar
-/// window atomically with the caller's ungrabAndFlush().
-///
-/// Call INSIDE xcb_grab_server, after prerenderForShow().  Caller is responsible
-/// for retile and ungrabAndFlush().
-pub fn commitShowInsideGrab() void {
-    const s = gBar.state orelse return;
-    s.render.dc.blitQueued();
-    _ = xcb.xcb_map_window(core.getState().conn, s.win.win_id);
-    s.is_dirty = false;
-    debug.info("Bar shown (show_fullscreen)", .{});
 }
 
 pub fn raiseBar() void {
@@ -1226,24 +1181,6 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
         s.title_cache.is_invalidated = true;
         s.markDirty();
     }
-}
-
-pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
-    const s = gBar.state orelse return;
-    if (event.event != s.win.win_id) return;
-    if (!core.getState().config.workspaces.enabled) return;
-    const ws_state = workspaces.getState() orelse return;
-    const ws_w = tags.getCachedWorkspaceWidth();
-    if (ws_w == 0) return;
-    const click_x = @max(0, event.event_x - s.layout_cache.workspace_x);
-    const clicked_ws: usize = @intCast(@divFloor(click_x, ws_w));
-    if (clicked_ws >= ws_state.workspaces.len) return;
-    switchToWorkspace(clicked_ws);
-    s.markDirty();
-}
-
-inline fn switchToWorkspace(ws_arg: usize) void {
-    workspaces.switchTo(ws_arg);
 }
 
 fn isTilingActive() bool {

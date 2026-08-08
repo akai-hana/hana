@@ -85,22 +85,12 @@ pub const Value = union(enum) {
 };
 
 pub const Section = struct {
-    /// The section's name as it appears in the config file.
-    ///
-    /// LIFETIME WARNING: this slice is a non-owning alias — it points into the
-    /// key string owned by the parent `Document.sections` map.  Reading `.name`
-    /// after the owning `Document.deinit()` call is use-after-free.  Callers
-    /// that need the name beyond the document's lifetime must duplicate it.
-    /// If you only need the name for diagnostic messages, read it before any
-    /// deinit.  External code should prefer `Document.getSection` and work with
-    /// the returned `*const Section` while the `Document` is alive.
-    name: []const u8,
     pairs: std.StringHashMap(Value),
 
-    pub fn init(allocator: std.mem.Allocator, name: []const u8) Section {
+    pub fn init(allocator: std.mem.Allocator) Section {
         var map = std.StringHashMap(Value).init(allocator);
         map.ensureTotalCapacity(16) catch {};
-        return .{ .name = name, .pairs = map };
+        return .{ .pairs = map };
     }
 
     pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
@@ -135,9 +125,6 @@ pub const Section = struct {
     pub fn getString(self: *const Section, key: []const u8) ?[]const u8 {
         return self.getAs([]const u8, key);
     }
-    pub fn getColor(self: *const Section, key: []const u8) ?u32 {
-        return self.getAs(u32, key);
-    }
     pub fn getScalable(self: *const Section, key: []const u8) ?ScalableValue {
         return self.getAs(ScalableValue, key);
     }
@@ -151,7 +138,7 @@ pub const Document = struct {
     pub fn init(allocator: std.mem.Allocator) Document {
         var sections = std.StringHashMap(Section).init(allocator);
         sections.ensureTotalCapacity(8) catch {};
-        return .{ .allocator = allocator, .sections = sections, .root = Section.init(allocator, "") };
+        return .{ .allocator = allocator, .sections = sections, .root = Section.init(allocator) };
     }
 
     pub fn deinit(self: *Document) void {
@@ -194,6 +181,19 @@ fn deepCopyValue(allocator: std.mem.Allocator, val: Value) std.mem.Allocator.Err
     };
 }
 
+/// Wraps `old_val` in a fresh array if it isn't one already, so callers can
+/// append into it. On error, `old_val` is left untouched.
+fn ensureArray(allocator: std.mem.Allocator, old_val: *Value) !void {
+    if (old_val.* == .array) return;
+    var arr = try std.ArrayList(Value).initCapacity(allocator, 1);
+    errdefer {
+        for (arr.items) |*item| item.deinit(allocator);
+        arr.deinit(allocator);
+    }
+    arr.appendAssumeCapacity(old_val.*);
+    old_val.* = .{ .array = arr };
+}
+
 /// Accumulate `incoming` into the existing single-file value at `old_val`.
 ///
 /// Used while parsing one file: a duplicate key wraps the existing scalar and
@@ -206,17 +206,7 @@ fn deepCopyValue(allocator: std.mem.Allocator, val: Value) std.mem.Allocator.Err
 ///
 /// Takes ownership of `incoming`; `old_val` is updated in place.
 fn accumulateScalar(allocator: std.mem.Allocator, old_val: *Value, incoming: Value) !void {
-    if (old_val.* != .array) {
-        // First duplicate: wrap the existing scalar in a fresh array before
-        // flattening `incoming` into it below.
-        var arr = try std.ArrayList(Value).initCapacity(allocator, 1);
-        errdefer {
-            for (arr.items) |*item| item.deinit(allocator);
-            arr.deinit(allocator);
-        }
-        arr.appendAssumeCapacity(old_val.*);
-        old_val.* = .{ .array = arr };
-    }
+    try ensureArray(allocator, old_val);
     if (incoming == .array) {
         // `incoming` is uniquely owned here (freshly parsed within this same
         // file, not shared with any other Document), so its elements can be
@@ -242,17 +232,7 @@ fn accumulateScalar(allocator: std.mem.Allocator, old_val: *Value, incoming: Val
 ///
 /// Takes ownership of `incoming`; `old_val` is updated in place.
 fn mergeIntoArray(allocator: std.mem.Allocator, old_val: *Value, incoming: Value) !void {
-    if (old_val.* != .array) {
-        // First duplicate: wrap the existing scalar in a fresh array before
-        // flattening `incoming` into it below.
-        var arr = try std.ArrayList(Value).initCapacity(allocator, 1);
-        errdefer {
-            for (arr.items) |*item| item.deinit(allocator);
-            arr.deinit(allocator);
-        }
-        arr.appendAssumeCapacity(old_val.*);
-        old_val.* = .{ .array = arr };
-    }
+    try ensureArray(allocator, old_val);
     if (incoming == .array) {
         for (incoming.array.items) |item|
             try old_val.array.append(allocator, try deepCopyValue(allocator, item));
@@ -309,7 +289,7 @@ pub fn mergeDocumentsInto(allocator: std.mem.Allocator, dst: *Document, src: *co
             try mergeSectionsInto(allocator, dst_sec, entry.value_ptr);
         } else {
             // New section — deep-copy it wholesale.
-            var new_sec = Section.init(allocator, name);
+            var new_sec = Section.init(allocator);
             errdefer new_sec.deinit(allocator);
             try mergeSectionsInto(allocator, &new_sec, entry.value_ptr);
             const name_copy = try allocator.dupe(u8, name);
@@ -603,14 +583,7 @@ const Parser = struct {
             (raw.len > 2 and raw[0] == '0' and (raw[1] == 'x' or raw[1] == 'X'));
 
         if (looks_like_color) {
-            if (parseColor(raw)) |color| return .{ .color = color } else |_| {
-                if (std.fmt.parseInt(i64, raw, 10)) |int_val| return .{ .integer = int_val } else |_| {
-                    // Not a valid color or integer: treat as an unquoted string.
-                    // This allows bare identifiers (e.g. layout names, action
-                    // names) to appear without quotes in unusual positions.
-                    return .{ .string = try self.allocator.dupe(u8, raw) };
-                }
-            }
+            if (parseColor(raw)) |color| return .{ .color = color } else |_| {}
         }
 
         if (std.fmt.parseInt(i64, raw, 10)) |int_val| return .{ .integer = int_val } else |_| {
@@ -683,7 +656,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
                 continue;
             }
 
-            try doc.sections.put(section_name, Section.init(allocator, section_name));
+            try doc.sections.put(section_name, Section.init(allocator));
             current_section = doc.sections.getPtr(section_name).?;
 
             p.skipWhitespace();

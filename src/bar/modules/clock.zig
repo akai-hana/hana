@@ -15,7 +15,6 @@
 //! promptly (typically < 1 ms) rather than waiting up to one full second.
 
 const std = @import("std");
-const core = @import("core");
 const types = @import("types");
 const drawing = @import("drawing");
 const bar = @import("bar");

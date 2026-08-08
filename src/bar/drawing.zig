@@ -12,7 +12,6 @@ const c = @import("render");
 // Public types
 
 pub const VisualInfo = struct {
-    visual_type: ?*core.xcb.xcb_visualtype_t,
     visual_id: u32,
 };
 
@@ -23,9 +22,9 @@ pub fn findVisualByDepth(screen: *core.xcb.xcb_screen_t, depth: u8) VisualInfo {
         if (di.data.*.depth != depth) continue;
         const vi = core.xcb.xcb_depth_visuals_iterator(di.data);
         if (vi.rem == 0) continue;
-        return .{ .visual_type = vi.data, .visual_id = vi.data.*.visual_id };
+        return .{ .visual_id = vi.data.*.visual_id };
     }
-    return .{ .visual_type = null, .visual_id = screen.root_visual };
+    return .{ .visual_id = screen.root_visual };
 }
 
 // Module-level font cache shared across all DrawContext instances (measurement + render DCs).
@@ -243,14 +242,6 @@ pub const DrawContext = struct {
         c.cairo_surface_destroy(self.surface);
         if (self.offscreen_pixmap != 0) _ = core.xcb.xcb_free_pixmap(self.conn, self.offscreen_pixmap);
         self.font.allocator.destroy(self);
-    }
-
-    /// Also clears the sized-font cache; delegates to FontState.loadFont.
-    pub fn loadFont(self: *DrawContext, font_name: []const u8) !void {
-        try self.font.loadFont(font_name);
-        if (self.cached_sized_desc) |old| c.pango_font_description_free(old);
-        self.cached_sized_desc = null;
-        debug.info("Cairo/Pango font loaded: {s}", .{font_name});
     }
 
     /// Delegates to FontState.loadFonts.

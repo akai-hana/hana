@@ -233,11 +233,7 @@ pub fn handlePromptKeypress(
 
 /// Low-level key-press handler.  Called by `handlePromptKeypress` after all
 /// prompt-level routing decisions have been made.
-///
-/// Exposed as `pub` so the bar's legacy key dispatch path can call it
-/// directly when it has already confirmed the prompt is active.  Prefer
-/// `handlePromptKeypress` for new call sites.
-pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
+fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
     if (!g.is_active) return false;
 
     // Only process XCB_KEY_PRESS events.  xcb_key_press_event_t and

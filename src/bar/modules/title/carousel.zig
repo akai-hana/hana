@@ -2,9 +2,6 @@
 //! Adds a scrolling effect to window titles that don't fit the title bar segment.
 
 const std = @import("std");
-
-const core = @import("core");
-const xcb = core.xcb;
 const utils = @import("utils");
 
 const scale = @import("scale");

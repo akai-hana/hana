@@ -7,8 +7,6 @@ const core = @import("core");
 const xcb = core.xcb;
 const constants = @import("constants");
 
-const debug = @import("debug");
-
 const max_property_length = constants.PROPERTY_MAX_LENGTH;
 /// Passed as the `delete` argument to xcb_get_property; 0 means do not consume the property.
 const property_no_delete = constants.PROPERTY_NO_DELETE;
@@ -23,7 +21,7 @@ const property_no_delete = constants.PROPERTY_NO_DELETE;
 pub var running = std.atomic.Value(bool).init(true);
 
 /// Set to true by SIGHUP or the `reload_config` keybinding.
-/// Consumed by `maybeReload` in the main event loop.
+/// Consumed by `consumeReload` in the main event loop.
 pub var should_reload = std.atomic.Value(bool).init(false);
 
 /// Signals the main event loop to exit cleanly.
@@ -54,11 +52,6 @@ pub const Rect = struct {
     /// Constructs a Rect from an XCB geometry reply.
     pub inline fn fromXcb(geom: *const xcb.xcb_get_geometry_reply_t) Rect {
         return .{ .x = geom.x, .y = geom.y, .width = geom.width, .height = geom.height };
-    }
-
-    /// Returns true when both dimensions meet the minimum window size requirement.
-    pub inline fn isValid(self: Rect) bool {
-        return self.width >= constants.MIN_WINDOW_DIM and self.height >= constants.MIN_WINDOW_DIM;
     }
 };
 
@@ -265,12 +258,6 @@ inline fn monotonicTs() std.os.linux.timespec {
     var ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
     return ts;
-}
-
-/// Returns the current monotonic clock time in milliseconds.
-pub fn monotonicMs() i64 {
-    const ts = monotonicTs();
-    return ts.sec * 1000 + @divTrunc(ts.nsec, 1_000_000);
 }
 
 /// Returns the current monotonic clock time in nanoseconds.

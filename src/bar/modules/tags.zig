@@ -2,7 +2,6 @@
 //! Displays the list of workspaces and their activity states on the status bar.
 
 const std = @import("std");
-const core = @import("core");
 const types = @import("types");
 const drawing = @import("drawing");
 const tracking = @import("tracking");

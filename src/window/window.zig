@@ -542,17 +542,15 @@ fn queryWMProtocolsProps(conn: *xcb.xcb_connection_t, win: u32) WMProtocolsProps
 
 /// Queries the WM_HINTS input field. Returns true when absent (assume True) or explicitly True.
 fn queryWMHintsAcceptsInput(conn: *xcb.xcb_connection_t, win: u32) bool {
-    const reply = xcb.xcb_get_property_reply(
+    return extractWMHintsInput(conn, xcb.xcb_get_property(
         conn,
-        xcb.xcb_get_property(conn, PROPERTY_NO_DELETE, win, xcb.XCB_ATOM_WM_HINTS, xcb.XCB_ATOM_WM_HINTS, 0, WM_HINTS_LONG_LENGTH),
-        null,
-    ) orelse return true;
-    defer std.c.free(reply);
-
-    if (reply.*.format != 32 or reply.*.value_len < 1) return true;
-
-    const hints: [*]const u32 = @ptrCast(@alignCast(xcb.xcb_get_property_value(reply)));
-    return parseWMHintsInputFromData(hints, reply.*.value_len);
+        PROPERTY_NO_DELETE,
+        win,
+        xcb.XCB_ATOM_WM_HINTS,
+        xcb.XCB_ATOM_WM_HINTS,
+        0,
+        WM_HINTS_LONG_LENGTH,
+    ));
 }
 
 // Child window resolution
