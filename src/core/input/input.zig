@@ -183,17 +183,20 @@ pub fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t) void {
 pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t) void {
     focus.setLastEventTime(event.time);
 
+    // POINTER_MOTION_HINT delivers one event per gesture; re-arm with a
+    // QueryPointer. Fire-and-discard — the server re-arms on receipt, not
+    // reply. This must happen on EVERY path through this handler, including
+    // while dragging — skipping it here would starve the drag of any motion
+    // event after the first, since the hint is not re-armed by anything else.
+    const cs = core.getState();
+    xcb.xcb_discard_reply(cs.conn, xcb.xcb_query_pointer(cs.conn, cs.root).sequence);
+
     if (drag.isDragging()) {
         drag.updateDrag(event.root_x, event.root_y);
         return;
     }
 
     if (focus.getSuppressReason() != .none) focus.setSuppressReason(.none);
-
-    // POINTER_MOTION_HINT delivers one event per gesture; re-arm with a
-    // QueryPointer. Fire-and-discard — the server re-arms on receipt, not reply.
-    const cs = core.getState();
-    xcb.xcb_discard_reply(cs.conn, xcb.xcb_query_pointer(cs.conn, cs.root).sequence);
 }
 
 // Window operations
