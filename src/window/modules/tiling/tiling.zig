@@ -61,11 +61,11 @@ pub const zero_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
 /// re-exported here so every existing `tiling.Layout` call site is unaffected.
 pub const Layout = types.Layout;
 
-// Variant enums are defined in core.zig to allow config.zig to parse them
-// without a circular import. Re-exported here for convenience.
-pub const MasterVariant = types.MasterVariant;
-pub const MonocleVariant = types.MonocleVariant;
-pub const GridVariant = types.GridVariant;
+// Variant enums are defined in types.zig to allow config.zig to parse them
+// without a circular import. Short private aliases for the struct fields below.
+const MasterVariant = types.MasterVariant;
+const MonocleVariant = types.MonocleVariant;
+const GridVariant = types.GridVariant;
 
 pub const LayoutVariants = struct {
     master: MasterVariant = .lifo,
@@ -74,8 +74,8 @@ pub const LayoutVariants = struct {
 };
 
 /// Scroll-layout runtime state, defined in scroll.zig alongside the scroll
-/// layout's other logic, re-exported here as `tiling.ScrollState`.
-pub const ScrollState = scroll.State;
+/// layout's other logic.
+const ScrollState = scroll.State;
 
 /// Layout configuration: all user-adjustable parameters that control which
 /// layout is active and how it sizes windows.  Functions that only need to
@@ -707,7 +707,6 @@ pub fn growBottomSlave() void {
     s.geom.workspace_geom_valid_bits = 0;
     retileCurrentWorkspace();
 }
-
 
 /// Shift the scroll-layout viewport left or right by one slot.
 /// `delta` is +1 (right/forward) or -1 (left/backward).

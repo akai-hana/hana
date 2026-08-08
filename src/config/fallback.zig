@@ -65,7 +65,7 @@ fn isCommandAvailable(command: []const u8) bool {
 // terminal's name (e.g. a stray "kitty" left in /usr/local/bin by some
 // unrelated package) would otherwise be reported as "available" here and
 // only fail later, with an unhelpful EACCES, when hana actually tries to
-// spawn it as the detected terminal (item 13 in the config-subsystem review).
+// spawn it as the detected terminal.
 inline fn checkPath(buf: []u8, dir: []const u8, command: []const u8) bool {
     const full_path = std.fmt.bufPrintZ(buf, "{s}/{s}", .{ dir, command }) catch return false;
     std.posix.access(full_path, std.posix.X_OK) catch return false;

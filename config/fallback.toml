@@ -7,7 +7,7 @@ layout      = "master"
 master_side = "left"
 
 master_count     = 1
-master_width     = 55
+master_width     = "55%"
 gaps             = 12
 border_width     = 4
 border_focused   = "#005577"

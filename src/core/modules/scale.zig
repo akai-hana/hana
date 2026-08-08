@@ -28,7 +28,7 @@ const RESOURCE_MANAGER_MAX_LEN: u32 = 4096;
 var dpi_cache: ?DpiInfo = null;
 
 /// Re-exported from core so callers that only import scale still get the type.
-pub const DpiInfo = core.DpiInfo;
+const DpiInfo = core.DpiInfo;
 
 /// Reads the Xft.dpi value from the X RESOURCE_MANAGER property, if present.
 /// Returns null when the property is absent, empty, or does not contain an Xft.dpi entry.
@@ -147,7 +147,7 @@ pub fn scaleBarHeight(value: parser.ScalableValue, screen_height: u16) u16 {
 // Refresh-rate detection
 
 /// Fallback refresh rate used when RandR is unavailable or returns an invalid value.
-pub const default_hz: f64 = 60.0;
+const default_hz: f64 = 60.0;
 
 var hz_cache: ?f64 = null;
 

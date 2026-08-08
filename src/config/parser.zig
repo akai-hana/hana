@@ -194,53 +194,55 @@ fn ensureArray(allocator: std.mem.Allocator, old_val: *Value) !void {
     old_val.* = .{ .array = arr };
 }
 
-/// Accumulate `incoming` into the existing single-file value at `old_val`.
+/// Accumulate `incoming` into the existing value at `old_val`.
 ///
-/// Used while parsing one file: a duplicate key wraps the existing scalar and
-/// `incoming` into a fresh array (or appends to an existing array). An
-/// array-valued `incoming` is flattened into the existing array rather than
-/// nested as a single element, so the same logical situation — a key
-/// declared twice — produces the same flat-array shape whether the
-/// duplication happened within one file or was split across two included
-/// files (see `mergeIntoArray`, which this now matches).
+/// Shared by the single-file duplicate-key path (`accumulateScalar`) and the
+/// multi-file merge path (`mergeIntoArray`): both wrap a scalar in a fresh
+/// array and flatten an array-valued `incoming` into one flat array, so the
+/// same logical situation — a key declared twice — produces the same shape
+/// whether it happened within one file or was split across two included files.
 ///
-/// Takes ownership of `incoming`; `old_val` is updated in place.
-fn accumulateScalar(allocator: std.mem.Allocator, old_val: *Value, incoming: Value) !void {
+/// With `move` set, `incoming` is uniquely owned (freshly parsed within a
+/// single file) and its array elements are transferred into `old_val.array` by
+/// ownership — no copy pass. With `move` clear, elements are deep-copied so
+/// `incoming` stays independently owned (it is a copy taken from a distinct
+/// source document). Takes ownership of `incoming`; `old_val` is updated
+/// in place.
+fn accumulate(comptime move: bool, allocator: std.mem.Allocator, old_val: *Value, incoming: Value) !void {
     try ensureArray(allocator, old_val);
     if (incoming == .array) {
-        // `incoming` is uniquely owned here (freshly parsed within this same
-        // file, not shared with any other Document), so its elements can be
-        // moved directly into old_val.array without an extra deep-copy pass —
-        // unlike mergeIntoArray, which must copy because its `incoming` was
-        // already a copy taken from a distinct source document.
         var inc = incoming;
-        for (inc.array.items) |item|
-            try old_val.array.append(allocator, item);
-        inc.array.deinit(allocator); // items already moved; only free the backing array
+        const start = old_val.array.items.len;
+        for (inc.array.items) |item| {
+            const elt = if (comptime move) item else try deepCopyValue(allocator, item);
+            old_val.array.append(allocator, elt) catch |err| {
+                if (comptime move) {
+                    // Roll back the already-moved elements so the caller's
+                    // errdefer (which deinits `incoming`) frees each one exactly
+                    // once — without this, the moved elements would be freed
+                    // both here and again when `old_val` is later deinited.
+                    old_val.array.shrinkRetainingCapacity(start);
+                    inc.deinit(allocator);
+                }
+                return err;
+            };
+        }
+        inc.array.deinit(allocator); // items transferred (or copied); free the backing array
     } else {
         try old_val.array.append(allocator, incoming);
     }
 }
 
-/// Merge `incoming` into the existing value at `old_val` when combining two
-/// config files.
-///
-/// Used by the multi-file merge path: a duplicate key accumulates into an
-/// array like `accumulateScalar`, but an array-valued `incoming` is exploded
-/// into individual elements rather than nested — so two files each declaring
-/// the same array key produce one flat array, not an array-of-arrays.
-///
-/// Takes ownership of `incoming`; `old_val` is updated in place.
+/// Single-file duplicate-key accumulation: `incoming` is freshly parsed and
+/// uniquely owned, so elements are moved rather than copied.
+fn accumulateScalar(allocator: std.mem.Allocator, old_val: *Value, incoming: Value) !void {
+    return accumulate(true, allocator, old_val, incoming);
+}
+
+/// Multi-file merge accumulation: `incoming` is a copy taken from a distinct
+/// source document, so elements are deep-copied before being stored.
 fn mergeIntoArray(allocator: std.mem.Allocator, old_val: *Value, incoming: Value) !void {
-    try ensureArray(allocator, old_val);
-    if (incoming == .array) {
-        for (incoming.array.items) |item|
-            try old_val.array.append(allocator, try deepCopyValue(allocator, item));
-        var inc = incoming;
-        inc.deinit(allocator);
-    } else {
-        try old_val.array.append(allocator, incoming);
-    }
+    return accumulate(false, allocator, old_val, incoming);
 }
 
 /// Merges the key-value pairs of `src` into `dst`.
@@ -610,10 +612,7 @@ const Parser = struct {
 
         if (self.peek() == '=') {
             _ = self.consume();
-            const value = self.parseValue() catch |err| {
-                self.allocator.free(key);
-                return err;
-            };
+            const value = self.parseValue() catch |err| return err;
             return .{ key, value };
         }
         return .{ key, Value{ .boolean = true } };

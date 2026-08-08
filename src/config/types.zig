@@ -90,7 +90,7 @@ pub const MouseBind = struct {
 /// the Config it was built from — Config.deinit tears the resolver down
 /// internally, before freeing the Actions its map entries point into — so
 /// there is no longer a two-`defer` dance for a future edit to accidentally
-/// reorder (see item 10 in the config-subsystem review).
+/// reorder.
 pub const KeybindResolver = struct {
     map: std.AutoHashMapUnmanaged(u64, *const Action) = .empty,
 
@@ -114,8 +114,8 @@ pub const KeybindResolver = struct {
     /// so bindings from a previous build never leak into the next one.
     ///
     /// Split out from `build` so the map-rebuild behavior can be exercised
-    /// without a live XkbState/X connection (see the reload-safety test
-    /// below), since keycode resolution is the only part that needs one.
+    /// without a live XkbState/X connection, since keycode resolution is the
+    /// only part that needs one.
     pub fn rebuildDispatchMap(self: *KeybindResolver, keybindings: []Keybind, allocator: std.mem.Allocator) void {
         var seen = std.AutoHashMap(u64, usize).init(allocator);
         defer seen.deinit();
@@ -179,7 +179,7 @@ pub fn LowerResult(comptime max_len: usize) type {
 /// on `.too_long` to give a more specific message than the generic "value
 /// not recognized" that both an overlong value and a genuine typo used to
 /// produce identically, since both previously just looked like "not found in
-/// map" to the caller (item 11 in the config-subsystem review).
+/// map" to the caller.
 ///
 /// This is complementary to (not a replacement for) LAYOUT_TABLE below:
 /// LAYOUT_TABLE is the single source of truth for name<->tag<->alias

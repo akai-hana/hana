@@ -35,6 +35,13 @@ fn getInRange(
                 debug.warn("Value for '{s}' ({d}) below minimum (0), using default", .{ key, i });
                 return default;
             }
+            // Guard the type's own range before the cast: an int larger than T
+            // can hold would trap on @intCast even when no explicit max is set.
+            // (For u64/usize the comparison is comptime-folded away.)
+            if (std.math.maxInt(T) < std.math.maxInt(i64) and i > std.math.maxInt(T)) {
+                debug.warn("Value for '{s}' ({d}) above maximum ({d}), using default", .{ key, i, std.math.maxInt(T) });
+                return default;
+            }
             break :blk @as(T, @intCast(i));
         },
         else => @compileError("Unsupported type"),
@@ -1156,10 +1163,12 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *typ
     }
 
     if (section.get("indicator_padding")) |val| {
-        const f: f32 = if (val.asScalable()) |sv|
-            if (sv.is_percentage) sv.value / 100.0 else sv.value
-        else if (val.asInt()) |i|
+        // Integer values are a percentage (0–100), matching transparency;
+        // fractional/decimal values are a 0.0–1.0 ratio directly.
+        const f: f32 = if (val.asInt()) |i|
             @as(f32, @floatFromInt(i)) / 100.0
+        else if (val.asScalable()) |sv|
+            if (sv.is_percentage) sv.value / 100.0 else sv.value
         else
             0.1;
         cfg.bar.indicator_padding = std.math.clamp(f, 0.0, 1.0);
@@ -1289,7 +1298,10 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *t
 /// `class_name` to that workspace. Shared by the class-keyed direction of
 /// [workspace.rules] and by [rules], which is always class-keyed.
 fn tryAddClassRule(allocator: std.mem.Allocator, cfg: *types.Config, class_name: []const u8, value: parser.Value) !void {
-    const ws_num = value.asInt() orelse return;
+    const ws_num = value.asInt() orelse {
+        debug.warn("Rule for '{s}' has non-integer value, skipping", .{class_name});
+        return;
+    };
     if (ws_num < 1) {
         debug.warn("Rule workspace {d} for '{s}' below minimum 1, skipping", .{ ws_num, class_name });
         return;
