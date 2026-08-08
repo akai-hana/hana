@@ -334,24 +334,21 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
     if (flags.raise)
         _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 
+    // Consume the pre-fired WM_PROTOCOLS cookie (set by setFocus) either by
+    // draining it through sendWMTakeFocusWithCookie — the server has been
+    // processing it while we did bookkeeping above, so this is typically a
+    // near-zero-cost buffer read — or by discarding it when the transition
+    // doesn't send WM_TAKE_FOCUS (e.g. no_input model).  Callers that don't
+    // pre-fire (drainPendingConfirm) fall back to the blocking sendWMTakeFocus.
+    const pre_cookie = state.pre_protocols_cookie;
+    state.pre_protocols_cookie = null;
     if (flags.send_wm_take_focus) {
-        // If setFocus pre-fired the WM_PROTOCOLS cookie before entering this
-        // function, consume it now — the server has been processing it while we
-        // did bookkeeping above, so this drain is typically a near-zero-cost
-        // buffer read rather than a round-trip.
-        // Fall back to the blocking sendWMTakeFocus for callers that don't
-        // pre-fire (drainPendingConfirm).
-        if (state.pre_protocols_cookie) |ck| {
-            state.pre_protocols_cookie = null;
-            window.sendWMTakeFocusWithCookie(conn, win, 0, ck); // CurrentTime
-        } else {
+        if (pre_cookie) |ck|
+            window.sendWMTakeFocusWithCookie(conn, win, 0, ck) // CurrentTime
+        else
             window.sendWMTakeFocus(conn, win, 0); // CurrentTime
-        }
-    } else if (state.pre_protocols_cookie) |ck| {
-        // send_wm_take_focus is false (e.g. no_input model) but a cookie was
-        // pre-fired — discard it to keep the XCB reply queue drained.
+    } else if (pre_cookie) |ck| {
         xcb.xcb_discard_reply(conn, ck.sequence);
-        state.pre_protocols_cookie = null;
     }
 
     if (flags.arm_confirm) {
@@ -420,10 +417,8 @@ pub fn setFocus(win: u32, reason: Reason) void {
     // update tiling borders, and notify the bar.  By the time
     // commitFocusTransition calls sendWMTakeFocusWithCookie, the reply is
     // typically already in the XCB receive buffer.
-    if (state.pre_protocols_cookie) |stale| {
-        // Discard any leftover cookie from a previous interrupted path.
-        xcb.xcb_discard_reply(conn, stale.sequence);
-    }
+    // Discard any leftover cookie from a previous interrupted path.
+    discardOptCookie(state.pre_protocols_cookie);
     state.pre_protocols_cookie = window.fireTakeFocusCookie(conn, win);
 
     cancelPendingConfirm();
@@ -511,28 +506,6 @@ fn cancelPendingConfirm() void {
     xcb.xcb_discard_reply(core.getState().conn, cookie.sequence);
 }
 
-/// Refresh the cached focus/close properties for `win`.
-///
-/// MUST be called from the PropertyNotify handler whenever `XA_WM_HINTS` OR
-/// `WM_PROTOCOLS` changes for a managed window.
-///
-/// Rationale for WM_HINTS: Electron and Java/Qt apps routinely update WM_HINTS
-/// after their window is mapped.  A stale `accepts_input` bit that missed an
-/// input=False→True update would return early at
-/// `if (input_model == .no_input)` on every hover, silently discarding all
-/// focus for that window. `accepts_input` is the only input-model bit that is
-/// cached — see the section comment above CachedProps in window.zig for why
-/// WM_TAKE_FOCUS support is checked live instead.
-///
-/// Rationale for WM_PROTOCOLS: WM_DELETE_WINDOW support (`wm_delete`) is
-/// cached and derived from the same property, for the close-window path
-/// (window.supportsWMDeleteCached). WM_TAKE_FOCUS support itself is exempt —
-/// getInputModel() checks it live on every call, so there is nothing to go
-/// stale on that front.
-pub fn invalidateInputModelCache(win: u32) void {
-    _ = window.queryAndCacheProps(core.getState().conn, win);
-}
-
 /// Re-assert focus on `win` from inside handleFocusIn.
 ///
 /// Skips xcb_set_input_focus for .globally_active (ICCCM §4.1.7).
@@ -568,6 +541,7 @@ fn sendFocusProtocol(win: u32) void {
 /// to slip through unchallenged.
 pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
     if (state.confirm_win) |exp| if (event.event == exp) cancelPendingConfirm();
+    const cs = core.getState();
     const is_offscreen_steal = !isInvalidFocusTarget(event.event) and
         !tracking.isOnCurrentWorkspace(event.event);
     if (state.focused_window) |sel| {
@@ -587,14 +561,10 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
             // Redirecting to root first breaks the cycle: the thief fights root
             // (which never replies), exhausting its retry budget.  Then
             // sendFocusProtocol(sel) reclaims focus with no active opponent.
-            if (is_offscreen_steal) {
-                const cs = core.getState();
-                focusNow(cs.conn, cs.root);
-            }
+            if (is_offscreen_steal) focusNow(cs.conn, cs.root);
             sendFocusProtocol(sel);
         }
     } else if (is_offscreen_steal) {
-        const cs = core.getState();
         focusNow(cs.conn, cs.root);
         advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
     }
