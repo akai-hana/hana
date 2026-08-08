@@ -3,7 +3,7 @@
 
 const std = @import("std");
 
-// libc bindings for fork/exec/wait — no Zig stdlib wrappers exist for these low-level syscalls.
+// libc bindings for fork/exec/wait (no Zig stdlib wrappers exist for these low-level syscalls)
 const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("sys/wait.h");
@@ -319,7 +319,7 @@ fn executeAction(action: *const types.Action) !void {
 fn executeTilingAction(action: *const types.Action) void {
     switch (action.*) {
         .toggle_floating_window => if (focus.getFocused()) |win|
-            withTilingGrab(struct {
+            withTilingGrabKeepFocus(struct {
                 win: u32,
                 fn call(self: @This()) void {
                     tiling.toggleWindowFloat(self.win);
@@ -714,6 +714,28 @@ fn tryConfigMouseBind(mods: u16, button: u8, win: u32, time: u32) bool {
 /// value-capturing struct with a `call(self) void` method when a window ID
 /// needs to ride along (see toggle_floating_window below).
 inline fn withTilingGrab(op: anytype) void {
+    withTilingGrabImpl(op, true);
+}
+
+/// Like `withTilingGrab`, but does not re-sync focus to whatever window is
+/// currently under the pointer afterward.
+///
+/// Used for actions that already have an explicit, keyboard-chosen target
+/// window (e.g. toggle_floating_window's keybind path). The pointer-sync
+/// step exists so mouse-driven reflows (layout changes, master swaps) hand
+/// focus to whichever window physically ends up under a stationary cursor.
+/// But when the action was itself keyboard-triggered against a specific
+/// window, that same step can silently move keyboard focus onto a
+/// completely different, unrelated window the cursor merely happens to be
+/// resting over (e.g. a floating window stacked on top of the one just
+/// acted on) — so a second, un-intended keypress (autorepeat, a fast
+/// double-tap, etc.) then lands on that other window instead of the one
+/// the user was just interacting with.
+inline fn withTilingGrabKeepFocus(op: anytype) void {
+    withTilingGrabImpl(op, false);
+}
+
+inline fn withTilingGrabImpl(op: anytype, sync_pointer: bool) void {
     const conn = core.getState().conn;
     _ = xcb.xcb_grab_server(conn);
     // Suppress EnterNotify events generated as a side effect of windows
@@ -729,11 +751,19 @@ inline fn withTilingGrab(op: anytype) void {
     window.updateFloatingWindowBorders();
     window.markBordersFlushed();
     bar.redrawInsideGrab();
-    // Once the layout has settled, resolve focus against where the pointer
-    // actually rests — mirrors executeSwapMaster's use of the same call.
-    // Clears the suppression above and queues an authoritative query that
-    // drainPointerSync() consumes on the next event-loop iteration.
-    focus.beginPointerSync();
+    if (sync_pointer) {
+        // Once the layout has settled, resolve focus against where the pointer
+        // actually rests — mirrors executeSwapMaster's use of the same call.
+        // Clears the suppression above and queues an authoritative query that
+        // drainPointerSync() consumes on the next event-loop iteration.
+        focus.beginPointerSync();
+    } else {
+        // No pointer resync — but suppression still needs clearing, or
+        // hover-focus stays masked until some other action happens to call
+        // beginPointerSync (see its own doc comment: it clears suppression
+        // as a side effect, which we're intentionally skipping here).
+        focus.setSuppressReason(.none);
+    }
     utils.ungrabAndFlush(conn);
 }
 
