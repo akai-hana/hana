@@ -160,7 +160,17 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 
     if (super_held and (event.detail == mouse_button_left or event.detail == mouse_button_right)) {
         drag.startDrag(managed_window, event.detail, event.root_x, event.root_y);
-        releaseGrab(event.time);
+        // Do NOT releaseGrab (ReplayPointer) here. Replaying hands the rest
+        // of the gesture to normal event delivery, which almost always means
+        // the app itself — real toolkits select ButtonReleaseMask on their
+        // own windows, and the pointer sits over that (moving) window for
+        // the whole drag. That swallows our ButtonRelease before it ever
+        // reaches root, so drag.stopDrag() never runs and drag.active is
+        // stuck true until the WM is restarted (see keepDragGrab below).
+        // AsyncPointer instead keeps the Super+Button grab from setupGrabs
+        // engaged, so MotionNotify/ButtonRelease keep arriving to us — the
+        // grab ends automatically once the button is physically released.
+        keepDragGrab(event.time);
         return;
     }
 
@@ -736,10 +746,31 @@ inline fn replayPointer(time: u32) void {
 }
 
 /// Releases both the pointer and keyboard SYNC grabs acquired on Super+click.
-/// Always pass event.time — never XCB_CURRENT_TIME.
+/// Replays the pointer, so the triggering click is handed to normal event
+/// delivery (i.e. to the app underneath). Only safe for click paths that
+/// don't need to keep tracking pointer events afterward — NOT for drag
+/// start; use keepDragGrab for that. Always pass event.time — never
+/// XCB_CURRENT_TIME.
 inline fn releaseGrab(time: u32) void {
     const conn = core.getState().conn;
     _ = xcb.xcb_allow_events(conn, xcb.XCB_ALLOW_REPLAY_POINTER, time);
+    _ = xcb.xcb_allow_events(conn, xcb.XCB_ALLOW_ASYNC_KEYBOARD, time);
+    _ = xcb.xcb_flush(conn);
+}
+
+/// Un-freezes the pointer for a drag gesture while keeping the Super+Button
+/// grab from setupGrabs (root, SYNC, event_mask BUTTON_PRESS|BUTTON_RELEASE|
+/// POINTER_MOTION) engaged — AsyncPointer resumes delivery without replaying
+/// or ending the grab, unlike releaseGrab's ReplayPointer. That guarantees
+/// the drag's MotionNotify/ButtonRelease keep arriving to us (dispatched to
+/// input.handleMotionNotify/handleButtonRelease) instead of going straight
+/// to whichever client window the cursor ends up over. The grab ends on its
+/// own once the button is physically released, so no matching "reacquire"
+/// call is needed. The keyboard grab is released immediately since dragging
+/// doesn't need it held. Always pass event.time — never XCB_CURRENT_TIME.
+inline fn keepDragGrab(time: u32) void {
+    const conn = core.getState().conn;
+    _ = xcb.xcb_allow_events(conn, xcb.XCB_ALLOW_ASYNC_POINTER, time);
     _ = xcb.xcb_allow_events(conn, xcb.XCB_ALLOW_ASYNC_KEYBOARD, time);
     _ = xcb.xcb_flush(conn);
 }

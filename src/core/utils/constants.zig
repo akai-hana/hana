@@ -92,18 +92,18 @@ pub const EventMasks = struct {
     // related reason: DWM's movemouse()/resizemouse() run their own blocking
     // XGrabPointer + XMaskEvent loop for the whole drag and read
     // ButtonRelease directly off that grab, so root never needs to select it.
-    // This WM tracks drags asynchronously instead — input.startDrag() arms
-    // drag.zig's state and returns immediately, and input.handleButtonPress
-    // replays/ends the initiating SYNC grab (releaseGrab) right away so the
-    // click still reaches the app underneath. That means the drag's
-    // eventual ButtonRelease has to arrive through *normal* event delivery
-    // (dispatched to input.handleButtonRelease, which calls drag.stopDrag())
-    // rather than through the grab, which is already gone by then. Without
-    // this bit, ButtonRelease is never delivered to us at all: drag.active
-    // gets stuck true forever, and window.handleEnterNotify's
-    // `if (drag.isDragging()) return;` guard then silently drops every
-    // hover-focus EnterNotify — for every window, on every workspace — until
-    // the WM is restarted and resets drag.zig's module state.
+    // This WM tracks drags asynchronously instead: input.startDrag() arms
+    // drag.zig's state and returns immediately, and the Super+Button grab
+    // from input.setupGrabs stays engaged (AsyncPointer, not ReplayPointer)
+    // for the rest of the gesture, so MotionNotify/ButtonRelease keep
+    // arriving to us — see keepDragGrab in input.zig for why ReplayPointer
+    // is NOT used there. This bit is what lets that ButtonRelease reach
+    // window.handleEnterNotify's `if (drag.isDragging()) return;` guard is
+    // gated on: without it, a release that isn't caught by the grab (e.g. one
+    // delivered by AllowEvents after the drag) has nothing to fall back to,
+    // drag.active gets stuck true forever, and every hover-focus EnterNotify
+    // — for every window, on every workspace — is silently dropped until the
+    // WM is restarted and resets drag.zig's module state.
     pub const ROOT_WINDOW = xcb.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
         xcb.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
         xcb.XCB_EVENT_MASK_KEY_PRESS |
