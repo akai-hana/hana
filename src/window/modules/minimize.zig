@@ -112,11 +112,7 @@ pub fn minimizeWindow() void {
 
     if (isMinimized(win)) return;
 
-    // ── Guard: fail fast before touching any other module's state ────────────
-    //
-    // Both checks are cheap (a comparison against a module-local integer) and
-    // have no side effects. Placing them here eliminates the need for a
-    // rollback path — no other module's state has been mutated if we return.
+    // Guard: check capacity before mutating any state so there is no rollback path.
 
     if (g_minimized.len >= MAX_MINIMIZED) {
         debug.err("minimize: buffer full ({d} entries), cannot minimize 0x{x}", .{ MAX_MINIMIZED, win });

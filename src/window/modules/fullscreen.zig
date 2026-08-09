@@ -63,9 +63,11 @@ var g_pending_bar_hide_win: u32 = 0;
 /// notifyConfigureIfPending, resetState, and onWindowGone.
 var g_pending_bar_show_win: u32 = 0;
 
-// EWMH atoms for _NET_WM_STATE_FULLSCREEN — interned once in init().
-var g_net_wm_state: xcb.xcb_atom_t = xcb.XCB_ATOM_NONE;
-var g_net_wm_state_fullscreen: xcb.xcb_atom_t = xcb.XCB_ATOM_NONE;
+// EWMH atoms for _NET_WM_STATE_FULLSCREEN, resolved from the shared atom
+// cache (utils.initAtomCache) in init(). Zero (XCB_ATOM_NONE) when the cache
+// was unavailable — setEwmhFullscreenState's guard already skips the write then.
+var g_net_wm_state: xcb.xcb_atom_t = 0;
+var g_net_wm_state_fullscreen: xcb.xcb_atom_t = 0;
 
 /// Shared reset sequence used by both init() and deinit() to keep them in sync.
 fn resetState() void {
@@ -73,16 +75,8 @@ fn resetState() void {
     g_float_saves_len = 0;
     g_pending_bar_hide_win = 0;
     g_pending_bar_show_win = 0;
-}
-
-/// Consume an intern-atom cookie and return the resulting atom,
-/// or XCB_ATOM_NONE if the reply is null. Centralises the consume-assign-free
-/// pattern shared by every atom lookup in init().
-fn internAtom(cookie: xcb.xcb_intern_atom_cookie_t) xcb.xcb_atom_t {
-    const r = xcb.xcb_intern_atom_reply(core.getState().conn, cookie, null) orelse
-        return xcb.XCB_ATOM_NONE;
-    defer std.c.free(r);
-    return r.*.atom;
+    g_net_wm_state = 0;
+    g_net_wm_state_fullscreen = 0;
 }
 
 /// Returns true when the reply geometry indicates the window is parked
@@ -96,13 +90,10 @@ inline fn isOffscreenReply(r: *const xcb.xcb_get_geometry_reply_t) bool {
 pub fn init() void {
     resetState();
 
-    // Intern EWMH atoms needed for _NET_WM_STATE_FULLSCREEN.
-    // Batch both requests before consuming either reply so the round-trips overlap.
-    const conn = core.getState().conn;
-    const ck_state = xcb.xcb_intern_atom(conn, 0, "_NET_WM_STATE".len, "_NET_WM_STATE");
-    const ck_fs = xcb.xcb_intern_atom(conn, 0, "_NET_WM_STATE_FULLSCREEN".len, "_NET_WM_STATE_FULLSCREEN");
-    g_net_wm_state = internAtom(ck_state);
-    g_net_wm_state_fullscreen = internAtom(ck_fs);
+    // Re-resolve the EWMH fullscreen atoms from the shared atom cache rather
+    // than interning them again here.
+    g_net_wm_state = utils.getAtomCached("_NET_WM_STATE") catch 0;
+    g_net_wm_state_fullscreen = utils.getAtomCached("_NET_WM_STATE_FULLSCREEN") catch 0;
 }
 
 pub fn deinit() void {
@@ -509,13 +500,8 @@ pub fn toggle() void {
             utils.ungrabAndFlush(conn);
         }
     } else {
-        // Nothing fullscreen on this workspace — hoist round-trips before the grab.
-        const geom = fetchWindowGeom(win);
-        saveFloatingWindowGeoms(win);
-        const conn = core.getState().conn;
-        _ = xcb.xcb_grab_server(conn);
-        enterFullscreenCommit(win, current_ws, geom);
-        utils.ungrabAndFlush(conn);
+        // Nothing fullscreen on this workspace.
+        enterFullscreen(win, null);
     }
 }
 

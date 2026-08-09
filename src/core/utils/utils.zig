@@ -119,6 +119,10 @@ const AtomCache = struct {
     _NET_WM_ACTION_ABOVE: u32,
     _NET_WM_ACTION_STICK: u32,
     _NET_WM_PID: u32,
+    // Root-window focus advertisement — read by focus.zig's setFocus path.
+    _NET_ACTIVE_WINDOW: u32,
+    // Legacy X resource-database atom — read by scale.zig for Xft.dpi.
+    RESOURCE_MANAGER: u32,
 };
 
 var atom_cache: ?AtomCache = null;
