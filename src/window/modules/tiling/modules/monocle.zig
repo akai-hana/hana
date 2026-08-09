@@ -1,6 +1,8 @@
 //! Monocle tiling layout
 //! Stacks all windows fullscreen, showing only the topmost one, with optional gap insets.
 
+const std = @import("std");
+
 const utils = @import("utils");
 const layouts = @import("layouts");
 const tiling = @import("tiling");
@@ -32,11 +34,7 @@ pub fn tileWithOffset(
     // ctx.focused_win via retileCurrentWorkspaceWithPendingFocus, since
     // focus.setFocus for it hasn't run yet at retile time.)
     const top_win: u32 = blk: {
-        if (ctx.focused_win) |f| {
-            for (windows) |w| {
-                if (w == f) break :blk f;
-            }
-        }
+        if (ctx.focused_win) |f| if (std.mem.indexOfScalar(u32, windows, f) != null) break :blk f;
         break :blk windows[windows.len - 1];
     };
 
@@ -52,11 +50,7 @@ pub fn tileWithOffset(
     // and raising `top_win` here would make it first in the *global*
     // stacking order — above the bar and every window on the workspace
     // actually being looked at — with nothing to ever lower it again.
-    if (ctx.is_background) {
-        layouts.configureWithHints(ctx, top_win, top_rect);
-    } else {
-        layouts.configureWithHintsAndRaise(ctx, top_win, top_rect);
-    }
+    layouts.configureWithHintsAndRaiseIfVisible(ctx, top_win, top_rect);
 
     pushBackgroundWindowsOffscreen(ctx, windows, top_win);
 }

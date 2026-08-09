@@ -81,11 +81,7 @@ pub fn tileWithOffset(
             // (see LayoutCtx.is_background) — there's no on-screen viewer to
             // show `raise_win` to, and raising it would leave it first in the
             // global stacking order with nothing to ever lower it again.
-            if (ctx.is_background) {
-                layouts.configureWithHints(ctx, raise_win, overflow_rect);
-            } else {
-                layouts.configureWithHintsAndRaise(ctx, raise_win, overflow_rect);
-            }
+            layouts.configureWithHintsAndRaiseIfVisible(ctx, raise_win, overflow_rect);
             for (windows[i..]) |overflow_win| {
                 if (overflow_win == raise_win) continue;
                 if (ctx.cache.getPtr(overflow_win)) |wd| {

@@ -169,6 +169,20 @@ pub fn configureWithHintsAndRaise(ctx: *const LayoutCtx, win: u32, rect: utils.R
     configureWithHintsImpl(true, ctx, win, rect);
 }
 
+/// Configure `win` with hints, raising it only when this is not a background
+/// retile (LayoutCtx.is_background). There is no viewer on a workspace nobody
+/// is looking at, and raising would leave the window first in the *global*
+/// stacking order — above the bar and every window on the workspace actually
+/// being viewed — with nothing to ever lower it again. Shared by the layouts
+/// that promote a focused/top window (monocle, fibonacci's overflow fallback).
+pub inline fn configureWithHintsAndRaiseIfVisible(ctx: *const LayoutCtx, win: u32, rect: utils.Rect) void {
+    if (ctx.is_background) {
+        configureWithHints(ctx, win, rect);
+    } else {
+        configureWithHintsAndRaise(ctx, win, rect);
+    }
+}
+
 /// Apply ICCCM §4.1.2.3 hints to a raw rect: resize-increment snap, max-size
 /// clamp, then aspect-ratio clamp (itself followed by a re-snap to the
 /// increment grid, since a client can legally declare both hints at once).

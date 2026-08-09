@@ -39,16 +39,11 @@ const max_master_width_ratio: f32 = 0.95; // prevents master from consuming the 
 const max_master_count: u8 = 10;
 // Per-retile window list capacity. A single workspace can never hold more
 // tiled windows than the global pool (tracking.Tracking, s.windows below)
-// allows, so this must stay >= constants.Limits.MAX_TILED_WINDOWS — enforced
-// by the comptime assertion below.
+// allows, so scratch_wins below is always large enough.
 const max_workspace_windows: usize = constants.Limits.MAX_TILED_WINDOWS;
 // Single-sourced in constants.zig: also matches workspaces.zig's fixed-size
 // override lookup tables and the u64 workspace_geom_valid_bits bitmask below.
 const max_workspaces: usize = constants.MAX_WORKSPACES;
-
-comptime {
-    std.debug.assert(max_workspace_windows >= constants.Limits.MAX_TILED_WINDOWS);
-}
 
 // Public types
 
@@ -833,12 +828,11 @@ pub fn takePrevFocusedForScroll() ?u32 {
 
 // All six layouts are always compiled in now. toggleLayout/toggleLayoutReverse
 // walk this fixed list when cycling.
-const layout_cycle_array: [types.LAYOUT_TABLE.len]Layout = blk: {
+const layout_cycle: [types.LAYOUT_TABLE.len]Layout = blk: {
     var arr: [types.LAYOUT_TABLE.len]Layout = undefined;
     for (types.LAYOUT_TABLE, 0..) |entry, i| arr[i] = entry.tag;
     break :blk arr;
 };
-const layout_cycle: []const Layout = &layout_cycle_array;
 
 /// Resolves a config-file layout name (canonical or alias, e.g. "master-stack",
 /// "master", "monocle") to its `Layout` tag. Driven by types.LAYOUT_TABLE, the
@@ -871,7 +865,7 @@ fn parseEnabledLayouts(layouts_cfg: []const []const u8) struct { arr: [types.LAY
         len += 1;
     }
     if (len == 0) {
-        @memcpy(arr[0..layout_cycle.len], layout_cycle);
+        @memcpy(arr[0..layout_cycle.len], layout_cycle[0..]);
         len = @intCast(layout_cycle.len);
     }
     return .{ .arr = arr, .len = len };
@@ -963,7 +957,7 @@ fn invokeLayout(
 ) void {
     const w = screen.width;
     const h = screen.height;
-    const y: u16 = if (screen.y > 0) @intCast(screen.y) else 0;
+    const y: u16 = @intCast(@max(screen.y, @as(i16, 0)));
     switch (layout) {
         .master => master.tileWithOffset(ctx, s, wins, w, h, y),
         .monocle => monocle.tileWithOffset(ctx, s, wins, w, h, y),
@@ -1164,10 +1158,6 @@ fn collectWorkspaceWindows(s: *State, buf: []u32, for_ws: ?u8) usize {
     // retile must observe the same sequence or swaps have no visual effect.
     var n: usize = 0;
     for (s.windows.items()) |win| {
-        if (n >= buf.len) {
-            debug.warn("collectWorkspaceWindows: workspace has >{} windows; excess dropped", .{buf.len});
-            break;
-        }
         const is_on_target = if (for_ws) |idx|
             tracking.isWindowOnWorkspace(win, idx)
         else
