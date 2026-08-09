@@ -110,7 +110,7 @@ pub const Section = struct {
             i64 => v.asInt(),
             bool => v.asBool(),
             []const u8 => v.asString(),
-            u32 => v.asColor(),
+            []const Value => v.asArray(),
             ScalableValue => v.asScalable(),
             else => @compileError("Section.getAs: unsupported type " ++ @typeName(T)),
         };
@@ -124,6 +124,9 @@ pub const Section = struct {
     }
     pub fn getString(self: *const Section, key: []const u8) ?[]const u8 {
         return self.getAs([]const u8, key);
+    }
+    pub fn getArray(self: *const Section, key: []const u8) ?[]const Value {
+        return self.getAs([]const Value, key);
     }
     pub fn getScalable(self: *const Section, key: []const u8) ?ScalableValue {
         return self.getAs(ScalableValue, key);
