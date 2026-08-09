@@ -242,10 +242,10 @@ pub fn advertiseEwmhSupport(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen
 
 // Property helpers
 
-/// Canonical implementations of the no-DPI-info scaling formulas.
-/// scale.zig delegates scaleBorderWidth/scaleMasterWidth to these directly
-/// (they need no DPI lookup), so there is exactly one formula to maintain.
-pub const scale_fallback = struct {
+/// Canonical scaling formulas — pure functions of a ScalableValue, no DPI
+/// lookup. scale.zig and config.zig both call into these, so there is exactly
+/// one formula to maintain.
+pub const scaling = struct {
     /// Resolves a ScalableValue to a ratio: `v%` becomes v/100, an absolute
     /// value stays as-is.
     pub inline fn asRatio(value: anytype) f32 {
@@ -270,7 +270,7 @@ pub const scale_fallback = struct {
 
 /// Returns the raw timespec for the given clock id (REALTIME/MONOTONIC).
 /// Uses the VDSO-accelerated clock_gettime on supported kernels.
-pub inline fn clockTs(clock_id: std.os.linux.clockid_t) std.os.linux.timespec {
+inline fn clockTs(clock_id: std.os.linux.clockid_t) std.os.linux.timespec {
     var ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(clock_id, &ts);
     return ts;

@@ -6,10 +6,10 @@ const xcb = @cImport(@cInclude("xcb/xcb.h"));
 // Modifier masks
 // Must be u16 as per XCB API
 pub const MOD_SHIFT: u16 = xcb.XCB_MOD_MASK_SHIFT;
-pub const MOD_CAPSLOCK: u16 = xcb.XCB_MOD_MASK_LOCK;
+const MOD_CAPSLOCK: u16 = xcb.XCB_MOD_MASK_LOCK;
 pub const MOD_CONTROL: u16 = xcb.XCB_MOD_MASK_CONTROL;
 pub const MOD_ALT: u16 = xcb.XCB_MOD_MASK_1;
-pub const MOD_NUMLOCK: u16 = xcb.XCB_MOD_MASK_2;
+const MOD_NUMLOCK: u16 = xcb.XCB_MOD_MASK_2;
 pub const MOD_SUPER: u16 = xcb.XCB_MOD_MASK_4;
 
 // Mask applied before comparing a received modifier state against a keybinding.

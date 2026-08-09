@@ -901,7 +901,7 @@ fn destroyBarWindow(conn: *xcb.xcb_connection_t, win_id: u32, colormap: u32) voi
 }
 
 fn measureFontMetrics() ?struct { asc: i32, desc: i32 } {
-    var mc = drawing.MeasureContext.init(core.getState().alloc, core.dpi_info.dpi) catch return null;
+    var mc = drawing.MeasureContext.init(core.getState().alloc, core.dpi_info) catch return null;
     defer mc.deinit();
     loadBarFonts(&mc) catch return null;
     const asc, const desc = mc.getMetrics();
@@ -943,7 +943,7 @@ fn createDrawContext(setup: BarWindowSetup, height: u16) !*drawing.DrawContext {
         cs.screen.width_in_pixels,
         height,
         setup.visual_id,
-        core.dpi_info.dpi,
+        core.dpi_info,
         setup.has_argb,
         cs.config.bar.transparency,
     );

@@ -145,43 +145,42 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 
     const cs = core.getState();
     const clicked_window = if (event.child != 0) event.child else event.event;
-    const managed_window = window.findManagedWindow(cs.conn, clicked_window, tracking.isManaged);
+    const super_held = (event.state & constants.MOD_SUPER) != 0;
+    const mods = utils.normalizeModifiers(event.state);
 
+    // Scroll-wheel binds (buttons 4/5) are viewport actions that don't target
+    // a specific window, so they're checked before the managed-window guard
+    // that would otherwise discard events fired over the desktop/bar.
+    if (super_held and (event.detail == mouse_button_scroll_up or event.detail == mouse_button_scroll_down)) {
+        if (!tryConfigMouseBind(mods, event.detail, 0, event.time))
+            replayPointer(event.time);
+        return;
+    }
+
+    const managed_window = window.findManagedWindow(cs.conn, clicked_window, tracking.isManaged);
     if (clicked_window == 0 or clicked_window == cs.root or managed_window == 0) {
         replayPointer(event.time);
         return;
     }
 
-    const super_held = (event.state & constants.MOD_SUPER) != 0;
-    const mods = utils.normalizeModifiers(event.state);
-
-    // Scroll-wheel binds (buttons 4/5) are viewport actions — check before the
-    // managed-window guard that would otherwise discard desktop/bar events.
-    if (super_held and (event.detail == mouse_button_scroll_up or event.detail == mouse_button_scroll_down)) {
-        if (!tryConfigMouseBind(mods, event.detail, 0, event.time)) {
-            replayPointer(event.time);
-        }
-        return;
-    }
-
     if (super_held) {
         if (tryConfigMouseBind(mods, event.detail, managed_window, event.time)) return;
-    }
 
-    if (super_held and (event.detail == mouse_button_left or event.detail == mouse_button_right)) {
-        drag.startDrag(managed_window, event.detail, event.root_x, event.root_y);
-        // Do NOT releaseGrab (ReplayPointer) here. Replaying hands the rest
-        // of the gesture to normal event delivery, which almost always means
-        // the app itself — real toolkits select ButtonReleaseMask on their
-        // own windows, and the pointer sits over that (moving) window for
-        // the whole drag. That swallows our ButtonRelease before it ever
-        // reaches root, so drag.stopDrag() never runs and drag.active is
-        // stuck true until the WM is restarted (see keepDragGrab below).
-        // AsyncPointer instead keeps the Super+Button grab from setupGrabs
-        // engaged, so MotionNotify/ButtonRelease keep arriving to us — the
-        // grab ends automatically once the button is physically released.
-        keepDragGrab(event.time);
-        return;
+        if (event.detail == mouse_button_left or event.detail == mouse_button_right) {
+            drag.startDrag(managed_window, event.detail, event.root_x, event.root_y);
+            // Do NOT releaseGrab (ReplayPointer) here. Replaying hands the rest
+            // of the gesture to normal event delivery, which almost always means
+            // the app itself — real toolkits select ButtonReleaseMask on their
+            // own windows, and the pointer sits over that (moving) window for
+            // the whole drag. That swallows our ButtonRelease before it ever
+            // reaches root, so drag.stopDrag() never runs and drag.active is
+            // stuck true until the WM is restarted (see keepDragGrab below).
+            // AsyncPointer instead keeps the Super+Button grab from setupGrabs
+            // engaged, so MotionNotify/ButtonRelease keep arriving to us — the
+            // grab ends automatically once the button is physically released.
+            keepDragGrab(event.time);
+            return;
+        }
     }
 
     // Fallback: any other click focuses and raises the window. Raise must
