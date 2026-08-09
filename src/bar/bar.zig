@@ -1018,7 +1018,7 @@ pub fn toggleBarSegmentAnchor() void {
     gBar.pending_force_full_redraw = true;
     s.invalidateLayoutCache();
     _ = xcb.xcb_grab_server(cs.conn);
-    _ = xcb.xcb_configure_window(cs.conn, s.win.win_id, xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{@as(u32, @bitCast(@as(i32, new_y)))});
+    _ = xcb.xcb_configure_window(cs.conn, s.win.win_id, xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{utils.toXcbCoord(new_y)});
     const current_ws = tracking.getCurrentWorkspace() orelse {
         window.updateWorkspaceBorders();
         window.markBordersFlushed();

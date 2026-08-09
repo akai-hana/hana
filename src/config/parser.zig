@@ -217,17 +217,23 @@ fn accumulate(comptime move: bool, allocator: std.mem.Allocator, old_val: *Value
             const elt = if (comptime move) item else try deepCopyValue(allocator, item);
             old_val.array.append(allocator, elt) catch |err| {
                 if (comptime move) {
-                    // Roll back the already-moved elements so the caller's
+                    // Un-append the already-moved elements so the caller's
                     // errdefer (which deinits `incoming`) frees each one exactly
                     // once — without this, the moved elements would be freed
                     // both here and again when `old_val` is later deinited.
                     old_val.array.shrinkRetainingCapacity(start);
-                    inc.deinit(allocator);
                 }
                 return err;
             };
         }
-        inc.array.deinit(allocator); // items transferred (or copied); free the backing array
+        if (comptime move) {
+            inc.array.deinit(allocator); // items transferred by ownership; free only the backing array
+        } else {
+            // Items were deep-copied into `old_val`; free the source copies
+            // and their backing array so nothing from `incoming` leaks.
+            for (inc.array.items) |*item| item.deinit(allocator);
+            inc.array.deinit(allocator);
+        }
     } else {
         try old_val.array.append(allocator, incoming);
     }
@@ -452,8 +458,12 @@ const Parser = struct {
         var result = try std.ArrayList(u8).initCapacity(self.allocator, end_pos - start);
         errdefer result.deinit(self.allocator);
 
+        var closed = false;
         while (self.peek()) |c| {
-            if (c == quote) break;
+            if (c == quote) {
+                closed = true;
+                break;
+            }
             if (c == '\n') return ParseError.InvalidValue;
 
             if (c == '\\') {
@@ -473,6 +483,7 @@ const Parser = struct {
             }
         }
 
+        if (!closed) return ParseError.InvalidValue;
         _ = self.consume();
         return try result.toOwnedSlice(self.allocator);
     }

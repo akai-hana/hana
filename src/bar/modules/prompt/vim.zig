@@ -1193,13 +1193,14 @@ fn replayDot(vs: *VimState) void {
                     motionFind(vs, om.find_kind, om.find_ch, cnt)
                 else if (om.tobj_kind != 0)
                     resolveTextObject(vs, om.tobj_kind, om.tobj_delim)
-                else if (om.has_g_prefix) blk: {
-                    break :blk switch (om.motion_sym) {
-                        'e' => MotionResult{ .pos = motionWordEndBackward(vs, false, cnt), .inclusive = true },
-                        'E' => MotionResult{ .pos = motionWordEndBackward(vs, true, cnt), .inclusive = true },
-                        else => null,
-                    };
-                } else resolveSimpleMotion(vs, om.motion_sym, cnt);
+                else if (om.has_g_prefix)
+                    if (resolveGPrefixPos(vs, om.motion_sym, cnt)) |pos|
+                        MotionResult{ .pos = pos, .inclusive = (om.motion_sym == 'e' or om.motion_sym == 'E') }
+                    else
+                        null
+                else if (om.motion_sym == '%')
+                    MotionResult{ .pos = motionMatchBracket(vs), .inclusive = true }
+                else resolveSimpleMotion(vs, om.motion_sym, cnt);
             if (mr_opt) |mr| {
                 applyOperator(vs, om.op, mr);
                 if (om.op == 'c') insertSlice(vs, vs.dot_insert_buf[0..vs.dot_insert_len]);

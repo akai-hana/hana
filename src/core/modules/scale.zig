@@ -137,10 +137,7 @@ pub fn scaleFontSize(value: parser.ScalableValue, screen: *xcb.xcb_screen_t) u16
 /// Converts a scalable bar height value to pixels, clamped to BAR_MIN_HEIGHT_PX.
 pub fn scaleBarHeight(value: parser.ScalableValue, screen_height: u16) u16 {
     const screen_height_f: f32 = @floatFromInt(screen_height);
-    const scaled_px: f32 = if (value.is_percentage)
-        screen_height_f * (value.value / 100.0)
-    else
-        value.value;
+    const scaled_px: f32 = utils.scale_fallback.scaleToPixels(value, screen_height_f);
     return @max(BAR_MIN_HEIGHT_PX, @as(u16, @intFromFloat(@round(scaled_px))));
 }
 

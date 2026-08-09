@@ -9,6 +9,7 @@ const debug = @import("debug");
 const xkbcommon = @import("xkbcommon");
 const parser = @import("parser");
 const carousel = @import("carousel");
+const utils = @import("utils");
 
 const parseColor = parser.parseColor;
 
@@ -338,7 +339,7 @@ pub fn validate(cfg: *const types.Config) !void {
     }
     // master_width is stored as a ScalableValue; normalise to [0,1] for the check.
     const mw = cfg.tiling.master_width;
-    const mw_ratio: f32 = if (mw.is_percentage) mw.value / 100.0 else mw.value;
+    const mw_ratio: f32 = utils.scale_fallback.asRatio(mw);
     if (mw_ratio < constants.MIN_MASTER_WIDTH or mw_ratio > 1.0) {
         debug.err("Invalid config: master_width ratio {d:.3} out of [{d:.2}, 1.0], keeping old", .{ mw_ratio, constants.MIN_MASTER_WIDTH });
         return error.InvalidConfig;
@@ -1090,7 +1091,7 @@ fn parseTransparency(value: parser.Value) f32 {
         return 1.0;
     }
     if (value.asScalable()) |s| {
-        const f = if (s.is_percentage) s.value / 100.0 else s.value;
+        const f = utils.scale_fallback.asRatio(s);
         if (f < 0.0 or f > 1.0) {
             debug.warn("Invalid transparency value {d} (must be 0.0–1.0 or 0–100%), using default", .{f});
             return 1.0;
@@ -1168,7 +1169,7 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *typ
         const f: f32 = if (val.asInt()) |i|
             @as(f32, @floatFromInt(i)) / 100.0
         else if (val.asScalable()) |sv|
-            if (sv.is_percentage) sv.value / 100.0 else sv.value
+            utils.scale_fallback.asRatio(sv)
         else
             0.1;
         cfg.bar.indicator_padding = std.math.clamp(f, 0.0, 1.0);
