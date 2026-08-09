@@ -307,23 +307,27 @@ const State = struct {
                     snap.window_titles.list.items,
                 );
                 break :blk try prompt.draw(
-                    r.dc,
-                    r.config,
-                    r.height,
-                    x,
-                    width orelse TITLE_MIN_WIDTH,
-                    self.win.conn,
-                    snap.focused_window,
-                    snap.focused_title.items,
-                    minimized_title,
-                    snap.current_workspace_windows.items,
-                    &snap.minimized_windows,
-                    snap.window_titles.list.items,
-                    snap.window_geoms.items,
-                    &self.title_cache.title,
-                    &self.title_cache.title_window,
-                    snap.is_title_invalidated,
+                    .{
+                        .dc = r.dc,
+                        .config = r.config,
+                        .height = r.height,
+                        .start_x = x,
+                        .width = width orelse TITLE_MIN_WIDTH,
+                        .conn = self.win.conn,
+                        .cached_title = &self.title_cache.title,
+                        .cached_title_window = &self.title_cache.title_window,
+                    },
+                    .{
+                        .focused_window = snap.focused_window,
+                        .focused_title = snap.focused_title.items,
+                        .minimized_title = minimized_title,
+                        .current_ws_wins = snap.current_workspace_windows.items,
+                        .minimized_set = &snap.minimized_windows,
+                        .titles = snap.window_titles.list.items,
+                        .geoms = snap.window_geoms.items,
+                    },
                     r.allocator,
+                    snap.is_title_invalidated,
                 );
             },
             .clock => try clock.draw(r.dc, r.config, r.height, x),
@@ -675,7 +679,7 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
             // drawSegmentedTitles' sentinel does — they're never actually
             // positioned on screen.
             const geom: utils.Rect = if (snap.minimized_windows.contains(win))
-                .{ .x = std.math.maxInt(i16), .y = std.math.maxInt(i16), .width = 0, .height = 0 }
+                title.offscreen_rect
             else
                 title.fetchWindowGeom(core.getState().conn, win);
             snap.window_geoms.append(allocator, geom) catch {};

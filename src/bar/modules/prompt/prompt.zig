@@ -8,7 +8,6 @@ const xcb = core.xcb;
 
 const bar = @import("bar");
 const types = @import("types");
-const utils = @import("utils");
 
 const drawing = @import("drawing");
 const title = @import("title");
@@ -306,48 +305,13 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
 }
 
 pub fn draw(
-    dc: *drawing.DrawContext,
-    config: types.BarConfig,
-    height: u16,
-    start_x: u16,
-    width: u16,
-    conn: *xcb.xcb_connection_t,
-    focused_window: ?u32,
-    focused_title: []const u8,
-    minimized_title: []const u8,
-    current_ws_wins: []const u32,
-    minimized_set: *const std.AutoHashMapUnmanaged(u32, void),
-    titles: []const []const u8,
-    geoms: []const utils.Rect,
-    cached_title: *std.ArrayListUnmanaged(u8),
-    cached_title_window: *?u32,
-    title_invalidated: bool,
+    ctx: title.TitleRenderContext,
+    snap: title.TitleSnapshot,
     allocator: std.mem.Allocator,
+    title_invalidated: bool,
 ) !u16 {
-    if (!g.is_active) return title.draw(
-        .{
-            .dc = dc,
-            .config = config,
-            .height = height,
-            .start_x = start_x,
-            .width = width,
-            .conn = conn,
-            .cached_title = cached_title,
-            .cached_title_window = cached_title_window,
-        },
-        .{
-            .focused_window = focused_window,
-            .focused_title = focused_title,
-            .minimized_title = minimized_title,
-            .current_ws_wins = current_ws_wins,
-            .minimized_set = minimized_set,
-            .titles = titles,
-            .geoms = geoms,
-        },
-        allocator,
-        title_invalidated,
-    );
-    return drawActive(dc, config, height, start_x, width);
+    if (!g.is_active) return title.draw(ctx, snap, allocator, title_invalidated);
+    return drawActive(ctx.dc, ctx.config, ctx.height, ctx.start_x, ctx.width);
 }
 
 // Private — action handling
@@ -506,9 +470,7 @@ fn compLowerBound(prefix: []const u8) usize {
     var hi: usize = g.comp_count;
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        const slot = mid * (max_completion_len + 1);
-        const entry = std.mem.sliceTo(g.comp_names[slot .. slot + max_completion_len + 1], 0);
-        if (std.mem.order(u8, entry, prefix) == .lt) lo = mid + 1 else hi = mid;
+        if (std.mem.order(u8, compName(mid), prefix) == .lt) lo = mid + 1 else hi = mid;
     }
     return lo;
 }
@@ -518,9 +480,19 @@ fn compLowerBound(prefix: []const u8) usize {
 fn compExistsExact(name: []const u8) bool {
     const idx = compLowerBound(name);
     if (idx >= g.comp_count) return false;
-    const slot = idx * (max_completion_len + 1);
-    const entry = std.mem.sliceTo(g.comp_names[slot .. slot + max_completion_len + 1], 0);
-    return std.mem.eql(u8, entry, name);
+    return std.mem.eql(u8, compName(idx), name);
+}
+
+/// The `i`th completion name (fixed-stride slot read from the sorted table).
+fn compName(i: usize) []const u8 {
+    const slot = i * (max_completion_len + 1);
+    return std.mem.sliceTo(g.comp_names[slot .. slot + max_completion_len + 1], 0);
+}
+
+/// The `i`th history entry (newest at index 0).
+fn histEntry(i: usize) []const u8 {
+    const slot = i * (max_history_line + 1);
+    return std.mem.sliceTo(g.hist_entries[slot .. slot + max_history_line + 1], 0);
 }
 
 /// Clamps `suffix` into g.ghost_buf/g.ghost_len. Shared by both updateGhost
@@ -546,8 +518,7 @@ fn updateGhost() void {
     // 1. History-based suggestion (newest first)
     var hi: usize = 0;
     while (hi < g.hist_count) : (hi += 1) {
-        const hslot = hi * (max_history_line + 1);
-        const entry = std.mem.sliceTo(g.hist_entries[hslot .. hslot + max_history_line + 1], 0);
+        const entry = histEntry(hi);
         if (entry.len == 0) continue;
 
         const cmd_end = std.mem.indexOfScalar(u8, entry, ' ') orelse entry.len;
@@ -565,8 +536,7 @@ fn updateGhost() void {
     //    starts with prefix and is longer than prefix IS the shortest match.
     var i: usize = compLowerBound(prefix);
     while (i < g.comp_count) : (i += 1) {
-        const slot = i * (max_completion_len + 1);
-        const name = std.mem.sliceTo(g.comp_names[slot .. slot + max_completion_len + 1], 0);
+        const name = compName(i);
         if (!std.mem.startsWith(u8, name, prefix)) return; // past all prefix matches
         if (name.len <= prefix.len) continue; // exact match, not a completion
         return setGhost(name[prefix.len..]);
@@ -684,9 +654,7 @@ fn histLoadFile(fp: *c.FILE) void {
     var seen = std.AutoHashMapUnmanaged(u64, void){};
     defer seen.deinit(g.allocator);
     for (0..g.hist_count) |di| {
-        const dslot = di * (max_history_line + 1);
-        const existing = std.mem.sliceTo(g.hist_entries[dslot .. dslot + max_history_line + 1], 0);
-        seen.put(g.allocator, std.hash.Wyhash.hash(0, existing), {}) catch {};
+        seen.put(g.allocator, std.hash.Wyhash.hash(0, histEntry(di)), {}) catch {};
     }
 
     var li: usize = n_lines;
