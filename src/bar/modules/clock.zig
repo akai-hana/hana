@@ -86,7 +86,7 @@ fn runClockThread() void {
     while (!clock_quit.load(.seq_cst)) {
         var req: Timespec = .{ .tv_sec = 1, .tv_nsec = 0 };
         _ = c.nanosleep(@ptrCast(&req), null);
-        _ = bar.checkClockUpdate();
+        bar.checkClockUpdate();
     }
 }
 

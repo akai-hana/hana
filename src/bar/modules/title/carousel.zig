@@ -344,9 +344,7 @@ pub fn drawScrollingTitle(
     // Recover text_w from the live entry when the title hasn't changed,
     // avoiding a Pango measurement on the common steady-state path.
     const text_w: u16 = if (!title_invalidated) blk: {
-        if (render.single) |e| {
-            if (e.window == window) break :blk e.cycle_w - carousel_gap_px;
-        }
+        if (render.single) |e| if (e.window == window) break :blk e.cycle_w - carousel_gap_px;
         break :blk dc.measureTextWidth(text);
     } else dc.measureTextWidth(text);
 
@@ -429,10 +427,7 @@ fn commitCarouselFrame(
 
     // Determine whether a full pixmap rebuild is needed (geometry/identity/
     // focus changed) vs. an in-place colour update vs. no action.
-    const geom_stale: bool = force_rebuild or blk: {
-        const e = slot.* orelse break :blk true;
-        break :blk entryStale(&e, window, title_invalidated, cycle_w, geom);
-    };
+    const geom_stale = force_rebuild or if (slot.*) |*e| entryStale(e, window, title_invalidated, cycle_w, geom) else true;
 
     if (geom_stale) {
         // Full rebuild: free old pixmap (if any) then delegate to buildCarouselEntry.

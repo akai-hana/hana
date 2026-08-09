@@ -292,7 +292,7 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
     }
 
     const action = switch (g.vim_state.mode) {
-        .insert => if (vim_mode) vim.handleInsert(&g.vim_state, sym) else handleInsertBasic(&g.vim_state, sym),
+        .insert => if (vim_mode) vim.handleInsert(&g.vim_state, sym) else vim.handleInsertBasic(&g.vim_state, sym),
         .normal => if (vim_mode) vim.handleNormal(&g.vim_state, sym) else .none,
         .visual => if (vim_mode) vim.handleVisual(&g.vim_state, sym) else .none,
         .replace => if (vim_mode) vim.handleReplace(&g.vim_state, sym) else .none,
@@ -735,31 +735,6 @@ fn spawnCommand(cmd: []const u8) void {
     }
 }
 
-// Private — basic insert-mode editing (used when core.getState().config.bar.vim_mode = false)
-
-/// Minimal insert handler used when vim mode is disabled.
-/// Handles printable ASCII, cursor keys, Backspace, Delete,
-/// Return (spawn), and Escape (deactivate).
-fn handleInsertBasic(vs: *vim.VimState, sym: xcb.xcb_keysym_t) vim.Action {
-    switch (sym) {
-        vim.XK_Escape => return .deactivate,
-        vim.XK_Return => return .spawn,
-        vim.XK_BackSpace => vim.deleteBefore(vs),
-        vim.XK_Delete => vim.deleteAfter(vs),
-        vim.XK_Left => if (vs.cursor > 0) {
-            vs.cursor -= 1;
-        },
-        vim.XK_Right => if (vs.cursor < vs.len) {
-            vs.cursor += 1;
-        },
-        vim.XK_Home => vs.cursor = 0,
-        vim.XK_End => vs.cursor = vs.len,
-        else => if (vim.isPrintableAscii(sym))
-            vim.insertSlice(vs, &[1]u8{@truncate(sym)}),
-    }
-    return .none;
-}
-
 // Private — rendering helpers
 
 /// Binary search: first byte offset where `measureTextWidth(text[0..offset])
@@ -934,6 +909,7 @@ fn drawActive(
     const bg = config.drunBg();
     const fg = config.drunFg();
     const prompt = config.drun_prompt;
+    const vim_mode = core.getState().config.bar.vim_mode;
 
     dc.fillRect(start_x, 0, width, height, bg);
 
@@ -954,7 +930,7 @@ fn drawActive(
     const pill_h_pad: u16 = 6;
     const white: u32 = 0xFFFFFFFF;
 
-    const mode_label = if (core.getState().config.bar.vim_mode) g.vim_state.mode.label() else "";
+    const mode_label = if (vim_mode) g.vim_state.mode.label() else "";
     const mode_idx: usize = @intFromEnum(g.vim_state.mode);
 
     const mode_w: u16 = g.cached_mode_w[mode_idx] orelse blk: {
@@ -996,7 +972,7 @@ fn drawActive(
             // Filled pill background.
             dc.fillRect(pill_x, cursor_v_pad, pill_w, height -| cursor_v_pad * 2, accent);
 
-            const colon_cmd = if (core.getState().config.bar.vim_mode) vim.colonInput(&g.vim_state) else null;
+            const colon_cmd = if (vim_mode) vim.colonInput(&g.vim_state) else null;
             if (colon_cmd) |ct| {
                 // Ex-command input: ":typed_chars" + blinking insert-style caret.
                 var ppx: i32 = @as(i32, pill_x) + @as(i32, pill_h_pad);
@@ -1088,7 +1064,6 @@ fn drawActive(
     // Mode-specific text rendering.
     // When colon-command mode is active the cursor lives in the pill widget,
     // not here — so we skip all cursor drawing in the main text area.
-    const vim_mode = core.getState().config.bar.vim_mode;
     const colon_active = vim_mode and vim.colonInput(&g.vim_state) != null;
 
     if (g.vim_state.mode == .visual) {
