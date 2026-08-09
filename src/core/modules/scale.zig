@@ -96,15 +96,14 @@ pub fn detectDpi(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) DpiInfo
     }
 
     const geometry_dpi = calcDpiFromGeometry(screen);
-    const dpi = if (geometry_dpi < 50.0 or geometry_dpi > 300.0) blk: {
-        debug.warn("Calculated DPI {d:.1} seems unreasonable, using baseline DPI", .{geometry_dpi});
-        break :blk BASELINE_DPI;
-    } else blk: {
+    const reasonable = geometry_dpi >= 50.0 and geometry_dpi <= 300.0;
+    if (reasonable) {
         debug.info("Using geometry-calculated DPI: {d:.1}", .{geometry_dpi});
-        break :blk geometry_dpi;
-    };
+    } else {
+        debug.warn("Calculated DPI {d:.1} seems unreasonable, using baseline DPI", .{geometry_dpi});
+    }
 
-    const info: DpiInfo = .{ .dpi = dpi };
+    const info: DpiInfo = .{ .dpi = if (reasonable) geometry_dpi else BASELINE_DPI };
     dpi_cache = info;
     return info;
 }

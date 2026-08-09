@@ -356,27 +356,24 @@ fn executeTilingAction(action: *const types.Action) void {
 fn executeSwapMaster(action: *const types.Action) void {
     const conn = core.getState().conn;
     _ = xcb.xcb_grab_server(conn);
-    if (action.* == .swap_master) {
-        // Capture the focused window ID before the swap so we can pass it as
-        // defer_configure — the shrinking window fills its new slot before the
-        // growing window vacates its old one, eliminating a one-frame gap.
-        const new_master = focus.getFocused();
-        _ = tiling.swapWithMaster();
-        tiling.retileCurrentWorkspaceDeferred(new_master);
-    } else {
-        // follow-focus: capture, reorder, transfer focus, retile deferred —
-        // all inside the grab so the border change is part of the same flush.
-        //
-        // Focus MUST be transferred before the retile: layouts that derive
-        // their visible/raised window from focus.getFocused() at retile time
-        // (e.g. monocle — see monocle.zig's tileWithOffset) would otherwise
-        // retile against the stale, about-to-be-displaced window, then have
-        // no follow-up retile to correct course once focus actually moves.
-        const new_master = focus.getFocused();
-        const displaced = tiling.swapWithMaster();
+
+    // Capture the focused window ID before the swap so we can pass it as
+    // defer_configure — the shrinking window fills its new slot before the
+    // growing window vacates its old one, eliminating a one-frame gap.
+    const new_master = focus.getFocused();
+    const displaced = tiling.swapWithMaster();
+
+    // follow-focus only: transfer focus before the retile. Focus MUST move
+    // first — layouts that derive their visible/raised window from
+    // focus.getFocused() at retile time (e.g. monocle — see monocle.zig's
+    // tileWithOffset) would otherwise retile against the stale,
+    // about-to-be-displaced window, then have no follow-up retile to correct
+    // course once focus actually moves.
+    if (action.* == .swap_master_focus_swap)
         if (displaced) |win| focus.setFocus(win, .tiling_operation);
-        tiling.retileCurrentWorkspaceDeferred(new_master);
-    }
+
+    tiling.retileCurrentWorkspaceDeferred(new_master);
+
     // Async pointer-sync: queues the cookie without blocking so no premature
     // flush occurs inside the grab. drainPointerSync() consumes it next loop.
     focus.beginPointerSync();
