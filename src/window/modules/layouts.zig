@@ -24,11 +24,14 @@ pub const SizeHints = struct {
     max_aspect: f32 = 0.0,
 };
 
+/// Sentinel zero rect used to mark a cache entry as stale.
+pub const zero_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+
 /// Per-window cache entry: last geometry, last border color, size hints.
 pub const WindowData = struct {
     /// Zeroed rect = stale / not yet computed. The layout engine never
     /// produces a real 0×0 rect, so this sentinel is unambiguous.
-    rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+    rect: utils.Rect = zero_rect,
     border: u32 = 0,
     hints: SizeHints = .{},
 
@@ -85,6 +88,18 @@ pub const LayoutCtx = struct {
     /// of the bar and every window on the workspace actually being viewed.
     is_background: bool = false,
 };
+
+/// Push `win` offscreen for layouts that hide it (monocle's background
+/// windows, fibonacci's overflow fallback). Invalidates the cached rect first
+/// so `restoreWorkspaceGeom` never replays a stale on-screen position, and
+/// skips the XCB round-trip when the entry is already invalid.
+pub inline fn pushWindowOffscreenAndInvalidate(ctx: *const LayoutCtx, win: u32) void {
+    if (ctx.cache.getPtr(win)) |wd| {
+        if (!wd.hasValidRect()) return;
+        wd.rect = zero_rect;
+    }
+    utils.pushWindowOffscreen(ctx.conn, win);
+}
 
 pub inline fn rectsEqual(a: utils.Rect, b: utils.Rect) bool {
     return a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height;

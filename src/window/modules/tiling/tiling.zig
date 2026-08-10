@@ -47,10 +47,6 @@ const max_workspaces: usize = constants.MAX_WORKSPACES;
 
 // Public types
 
-/// Sentinel zero rect used to mark a cache entry as stale.
-/// Exported so layout modules (monocle) can write it directly.
-pub const zero_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
-
 /// Defined in types.zig (see its doc comment for why) so config.zig and
 /// workspaces.zig can resolve layout names without a circular import;
 /// re-exported here so every existing `tiling.Layout` call site is unaffected.
@@ -143,18 +139,11 @@ pub const State = struct {
     is_enabled: bool,
     is_dirty: bool,
 
-    /// All layout configuration: which layout is active, sizing parameters, etc.
     config: LayoutConfig,
-
-    /// Window tracking list.
     windows: tracking.Tracking,
-
-    /// Geometry cache: per-window rect/border cache, workspace validity bits,
-    /// and the scratch window buffer.
     geom: GeomCache,
 
-    /// Scroll-layout runtime state, grouped so its lifetime and ownership are
-    /// explicit.  Dormant (but preserved) when layout != .scroll.
+    /// Scroll-layout runtime state; dormant (but preserved) when layout != .scroll.
     scroll: ScrollState,
 
     pub inline fn margins(self: *const State) utils.Margins {
@@ -221,15 +210,6 @@ pub fn reloadConfig() void {
     // decrease_master) and stack_balance (mod+n/mod+o grow-slave actions) —
     // is reset to null by applyWorkspaceOverrides itself, since a reload has
     // no config-declared value to restore either to.
-    //
-    // Previously this only reset every workspace to the single global
-    // default and never re-read workspace_layout_overrides /
-    // workspace_master_count_overrides at all, so editing a per-workspace
-    // override and reloading silently reverted it to the global default
-    // instead of applying the edit — see item 5 in the config-subsystem
-    // review. applyWorkspaceOverrides is the same function workspaces.init()
-    // uses at startup, so first-launch and reload now apply overrides
-    // identically.
     if (workspaces.getState()) |ws_state| {
         workspaces.applyWorkspaceOverrides(ws_state.workspaces, &core.getState().config.tiling, ns.config.layout);
     }
@@ -291,19 +271,12 @@ pub fn addWindow(window_id: u32) void {
     const border_color = s.borderColor(window_id);
     _ = xcb.xcb_change_window_attributes(core.getState().conn, window_id, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{border_color});
 
-    // NOTE: BORDER_WIDTH is intentionally NOT sent here.
-    //
-    // Every code path that calls addWindow is immediately followed by a call
-    // that owns the BORDER_WIDTH send:
-    //   • mapWindowToScreen      → applyBorderWidth(win)   (on-screen spawn)
-    //   • registerWindowOffscreen → applyBorder(win)        (off-screen spawn)
-    //   • toggleWindowFloat       (float→tiled)             border width already
-    //   • addWindowAtFilteredIndex (unminimize)              set at initial map
-    //
-    // The X server retains BORDER_WIDTH between configure_window calls, so the
-    // value from the initial map remains correct for toggle and unminimize paths.
-    // Sending it here duplicated the request from applyBorderWidth in the common
-    // spawn path, costing one extra XCB round-trip per window open.
+    // NOTE: BORDER_WIDTH is intentionally NOT sent here — every caller of
+    // addWindow is immediately followed by the code that owns the BORDER_WIDTH
+    // send (mapWindowToScreen → applyBorderWidth, registerWindowOffscreen →
+    // applyBorder, toggleWindowFloat / unminimize → already set at initial
+    // map). The X server retains BORDER_WIDTH between configure calls, so
+    // sending it here would duplicate that request in the common spawn path.
 
     // Pre-populate the cache so the immediately-following retile does not
     // re-send the border pixel.
@@ -399,7 +372,7 @@ pub fn getWindowGeom(window_id: u32) ?utils.Rect {
 /// stale cache hit and skip configure_window. The border entry is preserved.
 pub fn invalidateGeomCache(window_id: u32) void {
     const s = getState();
-    if (s.geom.cache.getPtr(window_id)) |wd| wd.rect = zero_rect;
+    if (s.geom.cache.getPtr(window_id)) |wd| wd.rect = layouts.zero_rect;
 }
 
 /// Clear the workspace-valid bit for `ws_idx` so the next restoreWorkspaceGeom
@@ -609,6 +582,13 @@ pub inline fn defaultLayout() Layout {
     return layout_cycle[0];
 }
 
+/// Persist a layout-config field to the current workspace's override slot in
+/// per-workspace mode. Global mode has no per-workspace overrides to write.
+inline fn persistToCurrentWorkspace(comptime field: []const u8, value: anytype) void {
+    if (core.getState().config.tiling.global_layout) return;
+    if (workspaces.getCurrentWorkspaceObject()) |ws| @field(ws, field) = value;
+}
+
 // Master width and count
 
 pub fn adjustMasterCount(delta: i8) void {
@@ -618,13 +598,10 @@ pub fn adjustMasterCount(delta: i8) void {
     const clamped: u8 = @intCast(@min(new, max_master_count));
     if (clamped == s.config.master_count) return;
     s.config.master_count = clamped;
-    const global_layout = core.getState().config.tiling.global_layout;
-    if (!global_layout) {
-        if (workspaces.getCurrentWorkspaceObject()) |ws| ws.master_count = s.config.master_count;
-    }
+    persistToCurrentWorkspace("master_count", s.config.master_count);
     // In global mode master_count applies to every workspace, so all inactive
     // workspace caches are now stale.
-    if (global_layout) s.geom.workspace_geom_valid_bits = 0;
+    if (core.getState().config.tiling.global_layout) s.geom.workspace_geom_valid_bits = 0;
     retileCurrentWorkspace();
 }
 
@@ -638,9 +615,7 @@ pub inline fn decreaseMasterCount() void {
 pub fn adjustMasterWidth(delta: f32) void {
     const s = getState();
     s.config.master_width = @max(constants.MIN_MASTER_WIDTH, @min(max_master_width_ratio, s.config.master_width + delta));
-    if (!core.getState().config.tiling.global_layout) {
-        if (workspaces.getCurrentWorkspaceObject()) |ws| ws.master_width = s.config.master_width;
-    }
+    persistToCurrentWorkspace("master_width", s.config.master_width);
     // Invalidate inactive workspace caches so their next switch-in forces a
     // full retile with the new width, rather than replaying stale positions.
     // is_dirty is NOT set here: retileCurrentWorkspace() immediately below
@@ -658,20 +633,9 @@ pub inline fn decreaseMasterWidth() void {
 
 // Stack slot balance (mod+n / mod+o)
 //
-// stack_balance lives on LayoutConfig (alongside master_width/master_count)
-// and is persisted per-workspace the same way — see the per-workspace write
-// below and Workspace.stack_balance in workspaces.zig — so, like master
-// width/count, it respects `global_layout`: per-workspace when false (the
-// default), shared across every workspace when true.
-//
-// It's a single signed scalar rather than two independent "grow top" / "grow
-// bottom" counters specifically so mod+n and mod+o partially undo each other
-// instead of compounding: with two independent boosts, alternating mod+n and
-// mod+o with 3+ slaves would grow *both* ends at once and squeeze whatever's
-// in between toward zero, since the windows in the middle only ever lose
-// share to both boosts and never get any of it back. A signed balance can't
-// do that — moving it back toward 0 (either direction) hands share straight
-// back to the middle windows.
+// Persisted per-workspace like master width/count (see Workspace.stack_balance
+// in workspaces.zig), so it respects `global_layout`: per-workspace when false
+// (the default), shared across every workspace when true.
 
 const stack_balance_step: f32 = 0.5;
 const max_stack_balance: f32 = 6.0;
@@ -684,9 +648,7 @@ const max_stack_balance: f32 = 6.0;
 pub fn growTopSlave() void {
     const s = getState();
     s.config.stack_balance = @min(max_stack_balance, s.config.stack_balance + stack_balance_step);
-    if (!core.getState().config.tiling.global_layout) {
-        if (workspaces.getCurrentWorkspaceObject()) |ws| ws.stack_balance = s.config.stack_balance;
-    }
+    persistToCurrentWorkspace("stack_balance", s.config.stack_balance);
     s.geom.workspace_geom_valid_bits = 0;
     retileCurrentWorkspace();
 }
@@ -696,9 +658,7 @@ pub fn growTopSlave() void {
 pub fn growBottomSlave() void {
     const s = getState();
     s.config.stack_balance = @max(-max_stack_balance, s.config.stack_balance - stack_balance_step);
-    if (!core.getState().config.tiling.global_layout) {
-        if (workspaces.getCurrentWorkspaceObject()) |ws| ws.stack_balance = s.config.stack_balance;
-    }
+    persistToCurrentWorkspace("stack_balance", s.config.stack_balance);
     s.geom.workspace_geom_valid_bits = 0;
     retileCurrentWorkspace();
 }
@@ -926,7 +886,7 @@ fn initState() State {
         .geom = .{
             .cache = layouts.CacheMap.init(cs.alloc),
             .workspace_geom_valid_bits = 0,
-            .last_retile_area = zero_rect,
+            .last_retile_area = layouts.zero_rect,
             .scratch_wins = undefined,
         },
         .scroll = .{},
@@ -1014,29 +974,6 @@ inline fn resolveWorkspaceOverride(
     return @field(wss.workspaces[ws_idx], field) orelse global_value;
 }
 
-/// Scope guard for temporarily overriding s.config.master_width/master_count
-/// (e.g. to the per-workspace values while retiling a workspace that isn't
-/// the active one) and restoring the previous values on `deinit()`. Every
-/// retile call site that needs a workspace-scoped override uses this instead
-/// of its own save/restore block.
-const MasterConfigScope = struct {
-    s: *State,
-    saved_width: f32,
-    saved_count: u8,
-
-    fn deinit(self: MasterConfigScope) void {
-        self.s.config.master_width = self.saved_width;
-        self.s.config.master_count = self.saved_count;
-    }
-};
-
-inline fn overrideMasterConfig(s: *State, width: f32, count: u8) MasterConfigScope {
-    const scope = MasterConfigScope{ .s = s, .saved_width = s.config.master_width, .saved_count = s.config.master_count };
-    s.config.master_width = width;
-    s.config.master_count = count;
-    return scope;
-}
-
 /// Returns the master width for `ws_idx` in per-workspace mode. Falls back to
 /// the current global value for workspaces that have no override yet.
 inline fn resolveMasterWidth(s: *const State, ws_state: ?*WsState, ws_idx: u8) f32 {
@@ -1096,11 +1033,16 @@ fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
     // workspace, s.config already holds the authoritative values (kept in
     // sync by applyWorkspaceLayout/adjustMasterWidth/adjustMasterCount), so
     // re-resolving here would be redundant at best.
-    const mc: ?MasterConfigScope = if (opts.for_ws != null)
-        overrideMasterConfig(s, resolveMasterWidth(s, wss, target_ws), resolveMasterCount(s, wss, target_ws))
-    else
-        null;
-    defer if (mc) |scope| scope.deinit();
+    const saved_width = s.config.master_width;
+    const saved_count = s.config.master_count;
+    if (opts.for_ws != null) {
+        s.config.master_width = resolveMasterWidth(s, wss, target_ws);
+        s.config.master_count = resolveMasterCount(s, wss, target_ws);
+    }
+    defer {
+        s.config.master_width = saved_width;
+        s.config.master_count = saved_count;
+    }
 
     invokeLayout(
         selectLayout(s, wss, target_ws, core.getState().config.tiling.global_layout),
@@ -1306,17 +1248,11 @@ inline fn markWorkspaceGeomValid(s: *State, ws_idx: anytype) void {
 inline fn applyLayoutStep(comptime forward: bool) void {
     const s = getState();
     if (s.config.layout == .floating) return;
-    applyLayout(s, stepLayout(s, s.config.layout, forward));
-}
-
-fn applyLayout(s: *State, layout: Layout) void {
+    const layout = stepLayout(s, s.config.layout, forward);
     s.config.layout = layout;
-    const global_layout = core.getState().config.tiling.global_layout;
-    if (!global_layout) {
-        if (workspaces.getCurrentWorkspaceObject()) |ws| ws.layout = layout;
-    }
+    persistToCurrentWorkspace("layout", layout);
     // In global mode all workspaces share the same layout; inactive caches are stale.
-    if (global_layout) s.geom.workspace_geom_valid_bits = 0;
+    if (core.getState().config.tiling.global_layout) s.geom.workspace_geom_valid_bits = 0;
     retileCurrentWorkspace();
     bar.scheduleFullRedraw();
     debug.info("Layout: {s}", .{@tagName(layout)});

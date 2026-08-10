@@ -56,9 +56,7 @@ pub fn tileWithOffset(
 }
 
 /// Push all windows except `top_win` offscreen so they never show through a
-/// transparent top window. Skips windows already offscreen to avoid redundant
-/// round-trips, and invalidates their cached rect so `restoreWorkspaceGeom`
-/// doesn't replay a stale on-screen position.
+/// transparent top window.
 fn pushBackgroundWindowsOffscreen(
     ctx: *const layouts.LayoutCtx,
     windows: []const u32,
@@ -66,10 +64,6 @@ fn pushBackgroundWindowsOffscreen(
 ) void {
     for (windows) |win| {
         if (win == top_win) continue;
-        if (ctx.cache.getPtr(win)) |wd| {
-            if (!wd.hasValidRect()) continue; // already offscreen — skip round-trip
-            wd.rect = tiling.zero_rect; // invalidate before sending
-        }
-        utils.pushWindowOffscreen(ctx.conn, win);
+        layouts.pushWindowOffscreenAndInvalidate(ctx, win);
     }
 }

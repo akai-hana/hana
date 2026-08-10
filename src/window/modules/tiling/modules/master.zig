@@ -67,11 +67,12 @@ pub fn tileWithOffset(
     const is_master_on_right = state.config.master_side == .right;
     const master_x: u16 = if (is_master_on_right) screen_w -| master_w else 0;
 
-    // Inner width accounts for the gap between master and stack panes.
-    const master_inner_w = if (stack_n > 0)
-        layouts.shrinkClamped(master_w, m.gap + (m.gap / 2 + utils.doubledBorder(m)))
-    else
-        layouts.shrinkClamped(master_w, m.gap + (m.gap + utils.doubledBorder(m)));
+    // The master column is inset by a full gap on its screen edge plus a
+    // half-gap toward the stack (the stack's own half-gap completes the shared
+    // gap); with no stack both screen edges carry a full gap. Borders are then
+    // subtracted from the content width.
+    const edge_inset: u16 = if (stack_n > 0) m.gap + m.gap / 2 else m.gap * 2;
+    const master_inner_w = layouts.shrinkClamped(master_w, edge_inset + utils.doubledBorder(m));
 
     // The master column never uses the stack boost — it isn't a "slave"
     // column, so mod+n/mod+o have no effect on it.
