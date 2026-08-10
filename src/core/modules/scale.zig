@@ -118,14 +118,16 @@ pub fn scaleMasterWidth(value: parser.ScalableValue) f32 {
 pub fn scaleFontSize(value: parser.ScalableValue, screen: *xcb.xcb_screen_t) u16 {
     const screen_height: f32 = @floatFromInt(screen.height_in_pixels);
     const raw = if (value.is_percentage) value.value * (screen_height / FONT_BASELINE_HEIGHT) else value.value;
-    return @intFromFloat(@max(1.0, @round(raw)));
+    const clamped = std.math.clamp(@round(raw), 1.0, @as(f32, std.math.maxInt(u16)));
+    return @intFromFloat(clamped);
 }
 
 /// Converts a scalable bar height value to pixels, clamped to BAR_MIN_HEIGHT_PX.
 pub fn scaleBarHeight(value: parser.ScalableValue, screen_height: u16) u16 {
     const screen_height_f: f32 = @floatFromInt(screen_height);
     const scaled_px: f32 = utils.scaling.scaleToPixels(value, screen_height_f);
-    return @max(BAR_MIN_HEIGHT_PX, @as(u16, @intFromFloat(@round(scaled_px))));
+    const clamped = std.math.clamp(@round(scaled_px), 0.0, @as(f32, std.math.maxInt(u16)));
+    return @max(BAR_MIN_HEIGHT_PX, @as(u16, @intFromFloat(clamped)));
 }
 
 // Refresh-rate detection

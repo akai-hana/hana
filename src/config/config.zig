@@ -15,7 +15,7 @@ const utils = @import("utils");
 /// (values are warn-and-revert, not clamped).
 fn getInRange(
     comptime T: type,
-    section: *const parser.Section,
+    section: *parser.Section,
     key: []const u8,
     default: T,
     comptime min: ?T,
@@ -55,7 +55,7 @@ fn getInRange(
 }
 
 /// Resolves a color from a section key, accepting `#RRGGBB`, `0xRRGGBB`, or an integer.
-inline fn getColor(section: *const parser.Section, key: []const u8, default: u32) u32 {
+inline fn getColor(section: *parser.Section, key: []const u8, default: u32) u32 {
     const value = section.get(key) orelse return default;
     if (value.asColor()) |c| return c;
     if (value.asString()) |s| return parser.parseColor(s) catch {
@@ -71,7 +71,7 @@ inline fn getColor(section: *const parser.Section, key: []const u8, default: u32
 /// ceiling) — enough to reject a negative like `gap_width = -50`. Returns
 /// `default` unclamped, with a warning, matching getInRange.
 fn getScalableInRange(
-    section: *const parser.Section,
+    section: *parser.Section,
     key: []const u8,
     default: parser.ScalableValue,
     comptime min: f32,
@@ -175,7 +175,10 @@ fn tryParseTomlFile(allocator: std.mem.Allocator, path: []const u8) ?parser.Docu
 /// `include` directive is intentionally not processed. This keeps the include
 /// graph cycle-free by construction (no cycle-detection machinery needed) at
 /// the cost of no chained includes.
-fn processIncludes(allocator: std.mem.Allocator, dst: *parser.Document, src_doc: *const parser.Document, dir_path: []const u8) !void {
+fn processIncludes(allocator: std.mem.Allocator, dst: *parser.Document, src_doc: *parser.Document, dir_path: []const u8) !void {
+    // The `include` key is copied into `dst` by mergeDocumentsInto, so mark it
+    // consumed there as well — otherwise warnUnconsumed would flag it as a typo.
+    dst.root.markConsumed("include");
     const inc_val = src_doc.get("include") orelse return;
     const includes = inc_val.asArray() orelse return;
     for (includes) |item| {
@@ -328,7 +331,7 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !types.Config 
 
 fn loadFallbackConfig(allocator: std.mem.Allocator) !types.Config {
     const fallback = @import("fallback");
-    const fallback_toml = try fallback.getFallbackToml();
+    const fallback_toml = fallback.getFallbackToml() orelse return error.FallbackMissing;
     var doc = try parser.parse(allocator, fallback_toml);
     defer doc.deinit();
     const cfg = try buildConfigFromDoc(allocator, &doc);
@@ -368,7 +371,7 @@ fn getDefaultConfig(allocator: std.mem.Allocator) types.Config {
 }
 
 /// Builds a Config from a parsed Document: initialises defaults then applies all sections.
-fn buildConfigFromDoc(allocator: std.mem.Allocator, doc: *const parser.Document) !types.Config {
+fn buildConfigFromDoc(allocator: std.mem.Allocator, doc: *parser.Document) !types.Config {
     var cfg = getDefaultConfig(allocator);
     parseWorkspaces(doc, &cfg);
     try parseKeybindings(allocator, doc, &cfg);
@@ -378,7 +381,17 @@ fn buildConfigFromDoc(allocator: std.mem.Allocator, doc: *const parser.Document)
     parseDrag(doc, &cfg);
     parseEnabledFlag(doc, "fullscreen", &cfg.fullscreen_enabled);
     parseEnabledFlag(doc, "minimize", &cfg.minimize_enabled);
+    warnUnconsumedSections(doc);
     return cfg;
+}
+
+/// Warns about keys no parse function examined, to surface typos the parser
+/// would otherwise accept silently.
+fn warnUnconsumedSections(doc: *parser.Document) void {
+    doc.root.warnUnconsumed("<root>");
+    var iter = doc.sections.iterator();
+    while (iter.next()) |entry|
+        entry.value_ptr.warnUnconsumed(entry.key_ptr.*);
 }
 
 const MOD_MAP = std.StaticStringMap(u16).initComptime(.{
@@ -392,11 +405,11 @@ const MOD_MAP = std.StaticStringMap(u16).initComptime(.{
 });
 
 const MOUSE_BUTTON_MAP = std.StaticStringMap(u8).initComptime(.{
-    .{ "button1", 1 },    .{ "left_click", 1 },   .{ "leftclick", 1 },   .{ "left", 1 },
-    .{ "button2", 2 },    .{ "middle_click", 2 }, .{ "middleclick", 2 }, .{ "middle", 2 },
-    .{ "button3", 3 },    .{ "right_click", 3 },  .{ "right", 3 },       .{ "button4", 4 },
-    .{ "scroll_up", 4 },  .{ "scrollup", 4 },     .{ "button5", 5 },     .{ "scroll_down", 5 },
-    .{ "scrolldown", 5 },
+    .{ "button1", 1 },      .{ "left_click", 1 },   .{ "leftclick", 1 },
+    .{ "button2", 2 },      .{ "middle_click", 2 }, .{ "middleclick", 2 },
+    .{ "button3", 3 },      .{ "right_click", 3 },  .{ "rightclick", 3 },
+    .{ "button4", 4 },      .{ "scroll_up", 4 },    .{ "scrollup", 4 },
+    .{ "button5", 5 },      .{ "scroll_down", 5 },  .{ "scrolldown", 5 },
 });
 
 inline fn mouseButtonFromName(name: []const u8) ?u8 {
@@ -456,9 +469,14 @@ const ACTION_MAP = std.StaticStringMap(types.Action).initComptime(.{
 
 const GlobEntry = struct {
     key: []const u8,
-    ws_idx: u8, // 1-based position in the expanded list; 0 when there is no glob
+    ws_idx: u16, // 1-based position in the expanded list; 0 when there is no glob
     owned: bool, // true when key was heap-allocated and must be freed by the caller
 };
+
+/// Maximum number of keys a single `{…}` glob may expand to. Workspace
+/// indices only reach 256 (see tryParseWorkspace), and a larger glob could
+/// only ever produce unreachable exec fallbacks — so expansion stops there.
+const MAX_GLOB_EXPANSION: usize = 256;
 
 /// Wraps `key` as the single unowned GlobEntry returned when a keybind key
 /// has no `{…}` glob (or an unusable one) to expand.
@@ -488,7 +506,7 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
     }
 
     var it = std.mem.splitScalar(u8, inner, ',');
-    while (it.next()) |token| {
+    outer: while (it.next()) |token| {
         const t = std.mem.trim(u8, token, " \t");
         if (t.len == 0) continue;
         if (t.len == 3 and t[1] == '-') {
@@ -498,9 +516,18 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
                 debug.warn("Keybind glob '{s}': descending range '{c}-{c}', skipping", .{ key_pattern, ch, end });
                 continue;
             }
-            while (ch <= end) : (ch += 1)
+            while (ch <= end) : (ch += 1) {
+                if (keys.items.len >= MAX_GLOB_EXPANSION) {
+                    debug.warn("Keybind glob '{s}': expansion exceeds {} keys, truncating", .{ key_pattern, MAX_GLOB_EXPANSION });
+                    break :outer;
+                }
                 try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, ch, suffix }));
+            }
         } else {
+            if (keys.items.len >= MAX_GLOB_EXPANSION) {
+                debug.warn("Keybind glob '{s}': expansion exceeds {} keys, truncating", .{ key_pattern, MAX_GLOB_EXPANSION });
+                break :outer;
+            }
             try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ prefix, t, suffix }));
         }
     }
@@ -521,7 +548,7 @@ const WORKSPACE_ACTION_BASES = std.StaticStringMap(void).initComptime(.{
     .{ "workspace", {} }, .{ "move_to_workspace", {} }, .{ "toggle_tag", {} },
 });
 
-fn resolveAndParseAction(allocator: std.mem.Allocator, cmd: []const u8, ws_idx: u8, kill_placeholder: ?[]const u8) !types.Action {
+fn resolveAndParseAction(allocator: std.mem.Allocator, cmd: []const u8, ws_idx: u16, kill_placeholder: ?[]const u8) !types.Action {
     const ws_str: ?[]u8 = if (ws_idx > 0 and WORKSPACE_ACTION_BASES.has(cmd))
         try std.fmt.allocPrint(allocator, "{s}_{d}", .{ cmd, ws_idx })
     else
@@ -536,7 +563,7 @@ fn resolveAndParseAction(allocator: std.mem.Allocator, cmd: []const u8, ws_idx: 
     return parseAction(allocator, after_ws);
 }
 
-fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+fn parseKeybindings(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     const section = doc.getSection("binds") orelse doc.getSection("Keybindings") orelse return;
     // Find Mod and kill placeholders with a single pass over the pairs so that
     // casing in the config file doesn't matter (e.g. "mod", "Mod", "MOD" all work).
@@ -545,16 +572,20 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *const parser.Document, c
     {
         var scan = section.pairs.iterator();
         while (scan.next()) |e| {
-            if (std.ascii.eqlIgnoreCase(e.key_ptr.*, "Mod"))
-                mod_placeholder = e.value_ptr.*.asString()
-            else if (std.ascii.eqlIgnoreCase(e.key_ptr.*, "kill"))
+            if (std.ascii.eqlIgnoreCase(e.key_ptr.*, "Mod")) {
+                mod_placeholder = e.value_ptr.*.asString();
+                section.markConsumed(e.key_ptr.*);
+            } else if (std.ascii.eqlIgnoreCase(e.key_ptr.*, "kill")) {
                 kill_placeholder = e.value_ptr.*.asString();
+                section.markConsumed(e.key_ptr.*);
+            }
         }
     }
     var iter = section.pairs.iterator();
     while (iter.next()) |entry| {
         if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "Mod")) continue;
         if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "kill")) continue;
+        section.markConsumed(entry.key_ptr.*);
         const glob_entries = try expandGlobKeys(allocator, entry.key_ptr.*);
         defer {
             for (glob_entries) |ge| if (ge.owned) allocator.free(ge.key);
@@ -695,15 +726,17 @@ pub inline fn lookupKeybinding(mods: u16, keysym: u32) ?*const types.Action {
     return core.getState().config.keybind_resolver.lookup(mods, keysym);
 }
 
-/// Canonical startup/reload entry point: load, resolve keybindings, finalize.
+/// Canonical startup/reload entry point: load, validate, resolve keybindings, finalize.
 pub fn load(allocator: std.mem.Allocator, screen: *core.xcb.xcb_screen_t, xkb_state: *xkbcommon.XkbState) !types.Config {
     var cfg = try loadConfigDefault(allocator);
+    errdefer cfg.deinit(allocator);
+    try validate(&cfg);
     cfg.keybind_resolver.build(cfg.keybindings.items, xkb_state, allocator);
     finalizeConfig(&cfg, screen);
     return cfg;
 }
 
-fn parseDrag(doc: *const parser.Document, cfg: *types.Config) void {
+fn parseDrag(doc: *parser.Document, cfg: *types.Config) void {
     const section = doc.getSection("drag") orelse return;
     cfg.drag_enabled = getInRange(bool, section, "enabled", cfg.drag_enabled, null, null);
     // Reading the current value as the default avoids duplicating the struct
@@ -712,7 +745,7 @@ fn parseDrag(doc: *const parser.Document, cfg: *types.Config) void {
     cfg.snap_distance = getScalableInRange(section, "snap_distance", cfg.snap_distance, 0.0);
 }
 
-fn parseWorkspaces(doc: *const parser.Document, cfg: *types.Config) void {
+fn parseWorkspaces(doc: *parser.Document, cfg: *types.Config) void {
     const section = doc.getSection("bar.modules.workspaces") orelse doc.getSection("workspaces") orelse return;
     cfg.workspaces.enabled = getInRange(bool, section, "enabled", cfg.workspaces.enabled, null, null);
     cfg.workspaces.count = getInRange(u8, section, "count", cfg.workspaces.count, 1, null);
@@ -721,14 +754,14 @@ fn parseWorkspaces(doc: *const parser.Document, cfg: *types.Config) void {
 /// Reads `section_name.enabled` (default true) into `field`. Used for
 /// subsystems that are always compiled in and only toggled on/off, like
 /// [fullscreen] and [minimize].
-fn parseEnabledFlag(doc: *const parser.Document, section_name: []const u8, field: *bool) void {
+fn parseEnabledFlag(doc: *parser.Document, section_name: []const u8, field: *bool) void {
     const section = doc.getSection(section_name) orelse return;
     // Read the already-initialised value back as the default so this helper
     // can't drift out of sync with the field's default in types.zig.
     field.* = getInRange(bool, section, "enabled", field.*, null, null);
 }
 
-fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+fn parseTiling(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     const section = doc.getSection("tiling") orelse return;
     cfg.tiling.enabled = getInRange(bool, section, "enabled", cfg.tiling.enabled, null, null);
     if (section.getArray("layouts")) |arr| {
@@ -777,11 +810,12 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *
 
 /// Per-workspace master count overrides: [tiling.layouts.master-stack.counts]
 /// workspace_number (1-based) = count. Only meaningful when global_layout = false.
-fn parseMasterStackCounts(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+fn parseMasterStackCounts(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     const counts_sec = doc.getSection("tiling.layouts.master-stack.counts") orelse return;
     cfg.tiling.workspace_master_count_overrides.clearRetainingCapacity();
     var iter = counts_sec.pairs.iterator();
     while (iter.next()) |entry| {
+        counts_sec.markConsumed(entry.key_ptr.*);
         const ws_1based = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
             debug.warn("master-stack.counts: invalid workspace key '{s}', skipping", .{entry.key_ptr.*});
             continue;
@@ -805,7 +839,7 @@ fn parseMasterStackCounts(allocator: std.mem.Allocator, doc: *const parser.Docum
 /// Reads `variants` from `section` into `field`; warns on unknown values.
 inline fn tryParseVariant(
     comptime T: type,
-    section: *const parser.Section,
+    section: *parser.Section,
     layout_name: []const u8,
     field: *T,
 ) void {
@@ -816,7 +850,7 @@ inline fn tryParseVariant(
     };
 }
 
-fn parseTilingVariants(doc: *const parser.Document, cfg: *types.Config) void {
+fn parseTilingVariants(doc: *parser.Document, cfg: *types.Config) void {
     inline for (.{
         .{ "tiling.layouts.master-stack", types.MasterVariant, "master-stack", "master_variant" },
         .{ "tiling.layouts.monocle", types.MonocleVariant, "monocle", "monocle_variant" },
@@ -1045,18 +1079,23 @@ fn parseTransparency(value: parser.Value) f32 {
 /// `*view` must already hold a heap allocation (getDefaultConfig dupes the
 /// defaults), so this transfers ownership and Config.deinit can free every
 /// BarConfig string field unconditionally.
+///
+/// The duplicate is taken BEFORE the old allocation is freed: in the
+/// "key absent" fallback path (assignStrKey) `val` IS the current `view.*`,
+/// so freeing first would read freed memory.
 fn assignStr(a: std.mem.Allocator, view: *[]const u8, val: []const u8) !void {
+    const copy = try a.dupe(u8, val);
     a.free(view.*);
-    view.* = try a.dupe(u8, val);
+    view.* = copy;
 }
 
 /// Reads `section.key` (falling back to `view`'s current value when absent)
 /// and assigns the result into `view` via assignStr.
-fn assignStrKey(a: std.mem.Allocator, section: *const parser.Section, key: []const u8, view: *[]const u8) !void {
+fn assignStrKey(a: std.mem.Allocator, section: *parser.Section, key: []const u8, view: *[]const u8) !void {
     try assignStr(a, view, getInRange([]const u8, section, key, view.*, null, null));
 }
 
-fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     const section = doc.getSection("bar") orelse return;
     cfg.bar.enabled = getInRange(bool, section, "enabled", cfg.bar.enabled, null, null);
     cfg.bar.vim_mode = getInRange(bool, section, "vim_mode", cfg.bar.vim_mode, null, null);
@@ -1152,7 +1191,7 @@ fn parseBar(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *typ
     carousel.setRefreshRateOverride(@as(f64, @floatFromInt(getInRange(u16, section, "carousel_refresh_rate", 0, null, null))));
 }
 
-fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Section, cfg: *types.Config) !void {
+fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *parser.Section, cfg: *types.Config) !void {
     for (cfg.bar.workspace_icons.items) |icon| allocator.free(icon);
     cfg.bar.workspace_icons.clearRetainingCapacity();
     if (section.getArray("icons")) |arr| {
@@ -1173,7 +1212,7 @@ fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *const parser.Sect
     }
 }
 
-fn parseBarLayout(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+fn parseBarLayout(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     for (cfg.bar.layout.items) |*item| item.deinit(allocator);
     cfg.bar.layout.clearRetainingCapacity();
     const positions = [_]struct { name: []const u8, pos: types.BarSegmentAnchor }{
@@ -1200,7 +1239,7 @@ fn parseBarLayout(allocator: std.mem.Allocator, doc: *const parser.Document, cfg
     if (cfg.bar.layout.items.len == 0) try initDefaultBarLayout(allocator, cfg);
 }
 
-fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *types.Config) !void {
+fn parseRules(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     // [workspace.rules]: key is either a class name (value = ws int) or
     // a workspace number (value = class array). Both directions call addRule.
     if (doc.getSection("workspace.rules")) |rules_section| {
@@ -1224,8 +1263,10 @@ fn parseRules(allocator: std.mem.Allocator, doc: *const parser.Document, cfg: *t
         const ws_num = std.fmt.parseInt(usize, ws_str, 10) catch continue;
         if (!checkWorkspaceBound(ws_num, name, cfg.workspaces.count)) continue;
         var iter = entry.value_ptr.pairs.iterator();
-        while (iter.next()) |class_entry|
+        while (iter.next()) |class_entry| {
+            entry.value_ptr.markConsumed(class_entry.key_ptr.*);
             try addRule(allocator, cfg, class_entry.key_ptr.*, ws_num);
+        }
     }
 }
 
@@ -1251,10 +1292,11 @@ fn tryAddClassRule(allocator: std.mem.Allocator, cfg: *types.Config, class_name:
 fn parseWorkspaceRuleSection(
     allocator: std.mem.Allocator,
     cfg: *types.Config,
-    rules_section: *const parser.Section,
+    rules_section: *parser.Section,
 ) !void {
     var iter = rules_section.pairs.iterator();
     while (iter.next()) |entry| {
+        rules_section.markConsumed(entry.key_ptr.*);
         const ws_num = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
             try tryAddClassRule(allocator, cfg, entry.key_ptr.*, entry.value_ptr.*);
             continue;
@@ -1272,9 +1314,11 @@ fn parseWorkspaceRuleSection(
 fn parseSimpleRuleSection(
     allocator: std.mem.Allocator,
     cfg: *types.Config,
-    rules_section: *const parser.Section,
+    rules_section: *parser.Section,
 ) !void {
     var iter = rules_section.pairs.iterator();
-    while (iter.next()) |entry|
+    while (iter.next()) |entry| {
+        rules_section.markConsumed(entry.key_ptr.*);
         try tryAddClassRule(allocator, cfg, entry.key_ptr.*, entry.value_ptr.*);
+    }
 }

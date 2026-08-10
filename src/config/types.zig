@@ -96,7 +96,14 @@ pub const KeybindResolver = struct {
     /// startup (config.load) and again on every config reload
     /// (events.applyConfig).
     pub fn build(self: *KeybindResolver, keybindings: []Keybind, xkb_state: *xkbcommon.XkbState, allocator: std.mem.Allocator) void {
-        for (keybindings) |*kb| kb.keycode = xkb_state.keysymToKeycode(kb.keysym);
+        for (keybindings) |*kb| {
+            kb.keycode = xkb_state.keysymToKeycode(kb.keysym);
+            if (kb.keycode == null) {
+                var name_buf: [64]u8 = undefined;
+                const name = xkbcommon.keysymGetName(kb.keysym, &name_buf);
+                debug.warn("Keybinding mods=0x{x:0>4} keysym={s} (0x{x}) resolves to no base keycode and will NOT be grabbed — shifted symbols such as \"@\" must be bound via their unshifted key name (e.g. \"2\")", .{ kb.modifiers, name, kb.keysym });
+            }
+        }
         self.rebuildDispatchMap(keybindings, allocator);
     }
 
@@ -487,10 +494,10 @@ pub const BarConfig = struct {
         const h: f32 = @floatFromInt(bar_height);
         if (self.font_size.is_percentage) {
             const margin_ratio = (1.0 - self.font_size.value / 100.0) / 2.0;
-            return @as(u16, @intFromFloat(@round(@max(0.0, h * margin_ratio))));
+            return scaleToU16(h * margin_ratio);
         }
         const font_px = self.font_size.value;
-        return @as(u16, @intFromFloat(@round(@max(0.0, (h - font_px) / 2.0))));
+        return scaleToU16((h - font_px) / 2.0);
     }
 
     /// Scales a ScalableValue to pixels. `factor` multiplies the percentage path.
@@ -500,7 +507,8 @@ pub const BarConfig = struct {
     }
 
     inline fn scaleToU16(val: f32) u16 {
-        return @as(u16, @intFromFloat(@round(@max(0.0, val))));
+        const clamped = std.math.clamp(val, 0.0, @as(f32, std.math.maxInt(u16)));
+        return @as(u16, @intFromFloat(@round(clamped)));
     }
     pub inline fn scaledSpacing(self: *const BarConfig, bar_height: u16) u16 {
         return scaleToU16(scaleValue(self.spacing, bar_height, 5.0));

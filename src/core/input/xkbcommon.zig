@@ -77,6 +77,11 @@ pub const XkbState = struct {
     /// Reverse-look up a keysym to its keycode (used during config parsing).
     /// Scans the flat table (248 entries, all in L1 cache). Called only at
     /// config-parse time, never on the hot key-press path.
+    ///
+    /// The table holds each key's base (unshifted) symbol, so a keysym that
+    /// only exists behind a Shift — e.g. `@` on a US layout — resolves to
+    /// null. Callers should warn when this happens: the binding cannot be
+    /// grabbed.
     pub inline fn keysymToKeycode(self: *const XkbState, keysym: u32) ?u8 {
         for (8..256) |kc| {
             if (self.keysym_by_keycode[kc] == keysym) return @intCast(kc);
@@ -84,6 +89,15 @@ pub const XkbState = struct {
         return null;
     }
 };
+
+/// Renders a keysym to its XKB name (e.g. XKB_KEY_at -> "at") into `buf`,
+/// returning a slice of `buf` holding the name. Used for diagnostic messages.
+pub fn keysymGetName(keysym: u32, buf: []u8) []const u8 {
+    if (buf.len == 0) return "";
+    const n = xkb.xkb_keysym_get_name(keysym, @ptrCast(buf.ptr), buf.len);
+    const len: usize = if (n < 0) 0 else @min(@as(usize, @intCast(n)), buf.len);
+    return buf[0..len];
+}
 
 const XKB_RETRY_DELAY_MS = constants.XKB_RETRY_DELAY_MS;
 

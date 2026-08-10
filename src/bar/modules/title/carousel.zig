@@ -58,11 +58,14 @@ inline fn entryStale(e: *const CarouselEntry, window: ?u32, title_invalidated: b
 }
 
 /// Runtime-configurable scroll parameters.
+/// Read by the carousel thread (wakeIntervalNs, advanceCarouselOffset) and
+/// written by the main thread during config parse/reload, so both fields are
+/// atomics rather than plain f64.
 const ScrollConfig = struct {
-    speed: f64 = default_scroll_speed,
+    speed: std.atomic.Value(f64) = std.atomic.Value(f64).init(default_scroll_speed),
     /// When > 0, overrides the monitor's detected refresh rate for the wake
     /// interval. Set via `carousel_refresh_rate` in the config file.
-    rate_override: f64 = 0.0,
+    rate_override: std.atomic.Value(f64) = std.atomic.Value(f64).init(0.0),
 };
 
 /// All state exclusively owned by whichever thread currently holds bar.zig's
@@ -111,13 +114,13 @@ pub fn isCarouselEnabled() bool {
 /// Set the scroll speed in pixels per second.
 /// Values ≤ 0 are clamped to default_scroll_speed.
 pub fn setScrollSpeed(px_per_s: f64) void {
-    scroll_config.speed = if (px_per_s > 0.0) px_per_s else default_scroll_speed;
+    scroll_config.speed.store(if (px_per_s > 0.0) px_per_s else default_scroll_speed, .monotonic);
 }
 
 /// Override the refresh rate used for the wake interval.
 /// Pass 0 (the default) to use the monitor's auto-detected rate.
 pub fn setRefreshRateOverride(hz: f64) void {
-    scroll_config.rate_override = if (hz > 0.0) hz else 0.0;
+    scroll_config.rate_override.store(if (hz > 0.0) hz else 0.0, .monotonic);
 }
 
 /// Returns the carousel thread's wake interval in nanoseconds.
@@ -130,10 +133,8 @@ pub fn setRefreshRateOverride(hz: f64) void {
 /// Called once per carousel-thread sleep cycle; the division is cheap relative
 /// to the timedWait syscall that follows.
 pub fn wakeIntervalNs() u64 {
-    const hz: f64 = if (scroll_config.rate_override > 0.0)
-        scroll_config.rate_override
-    else
-        scale.getDetectedRateHz();
+    const rate_override = scroll_config.rate_override.load(.monotonic);
+    const hz: f64 = if (rate_override > 0.0) rate_override else scale.getDetectedRateHz();
     return @intFromFloat(1_000_000_000.0 / hz);
 }
 
@@ -152,10 +153,13 @@ pub fn getSegmentedCarouselWindow() ?u32 {
 }
 
 /// Free all carousel pixmaps and reset cross-thread signals.
-/// Call on bar deinit or config reload, after the carousel thread has
-/// already been stopped (carousel.stopThread()) so nothing else can be
-/// touching render.single/render.seg concurrently.
+/// Call on bar deinit or config reload. Safe both when the carousel thread is
+/// still running and after it has been stopped: it acquires bar.zig's
+/// draw_mutex (which the carousel thread holds while drawing) so it cannot
+/// race a concurrent blit of render.single/render.seg.
 pub fn deinitCarousel() void {
+    bar.draw_mutex.lock();
+    defer bar.draw_mutex.unlock();
     deinitSingleCarousel();
     deinitSegmentedCarousel();
     focus_signal.is_invalidated.store(false, .monotonic);
@@ -512,7 +516,7 @@ fn advanceCarouselOffset(e: *CarouselEntry, now_ns: u64) u16 {
     std.debug.assert(e.cycle_w > 0);
     const delta_ns = @as(f64, @floatFromInt(now_ns -| e.last_ns));
     // Accumulate exact sub-pixel advance for this tick plus any carry.
-    const delta_px = delta_ns * scroll_config.speed / 1_000_000_000.0 + e.frac_acc;
+    const delta_px = delta_ns * scroll_config.speed.load(.monotonic) / 1_000_000_000.0 + e.frac_acc;
     const int_px = @floor(delta_px);
     e.frac_acc = delta_px - int_px; // carry remainder to next tick
     e.last_ns = now_ns;

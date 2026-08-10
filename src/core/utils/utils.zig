@@ -273,7 +273,8 @@ pub const scaling = struct {
             (value.value / 100.0) * 0.5 * @as(f32, @floatFromInt(reference_dimension))
         else
             value.value;
-        return @intFromFloat(@max(0.0, @round(v)));
+        const clamped = std.math.clamp(@round(v), 0.0, @as(f32, std.math.maxInt(u16)));
+        return @intFromFloat(clamped);
     }
 };
 

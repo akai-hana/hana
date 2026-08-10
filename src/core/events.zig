@@ -7,7 +7,6 @@ const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
 const constants = @import("constants");
-const types = @import("types");
 
 const debug = @import("debug");
 const config = @import("config");
@@ -232,21 +231,22 @@ pub fn grabKeybindings() void {
 
 // Config reload
 
-/// Applies a validated config: resolves keybindings and notifies all
-/// subsystems of the change. grabKeybindings() is deliberately not called
-/// here — see the comment in handleConfigReload for why.
-fn applyConfig(new_config: *types.Config) !void {
-    const cs = core.getState();
-    new_config.keybind_resolver.build(new_config.keybindings.items, input.getXkbState(), cs.alloc);
-    config.finalizeConfig(new_config, cs.screen);
-
-    window.reloadBorders();
-    tiling.reloadConfig();
-    bar.reload();
-}
-
 /// Loads and validates a new config, then applies it atomically.
 /// On failure, the old config remains active.
+///
+/// Ordering matters for every step:
+///   1. Keybind resolution and DPI scaling operate directly on `new_config`
+///      and must run before the swap.
+///   2. The swap (old -> new) happens BEFORE the subsystem reloads below, so
+///      window.reloadBorders()/tiling.reloadConfig()/bar.reload() — which all
+///      read core.getState().config — rebuild from the NEW config, not the
+///      stale one. (The old ordering silently kept bar/tiling/border settings
+///      from the previous config, then old_config.deinit() freed the bar
+///      string slices the new bar had shallow-copied: a use-after-free on the
+///      next bar draw.)
+///   3. grabKeybindings() must run after the swap: fillGrabCookies() reads
+///      core.getState().config.keybindings, so grabbing before the swap would
+///      re-grab the OLD keycodes.
 fn handleConfigReload() !void {
     debug.info("Reload requested", .{});
     const cs = core.getState();
@@ -258,15 +258,18 @@ fn handleConfigReload() !void {
     errdefer new_config.deinit(cs.alloc);
 
     try config.validate(&new_config);
-    try applyConfig(&new_config);
+    new_config.keybind_resolver.build(new_config.keybindings.items, input.getXkbState(), cs.alloc);
+    config.finalizeConfig(&new_config, cs.screen);
 
     var old_config = cs.config;
     cs.config = new_config;
+
+    window.reloadBorders();
+    tiling.reloadConfig();
+    bar.reload();
+
     old_config.deinit(cs.alloc);
 
-    // grabKeybindings() must run after this swap, not inside applyConfig:
-    // fillGrabCookies() reads core.getState().config.keybindings, so calling
-    // it before the swap would re-grab the OLD keycodes.
     grabKeybindings();
 
     // Rebuild after the swap so borrowed key slices point into the new config's memory.

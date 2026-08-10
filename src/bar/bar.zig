@@ -126,7 +126,7 @@ const BarSnapshot = struct {
 /// carousel.zig (ticks once per display refresh while a title is actively
 /// scrolling). This mutex is what keeps those two threads from ever painting
 /// into the DrawContext at the same instant as the main WM thread.
-var draw_mutex: utils.Mutex = .{};
+pub var draw_mutex: utils.Mutex = .{};
 
 /// All atoms needed to declare the bar window as a dock to the compositor.
 const BarAtoms = struct {

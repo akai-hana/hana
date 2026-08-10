@@ -87,17 +87,24 @@ inline fn evictWindow(win: u32) void {
 /// Moves win's fullscreen record so it stays fullscreen after a tag/move.
 /// No-op if win isn't fullscreen anywhere. Cleans up the source workspace's
 /// live UI (bar, border) only when leaving `current` — other workspaces have
-/// no live fullscreen chrome to clean up. `force`: follow `new_home` even
-/// when fullscreen on some other, non-current workspace — used when `win` is
-/// being detached from every workspace except `new_home`.
-fn transferFullscreenRecord(win: u32, current: u8, new_home: u8, force: bool) void {
+/// no live fullscreen chrome to clean up.
+///
+/// Must be called BEFORE the workspace mask is changed (i.e. before
+/// setWindowMask): setWindowMask prunes fullscreen records on workspaces the
+/// window is no longer tagged on, so a record relocated here first survives
+/// the prune because `new_home` is still tagged. If `new_home` already holds a
+/// record for another window, win's record is dropped rather than clobbering
+/// it — a window leaving the visible workspace does not displace a resident
+/// workspace's fullscreen window.
+fn transferFullscreenRecord(win: u32, current: u8, new_home: u8) void {
     const src_ws = fullscreen.workspaceFor(win) orelse return;
-    if (src_ws == current) {
-        fullscreen.cleanupFullscreenForMove(win, src_ws);
-        fullscreen.moveRecord(src_ws, new_home);
-    } else if (force) {
-        fullscreen.moveRecord(src_ws, new_home);
+    if (src_ws != current) return;
+    fullscreen.cleanupFullscreenForMove(win, src_ws);
+    if (fullscreen.getForWorkspace(new_home) != null) {
+        fullscreen.removeForWorkspace(src_ws);
+        return;
     }
+    fullscreen.moveRecord(src_ws, new_home);
 }
 
 /// Resolved layout + variant override for a single workspace, keyed by
@@ -256,10 +263,13 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
 
     // new_mask is always non-zero: target_bit is always set.
     const new_mask = (mask & ~tracking.workspaceBit(s.current)) | target_bit;
+    // Relocate the fullscreen record BEFORE the mask change: setWindowMask's
+    // pruneForWorkspaceMask would otherwise drop it (win is no longer tagged
+    // on its old workspace), instead of carrying it to the new home.
+    transferFullscreenRecord(win, s.current, target_ws);
     setWindowMask(s, win, new_mask);
 
     if (minimize.isMinimized(win)) minimize.moveToWorkspace(win, target_ws);
-    transferFullscreenRecord(win, s.current, target_ws, false);
 
     if (target_ws != s.current) {
         evictWindow(win);
@@ -275,10 +285,13 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
 
 /// Low-level: set a window's workspace bitmask and clear last_focused on
 /// workspaces it just left. Does not touch screen visibility or tiling.
+/// Any fullscreen record for `win` on a workspace it no longer occupies is
+/// pruned here, so a stale record can never survive a mask change.
 fn setWindowMask(s: *State, win: u32, new_mask: u64) void {
     std.debug.assert(new_mask != 0);
     const old_mask = tracking.getWindowWorkspaceMask(win) orelse 0;
     tracking.setWindowMask(win, new_mask);
+    fullscreen.pruneForWorkspaceMask(win, new_mask);
 
     var removed_it = setBits(old_mask & ~new_mask);
     while (removed_it.next()) |idx| {
@@ -319,11 +332,15 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
         // Remove tag N.
         if (@popCount(mask) <= 1) return; // last workspace — protect
         const new_mask = mask & ~tbit;
+        if (target_ws == current) {
+            // Leaving the current workspace: hand the fullscreen record to
+            // whichever tagged workspace remains lowest. This must run before
+            // setWindowMask, whose pruneForWorkspaceMask would drop the record
+            // because win is no longer tagged on the old current workspace.
+            transferFullscreenRecord(win, current, @intCast(@ctz(new_mask)));
+        }
         setWindowMask(s, win, new_mask);
         if (target_ws == current) {
-            // Leaving the current workspace: if fullscreen here, hand the
-            // record to whichever tagged workspace remains lowest.
-            transferFullscreenRecord(win, current, @intCast(@ctz(new_mask)), false);
             // Grab so the evict and retile land in one atomic batch — the
             // compositor never sees the window gone but peers not yet reflowed.
             _ = xcb.xcb_grab_server(core.getState().conn);
