@@ -204,7 +204,8 @@ fn sliceLessThan(_: void, a: []u8, b: []u8) bool {
 
 /// Loads and merges all `*.toml` files directly inside `dir_path` (alphabetical order;
 /// subdirectories only via explicit `include`).  Later files win on scalar conflicts;
-/// arrays accumulate.
+/// arrays accumulate (enforced by the parser's Value getters: scalar reads resolve to
+/// the last declaration, array reads see every one).
 pub fn loadConfigFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !types.Config {
     var names: std.ArrayList([]u8) = .empty;
     defer {

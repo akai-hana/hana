@@ -1,7 +1,7 @@
 //! Core constants
 //! Defines shared constants used across multiple modules.
 
-const xcb = @cImport(@cInclude("xcb/xcb.h"));
+const xcb = @import("x11").xcb;
 
 // Modifier masks
 // Must be u16 as per XCB API

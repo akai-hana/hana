@@ -24,14 +24,33 @@ pub var running = std.atomic.Value(bool).init(true);
 /// Consumed by `consumeReload` in the main event loop.
 var should_reload = std.atomic.Value(bool).init(false);
 
+/// Write end of the signal self-pipe (owned by events.zig), registered via
+/// `setSignalWriteFd`. The `reload_config` keybinding has no signal byte, so
+/// `reload()` writes a SIGHUP wake byte here to poke the event loop out of
+/// poll immediately instead of waiting for an unrelated signal.
+var signal_write_fd: std.posix.fd_t = -1;
+
+/// Registers the write end of the signal self-pipe so `reload()` can wake the
+/// event loop. Pass -1 to unregister (teardown).
+pub fn setSignalWriteFd(fd: std.posix.fd_t) void {
+    signal_write_fd = fd;
+}
+
 /// Signals the main event loop to exit cleanly.
 pub inline fn quit() void {
     running.store(false, .release);
 }
 
 /// Signals the main event loop to reload the user config.
+///
+/// Safe from any thread: the wake byte is a plain write, not a signal. If the
+/// pipe is full (or not yet registered) the write is dropped — the event loop
+/// also polls the flag itself every iteration, so a lost byte only delays the
+/// reload by one poll timeout at worst.
 pub inline fn reload() void {
     should_reload.store(true, .release);
+    if (signal_write_fd >= 0)
+        _ = std.os.linux.write(signal_write_fd, &[_]u8{@intFromEnum(std.posix.SIG.HUP)}, 1);
 }
 
 /// Atomically consumes the reload flag.

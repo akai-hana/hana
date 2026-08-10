@@ -24,6 +24,10 @@ const fullscreen = @import("fullscreen");
 const FD_XCB = 0;
 const FD_SIGNAL = 1;
 
+/// Maximum events dispatched per XCB batch before returning to poll, so the
+/// signal pipe and timer paths get fair scheduling against a chatty client.
+const MAX_EVENTS_PER_BATCH: usize = 128;
+
 // Aliases to canonical definitions in constants.zig.
 const EVENT_DISPATCH_TABLE = constants.Limits.EVENT_DISPATCH_TABLE;
 const MAX_KEYBIND_COOKIES = constants.Limits.MAX_KEYBIND_COOKIES;
@@ -91,7 +95,23 @@ const dispatch_table = blk: {
 };
 
 fn dispatch(event_type: u8, event: *anyopaque) void {
+    // Type 0 is an X error pseudo-event produced for a failed *unchecked*
+    // request. Nothing else in this codebase subscribes to type-0, so without
+    // this branch such errors would be silently dropped — making real-world
+    // X11 failures (bad grabs, stale window ids, wrong atoms) undiagnosable.
+    if (event_type == 0) {
+        const e: *xcb.xcb_generic_error_t = @ptrCast(@alignCast(event));
+        debug.warn("Unchecked XCB request failed: code={} major={} minor={} resource={x}", .{
+            e.error_code, e.major_code, e.minor_code, e.resource_id,
+        });
+        return;
+    }
     const idx = event_type & 0x7F; // strip XCB synthetic-event bit
+    // Guard the fixed-size table: extension events live above XCB_GE_GENERIC
+    // and would index out of bounds. hana only selects core events today, but
+    // the moment anyone subscribes to an extension this would become a
+    // memory-safety bug — cheap insurance.
+    if (idx >= dispatch_table.len) return;
     if (dispatch_table[idx]) |handler| handler(event);
 }
 
@@ -106,6 +126,7 @@ fn signalHandler(signo: std.posix.SIG) callconv(.c) void {
 /// Creates the signal self-pipe and installs handlers for SIGHUP/SIGTERM/SIGINT/SIGCHLD.
 pub fn setupSignalPipe() !void {
     signal_pipe = try utils.makePipe();
+    utils.setSignalWriteFd(signal_pipe[1]);
 
     const sa: std.posix.Sigaction = .{
         .handler = .{ .handler = signalHandler },
@@ -120,6 +141,7 @@ pub fn setupSignalPipe() !void {
 
 /// Closes both ends of the signal pipe.
 pub fn deinitSignalPipe() void {
+    utils.setSignalWriteFd(-1);
     for (&signal_pipe) |*fd| {
         if (fd.* == -1) continue;
         _ = std.os.linux.close(fd.*);
@@ -296,10 +318,18 @@ fn handleTimerEvents(cursor_is_blinking: bool) void {
     _ = bar.updateClock();
 }
 
-/// Drains all pending XCB events for this batch, then runs post-batch housekeeping.
+/// Drains pending XCB events for this batch, then runs post-batch housekeeping.
 fn handleXcbEvents() void {
     const conn = core.getState().conn;
-    while (xcb.xcb_poll_for_event(conn)) |event| {
+
+    // Cap the number of events dispatched per batch so a chatty client
+    // flooding PropertyNotify/ConfigureNotify can't starve the signal pipe and
+    // timer paths (clock, cursor blink) indefinitely. Unread events stay in the
+    // socket buffer and the fd stays readable, so they're handled on the next
+    // poll round.
+    var handled: usize = 0;
+    while (handled < MAX_EVENTS_PER_BATCH) : (handled += 1) {
+        const event = xcb.xcb_poll_for_event(conn) orelse break;
         defer std.c.free(event);
         dispatch(@as(*u8, @ptrCast(event)).*, event);
     }
@@ -370,10 +400,14 @@ pub fn run() !void {
 
         if ((fds[FD_XCB].revents & std.posix.POLL.IN) != 0) handleXcbEvents();
 
-        if ((fds[FD_SIGNAL].revents & std.posix.POLL.IN) != 0) {
+        if ((fds[FD_SIGNAL].revents & std.posix.POLL.IN) != 0)
             handleSignalPipe(signal_fd);
-            if (utils.consumeReload())
-                handleConfigReload() catch |err| debug.err("Reload failed: {}", .{err});
-        }
+
+        // The reload flag is also set directly by the reload_config keybinding
+        // (which writes a wake byte to the pipe, but the byte can be dropped if
+        // the pipe is full). Consume it every iteration so that path can never
+        // be lost — a flag-only request is picked up on the next poll timeout.
+        if (utils.consumeReload())
+            handleConfigReload() catch |err| debug.err("Reload failed: {}", .{err});
     }
 }

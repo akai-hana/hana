@@ -26,9 +26,16 @@ pub const Value = union(enum) {
     color: u32,
     scalable: ScalableValue,
 
+    /// Duplicate keys are stored as a flat array (see `accumulate`), so every
+    /// `.array`-handling case below implements the "later declaration wins"
+    /// half of the config merge contract: the value from the latest file (or
+    /// latest line within a file) is the LAST element, and array consumers see
+    /// the full accumulation via asArray. Without this, a repeated scalar key
+    /// would silently fall back to its struct default.
     pub inline fn asInt(self: Value) ?i64 {
         return switch (self) {
             .integer => |i| i,
+            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asInt() else null,
             else => null,
         };
     }
@@ -36,18 +43,21 @@ pub const Value = union(enum) {
         return switch (self) {
             .boolean => |b| b,
             .integer => |i| i != 0,
+            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asBool() else null,
             else => null,
         };
     }
     pub inline fn asString(self: Value) ?[]const u8 {
         return switch (self) {
             .string => |s| s,
+            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asString() else null,
             else => null,
         };
     }
     pub inline fn asColor(self: Value) ?u32 {
         return switch (self) {
             .color => |c| c,
+            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asColor() else null,
             else => null,
         };
     }
@@ -68,6 +78,7 @@ pub const Value = union(enum) {
         return switch (self) {
             .scalable => |s| s,
             .integer => |i| ScalableValue.absolute(@floatFromInt(i)),
+            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asScalable() else null,
             else => null,
         };
     }
@@ -233,6 +244,13 @@ fn ensureArray(allocator: std.mem.Allocator, old_val: *Value) !void {
 /// same logical situation — a key declared twice — produces the same shape
 /// whether it happened within one file or was split across two included files.
 ///
+/// Storage is array-shaped for every repeated key, but the two read paths
+/// resolve it differently (the "later files win on scalar conflicts; arrays
+/// accumulate" contract): the typed scalar getters (asInt/asBool/asString/
+/// asColor/asScalable) resolve to the LAST element, while asArray returns the
+/// full flat array — so keybinds, `include`, `layouts`, `fonts`, `icons`, and
+/// `segments` still chain across declarations.
+///
 /// With `move` set, `incoming` is uniquely owned (freshly parsed within a
 /// single file) and its array elements are transferred into `old_val.array` by
 /// ownership — no copy pass. With `move` clear, elements are deep-copied so
@@ -286,6 +304,8 @@ fn mergeIntoArray(allocator: std.mem.Allocator, old_val: *Value, incoming: Value
 /// Duplicate keys are accumulated into arrays, exactly like the parser does for
 /// duplicate keys within a single file — so a keybind defined in two different
 /// config files will have both actions executed, not one overwriting the other.
+/// Scalar reads resolve to the last declaration (the later file wins); only
+/// array-shaped reads see the full accumulation.
 /// `src` is not modified; all new data is freshly allocated.
 fn mergeSectionsInto(allocator: std.mem.Allocator, dst: *Section, src: *const Section) !void {
     var iter = src.pairs.iterator();
@@ -314,7 +334,9 @@ fn mergeSectionsInto(allocator: std.mem.Allocator, dst: *Section, src: *const Se
 /// Merges `src` into `dst`. Duplicate keys are accumulated into arrays rather
 /// than overwritten, so the result is equivalent to having written all the
 /// key-value pairs in a single file — consistent with how the parser itself
-/// handles duplicate keys within one file.
+/// handles duplicate keys within one file. Scalar reads then resolve to the
+/// last element of the accumulation (later files win), while array reads see
+/// every declaration.
 pub fn mergeDocumentsInto(allocator: std.mem.Allocator, dst: *Document, src: *const Document) !void {
     // Merge root-level keys.
     try mergeSectionsInto(allocator, &dst.root, &src.root);
@@ -819,7 +841,10 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
                 //   Mod+Shift+1 = "toggle_tag_1"
                 //
                 // parseKeybindings already handles array values as sequences,
-                // so no further changes are needed there.
+                // so no further changes are needed there. Scalar-typed reads
+                // of a repeated key resolve to the last declaration instead
+                // (see the Value getters), so e.g. a duplicated `master_width`
+                // is later-wins rather than silently defaulting.
                 try accumulateScalar(allocator, old, kv[1]);
                 allocator.free(kv[0]);
             } else {
