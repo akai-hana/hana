@@ -328,8 +328,7 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
 
     if (flags.set_input_focus) focusNow(conn, win);
 
-    if (flags.raise)
-        _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+    if (flags.raise) utils.raiseWindow(conn, win);
 
     // Consume the pre-fired WM_PROTOCOLS cookie (set by setFocus) either by
     // draining it through sendWMTakeFocusWithCookie — the server has been

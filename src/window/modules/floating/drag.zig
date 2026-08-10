@@ -145,7 +145,7 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
         .pending_float = tiling.isWindowTiled(win) and !tiling.isFloatingLayout(),
     };
     focus.setFocus(win, .user_command);
-    _ = xcb.xcb_configure_window(cs.conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+    utils.raiseWindow(cs.conn, win);
     _ = xcb.xcb_flush(cs.conn);
 }
 

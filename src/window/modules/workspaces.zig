@@ -658,14 +658,7 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
             utils.pushWindowOffscreen(cs.conn, win);
             if (tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
         }
-        window.configureWindowGeom(cs.conn, info.window, .{
-            .x = 0,
-            .y = 0,
-            .width = @intCast(cs.screen.width_in_pixels),
-            .height = @intCast(cs.screen.height_in_pixels),
-            .border_width = 0,
-        });
-        _ = xcb.xcb_configure_window(cs.conn, info.window, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+        fullscreen.applyFullscreenGeometry(info.window);
         applyPostSwitchFocus(resolvePostSwitchFocus(new_ws_obj, ptr_reply));
     } else {
         // Resolve before restoring: on a geometry-cache miss,

@@ -145,9 +145,7 @@ fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32,
 
     if (effective.width == 0 or effective.height == 0) {
         debug.err("Invalid rect for window 0x{x}: {}x{} at {},{}", .{ win, effective.width, effective.height, effective.x, effective.y });
-        if (comptime raise) {
-            _ = xcb.xcb_configure_window(ctx.conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
-        }
+        if (comptime raise) utils.raiseWindow(ctx.conn, win);
         return;
     }
 
@@ -168,7 +166,7 @@ fn configureWithHintsImpl(comptime raise: bool, ctx: *const LayoutCtx, win: u32,
             utils.configureWindow(ctx.conn, win, effective);
         }
     } else if (comptime raise) {
-        _ = xcb.xcb_configure_window(ctx.conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+        utils.raiseWindow(ctx.conn, win);
     }
 }
 

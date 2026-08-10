@@ -296,14 +296,9 @@ fn getSavedFloatGeom(win: u32) ?utils.Rect {
 
 /// Restore every non-minimized, non-tiled window on the current workspace
 /// (except `skip_win`) to its saved position.
-/// Priority: g_float_saves -> tiling geometry cache -> floatDefaultPos fallback.
+/// Priority: g_float_saves -> tiling geometry cache -> moveFloatToDefaultPos.
 /// Clears g_float_saves when done.
 fn restoreFloatingWindows(skip_win: u32) void {
-    const pos = window.floatDefaultPos();
-
-    const pos_x: u32 = @intCast(pos.x);
-    const pos_y: u32 = @intCast(pos.y);
-
     var it = windowsOnCurrentWorkspace(skip_win);
     while (it.next()) |w| {
         if (minimize.isMinimized(w)) continue;
@@ -314,7 +309,7 @@ fn restoreFloatingWindows(skip_win: u32) void {
         if (getSavedFloatGeom(w)) |r| {
             utils.configureWindow(core.getState().conn, w, r);
         } else {
-            _ = xcb.xcb_configure_window(core.getState().conn, w, xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{ pos_x, pos_y });
+            window.moveFloatToDefaultPos(w);
         }
     }
 
@@ -342,6 +337,21 @@ fn setEwmhFullscreenState(win: u32, is_fullscreen: bool) void {
 
 // Commit helpers (XCB-only; caller owns grab/ungrab/flush)
 
+/// Configure `win` at fullscreen geometry (screen-sized, borderless) and raise
+/// it. Shared by enterFullscreenCommit and the workspace-switch path in
+/// workspaces.zig, which must apply identical geometry to the fullscreen window.
+pub fn applyFullscreenGeometry(win: u32) void {
+    const cs = core.getState();
+    window.configureWindowGeom(cs.conn, win, .{
+        .x = 0,
+        .y = 0,
+        .width = @intCast(cs.screen.width_in_pixels),
+        .height = @intCast(cs.screen.height_in_pixels),
+        .border_width = 0,
+    });
+    utils.raiseWindow(cs.conn, win);
+}
+
 fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     setForWorkspace(ws, .{
         .window = win,
@@ -362,15 +372,7 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     // (e.g. Discord, Electron apps) don't expose the raw background during
     // their repaint delay.  The bar hide is triggered in notifyConfigureIfPending
     // once the window confirms its new geometry.
-    const cs = core.getState();
-    window.configureWindowGeom(cs.conn, win, .{
-        .x = 0,
-        .y = 0,
-        .width = @intCast(cs.screen.width_in_pixels),
-        .height = @intCast(cs.screen.height_in_pixels),
-        .border_width = 0,
-    });
-    _ = xcb.xcb_configure_window(cs.conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
+    applyFullscreenGeometry(win);
 
     // Evict the fullscreen window itself; its cache still holds the pre-fullscreen
     // tiled rect. On exit retile would compute the same rect, get a hit, and skip
