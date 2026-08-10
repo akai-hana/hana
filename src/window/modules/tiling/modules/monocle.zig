@@ -17,8 +17,6 @@ pub fn tileWithOffset(
     screen_h: u16,
     y_offset: u16,
 ) void {
-    if (windows.len == 0) return;
-
     const m = state.margins();
     const inset: u16 = if (state.config.layout_variants.monocle == .gaps) m.gap else 0;
     const total_margin = utils.doubledBorder(m) + inset * 2;

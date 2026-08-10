@@ -15,8 +15,8 @@ pub fn tileWithOffset(
     screen_h: u16,
     y_offset: u16,
 ) void {
+    // Windows list is guaranteed non-empty by invokeLayout (see tiling.zig).
     const n = windows.len;
-    if (n == 0) return;
 
     const m = state.margins();
     const grid = calcGridShape(n);

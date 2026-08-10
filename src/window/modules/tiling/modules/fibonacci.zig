@@ -1,6 +1,7 @@
 //! Fibonacci (spiral) tiling layout
 //! Arranges windows in a counter-clockwise spiral, each taking half the remaining screen area.
 
+const std = @import("std");
 const utils = @import("utils");
 const layouts = @import("layouts");
 const tiling = @import("tiling");
@@ -27,8 +28,6 @@ pub fn tileWithOffset(
     screen_h: u16,
     y_offset: u16,
 ) void {
-    if (windows.len == 0) return;
-
     const m = state.margins();
     const border2 = utils.doubledBorder(m);
 
@@ -53,15 +52,10 @@ pub fn tileWithOffset(
             };
             // Find the focused window among the overflow set; fall back to the
             // first window if no focused window is present here.
-            var raise_win: u32 = windows[i];
-            if (ctx.focused_win) |f| {
-                for (windows[i..]) |ow| {
-                    if (ow == f) {
-                        raise_win = f;
-                        break;
-                    }
-                }
-            }
+            const raise_win: u32 = if (ctx.focused_win) |f|
+                if (std.mem.indexOfScalar(u32, windows[i..], f) != null) f else windows[i]
+            else
+                windows[i];
             // Same reasoning as monocle: never raise for a background retile
             // (see LayoutCtx.is_background) — there's no on-screen viewer to
             // show `raise_win` to, and raising it would leave it first in the

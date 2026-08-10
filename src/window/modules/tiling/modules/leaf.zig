@@ -23,8 +23,6 @@ pub fn tileWithOffset(
     screen_h: u16,
     y_offset: u16,
 ) void {
-    if (windows.len == 0) return;
-
     const m = state.margins();
 
     // Strip the outer gap; each recursive split inserts one gap at its seam,
