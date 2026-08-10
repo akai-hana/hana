@@ -333,7 +333,9 @@ inline fn emptyWorkspace(ctx: TitleRenderContext, count: usize) ?u16 {
     if (count != 0) return null;
     // No windows on this workspace — tear down any live carousel immediately
     // so it does not keep scrolling invisibly in the background.
-    carousel.deinitCarousel();
+    // Runs under draw_mutex (drawAll), so use the non-locking teardown;
+    // deinitCarousel() would recursively re-lock draw_mutex (not recursive).
+    carousel.deinitCarouselLocked();
     ctx.dc.fillRect(ctx.start_x, 0, ctx.width, ctx.height, ctx.config.bg);
     return ctx.start_x + ctx.width;
 }

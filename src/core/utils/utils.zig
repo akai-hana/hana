@@ -350,6 +350,7 @@ pub fn makePipe() ![2]std.posix.fd_t {
 /// site — too invasive for the small, self-contained locking bar.zig and
 /// carousel.zig need). This is a minimal handle-free substitute, shared
 /// between both instead of each defining its own copy.
+
 pub const Mutex = struct {
     inner: std.c.pthread_mutex_t = .{},
     pub fn lock(m: *Mutex) void {

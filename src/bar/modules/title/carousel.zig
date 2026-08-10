@@ -157,9 +157,18 @@ pub fn getSegmentedCarouselWindow() ?u32 {
 /// still running and after it has been stopped: it acquires bar.zig's
 /// draw_mutex (which the carousel thread holds while drawing) so it cannot
 /// race a concurrent blit of render.single/render.seg.
+/// Caller must NOT already hold draw_mutex (it is not recursive); use
+/// deinitCarouselLocked() from within a draw that holds draw_mutex.
 pub fn deinitCarousel() void {
     bar.draw_mutex.lock();
     defer bar.draw_mutex.unlock();
+    deinitCarouselLocked();
+}
+
+/// Same teardown as deinitCarousel() for callers that already hold bar.zig's
+/// draw_mutex (title rendering paths run under it via performDraw/redraws).
+/// Must not be called without holding draw_mutex.
+pub fn deinitCarouselLocked() void {
     deinitSingleCarousel();
     deinitSegmentedCarousel();
     focus_signal.is_invalidated.store(false, .monotonic);

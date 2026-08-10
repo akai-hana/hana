@@ -17,6 +17,7 @@ const focus = @import("focus");
 const tiling = @import("tiling");
 const bar = @import("bar");
 const prompt = @import("prompt");
+const clock = @import("clock");
 const fullscreen = @import("fullscreen");
 
 // Indices into the poll fd array.
@@ -280,15 +281,19 @@ fn handleConfigReload() !void {
 
 // Event loop
 
-/// Ticks the clock and cursor blink on poll timeout, then flushes to the compositor.
+/// Ticks the cursor blink and drains the clock thread's redraw request on
+/// poll timeout, then flushes to the compositor.
 fn handleTimerEvents(cursor_is_blinking: bool) void {
-    // poll() now times out only for cursor blink; the clock and carousel
-    // threads draw directly via bar.checkClockUpdate()/bar.tickCarousel().
+    // poll() times out for cursor blink and/or the clock's next whole-second
+    // boundary. The clock thread formats the time string and sets a dirty
+    // flag; bar.updateClock() (below) runs the Pango layout for the clock
+    // segment here on the main thread.
     if (cursor_is_blinking) {
         prompt.blinkTick();
         bar.submitDraw();
         _ = xcb.xcb_flush(core.getState().conn);
     }
+    _ = bar.updateClock();
 }
 
 /// Drains all pending XCB events for this batch, then runs post-batch housekeeping.
@@ -316,6 +321,10 @@ fn handleXcbEvents() void {
     focus.drainTilingOpSettle();
     window.updateWorkspaceBordersIfNeeded();
     bar.updateIfDirty() catch |err| debug.err("Failed to update bar: {}", .{err});
+    // Drain the clock thread's redraw request here too, not only on poll
+    // timeout: a busy main loop that never lets the timeout expire (constant
+    // XCB traffic) would otherwise starve the clock repaint.
+    _ = bar.updateClock();
 
     _ = xcb.xcb_flush(conn);
 }
@@ -330,9 +339,16 @@ pub fn run() !void {
     };
 
     while (utils.running.load(.acquire)) {
+        // Wake for the earlier of the cursor-blink deadline and the clock's
+        // next whole-second tick (plus grace). The clock deadline keeps the
+        // loop ticking even when nothing else is happening, and also provides
+        // the short-retry behaviour inside clock.nextTickWaitMs when the clock
+        // thread is late publishing a second.
         const blink_ms = prompt.blinkPollTimeoutMs();
         const cursor_is_blinking = blink_ms >= 0;
-        const poll_rc = std.os.linux.poll(&fds, fds.len, blink_ms);
+        const clock_ms: i32 = @intCast(clock.nextTickWaitMs());
+        const poll_ms: i32 = if (blink_ms < 0) clock_ms else @min(blink_ms, clock_ms);
+        const poll_rc = std.os.linux.poll(&fds, fds.len, poll_ms);
         const ready: usize = switch (std.posix.errno(poll_rc)) {
             .SUCCESS => @intCast(poll_rc),
             .INTR => continue,
