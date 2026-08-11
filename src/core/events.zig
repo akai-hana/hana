@@ -81,6 +81,7 @@ const dispatch_table = blk: {
     table[xcb.XCB_CLIENT_MESSAGE] = asHandler(window.handleClientMessage);
 
     table[xcb.XCB_KEY_PRESS] = asHandler(input.handleKeyPress);
+    table[xcb.XCB_MAPPING_NOTIFY] = asHandler(input.handleMappingNotify);
     table[xcb.XCB_BUTTON_PRESS] = asHandler(input.handleButtonPress);
     table[xcb.XCB_BUTTON_RELEASE] = asHandler(input.handleButtonRelease);
     table[xcb.XCB_MOTION_NOTIFY] = asHandler(input.handleMotionNotify);
@@ -270,6 +271,15 @@ pub fn grabKeybindings() void {
 ///   3. grabKeybindings() must run after the swap: fillGrabCookies() reads
 ///      core.getState().config.keybindings, so grabbing before the swap would
 ///      re-grab the OLD keycodes.
+///   4. `committed` flips the errdefer: before the swap a failure must free the
+///      unused new_config; after the swap new_config is the live config, so a
+///      failure must instead keep it and free the displaced old_config.
+///      (Today every post-swap call returns void, so this is latent-but-safe —
+///      bar.reload() swallows its own errors and keeps the old bar, which
+///      applyReload re-points at the new config before that.)
+///   5. config.applyCarouselSettings() runs only after the swap so a rejected
+///      reload never leaks carousel settings into effect (they are staged on
+///      the config struct at parse time, not written to globals).
 fn handleConfigReload() !void {
     debug.info("Reload requested", .{});
     const cs = core.getState();
@@ -278,14 +288,22 @@ fn handleConfigReload() !void {
         debug.err("Failed to load: {}, keeping old", .{err});
         return err;
     };
-    errdefer new_config.deinit(cs.alloc);
+    var old_config = cs.config;
+    var committed = false;
+    errdefer {
+        if (committed) {
+            old_config.deinit(cs.alloc);
+        } else {
+            new_config.deinit(cs.alloc);
+        }
+    }
 
     try config.validate(&new_config);
     new_config.keybind_resolver.build(new_config.keybindings.items, input.getXkbState(), cs.alloc);
     config.finalizeConfig(&new_config, cs.screen);
 
-    var old_config = cs.config;
     cs.config = new_config;
+    committed = true;
 
     window.reloadBorders();
     tiling.reloadConfig();
@@ -297,6 +315,8 @@ fn handleConfigReload() !void {
 
     // Rebuild after the swap so borrowed key slices point into the new config's memory.
     window.buildRulesMap();
+
+    config.applyCarouselSettings(&new_config);
 
     debug.info("Reload complete", .{});
 }

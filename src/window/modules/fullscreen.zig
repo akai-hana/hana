@@ -503,7 +503,7 @@ pub fn enterFullscreen(win: u32, saved_geom: ?core.WindowGeometry) void {
     const geom = saved_geom orelse fetchWindowGeom(win);
     saveFloatingWindowGeoms(win);
     const conn = core.getState().conn;
-    _ = xcb.xcb_grab_server(conn);
+    utils.grabServer(conn);
     enterFullscreenCommit(win, ws, geom);
     utils.ungrabAndFlush(conn);
 }
@@ -521,7 +521,7 @@ pub fn exitFullscreen(win: u32) void {
     // (non-fullscreen) dimensions via ConfigureNotify, identically to how
     // the bar hide is deferred on enter.
     const conn = core.getState().conn;
-    _ = xcb.xcb_grab_server(conn);
+    utils.grabServer(conn);
     exitFullscreenCommit(win, ws);
     restoreFloatingWindows(win);
     tiling.retileCurrentWorkspace();
@@ -549,7 +549,7 @@ pub fn toggle() void {
             // valid and will be consumed by restoreFloatingWindows below.
             const new_geom = fetchWindowGeom(win);
             const conn = core.getState().conn;
-            _ = xcb.xcb_grab_server(conn);
+            utils.grabServer(conn);
             exitFullscreenCommit(fs_info.window, current_ws);
             // Restore background windows before pushing them offscreen again.
             restoreFloatingWindows(win);

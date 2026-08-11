@@ -1027,7 +1027,16 @@ pub fn reload() void {
 
 fn applyReload(old: *State, height: u16) !void {
     const cs = core.getState();
-    const new_bar = try createBar(height, calcBarYPos(height));
+    const new_bar = createBar(height, calcBarYPos(height)) catch |err| {
+        // The caller (handleConfigReload) has already swapped cs.config to the
+        // new config and frees the OLD config when this returns. The old bar
+        // survives this failed reload, but its render.config is a shallow copy
+        // of the old config's BarConfig (borrowed string/list slices) — so
+        // re-point it at the live new config now, before old_config.deinit()
+        // runs, or the next bar draw reads freed memory.
+        old.render.config = cs.config.bar;
+        return err;
+    };
     const new_state = new_bar.state;
     new_state.is_visible = old.is_visible;
     new_state.is_globally_visible = old.is_globally_visible;
@@ -1055,7 +1064,7 @@ pub fn toggleBarSegmentAnchor() void {
     setWindowProperties(s.win.win_id, s.render.height);
     gBar.pending_force_full_redraw = true;
     s.invalidateLayoutCache();
-    _ = xcb.xcb_grab_server(cs.conn);
+    utils.grabServer(cs.conn);
     _ = xcb.xcb_configure_window(cs.conn, s.win.win_id, xcb.XCB_CONFIG_WINDOW_Y, &[_]u32{utils.toXcbCoord(new_y)});
     const current_ws = tracking.getCurrentWorkspace() orelse {
         window.updateWorkspaceBorders();
@@ -1149,7 +1158,7 @@ pub fn setBarState(action: BarAction) void {
 
     const conn = core.getState().conn;
     const grabbed = action == .toggle;
-    if (grabbed) _ = xcb.xcb_grab_server(conn);
+    if (grabbed) utils.grabServer(conn);
     if (show) _ = xcb.xcb_map_window(conn, s.win.win_id) else _ = xcb.xcb_unmap_window(conn, s.win.win_id);
     if (grabbed) {
         const effective_visible = if (is_fullscreen) s.is_globally_visible else s.is_visible;
@@ -1206,6 +1215,13 @@ pub fn tickCarousel() void {
     if (!s.is_visible) return;
     if (prompt.isActive()) return;
     if (!s.title_cache.is_layout_valid or s.title_cache.title_width == 0) return;
+    // Skip the tick while the main WM thread holds the X server grab. This
+    // thread's blit flushes the shared output buffer, which would release the
+    // grab-batch requests mid-grab and split what must be one atomic frame —
+    // and grabbing draw_mutex here could stall the main thread's
+    // scheduleFocusRedraw inside its own grab. The grab window is
+    // microseconds; skipping a scroll tick is imperceptible.
+    if (utils.isGrabActive()) return;
     draw_mutex.lock();
     defer draw_mutex.unlock();
     _ = s.drawTitleBlitOnly();

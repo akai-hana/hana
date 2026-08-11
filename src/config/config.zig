@@ -304,11 +304,24 @@ pub fn validate(cfg: *const types.Config) !void {
         debug.err("Invalid config: master_count must be > 0, keeping old", .{});
         return error.InvalidConfig;
     }
-    // master_width is stored as a ScalableValue; normalise to [0,1] for the check.
+    // master_width is stored as a ScalableValue. Percentages are validated as
+    // a [MIN_MASTER_WIDTH, MAX_MASTER_WIDTH] ratio (the runtime never lets the
+    // master consume the full screen — the same cap the increase_master_width
+    // action and the pixel->ratio conversion clamp to). Absolute pixel values
+    // are checked as pixels (>= 0 only): converting them to a ratio needs the
+    // screen width, which isn't available here, and the runtime clamps the
+    // resulting fraction into range itself — so rejecting them outright (the
+    // old behaviour, which compared raw pixels against the ratio bounds) would
+    // wrongly refuse a perfectly valid `master_width = 600`.
     const mw = cfg.tiling.master_width;
-    const mw_ratio: f32 = utils.scaling.asRatio(mw);
-    if (mw_ratio < constants.MIN_MASTER_WIDTH or mw_ratio > 1.0) {
-        debug.err("Invalid config: master_width ratio {d:.3} out of [{d:.2}, 1.0], keeping old", .{ mw_ratio, constants.MIN_MASTER_WIDTH });
+    if (mw.is_percentage) {
+        const mw_ratio: f32 = utils.scaling.asRatio(mw);
+        if (mw_ratio < constants.MIN_MASTER_WIDTH or mw_ratio > constants.MAX_MASTER_WIDTH) {
+            debug.err("Invalid config: master_width {d:.0}% out of [{d:.0}%, {d:.0}%], keeping old", .{ mw_ratio * 100.0, constants.MIN_MASTER_WIDTH * 100.0, constants.MAX_MASTER_WIDTH * 100.0 });
+            return error.InvalidConfig;
+        }
+    } else if (mw.value < 0.0) {
+        debug.err("Invalid config: master_width {d}px must be >= 0, keeping old", .{mw.value});
         return error.InvalidConfig;
     }
     if (cfg.workspaces.count < 1) {
@@ -348,11 +361,17 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !types.Config {
     return cfg;
 }
 
-fn getDefaultConfig(allocator: std.mem.Allocator) types.Config {
+/// Builds the built-in default Config: heap-dup'd strings so deinit can free
+/// every owned field unconditionally, plus one entry in `layouts` so the
+/// layout cycle always has something to rotate. Fallible: an OOM propagates
+/// and the partially-built Config is torn down by the errdefer, never left
+/// holding string literals that a later deinit would free.
+fn getDefaultConfig(allocator: std.mem.Allocator) !types.Config {
     var cfg: types.Config = .{};
-    const default_layout = allocator.dupe(u8, "master_left") catch "master_left";
-    cfg.tiling.layouts.append(allocator, default_layout) catch |e| debug.warnOnErr(e, "default layout append");
-    cfg.tiling.layout = if (cfg.tiling.layouts.items.len > 0) cfg.tiling.layouts.items[0] else default_layout;
+    errdefer cfg.deinit(allocator);
+    const default_layout = try allocator.dupe(u8, "master_left");
+    try cfg.tiling.layouts.append(allocator, default_layout);
+    cfg.tiling.layout = cfg.tiling.layouts.items[0];
     // Dupe the four BarConfig string fields parseBar may rewrite, so
     // Config.deinit can free each unconditionally (assignStr's ownership
     // transfer keeps the rewrite path leak-free).
@@ -362,18 +381,22 @@ fn getDefaultConfig(allocator: std.mem.Allocator) types.Config {
         .{ .view = &cfg.bar.indicator_focused, .literal = "■" },
         .{ .view = &cfg.bar.indicator_unfocused, .literal = "□" },
     };
-    for (defaults) |d| d.view.* = allocator.dupe(u8, d.literal) catch d.literal;
+    for (defaults) |d| d.view.* = try allocator.dupe(u8, d.literal);
     for (0..9) |i| {
-        const icon = std.fmt.allocPrint(allocator, "{}", .{i + 1}) catch continue;
-        cfg.bar.workspace_icons.append(allocator, icon) catch |e| debug.warnOnErr(e, "workspace icon append");
+        const icon = try std.fmt.allocPrint(allocator, "{}", .{i + 1});
+        try cfg.bar.workspace_icons.append(allocator, icon);
     }
-    initDefaultBarLayout(allocator, &cfg) catch |e| debug.warnOnErr(e, "default bar layout init");
+    try initDefaultBarLayout(allocator, &cfg);
     return cfg;
 }
 
 /// Builds a Config from a parsed Document: initialises defaults then applies all sections.
 fn buildConfigFromDoc(allocator: std.mem.Allocator, doc: *parser.Document) !types.Config {
-    var cfg = getDefaultConfig(allocator);
+    var cfg = try getDefaultConfig(allocator);
+    // If any parse step below errors (OOM), free the partial Config so the
+    // half-applied section doesn't leak. Only armed after getDefaultConfig
+    // succeeded, so its own errdefer handled the earlier failure.
+    errdefer cfg.deinit(allocator);
     parseWorkspaces(doc, &cfg);
     try parseKeybindings(allocator, doc, &cfg);
     try parseTiling(allocator, doc, &cfg);
@@ -571,23 +594,23 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *t
     var mod_placeholder: ?[]const u8 = null;
     var kill_placeholder: ?[]const u8 = null;
     {
-        var scan = section.pairs.iterator();
+        var scan = section.orderedIterator();
         while (scan.next()) |e| {
-            if (std.ascii.eqlIgnoreCase(e.key_ptr.*, "Mod")) {
-                mod_placeholder = e.value_ptr.*.asString();
-                section.markConsumed(e.key_ptr.*);
-            } else if (std.ascii.eqlIgnoreCase(e.key_ptr.*, "kill")) {
-                kill_placeholder = e.value_ptr.*.asString();
-                section.markConsumed(e.key_ptr.*);
+            if (std.ascii.eqlIgnoreCase(e.key, "Mod")) {
+                mod_placeholder = e.value.asString();
+                section.markConsumed(e.key);
+            } else if (std.ascii.eqlIgnoreCase(e.key, "kill")) {
+                kill_placeholder = e.value.asString();
+                section.markConsumed(e.key);
             }
         }
     }
-    var iter = section.pairs.iterator();
+    var iter = section.orderedIterator();
     while (iter.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "Mod")) continue;
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "kill")) continue;
-        section.markConsumed(entry.key_ptr.*);
-        const glob_entries = try expandGlobKeys(allocator, entry.key_ptr.*);
+        if (std.ascii.eqlIgnoreCase(entry.key, "Mod")) continue;
+        if (std.ascii.eqlIgnoreCase(entry.key, "kill")) continue;
+        section.markConsumed(entry.key);
+        const glob_entries = try expandGlobKeys(allocator, entry.key);
         defer {
             for (glob_entries) |ge| if (ge.owned) allocator.free(ge.key);
             allocator.free(glob_entries);
@@ -600,7 +623,7 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *t
             };
             defer if (keybind_str.ptr != ge.key.ptr) allocator.free(keybind_str);
             const action: types.Action = act: {
-                if (entry.value_ptr.*.asArray()) |arr| {
+                if (entry.value.asArray()) |arr| {
                     var acts: std.ArrayList(types.Action) = .empty;
                     errdefer {
                         for (acts.items) |*a| a.deinit(allocator);
@@ -620,7 +643,7 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *t
                         break :act only;
                     }
                     break :act .{ .sequence = try acts.toOwnedSlice(allocator) };
-                } else if (entry.value_ptr.*.asString()) |command| {
+                } else if (entry.value.asString()) |command| {
                     break :act try resolveAndParseAction(allocator, command, ge.ws_idx, kill_placeholder);
                 } else continue;
             };
@@ -700,11 +723,42 @@ inline fn tryParseWorkspace(command: []const u8, prefix: []const u8) ?u8 {
     return @intCast(num - 1);
 }
 
+/// Action verb stems used to spot a keybind action that was *meant* to be one
+/// of hana's built-in actions but is spelled wrong. Anything not matching one
+/// of these and not containing a shell metacharacter is treated as an ordinary
+/// exec command and left alone (e.g. "firefox", "foot", "/usr/bin/emacs").
+const ACTION_VERB_PREFIXES = [_][]const u8{
+    "toggle_", "increase_", "decrease_", "grow_", "stack_", "swap_",
+    "move_", "move_to_", "focus_", "close_", "kill_", "minimize_",
+    "unminimize_", "cycle_", "scroll_", "workspace_", "all_", "dump_",
+};
+
+/// True when `cmd` is a bare identifier (letters, digits, underscores only —
+/// nothing a real shell command would need) that starts with a known action
+/// verb stem, i.e. it looks like a misspelled built-in action rather than a
+/// legitimate external program.
+fn looksLikeActionWord(cmd: []const u8) bool {
+    if (cmd.len == 0) return false;
+    for (cmd) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '_')) return false;
+    }
+    for (ACTION_VERB_PREFIXES) |p| {
+        if (std.mem.startsWith(u8, cmd, p)) return true;
+    }
+    return false;
+}
+
 fn parseAction(allocator: std.mem.Allocator, cmd: []const u8) !types.Action {
     if (ACTION_MAP.get(cmd)) |a| return a;
     if (tryParseWorkspace(cmd, "workspace_")) |ws| return .{ .switch_workspace = ws };
     if (tryParseWorkspace(cmd, "move_to_workspace_")) |ws| return .{ .move_to_workspace = ws };
     if (tryParseWorkspace(cmd, "toggle_tag_")) |ws| return .{ .toggle_tag = ws };
+    // The fallback is exec so any shell command can be bound as an action —
+    // but a bare word that resembles a built-in action name is almost always
+    // a typo, and silently running it as an exec command (which then fails or
+    // does nothing) hides the mistake. Warn in that case.
+    if (looksLikeActionWord(cmd))
+        debug.warn("Unrecognized action '{s}': running it as an exec command — check the spelling (action names are matched exactly)", .{cmd});
     return .{ .exec = try allocator.dupe(u8, cmd) };
 }
 
@@ -734,7 +788,19 @@ pub fn load(allocator: std.mem.Allocator, screen: *core.xcb.xcb_screen_t, xkb_st
     try validate(&cfg);
     cfg.keybind_resolver.build(cfg.keybindings.items, xkb_state, allocator);
     finalizeConfig(&cfg, screen);
+    applyCarouselSettings(&cfg);
     return cfg;
+}
+
+/// Pushes the config's staged carousel settings onto the carousel's live
+/// globals. Called only from load() — i.e. at startup and, via
+/// handleConfigReload, AFTER the fully-validated config has been swapped in —
+/// so carousel settings can never leak into effect from a config that failed
+/// validation and was discarded.
+pub fn applyCarouselSettings(cfg: *const types.Config) void {
+    carousel.setCarouselEnabled(cfg.bar.carousel_enabled);
+    carousel.setScrollSpeed(@as(f64, @floatFromInt(cfg.bar.scroll_speed)));
+    carousel.setRefreshRateOverride(@as(f64, @floatFromInt(cfg.bar.carousel_refresh_rate)));
 }
 
 fn parseDrag(doc: *parser.Document, cfg: *types.Config) void {
@@ -749,7 +815,11 @@ fn parseDrag(doc: *parser.Document, cfg: *types.Config) void {
 fn parseWorkspaces(doc: *parser.Document, cfg: *types.Config) void {
     const section = doc.getSection("bar.modules.workspaces") orelse doc.getSection("workspaces") orelse return;
     cfg.workspaces.enabled = getInRange(bool, section, "enabled", cfg.workspaces.enabled, null, null);
-    cfg.workspaces.count = getInRange(u8, section, "count", cfg.workspaces.count, 1, null);
+    // Cap at MAX_WORKSPACES: tracking's u64 workspace bitmask and the
+    // fixed-size override/fullscreen lookup tables can't represent more, and
+    // tracking.setWorkspaceCount asserts the same ceiling — so a larger count
+    // would trip that assert in Debug and index out of bounds in release.
+    cfg.workspaces.count = getInRange(u8, section, "count", cfg.workspaces.count, 1, @intCast(constants.MAX_WORKSPACES));
 }
 
 /// Reads `section_name.enabled` (default true) into `field`. Used for
@@ -796,6 +866,7 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.
     cfg.tiling.border_width = getScalableInRange(aesthetic_src, "border_width", cfg.tiling.border_width, 0.0);
     cfg.tiling.border_focused = getColor(aesthetic_src, "border_focused", cfg.tiling.border_focused);
     cfg.tiling.border_unfocused = getColor(aesthetic_src, "border_unfocused", cfg.tiling.border_unfocused);
+    cfg.tiling.min_window_dim = getInRange(u16, section, "min_window_dim", cfg.tiling.min_window_dim, 1, null);
     const master_src = doc.getSection("tiling.layouts.master-stack") orelse section;
     const dedicated = master_src != section; // true when [tiling.layouts.master-stack] exists
     cfg.tiling.master_count = getInRange(u8, master_src, if (dedicated) "count" else "master_count", cfg.tiling.master_count, 1, null);
@@ -814,15 +885,15 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.
 fn parseMasterStackCounts(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     const counts_sec = doc.getSection("tiling.layouts.master-stack.counts") orelse return;
     cfg.tiling.workspace_master_count_overrides.clearRetainingCapacity();
-    var iter = counts_sec.pairs.iterator();
+    var iter = counts_sec.orderedIterator();
     while (iter.next()) |entry| {
-        counts_sec.markConsumed(entry.key_ptr.*);
-        const ws_1based = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
-            debug.warn("master-stack.counts: invalid workspace key '{s}', skipping", .{entry.key_ptr.*});
+        counts_sec.markConsumed(entry.key);
+        const ws_1based = std.fmt.parseInt(usize, entry.key, 10) catch {
+            debug.warn("master-stack.counts: invalid workspace key '{s}', skipping", .{entry.key});
             continue;
         };
         if (!checkWorkspaceBound(ws_1based, "master-stack.counts", constants.MAX_WORKSPACES)) continue;
-        const count_val = entry.value_ptr.*.asInt() orelse {
+        const count_val = entry.value.asInt() orelse {
             debug.warn("master-stack.counts: non-integer count for workspace {}, skipping", .{ws_1based});
             continue;
         };
@@ -1044,6 +1115,13 @@ const BAR_COLOR_FIELDS = [_][]const u8{
 /// purely off asInt()/asScalable() since the parser already recognises
 /// bare decimal literals as well as percentages.
 ///
+/// Bare integers are ALWAYS percentages (0–100), so `transparency = 50`
+/// is 50% opacity — identical in meaning to `50%`. The one colliding case
+/// is a bare `1`: `= 1` means 1% opacity while `= 1.0`/`= 100%` mean fully
+/// opaque. The ambiguity is resolved as 1% (consistent with the other
+/// integer-percent fields such as indicator_padding) and an explicit
+/// warning is emitted so a user who meant "fully opaque" notices.
+///
 /// A *quoted* transparency value (e.g. `transparency = "0.5"`) is not
 /// specially unwrapped; it falls to the default with an explicit warning.
 fn parseTransparency(value: parser.Value) f32 {
@@ -1051,12 +1129,14 @@ fn parseTransparency(value: parser.Value) f32 {
         if (i == 0) return 0.0;
         if (i >= 2 and i <= 100) return @as(f32, @floatFromInt(i)) / 100.0;
         if (i == 1) {
-            // `transparency = 1` is ambiguous: it could mean 1% opacity (like the
-            // range 2–100) or the floating-point 1.0 (fully opaque).  We treat it
-            // as fully opaque to be conservative, but warn the user explicitly so
-            // they can use `1%` for 1% opacity or `1.0` for fully opaque instead.
+            // `transparency = 1` is ambiguous: it could mean 1% opacity (like
+            // every other bare integer, a percentage of 100) or the
+            // floating-point 1.0 (fully opaque).  Per the "bare integers are
+            // percentages" rule it resolves to 1% opacity, but we warn so a
+            // user who meant fully opaque can write `1.0` or `100%` instead.
             debug.warn("Transparency value 1 is ambiguous (1% opacity or 1.0 fully opaque?); " ++
-                "treating as 1.0 (fully opaque). Use '1%' for 1%% opacity.", .{});
+                "treating as 1% opacity. Use '1.0' or '100%' for fully opaque.", .{});
+            return 0.01;
         } else {
             debug.warn("Invalid transparency value {} (must be 0–100), using default", .{i});
         }
@@ -1140,11 +1220,16 @@ fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Con
     }
 
     if (section.get("indicator_padding")) |val| {
-        // Integer values are a percentage (0–100), matching transparency;
-        // fractional/decimal values are a 0.0–1.0 ratio directly.
-        const f: f32 = if (val.asInt()) |i|
-            @as(f32, @floatFromInt(i)) / 100.0
-        else if (val.asScalable()) |sv|
+        // Bare integers are always a percentage (0–100), matching transparency;
+        // fractional/decimal values are a 0.0–1.0 ratio directly. `= 1` resolves
+        // to 1% padding (a bare integer, per the rule) with an explicit warning
+        // because `= 1.0` would mean 100% — same collision as transparency.
+        const f: f32 = if (val.asInt()) |i| blk: {
+            if (i == 1)
+                debug.warn("indicator_padding value 1 is ambiguous (1% or 1.0 ratio?); " ++
+                    "treating as 1%. Use '1.0' or '100%' for 100%.", .{});
+            break :blk @as(f32, @floatFromInt(i)) / 100.0;
+        } else if (val.asScalable()) |sv|
             utils.scaling.asRatio(sv)
         else
             0.1;
@@ -1186,10 +1271,14 @@ fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Con
                 @field(cfg.bar, f.key) = getColor(c, f.key, @field(cfg.bar, f.fallback));
         }
     }
-    // Carousel: enabled flag, scroll_speed (px/s, min 1), carousel_refresh_rate (Hz, 0 = auto-detect via RandR).
-    carousel.setCarouselEnabled(getInRange(bool, section, "carousel_enabled", true, null, null));
-    carousel.setScrollSpeed(@as(f64, @floatFromInt(getInRange(u16, section, "scroll_speed", 125, 1, null))));
-    carousel.setRefreshRateOverride(@as(f64, @floatFromInt(getInRange(u16, section, "carousel_refresh_rate", 0, null, null))));
+    // Carousel: enabled flag, scroll_speed (px/s, min 1), carousel_refresh_rate
+    // (Hz, 0 = auto-detect via RandR). These are staged on the config struct;
+    // applyCarouselSettings() pushes them onto the carousel's live globals only
+    // after a fully-validated config is swapped in (see load()), so a rejected
+    // reload cannot leak them into effect.
+    cfg.bar.carousel_enabled = getInRange(bool, section, "carousel_enabled", true, null, null);
+    cfg.bar.scroll_speed = getInRange(u16, section, "scroll_speed", 125, 1, null);
+    cfg.bar.carousel_refresh_rate = getInRange(u16, section, "carousel_refresh_rate", 0, null, null);
 }
 
 fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *parser.Section, cfg: *types.Config) !void {
@@ -1263,10 +1352,10 @@ fn parseRules(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.C
             continue;
         const ws_num = std.fmt.parseInt(usize, ws_str, 10) catch continue;
         if (!checkWorkspaceBound(ws_num, name, cfg.workspaces.count)) continue;
-        var iter = entry.value_ptr.pairs.iterator();
+        var iter = entry.value_ptr.orderedIterator();
         while (iter.next()) |class_entry| {
-            entry.value_ptr.markConsumed(class_entry.key_ptr.*);
-            try addRule(allocator, cfg, class_entry.key_ptr.*, ws_num);
+            entry.value_ptr.markConsumed(class_entry.key);
+            try addRule(allocator, cfg, class_entry.key, ws_num);
         }
     }
 }
@@ -1295,15 +1384,15 @@ fn parseWorkspaceRuleSection(
     cfg: *types.Config,
     rules_section: *parser.Section,
 ) !void {
-    var iter = rules_section.pairs.iterator();
+    var iter = rules_section.orderedIterator();
     while (iter.next()) |entry| {
-        rules_section.markConsumed(entry.key_ptr.*);
-        const ws_num = std.fmt.parseInt(usize, entry.key_ptr.*, 10) catch {
-            try tryAddClassRule(allocator, cfg, entry.key_ptr.*, entry.value_ptr.*);
+        rules_section.markConsumed(entry.key);
+        const ws_num = std.fmt.parseInt(usize, entry.key, 10) catch {
+            try tryAddClassRule(allocator, cfg, entry.key, entry.value);
             continue;
         };
-        if (!checkWorkspaceBound(ws_num, entry.key_ptr.*, cfg.workspaces.count)) continue;
-        if (entry.value_ptr.*.asArray()) |arr| {
+        if (!checkWorkspaceBound(ws_num, entry.key, cfg.workspaces.count)) continue;
+        if (entry.value.asArray()) |arr| {
             for (arr) |item| {
                 if (item.asString()) |class_name| try addRule(allocator, cfg, class_name, ws_num);
             }
@@ -1317,9 +1406,9 @@ fn parseSimpleRuleSection(
     cfg: *types.Config,
     rules_section: *parser.Section,
 ) !void {
-    var iter = rules_section.pairs.iterator();
+    var iter = rules_section.orderedIterator();
     while (iter.next()) |entry| {
-        rules_section.markConsumed(entry.key_ptr.*);
-        try tryAddClassRule(allocator, cfg, entry.key_ptr.*, entry.value_ptr.*);
+        rules_section.markConsumed(entry.key);
+        try tryAddClassRule(allocator, cfg, entry.key, entry.value);
     }
 }

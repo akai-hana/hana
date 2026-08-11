@@ -311,7 +311,7 @@ inline fn retileRedrawAndFlush() void {
 /// Grab, retile, redraw, flush — for callers with no per-window op to
 /// perform before the retile.
 inline fn retileAndScheduleFlush() void {
-    _ = xcb.xcb_grab_server(core.getState().conn);
+    utils.grabServer(core.getState().conn);
     retileRedrawAndFlush();
 }
 
@@ -343,7 +343,7 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
         if (target_ws == current) {
             // Grab so the evict and retile land in one atomic batch — the
             // compositor never sees the window gone but peers not yet reflowed.
-            _ = xcb.xcb_grab_server(core.getState().conn);
+            utils.grabServer(core.getState().conn);
             evictWindow(win);
             retileRedrawAndFlush();
         }
@@ -354,7 +354,7 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
         if (target_ws == current) {
             // Grab so the map and retile land in one atomic batch.
             const conn = core.getState().conn;
-            _ = xcb.xcb_grab_server(conn);
+            utils.grabServer(conn);
             _ = xcb.xcb_map_window(conn, win);
             retileRedrawAndFlush();
         }
@@ -407,7 +407,12 @@ pub fn switchToAll() void {
         const ptr_reply = xcb.xcb_query_pointer_reply(cs.conn, ptr_cookie, null);
         defer if (ptr_reply) |r| std.c.free(r);
 
-        _ = xcb.xcb_grab_server(cs.conn);
+        // Pre-resolve the focus target + input model before the grab so the
+        // grab body performs no blocking reply waits (see executeSwitch).
+        const focus_target = resolvePostSwitchFocus(&s.workspaces[s.current], ptr_reply);
+        const focus_model = if (focus_target) |w| window.getInputModel(cs.conn, w) else null;
+
+        utils.grabServer(cs.conn);
         exitAllWorkspacesView(s);
         // Resolve and apply focus BEFORE retiling: exitAllWorkspacesView may
         // have just evicted the still-focused window from this workspace's
@@ -416,7 +421,7 @@ pub fn switchToAll() void {
         // the stale, now-evicted window with no follow-up retile once focus
         // actually moves. All windows here are already mapped, so it's safe
         // to apply focus ahead of the retile.
-        applyPostSwitchFocus(resolvePostSwitchFocus(&s.workspaces[s.current], ptr_reply));
+        applyPostSwitchFocus(focus_target, focus_model);
         if (cs.config.tiling.enabled) tiling.retileCurrentWorkspace();
         bar.raiseBar();
         bar.redrawInsideGrab();
@@ -424,7 +429,7 @@ pub fn switchToAll() void {
     } else {
         // Enter.
         const cs = core.getState();
-        _ = xcb.xcb_grab_server(cs.conn);
+        utils.grabServer(cs.conn);
 
         for (tracking.allWindows()) |entry| {
             if (tracking.isWindowOnWorkspace(entry.win, s.current)) continue;
@@ -626,12 +631,14 @@ fn resolvePostSwitchFocus(new_ws_obj: *Workspace, ptr_reply: ?*xcb.xcb_query_poi
 /// the mapped-check and raise that focus.setFocus would normally do — every
 /// window here is already mapped and a workspace switch never raises.
 ///
-/// Route through focus.setFocus/clearFocus so commitFocusTransition runs
-/// its full side-effect list (MRU history, tiling border state, carousel
+/// Route through focus.setFocusWithModel/clearFocus so commitFocusTransition
+/// runs its full side-effect list (MRU history, tiling border state, carousel
 /// notification, _NET_ACTIVE_WINDOW, button-grab transfer, input focus).
-fn applyPostSwitchFocus(focus_target: ?u32) void {
+/// `focus_model` is the input model resolved BEFORE the grab (null only when
+/// focus_target is null) so the grab body performs no blocking reply waits.
+fn applyPostSwitchFocus(focus_target: ?u32, focus_model: ?window.InputModel) void {
     if (focus_target) |new_win| {
-        focus.setFocus(new_win, .workspace_switch);
+        if (focus_model) |model| focus.setFocusWithModel(new_win, .workspace_switch, model);
     } else {
         focus.clearFocus();
     }
@@ -656,7 +663,16 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
     const ptr_reply = xcb.xcb_query_pointer_reply(cs.conn, ptr_cookie, null);
     defer if (ptr_reply) |r| std.c.free(r);
 
-    _ = xcb.xcb_grab_server(cs.conn);
+    // Resolve the post-switch focus target and its input model BEFORE the
+    // grab: getInputModel's blocking WM_PROTOCOLS reply wait inside the grab
+    // would implicitly flush the queued hide/restore configure_window batch
+    // to the compositor mid-grab (same hazard as the pre-drained pointer
+    // query above — see focus.setFocusWithModel). The target resolution
+    // itself is pure (resolvePostSwitchFocus makes no xcb_*_reply call).
+    const focus_target = resolvePostSwitchFocus(new_ws_obj, ptr_reply);
+    const focus_model = if (focus_target) |w| window.getInputModel(cs.conn, w) else null;
+
+    utils.grabServer(cs.conn);
 
     hideWorkspaceWindows(&s.workspaces[old_ws], new_ws);
 
@@ -676,7 +692,7 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
             if (tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
         }
         fullscreen.applyFullscreenGeometry(info.window);
-        applyPostSwitchFocus(resolvePostSwitchFocus(new_ws_obj, ptr_reply));
+        applyPostSwitchFocus(focus_target, focus_model);
     } else {
         // Resolve before restoring: on a geometry-cache miss,
         // restoreWorkspaceWindows falls back to a full retile, and
@@ -684,9 +700,8 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
         // target at that point rather than reading the stale pre-switch
         // focus. The actual focus.setFocus() call still happens below,
         // after every window is mapped.
-        const focus_target = resolvePostSwitchFocus(new_ws_obj, ptr_reply);
         restoreWorkspaceWindows(new_ws_obj, old_ws, focus_target);
-        applyPostSwitchFocus(focus_target);
+        applyPostSwitchFocus(focus_target, focus_model);
     }
 
     bar.raiseBar();

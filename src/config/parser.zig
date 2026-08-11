@@ -32,14 +32,18 @@ pub const Value = union(enum) {
     /// latest line within a file) is the LAST element, and array consumers see
     /// the full accumulation via asArray. Without this, a repeated scalar key
     /// would silently fall back to its struct default.
-    pub inline fn asInt(self: Value) ?i64 {
+    /// Not `inline`: these recurse once when a value is an accumulated
+    /// duplicate array (see the `.array` cases), and inline recursion is
+    /// rejected by the compiler. They are only exercised during config
+    /// interpretation (startup/reload), not on any hot path.
+    pub fn asInt(self: Value) ?i64 {
         return switch (self) {
             .integer => |i| i,
             .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asInt() else null,
             else => null,
         };
     }
-    pub inline fn asBool(self: Value) ?bool {
+    pub fn asBool(self: Value) ?bool {
         return switch (self) {
             .boolean => |b| b,
             .integer => |i| i != 0,
@@ -47,14 +51,14 @@ pub const Value = union(enum) {
             else => null,
         };
     }
-    pub inline fn asString(self: Value) ?[]const u8 {
+    pub fn asString(self: Value) ?[]const u8 {
         return switch (self) {
             .string => |s| s,
             .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asString() else null,
             else => null,
         };
     }
-    pub inline fn asColor(self: Value) ?u32 {
+    pub fn asColor(self: Value) ?u32 {
         return switch (self) {
             .color => |c| c,
             .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asColor() else null,
@@ -74,7 +78,7 @@ pub const Value = union(enum) {
     /// true integer (workspace counts, master counts, etc.); it is widened
     /// losslessly here for the convenience of callers that only care about
     /// the scalable form.
-    pub inline fn asScalable(self: Value) ?ScalableValue {
+    pub fn asScalable(self: Value) ?ScalableValue {
         return switch (self) {
             .scalable => |s| s,
             .integer => |i| ScalableValue.absolute(@floatFromInt(i)),
@@ -101,6 +105,14 @@ pub const Section = struct {
     /// interpretation. Populated (best-effort — alloc failures are swallowed)
     /// so config.zig can warn about keys no parse function recognises.
     consumed: std.StringHashMap(void),
+    /// Document-order key list (insertion order), mirroring the first-time
+    /// keys land in `pairs`. `pairs` is a hashmap, so iterating it directly
+    /// yields nondeterministic order across runs (per-process random seed) —
+    /// `[binds]`, `[workspace.rules]` etc. use `orderedIterator` instead so
+    /// duplicate-effective bindings resolve deterministically (first in the
+    /// file wins, like a sequential parser). Strings are the same allocations
+    /// `pairs` owns; this list holds the pointers and is never copied.
+    keys_in_order: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Section {
         var map = std.StringHashMap(Value).init(allocator);
@@ -111,8 +123,21 @@ pub const Section = struct {
     }
 
     pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
+        self.keys_in_order.deinit(allocator);
         cleanPairs(allocator, &self.pairs);
         self.consumed.deinit();
+    }
+
+    /// Records `key` as the newest document-order key. Best-effort: an OOM
+    /// here just loses deterministic ordering for this section, never data.
+    fn recordKey(self: *Section, allocator: std.mem.Allocator, key: []const u8) void {
+        self.keys_in_order.append(allocator, key) catch {};
+    }
+
+    /// Iterates pairs in document (insertion) order — deterministic, unlike
+    /// `pairs.iterator()`. Values are the live (possibly accumulated) values.
+    pub fn orderedIterator(self: *const Section) OrderedIterator {
+        return .{ .section = self, .idx = 0 };
     }
 
     /// Records `key` as recognised so it won't be reported by warnUnconsumed.
@@ -169,6 +194,20 @@ pub const Section = struct {
     }
     pub fn getScalable(self: *Section, key: []const u8) ?ScalableValue {
         return self.getAs(ScalableValue, key);
+    }
+};
+
+/// Iterates a section's pairs in document (insertion) order. Values are
+/// looked up live from `pairs` so accumulated duplicates are seen in full.
+pub const OrderedIterator = struct {
+    section: *const Section,
+    idx: usize,
+
+    pub fn next(self: *OrderedIterator) ?struct { key: []const u8, value: Value } {
+        if (self.idx >= self.section.keys_in_order.items.len) return null;
+        const key = self.section.keys_in_order.items[self.idx];
+        self.idx += 1;
+        return .{ .key = key, .value = self.section.pairs.get(key).? };
     }
 };
 
@@ -327,6 +366,7 @@ fn mergeSectionsInto(allocator: std.mem.Allocator, dst: *Section, src: *const Se
             const key_copy = try allocator.dupe(u8, src_key);
             errdefer allocator.free(key_copy);
             try dst.pairs.put(key_copy, try deepCopyValue(allocator, src_val));
+            dst.recordKey(allocator, key_copy);
         }
     }
 }
@@ -735,7 +775,12 @@ const Parser = struct {
         if (items.items.len == 0) return ParseError.InvalidValue;
         if (items.items.len == 1) {
             const single = items.items[0];
-            items.items.len = 0; // steal ownership; errdefer now frees nothing
+            // Keep ownership of the single element but release the ArrayList's
+            // backing buffer — zeroing `len` alone would leak that allocation
+            // once the local goes out of scope (every scalar value parsed
+            // leaked a small buffer before this).
+            items.items.len = 0;
+            items.deinit(self.allocator);
             return single;
         }
         return .{ .array = items };
@@ -849,6 +894,7 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
                 allocator.free(kv[0]);
             } else {
                 try current_section.pairs.put(kv[0], kv[1]);
+                current_section.recordKey(allocator, kv[0]);
             }
 
             p.skipWhitespace();

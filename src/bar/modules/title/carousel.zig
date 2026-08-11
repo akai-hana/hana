@@ -302,7 +302,11 @@ pub fn drawCarouselTick(
 
     const off = advanceCarouselOffset(e, utils.monotonicNs());
     e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, seg_x, off, seg_w);
-    dc.blitAndFlush(seg_x, seg_w);
+    // Skip the flush while the main thread holds the X server grab: xcb_flush
+    // here would release the grab-batch requests mid-grab, splitting what must
+    // be one atomic compositor frame. The enqueued copy_area instead rides
+    // along with the main thread's closing ungrabAndFlush.
+    if (!utils.isGrabActive()) dc.blitAndFlush(seg_x, seg_w);
     return true;
 }
 
@@ -322,7 +326,9 @@ pub fn drawSegCarouselTickAuto(dc: *drawing.DrawContext, accent: u32) bool {
     if (focus_signal.is_invalidated.load(.acquire)) return false;
     const off = advanceCarouselOffset(e, utils.monotonicNs());
     e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, e.geom.seg_x, off, e.geom.seg_w);
-    dc.blitAndFlush(e.geom.seg_x, e.geom.seg_w);
+    // See drawCarouselTick: skip the flush inside an X server grab so the
+    // shared output buffer is not released mid-grab.
+    if (!utils.isGrabActive()) dc.blitAndFlush(e.geom.seg_x, e.geom.seg_w);
     return true;
 }
 

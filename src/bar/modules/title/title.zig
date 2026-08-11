@@ -7,6 +7,7 @@ const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
 const scale = @import("scale");
+const debug = @import("debug");
 
 const types = @import("types");
 
@@ -447,6 +448,8 @@ fn drawSegmentedTitles(
     const windows = snapshot.current_ws_wins;
     if (windows.len == 0) return;
 
+    if (windows.len > max_visible_windows)
+        debug.warn("Workspace has {} windows; only the first {} are rendered in split-view", .{ windows.len, max_visible_windows });
     const win_count = @min(windows.len, max_visible_windows);
 
     // Free the single-window carousel: the single and segmented paths are
