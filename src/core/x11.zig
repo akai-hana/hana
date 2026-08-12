@@ -7,4 +7,7 @@
 //! core.zig re-exports this as `pub const xcb` for modules that already
 //! import core.
 
-pub const xcb = @cImport(@cInclude("xcb/xcb.h"));
+pub const xcb = @cImport({
+    @cInclude("xcb/xcb.h");
+    @cInclude("xcb/randr.h"); // Refresh-rate detection for the carousel (scale.zig).
+});

@@ -384,6 +384,7 @@ const SystemLibraries = struct {
         root.linkSystemLibrary("xcb-keysyms", .{});
         root.linkSystemLibrary("xkbcommon-x11", .{});
         root.linkSystemLibrary("xcb-cursor", .{}); // Makes hana's root window respect custom cursor settings.
+        root.linkSystemLibrary("xcb-randr", .{}); // Monitor refresh-rate detection for the carousel.
     }
 
     // Bar libraries
