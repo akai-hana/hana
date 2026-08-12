@@ -12,7 +12,7 @@ const debug = @import("debug");
 // Public constants
 
 /// Default scroll speed in pixels per second.
-pub const default_scroll_speed: f64 = 125.0;
+pub const default_scroll_speed: u8 = 250;
 
 /// Pixel gap between the end of text copy A and the start of copy B in the
 /// pre-rendered pixmap.
