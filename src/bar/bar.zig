@@ -8,6 +8,7 @@ const xcb = core.xcb;
 const utils = @import("utils");
 const scale = @import("scale");
 const debug = @import("debug");
+const bench = @import("bench");
 
 const types = @import("types");
 
@@ -635,6 +636,8 @@ fn hasMinimizedSetChanged(
 /// at the swap sites for why this is safe.
 fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, forced: bool) !void {
     const allocator = s.render.allocator;
+    bench.beginTitleCapture();
+    const capture_start_ns: u64 = if (bench.enabled) utils.monotonicNs() else 0;
     snap.minimized_windows.clearRetainingCapacity();
     try minimize.collectMinimizedIntoSet(&snap.minimized_windows, allocator);
 
@@ -679,27 +682,29 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
         !std.mem.eql(u32, snap.current_workspace_windows.items, prev.current_workspace_windows.items) or
         hasMinimizedSetChanged(&snap.minimized_windows, &prev.minimized_windows);
     if (title_changed) {
+        const focused_idx: ?usize = if (snap.focused_window) |fw|
+            std.mem.indexOfScalar(u32, snap.current_workspace_windows.items, fw)
+        else
+            null;
+
+        // Batch pre-fetch replaces the sequential per-window round-trips:
+        // one dupe per title, ~2 round-trips total, zero blocking waits on
+        // the draw path itself (see title.batchFetchWindowInfosInto).
         snap.window_titles.clear(allocator);
         snap.window_geoms.clearRetainingCapacity();
-        var title_tmp: std.ArrayListUnmanaged(u8) = .empty;
-        defer title_tmp.deinit(allocator);
-        for (snap.current_workspace_windows.items) |win| {
-            if (snap.focused_window == win) {
-                snap.window_titles.append(allocator, snap.focused_title.items) catch {};
-            } else {
-                title_tmp.clearRetainingCapacity();
-                title.fetchWindowTitleInto(core.getState().conn, win, &title_tmp, allocator) catch {};
-                snap.window_titles.append(allocator, title_tmp.items) catch {};
-            }
-            // Skip the round-trip for minimized windows the same way
-            // drawSegmentedTitles' sentinel does — they're never actually
-            // positioned on screen.
-            const geom: utils.Rect = if (snap.minimized_windows.contains(win))
-                title.offscreen_rect
-            else
-                title.fetchWindowGeom(core.getState().conn, win);
-            snap.window_geoms.append(allocator, geom) catch {};
-        }
+        var titles: std.ArrayListUnmanaged([]const u8) = .empty;
+        title.batchFetchWindowInfosInto(
+            core.getState().conn,
+            snap.current_workspace_windows.items,
+            focused_idx,
+            snap.focused_title.items,
+            &snap.minimized_windows,
+            &titles,
+            &snap.window_geoms,
+            allocator,
+        );
+        // Steal the batch-owned title list; snapshot deinit frees its strings.
+        snap.window_titles.list = titles;
     } else {
         // Nothing about titles/membership/minimized-state changed since the
         // previous frame: rather than freeing every owned string in `snap`
@@ -729,6 +734,11 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
         !std.mem.eql(u8, snap.focused_title.items, prev.focused_title.items) or
         !std.mem.eql(u32, snap.current_workspace_windows.items, prev.current_workspace_windows.items) or
         hasMinimizedSetChanged(&snap.minimized_windows, &prev.minimized_windows);
+
+    if (bench.enabled) bench.reportTitleCapture(
+        utils.monotonicNs() -| capture_start_ns,
+        snap.current_workspace_windows.items.len,
+    );
 }
 
 // Draw submission
