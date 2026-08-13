@@ -191,17 +191,16 @@ pub inline fn getAtomCached(comptime name: []const u8) error{AtomCacheNotInitial
 
 // EWMH root window advertisement
 
-/// EWMH atoms hana declares support for via `_NET_SUPPORTED`. Every entry
-/// here must correspond to a protocol hana genuinely honours — clients use
-/// this list to decide what they can rely on.
+/// EWMH atoms hana declares via `_NET_SUPPORTED`. Every entry must correspond
+/// to a protocol hana genuinely honours — clients use this list to decide what
+/// they can rely on.
 ///
 /// Notably fixes GLFW's "Iconification of full screen windows requires a WM
-/// that supports EWMH full screen" error (seen in Minecraft and other
-/// LWJGL/GLFW games): GLFW only fullscreens via `_NET_WM_STATE_FULLSCREEN`
-/// if that atom is listed here. Without it, GLFW falls back to a raw
-/// override-redirect window, which bypasses the WM — and override-redirect
-/// windows can't be iconified through the WM, so the next XIconifyWindow()
-/// call throws that error instead of doing anything.
+/// that supports EWMH full screen" error (Minecraft and other LWJGL games):
+/// GLFW only fullscreens via `_NET_WM_STATE_FULLSCREEN` if that atom is
+/// listed here; otherwise it falls back to a raw override-redirect window that
+/// bypasses the WM and can't be iconified through it, so the next
+/// XIconifyWindow() throws that error.
 const supported_atoms = [_][]const u8{
     "_NET_SUPPORTED",
     "_NET_SUPPORTING_WM_CHECK",
@@ -220,18 +219,16 @@ const supported_atoms = [_][]const u8{
     "_NET_WM_STRUT_PARTIAL",
 };
 
-/// Publishes hana's EWMH conformance on the root window.
+/// Publishes hana's EWMH conformance on the root window: per the spec a
+/// conformant WM creates a small identity ("check") window, tags it and the
+/// root with `_NET_SUPPORTING_WM_CHECK`, gives it a `_NET_WM_NAME`, and lists
+/// every honour-able hint in `_NET_SUPPORTED`. Clients (GLFW, Qt, Chromium, …)
+/// probe this once at startup; without it they assume a bare ICCCM-only WM and
+/// take more conservative — in GLFW's case broken — code paths (see
+/// `supported_atoms`).
 ///
-/// Per the EWMH spec, a conformant WM creates a small identity ("check")
-/// window, tags it and the root with `_NET_SUPPORTING_WM_CHECK` pointing at
-/// it, gives it a `_NET_WM_NAME`, and lists every hint it honours in
-/// `_NET_SUPPORTED` on the root. Clients (GLFW, Qt, Chromium, ...) probe
-/// this once at startup; without it they assume a bare ICCCM-only WM and
-/// take more conservative — in GLFW's case, broken — code paths (see
-/// `supported_atoms` above).
-///
-/// Must run once at startup, after initAtomCache() and before any client
-/// can map a window.
+/// Must run once at startup, after initAtomCache() and before any client can
+/// map a window.
 pub fn advertiseEwmhSupport(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: u32) void {
     const supporting_wm_check = getAtomCached("_NET_SUPPORTING_WM_CHECK") catch return;
     const net_wm_name = getAtomCached("_NET_WM_NAME") catch return;
