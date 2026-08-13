@@ -195,7 +195,12 @@ fn handleSignalPipe(fd: std.posix.fd_t) void {
         const rc: isize = @bitCast(std.os.linux.read(fd, &buf, buf.len));
         if (rc <= 0) break; // 0 = EOF on write-end close, negative = error/EAGAIN
         const n: usize = @intCast(rc);
-        for (buf[0..n]) |byte| dispatchSignal(byte);
+        for (buf[0..n]) |byte| {
+            // Wake byte written by utils.reload(): poke the event loop out of
+            // poll, but don't re-dispatch it (see utils.WAKE_BYTE).
+            if (byte == utils.WAKE_BYTE) continue;
+            dispatchSignal(byte);
+        }
     }
 }
 

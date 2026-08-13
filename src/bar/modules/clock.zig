@@ -34,7 +34,6 @@ const types = @import("types");
 const utils = @import("utils");
 const drawing = @import("drawing");
 const debug = @import("debug");
-const bench = @import("bench");
 
 const c = @cImport(@cInclude("time.h"));
 
@@ -116,12 +115,10 @@ pub fn stopThread(allocator: std.mem.Allocator) void {
     clock_quit = true;
     clock_cond.signal();
     clock_mutex.unlock();
-    const stop_start_ns: u64 = if (bench.enabled) utils.monotonicNs() else 0;
     if (clock_thread) |t| {
         t.join();
         clock_thread = null;
     }
-    if (bench.enabled) std.debug.print("bench: clock stop: {d} us\n", .{(utils.monotonicNs() -| stop_start_ns) / 1000});
     if (clock_format_owned.len > 0) {
         allocator.free(clock_format_owned);
         clock_format_owned = "";
