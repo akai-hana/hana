@@ -1,3 +1,4 @@
+
 //! Focus management
 //! Handles setting, clearing, and tracking the currently focused window.
 
@@ -610,6 +611,15 @@ pub fn findBestAvailable(visible: *const fn (u32) bool) ?u32 {
         if (visible(entry.win)) return entry.win;
     }
     return null;
+}
+
+/// Focus the first available window on the current workspace. Fallback for
+/// callers that just cleared focus (window close, send-to-workspace) and
+/// have nothing more specific to prefer; reuses the same resolver as the
+/// window-close path. No-op if the workspace is empty.
+pub fn focusBestAvailable() void {
+    if (findBestAvailable(tracking.isOnCurrentWorkspaceAndVisible)) |win|
+        setFocus(win, .tiling_operation);
 }
 
 pub fn clearFocus() void {

@@ -1,3 +1,4 @@
+
 //! Workspace management
 //! Handles workspace creation, window assignment, and switching between workspaces.
 
@@ -273,7 +274,10 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
 
     if (target_ws != s.current) {
         evictWindow(win);
-        if (focus.getFocused() == win) focus.clearFocus();
+        if (focus.getFocused() == win) {
+            focus.clearFocus();
+            focus.focusBestAvailable();
+        }
     }
     if (core.getState().config.tiling.enabled) tiling.markDirty();
     bar.scheduleRedraw();
