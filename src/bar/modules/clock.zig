@@ -213,25 +213,23 @@ pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, star
     // lock, then render after releasing it — the clock thread may be formatting
     // the next second concurrently, so drawSegment must not read a torn string.
     var buf: [64]u8 = undefined;
-    var time_str: []const u8 = "";
+    var len: usize = 0;
     const sec = currentEpochSeconds();
     cache_mutex.lock();
     defer cache_mutex.unlock();
     if (sec == last_formatted_sec) {
-        const n = last_formatted_len;
-        @memcpy(buf[0..n], last_formatted_time[0..n]);
-        time_str = buf[0..n];
+        len = last_formatted_len;
+        @memcpy(buf[0..len], last_formatted_time[0..len]);
     } else {
         // Fallback format path (e.g. before the clock thread's first tick):
         // same guarded cache, so a concurrent publishCurrentTime can't race.
         const str = try formatTime(&last_formatted_time, sec, config.clock_format);
         last_formatted_len = str.len;
         last_formatted_sec = sec;
-        const n = str.len;
-        @memcpy(buf[0..n], str);
-        time_str = buf[0..n];
+        @memcpy(buf[0..str.len], str);
+        len = str.len;
     }
-    return dc.drawSegment(start_x, height, time_str, config.scaledSegmentPadding(height), config.bg, config.fg);
+    return dc.drawSegment(start_x, height, buf[0..len], config.scaledSegmentPadding(height), config.bg, config.fg);
 }
 
 fn currentEpochSeconds() i64 {

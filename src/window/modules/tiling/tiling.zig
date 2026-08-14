@@ -1226,6 +1226,11 @@ const FocusMasterPos = struct {
     ws_wins: []const u32, // per-workspace filtered list; ws_wins[0] is the layout master
 };
 
+/// Global index of `win` in the full ordered window list.
+inline fn globalIndexOf(s: *State, win: u32) ?usize {
+    return std.mem.indexOfScalar(u32, s.windows.items(), win);
+}
+
 fn findFocusMasterPos(s: *State) ?FocusMasterPos {
     const focused = focus.getFocused() orelse return null;
     if (!s.windows.contains(focused) or !tracking.isOnCurrentWorkspace(focused)) return null;
@@ -1236,14 +1241,14 @@ fn findFocusMasterPos(s: *State) ?FocusMasterPos {
     const ws_wins = collectWorkspaceWindows(s, null);
     if (ws_wins.len < 2) return null; // need at least two windows for a meaningful swap
 
-    const fp_filtered = std.mem.indexOfScalar(u32, ws_wins, focused) orelse return null;
-    const all = s.windows.items();
-
+    // ws_wins is a subset of the full list and the focused window is in it
+    // (guarded above), so all three global lookups succeed; the `orelse`
+    // guards against a window closing mid-operation.
     return .{
-        .fp_global = std.mem.indexOfScalar(u32, all, focused) orelse return null,
-        .mp_global = std.mem.indexOfScalar(u32, all, ws_wins[0]) orelse return null,
-        .next_global = std.mem.indexOfScalar(u32, all, ws_wins[1]) orelse return null,
-        .fp_filtered = fp_filtered,
+        .fp_global = globalIndexOf(s, focused) orelse return null,
+        .mp_global = globalIndexOf(s, ws_wins[0]) orelse return null,
+        .next_global = globalIndexOf(s, ws_wins[1]) orelse return null,
+        .fp_filtered = std.mem.indexOfScalar(u32, ws_wins, focused) orelse return null,
         .ws_wins = ws_wins,
     };
 }

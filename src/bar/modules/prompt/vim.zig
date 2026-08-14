@@ -619,11 +619,7 @@ fn execNormalKey(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) Action {
         },
 
         'u' => applyHistoryStep(vs, &vs.undo, &vs.redo),
-        '.' => {
-            replayDot(vs);
-            resetPendingCmd(vs);
-            return .none;
-        },
+        '.' => replayDot(vs),
 
         else => {},
     }
@@ -868,35 +864,10 @@ inline fn commitMotion(vs: *VimState, mr: MotionResult, motion_sym: xcb.xcb_keys
 /// `null` = not handled (normal-mode pending state active, or unrecognised).
 fn resolveMotionKey(vs: *VimState, sym: xcb.xcb_keysym_t) ?MotionKeyResult {
     // Pending find char.
-    if (vs.pending.awaiting == .find_char) {
-        if (isPrintableAscii(sym)) {
-            const ch: u8 = @truncate(sym);
-            const cnt = effectiveCount(vs);
-            const kind = vs.pending.awaiting.find_char;
-            vs.last_find_kind = kind;
-            vs.last_find_ch = ch;
-            const mr = motionFind(vs, kind, ch, cnt);
-            var result = commitMotion(vs, mr, 0);
-            result.dot.op_motion.find_kind = kind;
-            result.dot.op_motion.find_ch = ch;
-            return result;
-        }
-        resetPendingCmd(vs);
-        return .{};
-    }
+    if (vs.pending.awaiting == .find_char) return resolvePendingFindChar(vs, sym);
 
     // Pending g-prefix.
-    if (vs.pending.awaiting == .g_prefix) {
-        const cnt = effectiveCount(vs);
-        if (resolveGPrefixPos(vs, sym, cnt)) |pos| {
-            const mr = MotionResult{ .pos = pos, .inclusive = (sym == 'e' or sym == 'E') };
-            var result = commitMotion(vs, mr, sym);
-            result.dot.op_motion.has_g_prefix = true;
-            return result;
-        }
-        resetPendingCmd(vs);
-        return .{};
-    }
+    if (vs.pending.awaiting == .g_prefix) return resolvePendingGPrefix(vs, sym);
 
     // Bail out so handleNormal can service its own pending states (text-object,
     // mark set/jump) before we consume digits or simple motions.
@@ -932,6 +903,39 @@ fn resolveMotionKey(vs: *VimState, sym: xcb.xcb_keysym_t) ?MotionKeyResult {
     if (tryArmFindPrefix(vs, sym)) return .{};
 
     return null;
+}
+
+/// Consumes the armed f/F/t/T target key: resolves the find motion, remembers
+/// it for `;`/`,` repetition, and stamps the dot record. A non-printable key
+/// just clears the pending state (mr == null).
+fn resolvePendingFindChar(vs: *VimState, sym: xcb.xcb_keysym_t) ?MotionKeyResult {
+    if (!isPrintableAscii(sym)) {
+        resetPendingCmd(vs);
+        return .{};
+    }
+    const ch: u8 = @truncate(sym);
+    const kind = vs.pending.awaiting.find_char;
+    vs.last_find_kind = kind;
+    vs.last_find_ch = ch;
+    const mr = motionFind(vs, kind, ch, effectiveCount(vs));
+    var result = commitMotion(vs, mr, 0);
+    result.dot.op_motion.find_kind = kind;
+    result.dot.op_motion.find_ch = ch;
+    return result;
+}
+
+/// Consumes the armed g-prefix key: resolves the g motion and stamps the dot
+/// record with the g-prefix flag. A key that isn't a g motion just clears the
+/// pending state (mr == null).
+fn resolvePendingGPrefix(vs: *VimState, sym: xcb.xcb_keysym_t) ?MotionKeyResult {
+    const pos = resolveGPrefixPos(vs, sym, effectiveCount(vs)) orelse {
+        resetPendingCmd(vs);
+        return .{};
+    };
+    const mr = MotionResult{ .pos = pos, .inclusive = (sym == 'e' or sym == 'E') };
+    var result = commitMotion(vs, mr, sym);
+    result.dot.op_motion.has_g_prefix = true;
+    return result;
 }
 
 fn resolveSimpleMotion(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) ?MotionResult {
@@ -1154,6 +1158,13 @@ fn undoPush(vs: *VimState) void {
 
 // Private — dot repeat
 
+/// After replaying a change operator, re-insert the replacement text captured
+/// when the original command was executed. `op` is the operator char ('c', or
+/// the 'c'-equivalent returned by execDirectSym for s/S/C).
+inline fn replayInsertIfChange(vs: *VimState, op: u8) void {
+    if (op == 'c') insertSlice(vs, vs.dot_insert_buf[0..vs.dot_insert_len]);
+}
+
 fn replayDot(vs: *VimState) void {
     if (vs.dot == .none) return;
 
@@ -1169,10 +1180,7 @@ fn replayDot(vs: *VimState) void {
         .direct => |d| {
             const cnt = d.count;
             switch (d.sym) {
-                'x', 'X', 'D', 'C', 's' => {
-                    const op = execDirectSym(vs, @truncate(d.sym), cnt);
-                    if (op == 'c') insertSlice(vs, vs.dot_insert_buf[0..vs.dot_insert_len]);
-                },
+                'x', 'X', 'D', 'C', 's' => replayInsertIfChange(vs, execDirectSym(vs, @truncate(d.sym), cnt)),
                 'p', 'P' => for (0..cnt) |_| {
                     if (d.sym == 'p') pasteAfter(vs) else pasteBefore(vs);
                 },
@@ -1206,13 +1214,13 @@ fn replayDot(vs: *VimState) void {
                     resolveSimpleMotion(vs, om.motion_sym, cnt);
             if (mr_opt) |mr| {
                 applyOperator(vs, om.op, mr);
-                if (om.op == 'c') insertSlice(vs, vs.dot_insert_buf[0..vs.dot_insert_len]);
+                replayInsertIfChange(vs, om.op);
             }
         },
 
         .op_line => |ol| {
             applyOperator(vs, ol.op, .{ .pos = vs.len, .range_start_override = 0 });
-            if (ol.op == 'c') insertSlice(vs, vs.dot_insert_buf[0..vs.dot_insert_len]);
+            replayInsertIfChange(vs, ol.op);
         },
 
         .insert_session => {

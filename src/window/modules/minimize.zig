@@ -161,6 +161,18 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
     std.debug.assert(!isMinimized(win));
 
     if (saved_fs) |geom| {
+        // Fullscreen does not remove a window from the tiling pool (see
+        // fullscreen.zig's enterFullscreenCommit) — it just stops the layout
+        // from repositioning it. So if `win` was tiled when minimizeWindow()
+        // tore down its fullscreen state, tiling_index is non-null and it
+        // must be reinserted at its original slot now, BEFORE re-entering
+        // fullscreen. Without this, isWindowTiled(win) stays false forever:
+        // when this window later exits fullscreen, exitFullscreenCommit sees
+        // an untiled window, so it configures it to the saved geometry
+        // directly and never hands it back to the tiling engine — it keeps
+        // its dimensions but is permanently stuck outside the tiled layout.
+        if (tiling_index) |ti| tiling.addWindowAtFilteredIndex(win, ti);
+
         // enterFullscreen owns its own server grab, so we must not be inside one.
         // Use scheduleRedraw (next event-loop iteration) rather than redrawInsideGrab.
         focus.setFocus(win, .window_spawn);

@@ -86,13 +86,6 @@ const WindowTitles = struct {
         try self.list.append(list_allocator, owned);
     }
 
-    /// Appends a slice the caller already owns — a dupe that lives in this
-    /// list's arena (see `allocator`). Used by the batch pre-fetch to move a
-    /// freshly-fetched title into the list without copying it twice.
-    pub fn appendOwned(self: *WindowTitles, list_allocator: std.mem.Allocator, title_str: []const u8) !void {
-        try self.list.append(list_allocator, title_str);
-    }
-
     /// Clears the list, then refills it with dupes of `titles`.
     /// Partial failures leave the list shorter than `titles` rather than erroring out.
     pub fn replaceWith(self: *WindowTitles, list_allocator: std.mem.Allocator, titles: []const []const u8) void {
@@ -457,31 +450,46 @@ const State = struct {
         };
     }
 
+    /// Reserve `seg_w` px for the upcoming segment, plus `scaled_spacing` for
+    /// the inter-segment gap when the segment to the right drew. `reclaimSpace`
+    /// is the exact reverse, applied when the segment ends up drawing nothing.
+    fn reserveSpace(right_x: *u16, seg_w: u16, scaled_spacing: u16, with_gap: bool) void {
+        right_x.* -= seg_w;
+        if (with_gap) right_x.* -= scaled_spacing;
+    }
+
+    /// Reverse of `reserveSpace`: give the reservation back when the segment
+    /// drew nothing, so the next segment isn't placed in a phantom dead zone.
+    fn reclaimSpace(right_x: *u16, seg_w: u16, scaled_spacing: u16, with_gap: bool) void {
+        right_x.* += seg_w;
+        if (with_gap) right_x.* += scaled_spacing;
+    }
+
+    /// Paint the inter-segment gap starting at `gap_x`.
+    fn paintGap(self: *State, gap_x: u16, scaled_spacing: u16) void {
+        self.render.dc.fillRect(gap_x, 0, scaled_spacing, self.render.height, self.render.config.bg);
+    }
+
     fn drawRightSegments(self: *State, snap: *const BarSnapshot, segments: []const types.BarSegment) !void {
-        var right_x = self.render.width;
         const scaled_spacing = self.render.config.scaledSpacing(self.render.height);
-        // pending_gap: gap space is reserved BEFORE drawing the current segment so its
-        // pixel position is correct, then the gap is painted only if the segment drew.
-        // If the segment draws nothing, the reserved space is reclaimed.
+        var right_x = self.render.width;
+        // pending_gap: the segment to the right drew, so the gap between it
+        // and the current segment was reserved.
         var pending_gap = false;
         var i = segments.len;
         while (i > 0) {
             i -= 1;
             const seg_w = self.measureSegmentWidth(snap, segments[i]);
-            right_x -= seg_w;
-            if (pending_gap) right_x -= scaled_spacing;
+            reserveSpace(&right_x, seg_w, scaled_spacing, pending_gap);
+
             if (segments[i] == .clock) self.layout_cache.clock_x = right_x;
             self.recordClickBounds(segments[i], right_x, seg_w);
-            const drew_to = self.drawSegmentSafe(snap, segments[i], right_x, null);
-            const drew = drew_to != right_x;
 
-            if (drew and pending_gap) {
-                self.render.dc.fillRect(right_x + seg_w, 0, scaled_spacing, self.render.height, self.render.config.bg);
-            } else if (!drew) {
-                // Segment drew nothing: reclaim its reserved space so the next
-                // segment is not placed in a phantom dead zone.
-                right_x += seg_w;
-                if (pending_gap) right_x += scaled_spacing; // reclaim reserved gap too
+            const drew = self.drawSegmentSafe(snap, segments[i], right_x, null) != right_x;
+            if (drew) {
+                if (pending_gap) paintGap(self, right_x + seg_w, scaled_spacing);
+            } else {
+                reclaimSpace(&right_x, seg_w, scaled_spacing, pending_gap);
             }
             pending_gap = drew;
         }
@@ -704,41 +712,36 @@ fn hasMinimizedSetChanged(
     return false;
 }
 
-/// Captures current WM state into `snap`, diffing against `prev` to set dirty
-/// flags. `forced` (caller must read/clear `pending_force_full_redraw`)
-/// overrides all dirty checks. `prev` is mutable because the "nothing changed"
-/// branch swaps ownership of `window_titles`/`window_geoms` between the two
-/// ping-pong slots instead of duping them — see the swap-site comment.
-fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, forced: bool) !void {
-    const allocator = s.render.allocator;
-    bench.beginTitleCapture();
-    const capture_start_ns: u64 = if (bench.enabled) utils.monotonicNs() else 0;
-    // Consume the title-only redraw request. Unlike `forced` (which clears the
-    // whole bar), it only forces the title pre-fetch to re-run so the
-    // segmented title view picks up new per-window geometry after a swap.
-    const forced_title_redraw = gBar.pending_force_title_redraw;
-    gBar.pending_force_title_redraw = false;
+/// Collect the minimized window set for the current snapshot.
+fn captureMinimizedSet(snap: *BarSnapshot, allocator: std.mem.Allocator) !void {
     snap.minimized_windows.clearRetainingCapacity();
     try minimize.collectMinimizedIntoSet(&snap.minimized_windows, allocator);
+}
 
-    {
-        const ws_state = workspaces.getState() orelse return;
-        snap.workspace_count = @intCast(ws_state.workspaces.len);
-        snap.current_workspace = ws_state.current;
-        snap.is_all_view_active = ws_state.all_view_temp_wins.items.len > 0;
-        try snap.workspace_has_windows.resize(allocator, snap.workspace_count);
-        for (ws_state.workspaces, 0..) |_, i|
-            snap.workspace_has_windows.items[i] = tracking.hasWindowsOnWorkspace(@intCast(i));
-        snap.current_workspace_windows.clearRetainingCapacity();
-        if (ws_state.current < ws_state.workspaces.len) {
-            const cur_bit = tracking.workspaceBit(ws_state.current);
-            for (tracking.allWindows()) |entry| {
-                if (entry.mask & cur_bit != 0)
-                    try snap.current_workspace_windows.append(allocator, entry.win);
-            }
+/// Capture the workspace-derived state: count, current workspace, all-view
+/// mode, per-workspace occupancy, and the current workspace's window list.
+fn captureWorkspaceState(snap: *BarSnapshot, allocator: std.mem.Allocator) !void {
+    const ws_state = workspaces.getState() orelse return;
+    snap.workspace_count = @intCast(ws_state.workspaces.len);
+    snap.current_workspace = ws_state.current;
+    snap.is_all_view_active = ws_state.all_view_temp_wins.items.len > 0;
+    try snap.workspace_has_windows.resize(allocator, snap.workspace_count);
+    for (ws_state.workspaces, 0..) |_, i|
+        snap.workspace_has_windows.items[i] = tracking.hasWindowsOnWorkspace(@intCast(i));
+    snap.current_workspace_windows.clearRetainingCapacity();
+    if (ws_state.current < ws_state.workspaces.len) {
+        const cur_bit = tracking.workspaceBit(ws_state.current);
+        for (tracking.allWindows()) |entry| {
+            if (entry.mask & cur_bit != 0)
+                try snap.current_workspace_windows.append(allocator, entry.win);
         }
     }
+}
 
+/// Capture the focused window and its title. The title is re-fetched from X
+/// only when the focused window or the title changed; otherwise the previous
+/// frame's copy is reused.
+fn captureFocusedTitle(s: *State, snap: *BarSnapshot, prev: *BarSnapshot) void {
     snap.focused_window = focus.getFocused();
     snap.is_title_invalidated = s.title_cache.is_invalidated;
     s.title_cache.is_invalidated = false;
@@ -746,22 +749,22 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
     snap.focused_title.clearRetainingCapacity();
     if (snap.focused_window) |fw| {
         if (snap.focused_window != prev.focused_window or snap.is_title_invalidated) {
-            title.fetchWindowTitleInto(core.getState().conn, fw, &snap.focused_title, allocator) catch {};
+            title.fetchWindowTitleInto(core.getState().conn, fw, &snap.focused_title, s.render.allocator) catch {};
         } else {
-            snap.focused_title.appendSlice(allocator, prev.focused_title.items) catch {};
+            snap.focused_title.appendSlice(s.render.allocator, prev.focused_title.items) catch {};
         }
     }
+}
 
-    // Pre-fetch titles so the segmented-title draw path never issues its own X11
-    // calls. Only run when title state changed; clock/carousel ticks never reach
-    // this function at all, so there's no separate "no-op" case to handle.
-    const title_changed =
-        forced_title_redraw or
-        snap.focused_window != prev.focused_window or
-        snap.is_title_invalidated or
-        !std.mem.eql(u32, snap.current_workspace_windows.items, prev.current_workspace_windows.items) or
-        hasMinimizedSetChanged(&snap.minimized_windows, &prev.minimized_windows);
-    if (title_changed) {
+/// (Re)fetch the batched window titles/geometry — or, when nothing changed,
+/// relay the previous frame's lists between the two ping-pong slots instead
+/// of re-fetching (an O(window count) alloc+free pass saved on redraws where
+/// the titles didn't change, e.g. a workspace-indicator repaint). `prev` is
+/// not read again this frame, and next frame the roles flip, so ownership
+/// relays between the slots with zero allocation traffic until a
+/// `title_data_changed` frame refreshes it for real.
+fn prefetchWindowTitles(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, title_data_changed: bool) void {
+    if (title_data_changed) {
         const focused_idx: ?usize = if (snap.focused_window) |fw|
             std.mem.indexOfScalar(u32, snap.current_workspace_windows.items, fw)
         else
@@ -781,28 +784,51 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
             &snap.window_titles.list,
             &snap.window_geoms,
             snap.window_titles.allocator(),
-            allocator,
+            s.render.allocator,
         );
     } else {
-        // Nothing changed since the previous frame: swapping list ownership
-        // between the two slots avoids an O(window count) alloc+free pass on
-        // redraws where the titles didn't change (e.g. a workspace-indicator
-        // repaint).
-        //
-        // `prev` is not read again this frame, and next frame the roles flip,
-        // so ownership relays between the two slots with zero allocation
-        // traffic until a title_changed frame refreshes it for real.
         std.mem.swap(WindowTitles, &snap.window_titles, &prev.window_titles);
         std.mem.swap(std.ArrayListUnmanaged(utils.Rect), &snap.window_geoms, &prev.window_geoms);
     }
+}
 
-    snap.title_list_refreshed = title_changed;
+/// Captures current WM state into `snap`, diffing against `prev` to set dirty
+/// flags. `forced` (caller must read/clear `pending_force_full_redraw`)
+/// overrides all dirty checks. `prev` is mutable because the "nothing changed"
+/// branch swaps ownership of `window_titles`/`window_geoms` between the two
+/// ping-pong slots instead of duping them — see `prefetchWindowTitles`.
+fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, forced: bool) !void {
+    const allocator = s.render.allocator;
+    bench.beginTitleCapture();
+    const capture_start_ns: u64 = if (bench.enabled) utils.monotonicNs() else 0;
+    // Consume the title-only redraw request. Unlike `forced` (which clears the
+    // whole bar), it only forces the title pre-fetch to re-run so the
+    // segmented title view picks up new per-window geometry after a swap.
+    const forced_title_redraw = gBar.pending_force_title_redraw;
+    gBar.pending_force_title_redraw = false;
+
+    try captureMinimizedSet(snap, allocator);
+    try captureWorkspaceState(snap, allocator);
+    captureFocusedTitle(s, snap, prev);
+
+    // Pre-fetch titles so the segmented-title draw path never issues its own
+    // X11 calls. Only run when title state changed; clock/carousel ticks never
+    // reach this function at all, so there's no separate "no-op" case.
+    const title_data_changed =
+        forced_title_redraw or
+        snap.focused_window != prev.focused_window or
+        snap.is_title_invalidated or
+        !std.mem.eql(u32, snap.current_workspace_windows.items, prev.current_workspace_windows.items) or
+        hasMinimizedSetChanged(&snap.minimized_windows, &prev.minimized_windows);
+    prefetchWindowTitles(s, snap, prev, title_data_changed);
+
+    snap.title_list_refreshed = title_data_changed;
     snap.is_full_redraw = forced or (snap.workspace_count != prev.workspace_count);
     snap.is_workspace_dirty = snap.is_full_redraw or
         snap.current_workspace != prev.current_workspace or
         snap.is_all_view_active != prev.is_all_view_active or
         !std.mem.eql(bool, snap.workspace_has_windows.items, prev.workspace_has_windows.items);
-    snap.is_title_dirty =
+    const title_visual_dirty =
         forced_title_redraw or
         prompt.isActive() or
         snap.focused_window != prev.focused_window or
@@ -810,6 +836,7 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
         !std.mem.eql(u8, snap.focused_title.items, prev.focused_title.items) or
         !std.mem.eql(u32, snap.current_workspace_windows.items, prev.current_workspace_windows.items) or
         hasMinimizedSetChanged(&snap.minimized_windows, &prev.minimized_windows);
+    snap.is_title_dirty = title_visual_dirty;
 
     if (bench.enabled) bench.reportTitleCapture(
         utils.monotonicNs() -| capture_start_ns,

@@ -318,11 +318,7 @@ pub fn drawCarouselTick(
     const prev_off = e.pixel_offset;
     const off = advanceCarouselOffset(e, utils.monotonicNs());
     if (off == prev_off) return true;
-    e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, seg_x, off, seg_w);
-    // Skip the flush while the main thread holds the X server grab: xcb_flush
-    // would release grab-batch requests mid-grab, splitting one atomic frame.
-    // The enqueued copy_area rides along with the closing ungrabAndFlush.
-    if (!utils.isGrabActive()) dc.blitAndFlush(seg_x, seg_w);
+    blitOneFrame(e, dc, e.geom);
     return true;
 }
 
@@ -342,10 +338,7 @@ pub fn drawSegCarouselTickAuto(dc: *drawing.DrawContext, accent: u32) bool {
     const off = advanceCarouselOffset(e, utils.monotonicNs());
     // See drawCarouselTick: identical-offset frames need no blit or flush.
     if (off == prev_off) return true;
-    e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, e.geom.seg_x, off, e.geom.seg_w);
-    // See drawCarouselTick: skip the flush inside an X server grab so the
-    // shared output buffer is not released mid-grab.
-    if (!utils.isGrabActive()) dc.blitAndFlush(e.geom.seg_x, e.geom.seg_w);
+    blitOneFrame(e, dc, e.geom);
     return true;
 }
 
@@ -390,7 +383,17 @@ pub fn drawScrollingTitle(
         return;
     }
 
-    _ = try commitCarouselFrame(&render.single, dc, text, text_w, bg, fg, y, geom, window, title_invalidated, false);
+    _ = try commitCarouselFrame(&render.single, dc, .{
+        .text = text,
+        .text_w = text_w,
+        .bg = bg,
+        .fg = fg,
+        .baseline_y = y,
+        .geom = geom,
+        .window = window,
+        .title_invalidated = title_invalidated,
+        .force_rebuild = false,
+    });
 }
 
 // Public API — segmented carousel
@@ -424,7 +427,17 @@ pub fn drawSegmentedCarousel(
     // Consume the focus-change signal atomically.
     const force_rebuild = focus_signal.is_invalidated.swap(false, .acq_rel);
 
-    const rebuilt = try commitCarouselFrame(&render.seg, dc, text, text_w, accent, text_fg, baseline_y, geom, window, title_invalidated, force_rebuild);
+    const rebuilt = try commitCarouselFrame(&render.seg, dc, .{
+        .text = text,
+        .text_w = text_w,
+        .bg = accent,
+        .fg = text_fg,
+        .baseline_y = baseline_y,
+        .geom = geom,
+        .window = window,
+        .title_invalidated = title_invalidated,
+        .force_rebuild = force_rebuild,
+    });
     // Publish the window atomically after a rebuild so notifyFocusChanged on the
     // main thread can check it without touching render.seg.
     if (rebuilt) focus_signal.seg_window.store(window, .release);
@@ -432,6 +445,19 @@ pub fn drawSegmentedCarousel(
 }
 
 // Private — shared rebuild/recolour/blit step
+
+/// Copy the entry's current frame into the bar's offscreen pixmap and flush
+/// it to screen.
+///
+/// The flush is skipped while the main thread holds the X server grab:
+/// xcb_flush would release grab-batch requests mid-grab, splitting one atomic
+/// frame. The enqueued copy_area rides along with the closing ungrabAndFlush.
+/// Used by every blit site (tick fast-paths and rebuild/colour commits) so
+/// the grab handling stays consistent.
+fn blitOneFrame(e: *CarouselEntry, dc: *drawing.DrawContext, geom: SegmentGeometry) void {
+    e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, geom.seg_x, e.pixel_offset, geom.seg_w);
+    if (!utils.isGrabActive()) dc.blitAndFlush(geom.seg_x, geom.seg_w);
+}
 
 /// Publish a freshly-built entry: set the atomic `active` mirror and wake the
 /// carousel thread so the scroll starts on the next refresh, not at the end of
@@ -448,13 +474,10 @@ inline fn publishActive() void {
     }
 }
 
-/// Rebuilds `slot`'s pixmap from scratch when stale (window, title, cycle
-/// width, geometry changed — or `force_rebuild`), or re-renders in place on a
-/// colour-only change, then advances and blits one frame. Returns true when
-/// rebuilt from scratch.
-fn commitCarouselFrame(
-    slot: *?CarouselEntry,
-    dc: *drawing.DrawContext,
+/// The render parameters for one carousel frame commit. Bundled so
+/// commitCarouselFrame takes three arguments instead of eleven, and so the two
+/// call sites (single-window and segmented) can't reorder/omit arguments.
+const CarouselFrame = struct {
     text: []const u8,
     text_w: u16,
     bg: u32,
@@ -464,39 +487,48 @@ fn commitCarouselFrame(
     window: ?u32,
     title_invalidated: bool,
     force_rebuild: bool,
+};
+
+/// Rebuilds, recolours, or blits the current frame into `slot` as needed and
+/// flushes it to the screen. Returns true when a full pixmap rebuild was done,
+/// false when the existing frame was recoloured/blitted in place.
+fn commitCarouselFrame(
+    slot: *?CarouselEntry,
+    dc: *drawing.DrawContext,
+    frame: CarouselFrame,
 ) !bool {
-    const cycle_w: u16 = text_w + carousel_gap_px;
+    const cycle_w: u16 = frame.text_w + carousel_gap_px;
 
     // Determine whether a full pixmap rebuild is needed (geometry/identity/
     // focus changed) vs. an in-place colour update vs. no action.
-    const geom_stale = force_rebuild or if (slot.*) |*e| entryStale(e, window, title_invalidated, cycle_w, geom) else true;
+    const geom_stale = frame.force_rebuild or if (slot.*) |*e| entryStale(e, frame.window, frame.title_invalidated, cycle_w, frame.geom) else true;
 
     if (geom_stale) {
         // Full rebuild: build the new pixmap before freeing the old one so a
         // failed build keeps the previous pixmap live (the scroll continues on
         // the old frame) instead of dropping to a blank segment.
-        const new_entry = try buildCarouselEntry(dc, text, bg, fg, baseline_y, geom, cycle_w, window);
+        const new_entry = try buildCarouselEntry(dc, frame.text, frame.bg, frame.fg, frame.baseline_y, frame.geom, cycle_w, frame.window);
         if (slot.*) |*old| old.cp.deinit();
         slot.* = new_entry;
         publishActive();
         const e = &slot.*.?;
-        const off = advanceCarouselOffset(e, e.last_ns);
-        e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, geom.seg_x, off, geom.seg_w);
+        _ = advanceCarouselOffset(e, e.last_ns);
+        blitOneFrame(e, dc, frame.geom);
         return true;
     }
 
     const e = &slot.*.?;
 
-    if (e.last_bg != bg or e.last_fg != fg) {
+    if (e.last_bg != frame.bg or e.last_fg != frame.fg) {
         // Colour-only change: re-render into the existing pixmap without
         // freeing or reallocating it, preserving the scroll position.
-        try e.cp.render(dc, text, bg, fg, baseline_y, leftPadOf(geom), cycle_w);
-        e.last_bg = bg;
-        e.last_fg = fg;
+        try e.cp.render(dc, frame.text, frame.bg, frame.fg, frame.baseline_y, leftPadOf(frame.geom), cycle_w);
+        e.last_bg = frame.bg;
+        e.last_fg = frame.fg;
     }
 
-    const off = advanceCarouselOffset(e, utils.monotonicNs());
-    e.cp.blitFrame(dc.offscreen_pixmap, dc.gc, geom.seg_x, off, geom.seg_w);
+    _ = advanceCarouselOffset(e, utils.monotonicNs());
+    blitOneFrame(e, dc, frame.geom);
     return false;
 }
 

@@ -1189,8 +1189,7 @@ fn sendConfigureNotify(win: u32, geom: core.WindowGeometry) void {
     _ = xcb.xcb_send_event(core.getState().conn, 0, win, xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY, @ptrCast(&ev));
 }
 
-/// Synthesize a ConfigureNotify with the window's current geometry, cheapest
-/// source first:
+/// Resolve the window's current geometry, cheapest source first:
 ///
 ///   1. Tiling cache — zero round-trips (always current after a retile).
 ///   2. Fullscreen — geometry is fixed at (0, 0, screen_w, screen_h, bw=0);
@@ -1200,29 +1199,29 @@ fn sendConfigureNotify(win: u32, geom: core.WindowGeometry) void {
 ///      for video players that poll their size continuously.
 ///   3. True cache miss — one blocking xcb_get_geometry. Floating windows
 ///      never retiled; a fallback, not a hot path.
-fn sendSyntheticConfigureNotify(win: u32) void {
+///
+/// Returns null when even the fallback fails (window gone).
+fn resolveConfigureGeometry(win: u32) ?core.WindowGeometry {
     if (tiling.getWindowGeom(win)) |rect| {
         const border: u16 = if (tiling.getStateOpt()) |s| s.config.border_width else 0;
-        sendConfigureNotify(win, .{
+        return .{
             .x = rect.x,
             .y = rect.y,
             .width = rect.width,
             .height = rect.height,
             .border_width = border,
-        });
-        return;
+        };
     }
 
     if (fullscreen.isFullscreen(win)) {
         const screen = core.getState().screen;
-        sendConfigureNotify(win, .{
+        return .{
             .x = 0,
             .y = 0,
             .width = @intCast(screen.width_in_pixels),
             .height = @intCast(screen.height_in_pixels),
             .border_width = 0,
-        });
-        return;
+        };
     }
 
     const conn = core.getState().conn;
@@ -1230,15 +1229,20 @@ fn sendSyntheticConfigureNotify(win: u32) void {
         conn,
         xcb.xcb_get_geometry(conn, win),
         null,
-    ) orelse return;
+    ) orelse return null;
     defer std.c.free(reply);
-    sendConfigureNotify(win, .{
+    return .{
         .x = reply.*.x,
         .y = reply.*.y,
         .width = reply.*.width,
         .height = reply.*.height,
         .border_width = reply.*.border_width,
-    });
+    };
+}
+
+fn sendSyntheticConfigureNotify(win: u32) void {
+    const geom = resolveConfigureGeometry(win) orelse return;
+    sendConfigureNotify(win, geom);
 }
 
 pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) void {
