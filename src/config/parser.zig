@@ -26,12 +26,10 @@ pub const Value = union(enum) {
     color: u32,
     scalable: ScalableValue,
 
-    /// Duplicate keys are stored as a flat array (see `accumulate`), so each
-    /// `.array` case below implements the "later declaration wins" half of the
-    /// merge contract — the latest value is the LAST element, array consumers
-    /// see the full accumulation, and a repeated scalar key never silently
-    /// falls back to its struct default. Not `inline`: these recurse once for
-    /// an accumulated duplicate array, which the compiler rejects inline.
+    /// Duplicate keys accumulate into a flat array (see `accumulate`), so
+    /// `.array` cases below implement "later declaration wins" — the latest
+    /// value is the LAST element, array consumers see the full accumulation.
+    /// Not `inline`: recursion into an accumulated duplicate array is rejected.
     pub fn asInt(self: Value) ?i64 {
         return switch (self) {
             .integer => |i| i,
@@ -98,11 +96,10 @@ pub const Section = struct {
     /// interpretation. Populated (best-effort — alloc failures are swallowed)
     /// so config.zig can warn about keys no parse function recognises.
     consumed: std.StringHashMap(void),
-    /// Document-order key list (insertion order). `pairs` is a hashmap, so
-    /// iterating it directly is nondeterministic across runs (per-process
-    /// random seed) — `[binds]`, `[workspace.rules]` etc. use `orderedIterator`
-    /// instead, so duplicate-effective bindings resolve deterministically
-    /// (first in the file wins). Holds the same allocations `pairs` owns.
+    /// Document-order key list (insertion order); `pairs` is a hashmap, so
+    /// direct iteration is nondeterministic (per-process random seed).
+    /// `orderedIterator` gives deterministic, first-in-file-wins resolution
+    /// for `[binds]`, `[workspace.rules]`, etc. Holds `pairs`' allocations.
     keys_in_order: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Section {
@@ -266,21 +263,15 @@ fn ensureArray(allocator: std.mem.Allocator, old_val: *Value) !void {
     old_val.* = .{ .array = arr };
 }
 
-/// Accumulates `incoming` into the existing value at `old_val`.
-///
-/// Shared by the single-file duplicate-key path (`accumulateScalar`) and the
-/// multi-file merge path (`mergeIntoArray`): a repeated scalar becomes a flat
-/// array and an array-valued `incoming` is flattened into it, so a key
-/// declared twice produces the same shape whether within one file or across
-/// two included files. Scalar getters (asInt/asBool/...) then resolve to the
-/// LAST element ("later files win on scalar conflicts"), while asArray returns
-/// the full flat array so keybinds, `include`, `layouts`, etc. chain across
-/// declarations.
-///
-/// With `move` set, `incoming` is uniquely owned (freshly parsed in one file)
-/// and its elements transfer by ownership; with `move` clear they are
-/// deep-copied so `incoming` (borrowed from another document) stays owned.
-/// Takes ownership of `incoming`; `old_val` is updated in place.
+/// Accumulates `incoming` into `old_val`, shared by the single-file
+/// duplicate-key path (`accumulateScalar`) and the multi-file merge path
+/// (`mergeIntoArray`): a repeated scalar becomes a flat array and an
+/// array-valued `incoming` is flattened into it, so a key declared twice has
+/// the same shape in one file as across two. Scalar getters resolve to the
+/// LAST element (later files win); asArray sees the full accumulation so
+/// keybinds, `include`, `layouts`, etc. chain. With `move`, `incoming` is
+/// uniquely owned and elements transfer by ownership; otherwise they're
+/// deep-copied so the borrowed `incoming` stays owned.
 fn accumulate(comptime move: bool, allocator: std.mem.Allocator, old_val: *Value, incoming: Value) !void {
     try ensureArray(allocator, old_val);
     if (incoming == .array) {
@@ -323,11 +314,10 @@ fn mergeIntoArray(allocator: std.mem.Allocator, old_val: *Value, incoming: Value
     return accumulate(false, allocator, old_val, incoming);
 }
 
-/// Merges the key-value pairs of `src` into `dst`. Duplicate keys accumulate
-/// into arrays, exactly as the parser does within one file — so a keybind in
-/// two config files runs both actions. Scalar reads resolve to the last
-/// declaration (later file wins); array reads see the full accumulation.
-/// `src` is not modified; all new data is freshly allocated.
+/// Merges `src`'s pairs into `dst`; duplicate keys accumulate into arrays,
+/// exactly as within one file — a keybind in two files runs both actions.
+/// Scalar reads resolve to the last declaration (later file wins); array
+/// reads see the full accumulation; `src` is unmodified.
 fn mergeSectionsInto(allocator: std.mem.Allocator, dst: *Section, src: *const Section) !void {
     var iter = src.pairs.iterator();
     while (iter.next()) |entry| {
@@ -421,8 +411,7 @@ const Parser = struct {
     /// Current nested-array depth, checked against MAX_ARRAY_DEPTH so a
     /// pathologically deep literal (`[[[[[...]]]]]`) can't exhaust the stack.
     /// Config is locally authored and trusted, so this is a defensive
-    /// backstop (like the MAX_FILE_BYTES / fc-list-output caps), not a
-    /// response to observed input.
+    /// backstop, not a response to observed input.
     array_depth: usize = 0,
     /// Set while parsing array elements so parseBareValues parses only a
     /// single bare token per call — the `,`/`]` separators belong to
@@ -673,23 +662,20 @@ const Parser = struct {
             return .{ .scalable = ScalableValue.percentage(f) };
         }
 
-        // Bare decimal literal (no '%' suffix), e.g. `border_width = 2.5`:
-        // parsed as an absolute ScalableValue so ScalableValue fields no
-        // longer keep their struct default just for lacking a '%'. Whole
-        // numbers are left to the integer branch below so asInt()/asBool()
-        // consumers are unaffected.
+        // Bare decimal (no '%' suffix), e.g. `border_width = 2.5`: parsed as
+        // an absolute ScalableValue so such fields don't keep their struct
+        // default for lacking a '%'. Whole numbers stay integers so
+        // asInt()/asBool() consumers are unaffected.
         if (looksLikeDecimal(raw)) {
             if (std.fmt.parseFloat(f32, raw)) |f| {
                 if (std.math.isFinite(f)) return .{ .scalable = ScalableValue.absolute(f) };
             } else |_| {}
         }
 
-        // Bare colors require an explicit '#' or '0x' prefix. The old hex-only
-        // sniffing meant any all-a-f identifier ("dead", "cafe", "face")
-        // parsed as `.color` instead of `.string`, silently breaking
-        // asString()/ACTION_MAP.get() lookups for layout/variant/segment
-        // names. Unprefixed hex now falls through to `.string` like any other
-        // unrecognized bare token.
+        // Bare colors require an explicit '#' or '0x' prefix: the old
+        // hex-only sniffing parsed all-a-f identifiers ("dead", "cafe") as
+        // `.color` instead of `.string`, breaking asString()/ACTION_MAP
+        // lookups for layout/variant/segment names.
         if (raw[0] == '#') {
             // A leading '#' marks the token as a color, not a comment. If it
             // does not form a valid color the line is invalid — the same
@@ -708,14 +694,11 @@ const Parser = struct {
         }
     }
 
-    /// Parses a bare (unquoted) value: one token is a scalar, two or more
-    /// (whitespace/commas) form an array:
-    ///
-    ///     segments = workspaces layout clock   → ["workspaces","layout","clock"]
-    ///     icons = #ac3232, #52263e             → [0xac3232, 0x52263e]
-    ///
-    /// Inside `[...]` only one token is consumed (commas/bracket belong to
-    /// parseArray); semicolons are likewise left to the pair parser.
+    /// Parses a bare (unquoted) value: one token is a scalar; two or more
+    /// (whitespace/commas) form an array, e.g. `segments = workspaces layout
+    /// clock` → ["workspaces","layout","clock"] or `icons = #ac3232, #52263e`
+    /// → [0xac3232, 0x52263e]. Inside `[...]` one token is consumed (commas
+    /// belong to parseArray); semicolons are likewise left to the pair parser.
     fn parseBareValues(self: *Parser) ParseError!Value {
         var items: std.ArrayList(Value) = .empty;
         errdefer {
@@ -813,9 +796,8 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
 
             if (doc.sections.getPtr(section_name)) |existing| {
                 // Duplicate section header: keep filling the existing section
-                // rather than discarding the block — duplicate keys accumulate
-                // exactly as if the blocks had been one section, consistent
-                // with the cross-file merge path.
+                // — duplicate keys accumulate as if the blocks were one
+                // section, consistent with the cross-file merge path.
                 allocator.free(section_name);
                 current_section = existing;
             } else {
@@ -842,15 +824,13 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
 
             if (current_section.pairs.getPtr(kv[0])) |old| {
                 // Duplicate key: accumulate both values into an array rather
-                // than overwriting, letting the user bind multiple actions to
-                // one keybind by repeating the key:
+                // than overwriting, so a keybind can bind multiple actions:
                 //
                 //   Mod+Shift+1 = "move_to_workspace_1"
                 //   Mod+Shift+1 = "toggle_tag_1"
                 //
-                // parseKeybindings handles array values as sequences; scalar
-                // reads of a repeated key resolve to the last declaration
-                // (later-wins), e.g. a duplicated `master_width`.
+                // parseKeybindings treats array values as sequences; scalar
+                // reads of a repeated key resolve to the last declaration.
                 try accumulateScalar(allocator, old, kv[1]);
                 allocator.free(kv[0]);
             } else {

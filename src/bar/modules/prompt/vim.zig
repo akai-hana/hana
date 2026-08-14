@@ -52,9 +52,8 @@ const DotKind = enum { none, direct, op_motion, op_line, insert_session };
 
 /// Record of the last atomic change for `.` repeat.
 ///
-/// `dot_insert_buf` / `dot_insert_len` live directly on `VimState` (see
-/// below) so that the allocation is not lost when `vs.dot` is overwritten
-/// with a union literal.
+/// `dot_insert_buf`/`dot_insert_len` live on `VimState` (below) so the
+/// allocation survives `vs.dot` being overwritten with a new union literal.
 const DotRecord = union(DotKind) {
     none: void,
 
@@ -106,9 +105,8 @@ pub const UndoEntry = struct {
 
 /// A fixed-capacity ring-buffer stack of `UndoEntry` snapshots.
 ///
-/// `entries` is a heap-allocated slice (length = capacity).
-/// `top`     is the number of valid entries currently stored.
-/// `base`    is the index of the oldest entry (advances when the ring is full).
+/// `entries` is a heap-allocated slice (length = capacity); `top` is the
+/// number of valid entries; `base` is the oldest entry (advances when full).
 pub const RingStack = struct {
     entries: []UndoEntry = &.{},
     top: usize = 0,
@@ -117,10 +115,9 @@ pub const RingStack = struct {
 
 // Internal types
 
-/// What the engine is waiting for between keystrokes.
-/// Exactly one state is active at a time; the union makes that exclusivity structural.
-/// Adding a new pending state requires one new tag here — not a new boolean,
-/// a new `if` block, and a new bail-out condition in `resolveMotionKey`.
+/// What the engine is waiting for between keystrokes; the union makes the
+/// "exactly one" exclusivity structural, so a new pending state is one new tag
+/// rather than new booleans, `if` blocks, and bail-out conditions.
 const Awaiting = union(enum) {
     none,
     find_char: u8, // the f/F/t/T kind byte
@@ -436,11 +433,9 @@ fn handleReplaceCharPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     return .none;
 }
 
-/// Handles input while collecting an ex-command after ':'.
-///   :w  -> spawn_keep (execute, keep prompt open)   :q  -> deactivate (cancel)
-///   :wq -> spawn      (execute, close)              :x  -> spawn      (execute, close)
-/// Escape cancels; any unrecognised command is silently discarded.
-/// Call only when vs.pending.awaiting == .colon_cmd.
+/// Handles input while collecting an ex-command after ':' — :w → spawn_keep,
+/// :q → deactivate, :wq/:x → spawn; Escape cancels, unknown commands are
+/// silently discarded. Call only when vs.pending.awaiting == .colon_cmd.
 fn handleColonCmdPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     switch (sym) {
         XK_Escape => {
@@ -639,11 +634,10 @@ fn execNormalKey(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) Action {
 
 /// Handles a key press in normal mode. Returns the Action the caller should take.
 ///
-/// Reads top-to-bottom as the precedence order of normal mode: a pending
-/// single-char target (r{c}, :cmd, text-object, mark) claims the very next
-/// key outright; otherwise a motion is tried; otherwise a prefix key (d/c/y,
-/// i/a after an operator, r/m/') arms pending state for the *next* key;
-/// otherwise the key is a bare command handled by execNormalKey.
+/// Reads top-to-bottom as normal-mode precedence: a pending single-char target
+/// (r{c}, :cmd, text-object, mark) claims the next key; else a motion is
+/// tried; else a prefix key (d/c/y, i/a after an operator, r/m/') arms state
+/// for the *next* key; else execNormalKey handles it as a bare command.
 pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     if (vs.pending.awaiting == .replace_char) return handleReplaceCharPending(vs, sym);
     if (vs.pending.awaiting == .colon_cmd) return handleColonCmdPending(vs, sym);
@@ -839,13 +833,10 @@ fn resolveGPrefixPos(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) ?usize {
 }
 
 /// Result returned by `resolveMotionKey` when the key was handled in some way.
-/// `mr == null` means the key was consumed (digit accumulated, prefix armed,
-/// or `;`/`,` with no prior find) but produced no motion — the caller just
-/// returns `.none`. `mr != null` carries the resolved motion plus `dot`, an
-/// already-assembled `op_motion` record the caller can store verbatim.
-/// `dot_eligible` is false for `;`/`,` repeats, which do not update the dot record.
-/// A bare `null` from `resolveMotionKey` itself (no `.?`) means the key was
-/// not recognised at all and the caller should keep handling it.
+/// `mr == null`: key consumed (digit, prefix arm, `;`/`,` with no find) but no
+/// motion — caller returns `.none`. `mr != null`: resolved motion plus an
+/// already-assembled `op_motion` `dot` record (store verbatim). `dot_eligible`
+/// is false for `;`/`,` repeats. Bare `null` = key not recognised at all.
 const MotionKeyResult = struct {
     mr: ?MotionResult = null,
     op: u8 = 0,
@@ -853,17 +844,13 @@ const MotionKeyResult = struct {
     dot_eligible: bool = true,
 };
 
-/// Shared motion-key resolution for normal and visual mode.
-/// Handles: pending find, pending g, digit accumulation, ;/,, simple motions,
-/// and prefix arming (f/F/t/T/g).
+/// Shared motion-key resolution for normal and visual mode: pending find,
+/// pending g, digit accumulation, ;/,, simple motions, and prefix arming.
 ///
-/// Captures the current pending operator fields, calls `resetPendingCmd`, and
-/// assembles the base `op_motion` dot record from those fields plus
-/// `motion_sym` (pass 0 when the caller will fill in `find_kind`/`find_ch`
-/// instead). Every arm of `resolveMotionKey` that produces a motion follows
-/// exactly this pattern; the helper ensures the capture, reset, and dot-record
-/// assembly always happen together. Callers only need to set the one or two
-/// fields that differ (e.g. `result.dot.op_motion.has_g_prefix`) before returning.
+/// Captures the pending operator fields, resets `pending`, and assembles the
+/// base `op_motion` dot record from them plus `motion_sym` (0 when the caller
+/// fills in `find_kind`/`find_ch`). All motion-producing arms follow this one
+/// pattern; callers only set the fields that differ (e.g. `has_g_prefix`).
 inline fn commitMotion(vs: *VimState, mr: MotionResult, motion_sym: xcb.xcb_keysym_t) MotionKeyResult {
     const op = vs.pending.op;
     const opc = vs.pending.op_count;
@@ -876,11 +863,9 @@ inline fn commitMotion(vs: *VimState, mr: MotionResult, motion_sym: xcb.xcb_keys
     };
 }
 
-/// Returns a result with `mr` set if a motion was resolved (`pending` already
-/// reset; caller applies the motion then returns `.none`), a result with
-/// `mr == null` if the key was absorbed without producing a motion (digit or
-/// prefix arm; `pending` not reset), or plain `null` if the key was not
-/// handled at all (normal-mode-specific pending state active, or unrecognised).
+/// Returns: `mr` set = motion resolved (`pending` reset; caller applies it),
+/// `mr == null` = key absorbed without motion (digit/prefix arm), or plain
+/// `null` = not handled (normal-mode pending state active, or unrecognised).
 fn resolveMotionKey(vs: *VimState, sym: xcb.xcb_keysym_t) ?MotionKeyResult {
     // Pending find char.
     if (vs.pending.awaiting == .find_char) {
@@ -1425,9 +1410,8 @@ fn resolveTextObject(vs: *VimState, kind: u8, delim: u8) ?MotionResult {
         '(', ')', 'b' => textObjBracket(vs, '(', ')', inner),
         '[', ']' => textObjBracket(vs, '[', ']', inner),
         '{', '}', 'B' => textObjBracket(vs, '{', '}', inner),
-        // '<' and '>' are treated symmetrically (same open/close pair) so that
-        // `i<` and `a<` select tag-like content.  Note that in a single-line
-        // prompt buffer these are rare; the behaviour matches vim's `it`/`at`
+        // '<' and '>' share an open/close pair so `i<`/`a<` select tag-like
+        // content; rare in a single-line prompt, this mirrors vim's `it`/`at`
         // in spirit without full XML awareness.
         '<', '>' => textObjBracket(vs, '<', '>', inner),
         else => null,

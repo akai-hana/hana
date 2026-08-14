@@ -96,15 +96,11 @@ const PromptState = struct {
     /// by `consumeRedrawRequest` to avoid a circular import between prompt ↔ bar.
     redraw_pending: bool = false,
 
-    // Layout cache: pixel width of the text before the caret, the block-caret
-    // width, and the scroll offset that keeps the caret visible.  Recomputed in
-    // `drawActive` only when `layout_dirty` is set (any keypress, activate,
-    // spawn_keep, or a bar-height change).  The caret-blink animation redraws an
-    // identical frame every cursor_blink_ms, so blink ticks reuse these cached
-    // values instead of re-running ~20 Pango shape passes per tick.  Font
-    // metrics, mode/prompt widths, and the scroll region are constant between
-    // keypresses, so the cache only needs invalidating when the buffer, cursor,
-    // mode, or bar height changes.
+    // Layout cache: pixel width of the pre-caret text, the block-caret width,
+    // and the scroll offset keeping the caret visible. Recomputed in
+    // `drawActive` only when `layout_dirty` is set (keypress, activate,
+    // spawn_keep, or bar-height change) — the caret-blink redraws an identical
+    // frame each blink, so ticks reuse these instead of ~20 Pango shape passes.
     cached_pre_w: u16 = 0,
     cached_caret_w: u16 = 0,
     cached_scroll_x: u16 = 0,
@@ -121,12 +117,10 @@ pub fn isActive() bool {
     return g.is_active;
 }
 
-/// Returns the milliseconds until the next blink toggle, or -1 if the cursor
-/// blink animation is not running.  Pass this (combined with the clock timeout)
-/// to poll() so the event loop wakes up exactly when a redraw is needed.
-/// Only returns a non-negative value when the prompt is active in insert mode
-/// or colon-command mode, signalling that the bar should schedule a periodic
-/// redraw for the cursor blink animation.
+/// Milliseconds until the next blink toggle, or -1 when the blink animation
+/// isn't running. Pass this (with the clock timeout) to poll() so the loop
+/// wakes exactly when a redraw is needed. Non-negative only in insert or
+/// colon-command mode.
 pub fn blinkPollTimeoutMs() i32 {
     if (!g.is_active) return -1;
     if (g.vim_state.mode == .insert or (core.getState().config.bar.vim_mode and vim.colonInput(&g.vim_state) != null))
@@ -180,11 +174,9 @@ pub fn toggle() void {
     if (g.is_active) deactivate() else activate();
 }
 
-/// Query the X pointer and decide what close_window should do while the
-/// prompt is active:
-///   • cursor over bar window → kill the prompt, swallow the event
-///   • cursor over a program  → let WM close that window (return false)
-///   • cursor over nothing    → swallow the event silently, do nothing
+/// Query the X pointer and decide what close_window should do while the prompt
+/// is active: cursor over the bar → kill the prompt; over a program → let the
+/// WM close it (false); over nothing → swallow the key silently.
 fn closeWindowOrPromptUnderCursor() bool {
     const cs = core.getState();
     const ptr_cookie = xcb.xcb_query_pointer(cs.conn, cs.root);
@@ -208,17 +200,13 @@ fn closeWindowOrPromptUnderCursor() bool {
 
 /// Complete key-event routing entry point called by `input.zig`.
 ///
-/// Owns all prompt-specific routing decisions so `input.zig` stays free of
-/// prompt internals:
-///   - Returns false immediately when the prompt is inactive, so the caller
-///     falls through to normal keybind dispatch without any special-casing.
-///   - If the key is bound to `close_window`, checks where the cursor is:
-///     over the bar kills the prompt, over a window lets the WM close it,
-///     over the desktop swallows the key silently.
-///   - Otherwise delegates to `handleKeyPress` which processes the raw key.
+/// Keeps all prompt-specific routing out of `input.zig`: returns false
+/// immediately when inactive (normal keybind dispatch), routes `close_window`
+/// by cursor position (bar → kill prompt, window → WM close, desktop →
+/// swallow), and otherwise delegates to `handleKeyPress`.
 ///
 /// `bound_action` is whatever the keybind map resolved for this key; pass
-/// `state.map.get(key)` directly — null is fine when there is no binding.
+/// `state.map.get(key)` directly — null is fine when there's no binding.
 pub fn handlePromptKeypress(
     event: *const xcb.xcb_key_press_event_t,
     bound_action: ?*const types.Action,
@@ -226,10 +214,9 @@ pub fn handlePromptKeypress(
     if (!g.is_active) return false;
 
     // When the mod key (Super) is held and a WM action is bound to this key,
-    // let the normal keybind dispatcher handle it so the user can perform
-    // window-manager operations without cancelling the prompt.
-    // The close_window action is still routed through here so it can dismiss
-    // the prompt — but only when the cursor is over the bar itself.
+    // let the normal dispatcher run so WM operations don't cancel the prompt;
+    // close_window is still routed here to dismiss the prompt — but only when
+    // the cursor is over the bar itself.
     if (bound_action) |action| {
         if (action.* == .close_window) return closeWindowOrPromptUnderCursor();
         if (event.state & xcb.XCB_MOD_MASK_4 != 0)
@@ -243,20 +230,15 @@ pub fn handlePromptKeypress(
 fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
     if (!g.is_active) return false;
 
-    // Only process XCB_KEY_PRESS events.  xcb_key_press_event_t and
-    // xcb_key_release_event_t share the same struct layout, so the event loop
-    // can (and sometimes does) cast a release event and dispatch it here.
+    // Only process XCB_KEY_PRESS events — press and release events share the
+    // same struct layout, so the loop sometimes casts a release and dispatches
+    // it here. Without this guard the Escape release is a trap: handleInsert
+    // switches to .normal on press, then handleNormal sees XK_Escape with a
+    // clean pending and deactivates — and the prompt is gone before the next
+    // editing key arrives.
     //
-    // Without this guard the XCB_KEY_RELEASE for Escape is a fatal trap:
-    //   1. XCB_KEY_PRESS  (Escape): handleInsert switches mode to .normal ✓
-    //   2. XCB_KEY_RELEASE(Escape): handleNormal sees XK_Escape with a clean
-    //      pending (op=0, count=0) -> returns .deactivate -> prompt closes.
-    // The user then presses 'b' or an arrow key to start editing in normal
-    // mode, but the prompt is already gone — so those keys get the blame.
-    //
-    // Returning true (not false) for non-press events ensures the caller
-    // considers the event consumed and does not fall through to WM keybind
-    // dispatch for the release.
+    // Returning true (not false) keeps the release from falling through to WM
+    // keybind dispatch.
     if (event.response_type & 0x7F != xcb.XCB_KEY_PRESS) return true;
 
     const syms = g.key_syms orelse return false;
@@ -269,17 +251,12 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
 
     // Drop bare modifier key events (Shift, Ctrl, Alt, Super, Meta, Hyper …).
     //
-    // XCB delivers a XCB_KEY_PRESS event for every key including modifiers, so
-    // pressing Shift before typing '$' or '^' fires a key event with keysym
-    // 0xFFE1/0xFFE2 (XK_Shift_L/R) before the '$'/'^' event arrives.  If that
-    // event reaches handleNormal it falls through to resetPendingCmd(), clearing
-    // any pending operator ('d', 'c', 'y') or accumulated count — which is why
-    // operator+motion sequences that require Shift (d$, d^, dW, dE, c$, y^,
-    // visual 3W, …) silently turn into bare cursor moves instead of edits.
+    // XCB delivers a key event for every key including modifiers, so Shift
+    // before '$'/'^' fires XK_Shift_L/R first. Reaching handleNormal, that
+    // falls through to resetPendingCmd(), clearing any pending operator/count —
+    // why d$, d^, c$, y^, visual 3W, etc. silently become bare cursor moves.
     //
-    // Modifier keysyms occupy the contiguous range 0xFFE1–0xFFEE; nothing in
-    // that band is a valid editing key (editing specials such as Escape/Return/
-    // BackSpace/Delete/Arrow/Home/End all live elsewhere in 0xFF00–0xFFFF).
+    // Modifier keysyms occupy 0xFFE1–0xFFEE, a band with no valid editing key.
     if (sym >= 0xFFE0 and sym <= 0xFFEF) return true;
 
     // Ctrl-modified keys
@@ -355,9 +332,8 @@ fn handleAction(action: vim.Action) void {
             if (cmd.len > 0) spawnCommand(cmd);
             deactivate();
         },
-        // :w — execute the current command but keep the prompt open so the
-        // user can immediately type a new one.  The buffer is cleared and the
-        // mode is reset to INSERT, mirroring what activate() does without the
+        // :w — execute the command but keep the prompt open for the next one.
+        // Clears the buffer and resets to INSERT like activate(), minus the
         // keyboard-grab overhead (the grab is already held).
         .spawn_keep => {
             const cmd = g.vim_state.buf[0..g.vim_state.len];
@@ -406,17 +382,13 @@ fn activate() void {
     g.is_active = true;
     g.layout_dirty = true;
     g.redraw_pending = true;
-    // Force the bar to the absolute top of the screen for the duration of the
-    // prompt — above a fullscreen window, above anything else that happens to
-    // be raised over it — so the prompt is always visible and reachable.
-    // Reversed in deactivate() via bar.dismissAfterPrompt().
+    // Force the bar to the absolute top for the prompt's duration so it's
+    // always visible/reachable; reversed in deactivate() via dismissAfterPrompt().
     bar.presentForPrompt();
-    // No xcb_flush: xcb_grab_keyboard_reply already drained the XCB output
-    // buffer to deliver the preceding grab request, and presentForPrompt()
-    // flushes its own requests. The two assignments above are pure
-    // struct-field writes; no XCB requests are pending here otherwise.
-    // Contrast with deactivate(), where the flush is correct because
-    // xcb_ungrab_keyboard sends a new request that must arrive promptly.
+    // No xcb_flush: xcb_grab_keyboard_reply already drained the output buffer
+    // and presentForPrompt() flushes its own requests — nothing is pending
+    // here. Contrast with deactivate(), where xcb_ungrab_keyboard must arrive
+    // promptly.
 }
 
 /// Ungrabs the keyboard and marks the prompt inactive.
@@ -463,11 +435,10 @@ fn loadCompletions() void {
             const dt = entry.*.d_type;
             if (dt != 0 and dt != c.DT_REG and dt != c.DT_LNK) continue;
 
-            // DT_REG/DT_LNK (or DT_UNKNOWN, dt == 0, on filesystems that don't
-            // report a type) only rules out "obviously not a plain file" — it
-            // says nothing about the executable bit. Without this check, a
-            // stray non-executable file sitting in a $PATH directory would be
-            // offered as a runnable completion.
+            // DT_REG/DT_LNK (or DT_UNKNOWN on filesystems with no type) only
+            // rules out "obviously not a plain file" — it says nothing about
+            // the executable bit, so a non-executable $PATH file must not be
+            // offered as a completion.
             if (dir_path.len + 1 + name.len + 1 > full_path_buf.len) continue;
             @memcpy(full_path_buf[0..dir_path.len], dir_path);
             full_path_buf[dir_path.len] = '/';
@@ -613,14 +584,9 @@ fn histAppendToFile(cmd: []const u8) void {
     _ = c.write(fd, "\n", 1);
 }
 
-/// Parse one line from a shell history file into `out`, returning its length.
-/// Returns 0 to skip the line.
-///
-/// Formats understood:
-///   fish  : `"- cmd: <command>"` (YAML block)
-///   zsh   : `": <ts>:<elapsed>;<command>"` OR bare line
-///   bash  : bare line (may have `"#<timestamp>"` markers which are skipped)
-///   drun  : bare line
+/// Parse one line from a shell history file into `out`, returning its length
+/// (0 to skip). Understands fish `"- cmd: …"`, zsh `": <ts>:<elapsed>;…"` or
+/// bare lines, and bash/drun bare lines (`#` timestamp markers skipped).
 fn histParseLine(line: []const u8, out: []u8) usize {
     if (line.len == 0) return 0;
 
@@ -795,19 +761,15 @@ fn textPrefixFit(dc: *drawing.DrawContext, text: []const u8, max_px: u16) []cons
 
 /// Draw `text` with hard pixel clipping to `[text_left_x, scroll_end_x)`.
 ///
-/// `px` is the virtual pen position (scroll-space, may be negative).  It is
-/// always advanced by the full text width whether or not anything is drawn —
-/// callers rely on this to keep the pen position consistent.
+/// `px` is the virtual pen position (scroll-space, may be negative), always
+/// advanced by the full text width whether or not anything is drawn — callers
+/// rely on this to keep the pen consistent.
 ///
-/// Both edges are clipped without ellipsis:
-///   Left  — characters whose right edges fall before `text_left_x` are skipped.
-///   Right — characters that would extend past `scroll_end_x` are dropped.
-///
-/// This is the correct behaviour for pre-cursor text in a scrolling field:
-/// the cursor must appear immediately after the last visible character with no "…".
-/// `text_w` is the caller's already-measured pixel width of `text` (null to
-/// measure here).  Callers usually measure the same slice for scroll layout,
-/// so passing it in avoids a second Pango shape pass.
+/// Both edges clip without ellipsis: characters whose right edges fall before
+/// `text_left_x` are skipped; characters past `scroll_end_x` are dropped —
+/// correct for pre-cursor text, where the caret must sit right after the last
+/// visible character. `text_w` is the caller's already-measured width (null to
+/// measure here), avoiding a second Pango pass.
 inline fn drawSpan(
     dc: *drawing.DrawContext,
     px: *i32,
@@ -885,15 +847,11 @@ inline fn cursorBlockGeom(
 
 /// Draw a filled block cursor over `buf[lo..hi]` and advance `px.*` past it.
 ///
-/// Shared by visual-mode selection highlighting and the normal/replace-mode
-/// character cursor — both are "highlight a byte range with an accent block
-/// and inverse-coloured text", differing only in how wide the range is (a
-/// multi-byte selection vs. always one character) and whether colon-command
-/// mode wants the fill suppressed (`text_only`, normal/replace-only: while
-/// typing a `:` command the cursor lives in the pill widget, so the character
-/// underneath is shown as plain text instead of being boxed).
-/// When `lo == hi` (cursor sits past the end of the line) an empty
-/// space-sized block is drawn instead, matching the end-of-line caret.
+/// Shared by visual selection highlighting and the normal/replace character
+/// cursor — "highlight a byte range with an accent block and inverse text",
+/// differing only in range width and whether `text_only` suppresses the fill
+/// (colon-command mode: the caret lives in the pill, so the character shows as
+/// plain text). `lo == hi` draws an empty space-sized block (end-of-line).
 inline fn drawBlockCursor(
     dc: *drawing.DrawContext,
     px: *i32,
@@ -930,12 +888,9 @@ inline fn drawBlockCursor(
 
 /// Render the active input UI.
 ///
-/// Layout:
-///
-///   [ pad | scrollable: PROMPT | pre | CURSOR/SELECTION | post | MODE_LABEL | pad ]
-///
-/// The mode label is pinned to the right edge (does not scroll).
-/// The scrollable region keeps the cursor in view.
+/// Layout: [ pad | scrollable: PROMPT | pre | CURSOR/SELECTION | post |
+/// MODE_LABEL | pad ]. The mode label is pinned right (never scrolls); the
+/// scrollable region keeps the cursor in view.
 fn drawActive(
     dc: *drawing.DrawContext,
     config: types.BarConfig,
@@ -958,15 +913,12 @@ fn drawActive(
     const text_end_x = end_x -| pad;
     if (text_left_x >= text_end_x) return end_x;
 
-    // Mode widget — pinned to the right edge; does not scroll.
+    // Mode widget — pinned right; does not scroll.
     //
-    // Rendered as a filled pill: accent-coloured background, white text.
-    // Horizontal padding of `pill_h_pad` is applied on both sides so the text
-    // never touches the pill edge and there is a natural gap between the pill
-    // and the scrollable text region.
-    //
-    // In colon-command mode the mode label is replaced by an ex-command input
-    // field that shows ":typed_chars" followed by a block cursor.
+    // A filled pill (accent bg, white text) with `pill_h_pad` on both sides so
+    // the text never touches the pill edge and there's a gap to the scrollable
+    // region. In colon-command mode the label is replaced by ":typed_chars"
+    // plus a block cursor.
     const pill_h_pad: u16 = 6;
     const white: u32 = 0xFFFFFFFF;
 
@@ -1050,20 +1002,16 @@ fn drawActive(
         break :blk w;
     };
 
-    // Compute scroll offset to keep the cursor visible.
-    //
-    // In INSERT mode the cursor is a thin caret; the character it sits on is
-    // NOT consumed, so `post_text` starts at cursor (not cursor+1) and the
-    // caret_w used for layout is `cursor_width`.
-    // In all other modes a full-character block model is used.
+    // Compute scroll offset to keep the cursor visible. In INSERT mode the
+    // caret doesn't consume its character — post_text starts at cursor and
+    // caret_w is `cursor_width`; all other modes use a full-character block.
     const pre_cur_text = g.vim_state.buf[0..g.vim_state.cursor];
 
-    // Geometry is recomputed only when `layout_dirty`: the caret-blink
-    // animation redraws an identical frame every cursor_blink_ms, so blink
-    // ticks reuse the cached widths and scroll offset instead of re-running
-    // ~20 Pango shape passes per tick.  Font metrics, mode/prompt widths, and
-    // the scroll region are constant between keypresses, so the cache only
-    // needs invalidating when the buffer, cursor, mode, or bar height changes.
+    // Recompute geometry only when `layout_dirty`: the caret-blink redraws an
+    // identical frame every cursor_blink_ms, so blink ticks reuse the cached
+    // widths/scroll offset instead of ~20 Pango shape passes per tick. The
+    // cache needs invalidating only when buffer, cursor, mode, or height
+    // changes.
     if (g.layout_dirty or height != g.cached_height) {
         g.cached_pre_w = dc.measureTextWidth(pre_cur_text);
         g.cached_caret_w = if (g.vim_state.mode == .insert)
@@ -1081,11 +1029,10 @@ fn drawActive(
         const cursor_right = prompt_w + g.cached_pre_w + g.cached_caret_w;
         if (cursor_right > max_scroll_px) {
             const min_scroll: u16 = cursor_right -| max_scroll_px;
-            // Snap scroll_x to the nearest character boundary at or past min_scroll.
-            // Without snapping, `drawSpan` draws text[start..] at text_left_x even
-            // though character `start` begins some pixels past text_left_x in virtual
-            // space.  That shift creates a gap between the rendered text and the caret
-            // that looks like a phantom extra character to the right of the cursor.
+            // Snap scroll_x to the nearest character boundary at/past min_scroll:
+            // without it, drawSpan renders text[start..] at text_left_x while the
+            // character begins past it in virtual space — a phantom gap next to the
+            // caret.
             if (min_scroll <= prompt_w) {
                 const idx = textOffsetAtPx(dc, prompt, min_scroll);
                 scroll_x = dc.measureTextWidth(prompt[0..idx]);

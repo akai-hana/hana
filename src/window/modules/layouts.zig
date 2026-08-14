@@ -203,12 +203,11 @@ fn applyHintsToRect(rect: utils.Rect, h: SizeHints) utils.Rect {
     if (h.max_height > 0) ht = @min(ht, h.max_height);
 
     // min_aspect = h/w lower bound, max_aspect = w/h upper bound (dwm
-    // convention). Cross-multiplied to avoid FP division on every retile.
+    // convention); cross-multiplied to avoid FP division per retile.
     //
-    // The aspect clamp recomputes the dimension from scratch, which can land
-    // off the increment grid (e.g. a terminal with both PResizeInc and PAspect
-    // set); re-snapping afterward floors to the grid and never grows past
-    // max_width/height, keeping both hints satisfied simultaneously.
+    // The aspect clamp recomputes from scratch and can land off the increment
+    // grid (e.g. PResizeInc + PAspect on a terminal); re-snapping afterward
+    // floors to the grid without exceeding max_width/height.
     if (h.min_aspect > 0.0 and h.max_aspect > 0.0) {
         const fw: f32 = @floatFromInt(w);
         const fh: f32 = @floatFromInt(ht);

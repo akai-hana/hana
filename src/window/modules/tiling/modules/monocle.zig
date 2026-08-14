@@ -24,8 +24,7 @@ pub fn tileWithOffset(
     // Pick the top (visible) window: prefer the focused window, else the list
     // tail, so the last-focused window resurfaces on close. A focus change
     // alone doesn't retile (monocle hides via offscreen positioning, not stack
-    // order) — snapScrollToFocused retiles on focus cycling, and on spawn
-    // mapWindowToScreen passes the new window as ctx.focused_win.
+    // order); snapScrollToFocused / mapWindowToScreen handle the retiles.
     const top_win: u32 = blk: {
         if (ctx.focused_win) |f| if (std.mem.indexOfScalar(u32, windows, f) != null) break :blk f;
         break :blk windows[windows.len - 1];

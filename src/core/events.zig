@@ -183,11 +183,9 @@ const SIGNAL_DRAIN_BUF = 16; // drain a burst in one syscall rather than one per
 
 /// Drains the non-blocking signal pipe and dispatches each signal.
 ///
-/// std.os.linux.read returns usize (the raw syscall result); on error the
-/// kernel returns a negative value that wraps to a huge unsigned number, so an
-/// unsigned comparison would never read as negative and could escape unchecked
-/// into @intCast. Bitcast to isize and treat any non-positive result (error or
-/// EOF) as a stop condition.
+/// std.os.linux.read returns usize; a kernel error wraps a negative value into
+/// a huge unsigned number an unsigned comparison would never catch. Bitcast to
+/// isize and stop on any non-positive result (error, EOF, or empty).
 fn handleSignalPipe(fd: std.posix.fd_t) void {
     var buf: [SIGNAL_DRAIN_BUF]u8 = undefined;
     while (true) {
@@ -275,21 +273,19 @@ pub fn grabKeybindings() void {
 /// Loads and validates a new config, then applies it atomically. On failure
 /// the old config remains active.
 ///
-/// Ordering matters for every step:
-///   1. Keybind resolution and DPI scaling operate on `new_config` and must
-///      run before the swap.
-///   2. The swap happens BEFORE the subsystem reloads (reloadBorders /
-///      reloadConfig / bar.reload) so they rebuild from the NEW config, not
-///      the stale one. (The old ordering kept stale bar/tiling/border settings
-///      and then old_config.deinit() freed the string slices the new bar had
-///      shallow-copied — a use-after-free on the next bar draw.)
-///   3. grabKeybindings() runs after the swap because fillGrabCookies() reads
-///      the live config — grabbing first would re-grab the OLD keycodes.
+/// Ordering is load-bearing:
+///   1. Keybind resolution and DPI scaling run pre-swap on `new_config`.
+///   2. The swap precedes the subsystem reloads (reloadBorders / reloadConfig /
+///      bar.reload) so they rebuild from the NEW config. (The old ordering kept
+///      stale settings, then old_config.deinit() freed string slices the new bar
+///      had shallow-copied — a use-after-free on the next draw.)
+///   3. grabKeybindings() runs post-swap because fillGrabCookies() reads the
+///      live config.
 ///   4. `committed` flips the errdefer: pre-swap failure frees new_config;
 ///      post-swap failure keeps it and frees the displaced old_config. (Every
 ///      post-swap call is void today, so this is latent-but-safe.)
-///   5. applyCarouselSettings() runs after the swap so a rejected reload never
-///      leaks staged carousel settings into effect.
+///   5. applyCarouselSettings() runs post-swap so a rejected reload never leaks
+///      staged carousel settings.
 fn handleConfigReload() !void {
     debug.info("Reload requested", .{});
     const cs = core.getState();

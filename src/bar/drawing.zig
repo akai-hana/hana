@@ -453,27 +453,23 @@ pub const MeasureContext = struct {
     }
 };
 
-/// Pre-renders a title into a wide XCB pixmap once; every carousel tick is a single
-/// xcb_copy_area with zero Pango/Cairo involvement.
+/// Pre-renders a title into a wide XCB pixmap once; every carousel tick is a
+/// single xcb_copy_area with zero Pango/Cairo involvement.
 ///
-/// Wide-pixmap layout
-/// ──────────────────
 /// Text A is rendered at offset `left_pad`; text B — the seamless loop's second
 /// copy — at `left_pad + cycle_w`:
 ///
 ///   [ bg * left_pad | text A | bg * gap | text B ]
 ///    ←── left_pad ──→←text_w→←── gap ──→←text_w→
 ///
-/// At scroll offset O (0 ≤ O < cycle_w), blitFrame copies seg_w pixels from O into
-/// the offscreen pixmap.  The pixmap is wide enough that the copy is always a single
-/// unclipped xcb_copy_area — no fill step, no clipping arithmetic, no second copy.
+/// At scroll offset O (0 ≤ O < cycle_w), blitFrame copies seg_w pixels from O;
+/// the pixmap is wide enough that the copy is always a single unclipped
+/// xcb_copy_area.
 ///
-/// Required: pixmap_w ≥ cycle_w + seg_w.  The blit window is always
-/// [O, O + seg_w) ⊂ [0, cycle_w + seg_w), so source pixels past that are never
-/// read.  When the title is wider than the segment, text B simply clips at the
-/// pixmap edge: the window can only ever see the first seg_w − left_pad pixels
-/// of it, which always land inside the pixmap.  Callers (carousel.zig) compute
-/// the width before calling init().
+/// Required: pixmap_w ≥ cycle_w + seg_w, so [O, O + seg_w) never reads past the
+/// pixmap. If the title is wider than the segment, text B clips at the pixmap
+/// edge (the window only ever sees the first seg_w − left_pad pixels, always in
+/// bounds). Callers (carousel.zig) compute the width before calling init().
 pub const CarouselPixmap = struct {
     conn: *core.xcb.xcb_connection_t,
     pixmap: u32,

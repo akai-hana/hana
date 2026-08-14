@@ -53,15 +53,12 @@ const mouse_button_right: u8 = 3;
 
 // Core data structures
 
-/// List of per-window title strings backed by a per-slot arena.
-///
-/// Every string in `list` is a slice into `arena`'s memory, so clearing or
-/// dropping a list is one arena reset instead of one allocator.free per
-/// window, and duping a batch of titles bumps a pointer into already-owned
-/// arena pages instead of hitting the system allocator once per window.
-/// `list`'s own buffer stays on the caller's allocator (separate from the
-/// arena so `clear` can reset the arena without invalidating the retained
-/// buffer).
+/// Per-window title strings backed by a per-slot arena: every string in
+/// `list` is a slice into `arena`'s memory, so clearing/dropping a list is
+/// one arena reset, and duping a batch bumps a pointer into owned pages
+/// instead of hitting the system allocator per window. `list`'s own buffer
+/// lives on the caller's allocator, separate from the arena so `clear` can
+/// reset the arena without invalidating the retained buffer.
 const WindowTitles = struct {
     arena: std.heap.ArenaAllocator = undefined,
     list: std.ArrayListUnmanaged([]const u8) = .empty,
@@ -131,19 +128,16 @@ const BarSnapshot = struct {
     /// its own xcb_get_property calls.
     window_titles: WindowTitles = .{},
 
-    /// Pre-fetched window geometry, indexed parallel to `current_workspace_windows`
-    /// (same indexing as `window_titles`). Fetched once per snapshot, on the main
-    /// thread, so the segmented-title draw path — including drawTitleOnly's
-    /// carousel-thread fast path via drawCached — never issues its own
-    /// xcb_get_geometry round-trip for a window the tiling cache doesn't cover
-    /// (e.g. a floating window).
+    /// Pre-fetched window geometry, indexed like `window_titles`. Fetched once
+    /// per snapshot on the main thread so the segmented-title draw path —
+    /// including drawTitleOnly's carousel-thread fast path — never issues an
+    /// xcb_get_geometry round-trip for windows the tiling cache doesn't cover.
     window_geoms: std.ArrayListUnmanaged(utils.Rect) = .empty,
 
     /// True when `window_titles`/`window_geoms` were freshly re-fetched this
-    /// frame (the title pre-fetch re-ran) rather than relayed unchanged from
-    /// the previous snapshot slot. syncTitleCache uses this to skip re-duping
-    /// the cache's title strings on frames where the content provably did not
-    /// change — see the ownership-relay comment in captureStateIntoSlot.
+    /// frame rather than relayed from the previous snapshot slot. syncTitleCache
+    /// uses this to skip re-duping the cache's title strings when nothing changed
+    /// — see the ownership-relay comment in captureStateIntoSlot.
     title_list_refreshed: bool = false,
 
     fn deinit(snap: *BarSnapshot, allocator: std.mem.Allocator) void {
@@ -157,15 +151,13 @@ const BarSnapshot = struct {
 };
 
 /// Serializes access to the shared Cairo/XCB DrawContext. Bar drawing runs on
-/// the main WM thread, except for one small dedicated timer that runs on its
-/// own thread: carousel.zig (ticks once per display refresh while a title is
-/// actively scrolling) — and even that thread only ever performs the Pango-free
-/// carousel-pixmap blit, never a full Pango layout. The clock thread no longer
-/// touches the DrawContext at all: it formats the time string and flags the
-/// main thread to redraw. This mutex keeps the carousel thread from painting
-/// into the DrawContext at the same instant as the main WM thread, and Pango/
-/// fontconfig work is confined to the main thread so no bar thread can block
-/// the shutdown path inside a fontconfig lookup.
+/// the main WM thread except for the carousel thread (carousel.zig), which
+/// ticks per display refresh while a title scrolls but only ever does the
+/// Pango-free carousel-pixmap blit; the clock thread formats the time and
+/// flags a redraw, never touching the DrawContext. The mutex keeps the
+/// carousel thread from painting mid-main-thread draw, and Pango/fontconfig
+/// stays on the main thread so no bar thread can block shutdown inside a
+/// fontconfig lookup.
 pub var draw_mutex: utils.Mutex = .{};
 
 /// All atoms needed to declare the bar window as a dock to the compositor.
@@ -349,12 +341,10 @@ const State = struct {
     }
 
     /// Records the on-screen bounds of a clickable segment as drawAllInner
-    /// positions it, so handleButtonPress can later hit-test a click against
-    /// them without redoing the layout pass. Called unconditionally for every
-    /// segment position drawAllInner computes — including segments
-    /// shouldSkipSegment will skip drawing this frame — since the reserved
-    /// screen position is stable regardless of whether the pixels were
-    /// actually repainted. No-op for segment kinds with no click behaviour.
+    /// positions it, so handleButtonPress can hit-test against them without
+    /// redoing the layout pass. Called unconditionally — even for segments
+    /// shouldSkipSegment skips — since the reserved screen position is stable
+    /// whether or not the pixels were repainted. No-op for non-clickable kinds.
     fn recordClickBounds(self: *State, seg: types.BarSegment, x: u16, w: u16) void {
         switch (seg) {
             .workspaces => {
@@ -420,12 +410,10 @@ const State = struct {
         };
     }
 
-    /// Draws `segment`, catching and logging any error instead of propagating it.
-    /// On failure, returns `x` unchanged — the same signal drawSegment's callers
-    /// already use for "this segment drew nothing" — so a single broken segment
-    /// (bad config value, transient allocation failure, ...) can neither corrupt
-    /// the layout of the segments around it nor abort the rest of the frame,
-    /// leaving the off-screen pixmap partially drawn and never blitted.
+    /// Draws `segment`, catching and logging errors instead of propagating them.
+    /// On failure returns `x` unchanged (the "drew nothing" signal) so a broken
+    /// segment can't corrupt the surrounding layout or leave the off-screen
+    /// pixmap partially drawn and never blitted.
     fn drawSegmentSafe(self: *State, snap: *const BarSnapshot, segment: types.BarSegment, x: u16, width: ?u16) u16 {
         return self.drawSegment(snap, segment, x, width) catch |e| {
             debug.warnOnErr(e, "bar drawSegment");
@@ -434,10 +422,9 @@ const State = struct {
     }
 
     /// Draws one segment of a left-to-right row, painting the inter-segment gap
-    /// and advancing `x`. `w` is the reserved width (used when the segment is
-    /// skipped, and as the title width); `omit_gap_after_title` suppresses the
-    /// gap after a title segment so the next segment sits flush against it (the
-    /// center layout). Returns the new `x`.
+    /// and advancing `x`. `w` is the reserved width (also used when the segment
+    /// is skipped); `omit_gap_after_title` suppresses the gap after a title so
+    /// the next segment sits flush (center layout). Returns the new `x`.
     fn drawRowSegment(
         self: *State,
         snap: *const BarSnapshot,
@@ -569,10 +556,9 @@ const State = struct {
         const clock_x = self.layout_cache.clock_x orelse return;
         _ = clock.draw(self.render.dc, self.render.config, self.render.height, clock_x) catch |e|
             debug.warnOnErr(e, "drawClockOnly");
-        // renderOnly() flushes Cairo to the off-screen pixmap; blitAndFlush()
-        // copies only the clock region to the window and calls xcb_flush.
-        // Splitting the flush this way avoids a full-window blit plus a
-        // separate main-thread xcb_flush call.
+        // renderOnly() flushes Cairo to the pixmap; blitAndFlush() copies only the
+        // clock region to the window and calls xcb_flush, avoiding a full-window
+        // blit plus a separate main-thread xcb_flush.
         self.render.dc.renderOnly();
         self.render.dc.blitAndFlush(clock_x, self.layout_cache.clock_width);
     }
@@ -585,10 +571,9 @@ const State = struct {
         // Fast path: try to blit just the live carousel pixmap without a full Pango layout pass.
         if (self.drawTitleBlitOnly()) return;
 
-        // title_cache.title holds text for title_cache.title_window (the last full draw).
-        // If new_focused differs, that text is stale — drawing it would build the carousel
-        // with wrong content and reset start_ms, causing a visible restart on the next frame.
-        // A snapReady draw is guaranteed to follow (scheduleFocusRedraw calls markDirty).
+        // title_cache.title holds text for title_cache.title_window (last full draw); if
+        // new_focused differs it's stale — drawing it would rebuild the carousel with
+        // wrong content and reset start_ms. A snapReady draw is guaranteed to follow.
         if (new_focused != self.title_cache.title_window) return;
 
         _ = title.drawCached(
@@ -614,9 +599,8 @@ const State = struct {
                 // xcb_get_property calls on this fast-path redraw too.
                 .titles = self.title_cache.window_titles.list.items,
                 // Supply cached pre-fetched geometry so drawSegmentedTitles skips
-                // xcb_get_geometry calls on this fast-path redraw as well — this
-                // path runs on the dedicated carousel thread, where a blocking
-                // X11 round-trip would stall the scroll animation.
+                // xcb_get_geometry here too — this path runs on the carousel thread,
+                // where a blocking X11 round-trip would stall the scroll animation.
                 .geoms = self.title_cache.window_geoms.items,
             },
             self.render.allocator,
@@ -627,12 +611,11 @@ const State = struct {
         self.render.dc.blit();
     }
 
-    /// Pango-free title fast path shared by the main-thread drawTitleOnly and
-    /// the dedicated carousel thread. Blits the live carousel pixmap when
-    /// possible and returns true. Returns false (drawing nothing) when a
-    /// rebuild/colour/focus change is pending — those are handled by the main
-    /// thread's full-redraw machinery, never by falling through to a Pango
-    /// layout from the carousel thread.
+    /// Pango-free title fast path shared by drawTitleOnly and the carousel
+    /// thread. Blits the live carousel pixmap when possible and returns true;
+    /// returns false (drawing nothing) when a rebuild/colour/focus change is
+    /// pending — those go through the main thread's full-redraw machinery,
+    /// never a Pango layout from the carousel thread.
     fn drawTitleBlitOnly(self: *State) bool {
         if (!carousel.isCarouselActive()) return false;
         const win_count = self.title_cache.workspace_windows.items.len;
@@ -657,12 +640,10 @@ const State = struct {
     fn syncTitleCache(self: *State, snap: *const BarSnapshot, x: u16, w: u16) void {
         const alloc = self.render.allocator;
 
-        // Only re-sync the per-window data when the capture actually re-fetched
-        // it (snap.title_list_refreshed). On unchanged frames the snapshot
-        // relays the same lists between its ping-pong slots, so the cache
-        // already holds identical content — re-duping every title string here
-        // was an O(window count) alloc+free pass on every full redraw for data
-        // that didn't change.
+        // Re-sync per-window data only when the capture re-fetched it
+        // (snap.title_list_refreshed). Unchanged frames relay the same lists
+        // between ping-pong slots, so the cache already matches — re-duping
+        // every title was an O(window count) alloc+free pass for no-op data.
         if (snap.title_list_refreshed) {
             swapAlloc(u32, &self.title_cache.workspace_windows, alloc, snap.current_workspace_windows.items);
 
@@ -679,9 +660,8 @@ const State = struct {
             self.title_cache.window_titles.replaceWith(alloc, snap.window_titles.list.items);
 
             // Keep cached geometry in sync for the drawTitleOnly fast path. Rect is
-            // POD (no owned allocations per element), so — like workspace_windows
-            // above — build the replacement before swapping it in: a failed
-            // allocation leaves the existing cache untouched rather than emptied.
+            // POD, so — like workspace_windows above — build the replacement before
+            // swapping it in: a failed allocation leaves the cache untouched.
             swapAlloc(utils.Rect, &self.title_cache.window_geoms, alloc, snap.window_geoms.items);
 
             self.title_cache.focused_window = snap.focused_window;
@@ -724,12 +704,11 @@ fn hasMinimizedSetChanged(
     return false;
 }
 
-/// Captures current WM state into `snap`, diffing against `prev` to set dirty flags.
-/// `forced` (caller must read and clear `pending_force_full_redraw`) overrides all dirty checks.
-/// `prev` is mutable (not const) because the "nothing changed" branches below relay
-/// ownership of `window_titles`/`window_geoms` back and forth between the two ping-pong
-/// snapshot slots via std.mem.swap instead of duping them every frame — see the comment
-/// at the swap sites for why this is safe.
+/// Captures current WM state into `snap`, diffing against `prev` to set dirty
+/// flags. `forced` (caller must read/clear `pending_force_full_redraw`)
+/// overrides all dirty checks. `prev` is mutable because the "nothing changed"
+/// branch swaps ownership of `window_titles`/`window_geoms` between the two
+/// ping-pong slots instead of duping them — see the swap-site comment.
 fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, forced: bool) !void {
     const allocator = s.render.allocator;
     bench.beginTitleCapture();
@@ -773,10 +752,9 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
         }
     }
 
-    // Pre-fetch titles so the segmented-title draw path never issues its own
-    // X11 calls. Only run when title state has changed. (Clock and carousel
-    // ticks call drawClockOnly/drawTitleOnly directly and never reach this
-    // function at all, so there's no separate "no-op" case to handle here.)
+    // Pre-fetch titles so the segmented-title draw path never issues its own X11
+    // calls. Only run when title state changed; clock/carousel ticks never reach
+    // this function at all, so there's no separate "no-op" case to handle.
     const title_changed =
         forced_title_redraw or
         snap.focused_window != prev.focused_window or
@@ -806,18 +784,14 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
             allocator,
         );
     } else {
-        // Nothing about titles/membership/minimized-state changed since the
-        // previous frame: rather than freeing every owned string in `snap`
-        // and re-duping every owned string from `prev` — an O(window count)
-        // alloc+free pass on every redraw where the titles themselves didn't
-        // actually change (e.g. a plain workspace-indicator repaint) — swap
-        // list ownership between the two snapshot slots instead.
+        // Nothing changed since the previous frame: swapping list ownership
+        // between the two slots avoids an O(window count) alloc+free pass on
+        // redraws where the titles didn't change (e.g. a workspace-indicator
+        // repaint).
         //
-        // `prev` is not read again after this point in the current frame, and
-        // on the *next* frame the roles of the two slots flip (today's `snap`
-        // becomes tomorrow's `prev`), so ownership simply relays back and
-        // forth between the two slots forever with zero allocation traffic,
-        // until a frame where title_changed is true refreshes it for real.
+        // `prev` is not read again this frame, and next frame the roles flip,
+        // so ownership relays between the two slots with zero allocation
+        // traffic until a title_changed frame refreshes it for real.
         std.mem.swap(WindowTitles, &snap.window_titles, &prev.window_titles);
         std.mem.swap(std.ArrayListUnmanaged(utils.Rect), &snap.window_geoms, &prev.window_geoms);
     }
@@ -860,11 +834,10 @@ fn prepareSnapshot(s: *State) bool {
     return true;
 }
 
-/// Captures a fresh snapshot and draws synchronously, holding draw_mutex for
-/// the duration so the clock/carousel threads never paint at the same instant.
-/// `flush` selects whether the result is blitted to the window immediately
-/// (the normal event-loop path) or only rendered to the off-screen pixmap
-/// (the xcb_grab_server-safe path — see redrawInsideGrab).
+/// Captures a fresh snapshot and draws synchronously, holding draw_mutex so the
+/// clock/carousel threads never paint at the same instant. `flush` selects
+/// whether the result is blitted to the window (normal path) or only rendered
+/// to the off-screen pixmap (grab-safe path — see redrawInsideGrab).
 fn performDraw(flush: bool) void {
     const s = gBar.state orelse return;
     if (!prepareSnapshot(s)) return;
@@ -1140,12 +1113,11 @@ pub fn reload() void {
 fn applyReload(old: *State, height: u16) !void {
     const cs = core.getState();
     const new_bar = createBar(height, calcBarYPos(height)) catch |err| {
-        // The caller (handleConfigReload) has already swapped cs.config to the
-        // new config and frees the OLD config when this returns. The old bar
-        // survives this failed reload, but its render.config is a shallow copy
-        // of the old config's BarConfig (borrowed string/list slices) — so
-        // re-point it at the live new config now, before old_config.deinit()
-        // runs, or the next bar draw reads freed memory.
+        // The caller has already swapped cs.config to the new config and frees
+        // the OLD config when this returns. The old bar survives this failed
+        // reload, but its render.config borrows slices from that config — so
+        // re-point it at the live new config before old_config.deinit() runs,
+        // or the next draw reads freed memory.
         old.render.config = cs.config.bar;
         return err;
     };
@@ -1200,10 +1172,9 @@ pub fn scheduleFocusRedraw(new_win: ?u32) void {
     draw_mutex.lock();
     s.drawTitleOnly(new_win);
     draw_mutex.unlock();
-    // markDirty ensures a full redraw follows, which fetches the new window's title
-    // and rebuilds the carousel correctly. Without it, a cross-window focus change with
-    // no other dirty state would rely solely on the stale-title drawTitleOnly path —
-    // the combination that triggers the double-start flicker drawTitleOnly guards against.
+    // markDirty ensures a full redraw follows, fetching the new window's title and
+    // rebuilding the carousel; without it a cross-window focus change would rely on
+    // the stale-title path — the double-start flicker drawTitleOnly guards against.
     s.markDirty();
 }
 
@@ -1233,11 +1204,10 @@ pub fn scheduleFullRedraw() void {
 /// Schedules a redraw that re-captures the title segment's per-window data
 /// (re-running the batched pre-fetch) without clearing the whole bar.
 ///
-/// Use when on-screen window positions change but focus and the window-ID set
-/// don't (e.g. a master swap): the segmented title view sorts windows by
-/// position, so its segment order is stale even though every other segment is
-/// clean. Cheaper than scheduleFullRedraw — no background clear, and the
-/// workspace/layout/clock segments skip their repaint via shouldSkipSegment.
+/// Use when window positions change but focus and the window-ID set don't
+/// (e.g. a master swap): the segmented title view sorts by position, so its
+/// segment order is stale. Cheaper than scheduleFullRedraw — no background
+/// clear, and the other segments skip via shouldSkipSegment.
 pub fn scheduleTitleRedraw() void {
     if (gBar.state) |s| if (s.is_visible) {
         gBar.pending_force_title_redraw = true;
@@ -1251,12 +1221,11 @@ pub fn isVisible() bool {
 
 /// Synchronous bar update safe to call inside xcb_grab_server.
 ///
-/// Phase 1 (inside grab): render to the off-screen pixmap — cairo_surface_flush only,
-/// no xcb_copy_area, no xcb_flush, so the compositor sees no intermediate frame.
-/// Phase 2 (still inside grab): blitQueued() enqueues xcb_copy_area without flushing.
-///
-/// configure_window + xcb_copy_area + xcb_ungrab_server are sent in one flush by
-/// the caller's ungrabAndFlush(), producing exactly one compositor frame.
+/// Phase 1 (inside grab): render to the off-screen pixmap — cairo_surface_flush
+/// only, no xcb_copy_area/flush, so the compositor sees no intermediate frame.
+/// Phase 2: blitQueued() enqueues xcb_copy_area without flushing; the caller's
+/// ungrabAndFlush() sends configure_window + copy_area + ungrab in one flush,
+/// producing exactly one compositor frame.
 pub fn redrawInsideGrab() void {
     const s = gBar.state orelse return;
     if (!s.is_visible) return;
@@ -1274,16 +1243,13 @@ pub fn raiseBar() void {
 
 /// Forces the bar to the absolute top of the stacking order and guarantees it
 /// is mapped, overriding whatever would normally keep it hidden or covered —
-/// a fullscreen window on the current workspace, the user having toggled the
-/// bar off, or some other window simply having been raised above it. Used by
-/// the inline prompt (prompt.zig) so it is always visible and reachable while
-/// active, regardless of what else is on screen.
+/// a fullscreen window, the user toggling the bar off, or another window
+/// raised above it. Used by the inline prompt (prompt.zig) so it is always
+/// visible and reachable while active.
 ///
-/// This never touches window geometry or retiles anything: the bar is
-/// overlaid on top of whatever is already there (fullscreen content included)
-/// exactly as-is, the same way a dock/OSD overlays a fullscreen video. Pair
-/// with `dismissAfterPrompt` when the prompt exits so the bar returns to
-/// whatever state it was actually in beforehand.
+/// Never touches window geometry or retiles: the bar overlays whatever is
+/// already there (fullscreen included), the way a dock/OSD overlays fullscreen
+/// video. Pair with `dismissAfterPrompt` so the bar returns to its prior state.
 pub fn presentForPrompt() void {
     const s = gBar.state orelse return;
     if (!s.is_visible) {
@@ -1301,19 +1267,15 @@ pub fn presentForPrompt() void {
 
 /// Undoes `presentForPrompt` once the prompt exits (entered or cancelled).
 ///
-/// If the bar had to be shown solely to make the prompt visible, hides it
-/// again — but only if it *should still* be hidden right now. The prompt can
-/// stay open across other state changes (e.g. the fullscreen window that
-/// justified the override closes on its own), so this recomputes the bar's
-/// natural visibility at exit time rather than trusting a decision made back
-/// when the prompt activated; setBarState changes elsewhere in the meantime
-/// have no reason to know about (or clear) the forced-visible override.
+/// If the bar was shown solely to make the prompt visible, hides it again —
+/// but only if it *should still* be hidden. The prompt can outlive the state
+/// that justified the override (e.g. the fullscreen window closes on its own),
+/// so this recomputes the bar's natural visibility at exit time rather than
+/// trusting the decision made at activation.
 ///
-/// If the bar was already visible beforehand, this leaves it as-is: its
-/// forced top-of-stack position needs no explicit undo, since focusing or
-/// raising any other window (see focus.zig) already places that window above
-/// the bar again the moment the user interacts with it — the bar was never
-/// pinned above anything beyond this one moment.
+/// If the bar was already visible, this leaves it as-is: the forced
+/// top-of-stack position needs no explicit undo, since focusing any other
+/// window already raises it above the bar again (see focus.zig).
 pub fn dismissAfterPrompt() void {
     const s = gBar.state orelse return;
     if (!gBar.prompt_forced_visible) return;
@@ -1381,28 +1343,24 @@ pub fn updateClock() bool {
     return true;
 }
 
-/// Called from the dedicated carousel thread (carousel.zig) roughly once per
-/// display refresh while a title is actively scrolling. Blits the live
-/// carousel pixmap if possible; draw_mutex keeps this safe against a
-/// same-instant redraw from the main WM thread.
+/// Called from the carousel thread (carousel.zig) roughly once per display
+/// refresh while a title scrolls. Blits the live carousel pixmap if possible;
+/// draw_mutex keeps this safe against a same-instant main-thread redraw.
 ///
-/// Never runs Pango: when the fast-path blit reports a pending rebuild/colour/
-/// focus change, this draws nothing and lets the main thread's redraw
-/// machinery (focus change, minimize/unminimize, bar resize) repaint the
-/// title. Pango and fontconfig therefore never run off the main thread, which
-/// removes the SIGTERM deadlock class where a bar thread held draw_mutex while
-/// blocked inside a fontconfig lookup.
+/// Never runs Pango: when the blit reports a pending rebuild/colour/focus
+/// change, this draws nothing and lets the main thread repaint. Keeping
+/// Pango/fontconfig off this thread removes the SIGTERM deadlock where a bar
+/// thread held draw_mutex while blocked inside a fontconfig lookup.
 pub fn tickCarousel() void {
     const s = gBar.state orelse return;
     if (!s.is_visible) return;
     if (prompt.isActive()) return;
     if (!s.title_cache.is_layout_valid or s.title_cache.title_width == 0) return;
-    // Skip the tick while the main WM thread holds the X server grab. This
-    // thread's blit flushes the shared output buffer, which would release the
-    // grab-batch requests mid-grab and split what must be one atomic frame —
-    // and grabbing draw_mutex here could stall the main thread's
-    // scheduleFocusRedraw inside its own grab. The grab window is
-    // microseconds; skipping a scroll tick is imperceptible.
+    // Skip the tick while the main thread holds the X server grab: this
+    // thread's blit flushes the shared output buffer, releasing grab-batch
+    // requests mid-grab and splitting one atomic frame — and grabbing
+    // draw_mutex could stall scheduleFocusRedraw inside its own grab. The grab
+    // window is microseconds; skipping a tick is imperceptible.
     if (utils.isGrabActive()) return;
     draw_mutex.lock();
     defer draw_mutex.unlock();
@@ -1429,19 +1387,17 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
 
 // Mouse click handling
 
-/// Routes a ButtonPress landing directly on the bar window to whichever
-/// segment was clicked. Called from input.zig's handleButtonPress before its
-/// managed-window click path — the bar is never a managed window, so that
-/// path would otherwise just replay the event and swallow it.
+/// Routes a ButtonPress on the bar window to whichever segment was clicked.
+/// Called from input.zig before its managed-window click path — the bar is
+/// never a managed window, so that path would just replay and swallow it.
 ///
 /// Left-clicking a workspace icon switches to it; left-clicking the title
-/// segment focuses/minimizes/unminimizes the window shown there (or opens the
-/// prompt when the title segment is empty); left- or right-clicking the
-/// layout indicator cycles the tiling layout forward or backward.
+/// focuses/minimizes/unminimizes the window shown there (or opens the prompt
+/// when it's empty); left/right-clicking the layout indicator cycles the
+/// tiling layout forward/backward.
 ///
-/// Hit-testing uses the bounds `recordClickBounds`/`syncTitleCache` cached
-/// during the last full layout pass, so this never blocks on X11 I/O beyond
-/// what the resulting action itself performs.
+/// Hit-testing uses the bounds cached by `recordClickBounds`/`syncTitleCache`
+/// during the last full layout pass, so no extra X11 I/O here.
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     const s = gBar.state orelse return;
     if (!s.is_visible) return;
@@ -1485,11 +1441,10 @@ fn handleWorkspacesClick(offset: u16) void {
 }
 
 /// `offset` is the click position relative to the title segment's start.
-/// Resolves which window (if any) is displayed under the click using the
-/// cached per-window title/geometry data `syncTitleCache` populated on the
-/// last full draw, then:
-///   - no window under the click (empty workspace) → opens the prompt
-///   - the window is minimized → unminimizes that specific window
+/// Resolves which window is under the click via the per-window title/geometry
+/// data `syncTitleCache` cached on the last full draw, then:
+///   - no window under the click → opens the prompt
+///   - the window is minimized → unminimizes that window
 ///   - the window is already focused → minimizes it
 ///   - otherwise → focuses it
 fn handleTitleClick(s: *State, offset: u16) void {
@@ -1555,13 +1510,12 @@ fn isTilingActive() bool {
 /// `effective_visible` is the bar-visibility value that tilers should observe;
 /// it may differ from `s.is_visible` when a fullscreen override is in effect.
 fn retileAllWorkspaces(effective_visible: bool) void {
-    // Temporarily expose the effective visibility so tiling code that reads
-    // isVisible() sees the intended value rather than the transitional state.
+    // Temporarily expose the effective visibility so tiling code reading
+    // isVisible() sees the intended value, not the transitional state.
     //
-    // NOTE: the save/restore is scoped to the whole function, not to this
-    // `if` block — a `defer` written inside `if (gBar.state) |st| { ... }`
-    // would fire as soon as that block ends (i.e. immediately, before any
-    // retiling below runs), which would silently defeat this override.
+    // NOTE: the save/restore is scoped to the whole function — a `defer`
+    // inside `if (gBar.state) |st| { ... }` would fire as soon as that block
+    // ends (before any retiling below), silently defeating the override.
     const st_opt = gBar.state;
     const saved_visible = if (st_opt) |st| st.is_visible else false;
     if (st_opt) |st| st.is_visible = effective_visible;
