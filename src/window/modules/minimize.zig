@@ -239,6 +239,22 @@ pub fn unminimize(order: RestoreOrder) void {
     restoreWindowImpl(win, saved_fs, tiling_index);
 }
 
+/// Restores a specific minimized window, regardless of where it falls in the
+/// LIFO/FIFO order `unminimize` uses. Used by the title bar segment's click
+/// handling: clicking a minimized window's segment should bring back that
+/// particular window, not "whichever `unminimize` would have picked".
+/// No-op if `win` is not currently minimized.
+pub fn unminimizeSpecific(win: u32) void {
+    const idx = findInBuf(win) orelse return;
+
+    // Capture fields before removal invalidates the slot (mirrors unminimize()).
+    const saved_fs = g_minimized.items[idx].entry.saved_fs;
+    const tiling_index = g_minimized.items[idx].entry.tiling_index;
+    _ = removeFromBuf(win);
+
+    restoreWindowImpl(win, saved_fs, tiling_index);
+}
+
 pub fn unminimizeAll() void {
     const ws_idx = tracking.getCurrentWorkspace() orelse return;
 

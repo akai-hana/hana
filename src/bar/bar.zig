@@ -46,6 +46,11 @@ const FALLBACK_WORKSPACES_WIDTH: u16 = 270;
 const LAYOUT_WIDTH: u16 = 60;
 const TITLE_MIN_WIDTH: u16 = 100;
 
+// Mirrors input.zig's button numbering (X11 button codes); duplicated rather
+// than imported since input.zig imports this module and a back-import would cycle.
+const mouse_button_left: u8 = 1;
+const mouse_button_right: u8 = 3;
+
 // Core data structures
 
 /// List of per-window title strings backed by a per-slot arena.
@@ -227,6 +232,20 @@ const LayoutCache = struct {
     clock_x: ?u16 = null,
     right_section_width: u16 = 0,
     cached_workspace_count: u32 = std.math.maxInt(u32),
+
+    /// On-screen bounds of the workspaces segment, refreshed on every full
+    /// layout pass (drawAllInner always walks the whole configured layout,
+    /// regardless of dirty flags) — see recordClickBounds. Used by
+    /// handleButtonPress to hit-test workspace-icon clicks.
+    workspaces_x: u16 = 0,
+    workspaces_w: u16 = 0,
+    has_workspaces_bounds: bool = false,
+
+    /// On-screen bounds of the layout (tiling indicator) segment. Same
+    /// refresh contract as workspaces_x/w above.
+    layout_x: u16 = 0,
+    layout_w: u16 = 0,
+    has_layout_bounds: bool = false,
 };
 
 /// Focus/title/workspace rendering cache; updated after each full draw.
@@ -327,6 +346,29 @@ const State = struct {
     fn invalidateLayoutCache(self: *State) void {
         self.is_dirty = true;
         self.layout_cache.clock_x = null;
+    }
+
+    /// Records the on-screen bounds of a clickable segment as drawAllInner
+    /// positions it, so handleButtonPress can later hit-test a click against
+    /// them without redoing the layout pass. Called unconditionally for every
+    /// segment position drawAllInner computes — including segments
+    /// shouldSkipSegment will skip drawing this frame — since the reserved
+    /// screen position is stable regardless of whether the pixels were
+    /// actually repainted. No-op for segment kinds with no click behaviour.
+    fn recordClickBounds(self: *State, seg: types.BarSegment, x: u16, w: u16) void {
+        switch (seg) {
+            .workspaces => {
+                self.layout_cache.workspaces_x = x;
+                self.layout_cache.workspaces_w = w;
+                self.layout_cache.has_workspaces_bounds = true;
+            },
+            .layout => {
+                self.layout_cache.layout_x = x;
+                self.layout_cache.layout_w = w;
+                self.layout_cache.has_layout_bounds = true;
+            },
+            .title, .clock, .variants => {},
+        }
     }
 
     fn measureSegmentWidth(self: *State, snap: *const BarSnapshot, segment: types.BarSegment) u16 {
@@ -442,6 +484,7 @@ const State = struct {
             right_x -= seg_w;
             if (pending_gap) right_x -= scaled_spacing;
             if (segments[i] == .clock) self.layout_cache.clock_x = right_x;
+            self.recordClickBounds(segments[i], right_x, seg_w);
             const drew_to = self.drawSegmentSafe(snap, segments[i], right_x, null);
             const drew = drew_to != right_x;
 
@@ -499,6 +542,7 @@ const State = struct {
                         title_seg_x = x;
                         title_seg_w = w;
                     }
+                    self.recordClickBounds(seg, x, w);
                     x = self.drawRowSegment(snap, seg, x, w, false, scaled_spacing);
                 },
                 .center => {
@@ -509,6 +553,7 @@ const State = struct {
                             title_seg_x = x;
                             title_seg_w = w;
                         }
+                        self.recordClickBounds(seg, x, w);
                         x = self.drawRowSegment(snap, seg, x, w, true, scaled_spacing);
                     }
                 },
@@ -1380,6 +1425,125 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
         s.title_cache.is_invalidated = true;
         s.markDirty();
     }
+}
+
+// Mouse click handling
+
+/// Routes a ButtonPress landing directly on the bar window to whichever
+/// segment was clicked. Called from input.zig's handleButtonPress before its
+/// managed-window click path — the bar is never a managed window, so that
+/// path would otherwise just replay the event and swallow it.
+///
+/// Left-clicking a workspace icon switches to it; left-clicking the title
+/// segment focuses/minimizes/unminimizes the window shown there (or opens the
+/// prompt when the title segment is empty); left- or right-clicking the
+/// layout indicator cycles the tiling layout forward or backward.
+///
+/// Hit-testing uses the bounds `recordClickBounds`/`syncTitleCache` cached
+/// during the last full layout pass, so this never blocks on X11 I/O beyond
+/// what the resulting action itself performs.
+pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
+    const s = gBar.state orelse return;
+    if (!s.is_visible) return;
+    if (event.event_x < 0) return;
+    const x: u16 = @intCast(event.event_x);
+
+    const left = event.detail == mouse_button_left;
+    const right = event.detail == mouse_button_right;
+    if (!left and !right) return;
+
+    if (left and s.layout_cache.has_workspaces_bounds and
+        x >= s.layout_cache.workspaces_x and x < s.layout_cache.workspaces_x + s.layout_cache.workspaces_w)
+    {
+        handleWorkspacesClick(x - s.layout_cache.workspaces_x);
+        return;
+    }
+
+    if (left and !prompt.isActive() and s.title_cache.is_layout_valid and
+        x >= s.title_cache.title_x and x < s.title_cache.title_x + s.title_cache.title_width)
+    {
+        handleTitleClick(s, x - s.title_cache.title_x);
+        return;
+    }
+
+    if (s.layout_cache.has_layout_bounds and
+        x >= s.layout_cache.layout_x and x < s.layout_cache.layout_x + s.layout_cache.layout_w)
+    {
+        if (left) withTilingGrabForClick(tiling.toggleLayout) else withTilingGrabForClick(tiling.toggleLayoutReverse);
+        return;
+    }
+}
+
+/// `offset` is the click position relative to the workspaces segment's start.
+fn handleWorkspacesClick(offset: u16) void {
+    const cell_w = tags.getCachedWorkspaceWidth();
+    if (cell_w == 0) return;
+    const ws_state = workspaces.getState() orelse return;
+    const idx: usize = @intCast(offset / cell_w);
+    if (idx >= ws_state.workspaces.len) return;
+    workspaces.switchTo(@intCast(idx));
+}
+
+/// `offset` is the click position relative to the title segment's start.
+/// Resolves which window (if any) is displayed under the click using the
+/// cached per-window title/geometry data `syncTitleCache` populated on the
+/// last full draw, then:
+///   - no window under the click (empty workspace) → opens the prompt
+///   - the window is minimized → unminimizes that specific window
+///   - the window is already focused → minimizes it
+///   - otherwise → focuses it
+fn handleTitleClick(s: *State, offset: u16) void {
+    if (s.title_cache.workspace_windows.items.len == 0) {
+        if (!prompt.isActive()) prompt.toggle();
+        return;
+    }
+
+    const ctx = title.TitleRenderContext{
+        .dc = s.render.dc,
+        .config = s.render.config,
+        .height = s.render.height,
+        .start_x = s.title_cache.title_x,
+        .width = s.title_cache.title_width,
+        .conn = s.win.conn,
+    };
+    const snapshot = title.TitleSnapshot{
+        .focused_window = s.title_cache.focused_window,
+        .focused_title = "",
+        .minimized_title = "",
+        .current_ws_wins = s.title_cache.workspace_windows.items,
+        .minimized_set = &s.title_cache.minimized_windows,
+        .titles = s.title_cache.window_titles.list.items,
+        .geoms = s.title_cache.window_geoms.items,
+    };
+
+    const target = (title.hitTest(ctx, snapshot, s.render.allocator, offset) catch |e| {
+        debug.warnOnErr(e, "bar title click hitTest");
+        return;
+    }) orelse return;
+
+    if (minimize.isMinimized(target.window)) {
+        minimize.unminimizeSpecific(target.window);
+    } else if (focus.getFocused() == target.window) {
+        minimize.minimizeWindow();
+    } else {
+        focus.setFocus(target.window, .mouse_click);
+    }
+}
+
+/// Mirrors input.zig's withTilingGrab (mouse-driven variant, which resyncs
+/// pointer-based focus after the reflow). Reimplemented locally rather than
+/// exposed from input.zig because input.zig already imports this module —
+/// importing back would cycle.
+inline fn withTilingGrabForClick(op: anytype) void {
+    const conn = core.getState().conn;
+    utils.grabServer(conn);
+    focus.setSuppressReason(.tiling_operation);
+    op();
+    window.updateFloatingWindowBorders();
+    window.markBordersFlushed();
+    redrawInsideGrab();
+    focus.beginPointerSync();
+    utils.ungrabAndFlush(conn);
 }
 
 fn isTilingActive() bool {

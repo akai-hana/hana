@@ -156,6 +156,19 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     const super_held = (event.state & constants.MOD_SUPER) != 0;
     const mods = utils.normalizeModifiers(event.state);
 
+    // The bar selects BUTTON_PRESS directly (not via the Super+Button grab
+    // below), so a plain click on it arrives here as an ordinary, ungrabbed
+    // event. Route it to the bar's own segment click handling and skip the
+    // managed-window / replay-pointer machinery entirely — that machinery
+    // exists for the synchronous grab a real client-window click goes
+    // through, which a bar click never triggers. Super-held clicks fall
+    // through unchanged (config mouse bindings / drag), matching their
+    // existing behaviour of being a no-op over the bar today.
+    if (!super_held and bar.isBarWindow(clicked_window)) {
+        bar.handleButtonPress(event);
+        return;
+    }
+
     // Scroll-wheel binds (buttons 4/5) are viewport actions that don't target
     // a specific window, so they're checked before the managed-window guard
     // that would otherwise discard events fired over the desktop/bar.

@@ -277,6 +277,72 @@ pub fn drawCached(
     return drawInner(ctx, snapshot, allocator, false);
 }
 
+// Public API — click hit-testing
+
+/// A window resolved from a click inside the title segment, along with
+/// whether it was minimized at the time of the click.
+pub const ClickTarget = struct {
+    window: u32,
+    minimized: bool,
+};
+
+/// Resolves which window (if any) is displayed at `offset_x` pixels into the
+/// title segment — `offset_x` is relative to the segment's own start_x, i.e.
+/// `click_x - ctx.start_x`, and must be in `[0, ctx.width)`.
+///
+/// Single-window and split-view (segmented) layouts are both handled:
+/// split-view replicates the exact sort order and pixel-perfect tiling
+/// `drawSegmentedTitles` uses, so a click resolves to whichever window's
+/// title is visually under the cursor. `ctx`/`snapshot` should be built from
+/// the bar's cached title state (the same data `drawCached`/`drawTitleOnly`
+/// read), so — like those callers — this makes no blocking X11 round-trip
+/// when that cache is fully populated; a cache miss falls back to the same
+/// live xcb_get_property/xcb_get_geometry calls `drawSegmentedTitles` would
+/// make.
+///
+/// Returns null when the title segment currently shows no window (empty
+/// workspace) — callers use this to distinguish "clicked an empty title
+/// segment" from "clicked a window's segment".
+pub fn hitTest(
+    ctx: TitleRenderContext,
+    snapshot: TitleSnapshot,
+    allocator: std.mem.Allocator,
+    offset_x: u16,
+) !?ClickTarget {
+    const windows = snapshot.current_ws_wins;
+    if (windows.len == 0) return null;
+
+    if (windows.len == 1) {
+        const win = windows[0];
+        return .{ .window = win, .minimized = snapshot.minimized_set.contains(win) };
+    }
+
+    if (ctx.width == 0) return null;
+    const win_count = @min(windows.len, max_visible_windows);
+
+    // Same outlive requirement as drawSegmentedTitles: a WindowInfo's
+    // `.title` may point into `owned_titles`' memory.
+    var window_info_buf: [max_visible_windows]WindowInfo = undefined;
+    var owned_titles: [max_visible_windows]?[]const u8 = undefined;
+    for (owned_titles[0..win_count]) |*t| t.* = null;
+    defer for (owned_titles[0..win_count]) |t| if (t) |s| allocator.free(s);
+
+    const info_count = try gatherWindowInfos(ctx, snapshot, allocator, windows[0..win_count], &window_info_buf, &owned_titles);
+    if (info_count == 0) return null;
+
+    // Same sort as drawSegmentedTitles, so segment index i corresponds to the
+    // same on-screen position: [i*W/n, (i+1)*W/n).
+    const window_infos = window_info_buf[0..info_count];
+    std.mem.sort(WindowInfo, window_infos, {}, compareWindows);
+
+    const n: u32 = @intCast(window_infos.len);
+    // Inverse of the pixel-perfect tiling formula drawSegmentedTitles uses
+    // (x0(i) = floor(i*W/n)): floor(offset*n/W) lands in the same segment.
+    const idx: usize = @intCast(@min(n - 1, @divFloor(@as(u32, offset_x) * n, @as(u32, ctx.width))));
+    const info = window_infos[idx];
+    return .{ .window = info.window, .minimized = info.minimized };
+}
+
 // Public API — title pre-fetch (main thread only)
 
 /// Fetch the title of `win` into `buf`, reusing its existing capacity.
