@@ -533,20 +533,29 @@ pub fn toggleLayoutReverse() void {
     applyLayoutStep(false);
 }
 
-/// Cycle through the per-layout variants for the currently active layout.
+/// Cycle through the per-layout variants for the currently active layout (forward).
 pub fn stepLayoutVariant() void {
+    applyLayoutVariantStep(true);
+}
+/// Cycle through the per-layout variants for the currently active layout (reverse).
+pub fn stepLayoutVariantReverse() void {
+    applyLayoutVariantStep(false);
+}
+
+/// Shared body for stepLayoutVariant/stepLayoutVariantReverse.
+inline fn applyLayoutVariantStep(comptime forward: bool) void {
     const s = getState();
     switch (s.config.layout) {
         .master => {
-            cycleEnum(&s.config.layout_variants.master);
+            cycleEnum(&s.config.layout_variants.master, forward);
             debug.info("Master variant: {s}", .{@tagName(s.config.layout_variants.master)});
         },
         .monocle => {
-            cycleEnum(&s.config.layout_variants.monocle);
+            cycleEnum(&s.config.layout_variants.monocle, forward);
             debug.info("Monocle variant: {s}", .{@tagName(s.config.layout_variants.monocle)});
         },
         .grid => {
-            cycleEnum(&s.config.layout_variants.grid);
+            cycleEnum(&s.config.layout_variants.grid, forward);
             debug.info("Grid variant: {s}", .{@tagName(s.config.layout_variants.grid)});
         },
         else => {
@@ -1299,8 +1308,11 @@ inline fn applyLayoutStep(comptime forward: bool) void {
     debug.info("Layout: {s}", .{@tagName(layout)});
 }
 
-/// Advance a finite enum field to its next variant, wrapping around.
-inline fn cycleEnum(v: anytype) void {
+/// Advance a finite enum field to its next variant (or, when `forward` is
+/// false, its previous variant), wrapping around.
+inline fn cycleEnum(v: anytype, comptime forward: bool) void {
     const T = @TypeOf(v.*);
-    v.* = @enumFromInt((@intFromEnum(v.*) + 1) % std.meta.fields(T).len);
+    const len = std.meta.fields(T).len;
+    const cur = @intFromEnum(v.*);
+    v.* = @enumFromInt(if (forward) (cur + 1) % len else (cur + len - 1) % len);
 }

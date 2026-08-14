@@ -231,6 +231,12 @@ const LayoutCache = struct {
     layout_x: u16 = 0,
     layout_w: u16 = 0,
     has_layout_bounds: bool = false,
+
+    /// On-screen bounds of the layout variants segment. Same refresh
+    /// contract as workspaces_x/w above.
+    variants_x: u16 = 0,
+    variants_w: u16 = 0,
+    has_variants_bounds: bool = false,
 };
 
 /// Focus/title/workspace rendering cache; updated after each full draw.
@@ -350,7 +356,12 @@ const State = struct {
                 self.layout_cache.layout_w = w;
                 self.layout_cache.has_layout_bounds = true;
             },
-            .title, .clock, .variants => {},
+            .variants => {
+                self.layout_cache.variants_x = x;
+                self.layout_cache.variants_w = w;
+                self.layout_cache.has_variants_bounds = true;
+            },
+            .title, .clock => {},
         }
     }
 
@@ -1418,10 +1429,14 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
 /// Called from input.zig before its managed-window click path — the bar is
 /// never a managed window, so that path would just replay and swallow it.
 ///
-/// Left-clicking a workspace icon switches to it; left-clicking the title
-/// focuses/minimizes/unminimizes the window shown there (or opens the prompt
-/// when it's empty); left/right-clicking the layout indicator cycles the
-/// tiling layout forward/backward.
+/// Left-clicking a workspace icon switches to it; right-clicking one sends
+/// the currently focused window to it. Right-clicking anywhere in the title
+/// segment (empty or over any window's title, regardless of that window's
+/// state) opens the prompt; left-clicking the title otherwise
+/// focuses/minimizes/unminimizes the window shown there.
+/// Left/right-clicking the layout indicator cycles the tiling layout
+/// forward/backward; left/right-clicking the layout variants indicator
+/// cycles the current layout's variant forward/backward the same way.
 ///
 /// Hit-testing uses the bounds cached by `recordClickBounds`/`syncTitleCache`
 /// during the last full layout pass, so no extra X11 I/O here.
@@ -1435,17 +1450,22 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     const right = event.detail == mouse_button_right;
     if (!left and !right) return;
 
-    if (left and s.layout_cache.has_workspaces_bounds and
+    if (s.layout_cache.has_workspaces_bounds and
         x >= s.layout_cache.workspaces_x and x < s.layout_cache.workspaces_x + s.layout_cache.workspaces_w)
     {
-        handleWorkspacesClick(x - s.layout_cache.workspaces_x);
+        const offset = x - s.layout_cache.workspaces_x;
+        if (left) handleWorkspacesClick(offset) else handleWorkspacesRightClick(offset);
         return;
     }
 
-    if (left and !prompt.isActive() and s.title_cache.is_layout_valid and
+    if (s.title_cache.is_layout_valid and
         x >= s.title_cache.title_x and x < s.title_cache.title_x + s.title_cache.title_width)
     {
-        handleTitleClick(s, x - s.title_cache.title_x);
+        if (right) {
+            if (!prompt.isActive()) prompt.toggle();
+        } else if (!prompt.isActive()) {
+            handleTitleClick(s, x - s.title_cache.title_x);
+        }
         return;
     }
 
@@ -1453,6 +1473,13 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
         x >= s.layout_cache.layout_x and x < s.layout_cache.layout_x + s.layout_cache.layout_w)
     {
         if (left) withTilingGrabForClick(tiling.toggleLayout) else withTilingGrabForClick(tiling.toggleLayoutReverse);
+        return;
+    }
+
+    if (s.layout_cache.has_variants_bounds and
+        x >= s.layout_cache.variants_x and x < s.layout_cache.variants_x + s.layout_cache.variants_w)
+    {
+        if (left) withTilingGrabForClick(tiling.stepLayoutVariant) else withTilingGrabForClick(tiling.stepLayoutVariantReverse);
         return;
     }
 }
@@ -1467,18 +1494,30 @@ fn handleWorkspacesClick(offset: u16) void {
     workspaces.switchTo(@intCast(idx));
 }
 
+/// `offset` is the click position relative to the workspaces segment's start.
+/// Sends the currently focused window to the clicked workspace; a no-op when
+/// there's no focused window or it's already exclusively on that workspace
+/// (see `workspaces.moveWindowTo`).
+fn handleWorkspacesRightClick(offset: u16) void {
+    const cell_w = tags.getCachedWorkspaceWidth();
+    if (cell_w == 0) return;
+    const ws_state = workspaces.getState() orelse return;
+    const idx: usize = @intCast(offset / cell_w);
+    if (idx >= ws_state.workspaces.len) return;
+    const win = focus.getFocused() orelse return;
+    workspaces.moveWindowTo(win, @intCast(idx)) catch |e| debug.warnOnErr(e, "bar workspace right-click move");
+}
+
 /// `offset` is the click position relative to the title segment's start.
 /// Resolves which window is under the click via the per-window title/geometry
 /// data `syncTitleCache` cached on the last full draw, then:
-///   - no window under the click → opens the prompt
+///   - no window under the click → no-op (empty title is handled by the
+///     right-click prompt path in `handleButtonPress`, before this is called)
 ///   - the window is minimized → unminimizes that window
 ///   - the window is already focused → minimizes it
 ///   - otherwise → focuses it
 fn handleTitleClick(s: *State, offset: u16) void {
-    if (s.title_cache.workspace_windows.items.len == 0) {
-        if (!prompt.isActive()) prompt.toggle();
-        return;
-    }
+    if (s.title_cache.workspace_windows.items.len == 0) return;
 
     const ctx = title.TitleRenderContext{
         .dc = s.render.dc,
