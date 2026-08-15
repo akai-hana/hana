@@ -37,7 +37,19 @@ var signal_pipe: [2]std.posix.fd_t = .{ -1, -1 };
 
 const EventHandler = *const fn (event: *anyopaque) void;
 
+/// Casts a `fn(*T) void` event handler to the generic `EventHandler` pointer
+/// type via @ptrCast. Safe only because every registered handler takes a
+/// single pointer argument and returns void, matching EventHandler's shape
+/// exactly; the check below enforces that at comptime so a handler with the
+/// wrong signature fails to build instead of miscompiling through the cast.
 inline fn asHandler(comptime f: anytype) EventHandler {
+    const info = @typeInfo(@TypeOf(f)).@"fn";
+    if (info.params.len != 1)
+        @compileError("event handler must take exactly one parameter, got " ++ @typeName(@TypeOf(f)));
+    if (info.params[0].type == null or @typeInfo(info.params[0].type.?) != .pointer)
+        @compileError("event handler's parameter must be a single-item pointer, got " ++ @typeName(@TypeOf(f)));
+    if (info.return_type != void)
+        @compileError("event handler must return void, got " ++ @typeName(@TypeOf(f)));
     return @ptrCast(&f);
 }
 
