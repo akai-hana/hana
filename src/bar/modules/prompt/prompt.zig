@@ -303,12 +303,8 @@ fn acceptGhost() bool {
         0;
     if (n_ghost > 0) {
         vim.insertSlice(&g.vim_state, g.ghost_buf[0..n_ghost]);
-        g.ghost_len = 0;
     }
-    g.is_blink_visible = true;
-    g.layout_dirty = true;
-    g.redraw_pending = true;
-    return true;
+    return finishKeyPress(.none, true);
 }
 
 pub fn draw(
@@ -340,22 +336,31 @@ fn handleAction(action: vim.Action) void {
         .none => {},
         .deactivate => deactivate(),
         .spawn => {
-            const cmd = g.vim_state.buf[0..g.vim_state.len];
-            if (cmd.len > 0) spawnCommand(cmd);
+            runPromptCommand();
             deactivate();
         },
         // :w — execute the command but keep the prompt open for the next one.
         // Clears the buffer and resets to INSERT like activate(), minus the
         // keyboard-grab overhead (the grab is already held).
         .spawn_keep => {
-            const cmd = g.vim_state.buf[0..g.vim_state.len];
-            if (cmd.len > 0) spawnCommand(cmd);
-            g.vim_state.reset();
-            g.ghost_len = 0;
-            g.has_space = false;
-            g.layout_dirty = true;
+            runPromptCommand();
+            resetPromptEditing();
         },
     }
+}
+
+/// Run the command currently in the buffer, if any.
+fn runPromptCommand() void {
+    const cmd = g.vim_state.buf[0..g.vim_state.len];
+    if (cmd.len > 0) spawnCommand(cmd);
+}
+
+/// Reset editing state and prompt-editing flags, preserving heap allocations.
+fn resetPromptEditing() void {
+    g.vim_state.reset();
+    g.ghost_len = 0;
+    g.has_space = false;
+    g.layout_dirty = true;
 }
 
 // Private — activate / deactivate
@@ -364,9 +369,7 @@ fn handleAction(action: vim.Action) void {
 /// heap-allocated buffers (buf, yank_buf, undo/redo stacks, etc.).
 /// Grabs the keyboard, resets editing state, and marks the prompt active.
 fn activate() void {
-    g.vim_state.reset(); // reset editing state, preserve heap allocations
-    g.ghost_len = 0;
-    g.has_space = false;
+    resetPromptEditing();
     // Load completions and history on first activation.
     if (g.comp_count == 0) loadCompletions();
     if (!g.is_hist_loaded) loadHistory();
@@ -426,13 +429,12 @@ fn loadCompletions() void {
     const path_env_ptr = c.getenv("PATH") orelse return;
     const path_env = std.mem.span(path_env_ptr);
 
-    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var dir_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
     var dir_it = std.mem.splitScalar(u8, path_env, ':');
     outer: while (dir_it.next()) |dir_path| {
-        if (dir_path.len == 0 or dir_path.len >= dir_buf.len) continue;
-        @memcpy(dir_buf[0..dir_path.len], dir_path);
-        dir_buf[dir_path.len] = 0;
+        if (dir_path.len == 0) continue;
+        _ = std.fmt.bufPrintZ(&dir_buf, "{s}", .{dir_path}) catch continue;
 
         const dirp = c.opendir(&dir_buf) orelse continue;
         defer _ = c.closedir(dirp);
@@ -466,12 +468,8 @@ fn isRunnableFile(dir_path: []const u8, name: []const u8) bool {
     if (name.len == 0 or name.len > max_completion_len) return false;
     if (name[0] == '.') return false;
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (dir_path.len + 1 + name.len + 1 > full_path_buf.len) return false;
-    @memcpy(full_path_buf[0..dir_path.len], dir_path);
-    full_path_buf[dir_path.len] = '/';
-    @memcpy(full_path_buf[dir_path.len + 1 ..][0..name.len], name);
-    full_path_buf[dir_path.len + 1 + name.len] = 0;
+    var full_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    _ = std.fmt.bufPrintZ(&full_path_buf, "{s}/{s}", .{ dir_path, name }) catch return false;
     return c.access(&full_path_buf, c.X_OK) == 0;
 }
 

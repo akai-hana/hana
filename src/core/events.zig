@@ -29,11 +29,6 @@ const FD_SIGNAL = 1;
 /// signal pipe and timer paths get fair scheduling against a chatty client.
 const MAX_EVENTS_PER_BATCH: usize = 128;
 
-// Aliases to canonical definitions in constants.zig.
-const EVENT_DISPATCH_TABLE = constants.Limits.EVENT_DISPATCH_TABLE;
-const MAX_KEYBIND_COOKIES = constants.Limits.MAX_KEYBIND_COOKIES;
-const LOCK_MODIFIERS = constants.LOCK_MODIFIERS;
-
 // Self-pipe for portable signal delivery.
 // Signal handlers write to [1]; the event loop polls [0].
 var signal_pipe: [2]std.posix.fd_t = .{ -1, -1 };
@@ -46,16 +41,20 @@ inline fn asHandler(comptime f: anytype) EventHandler {
     return @ptrCast(&f);
 }
 
+inline fn eventCast(comptime T: type, event: *anyopaque) T {
+    return @ptrCast(@alignCast(event));
+}
+
 /// Fans out PropertyNotify to both bar (title) and window (WM_PROTOCOLS cache).
 fn handlePropertyNotify(event: *anyopaque) void {
-    const e: *xcb.xcb_property_notify_event_t = @ptrCast(@alignCast(event));
+    const e = eventCast(*xcb.xcb_property_notify_event_t, event);
     bar.handlePropertyNotify(e);
     window.handlePropertyNotify(e);
 }
 
 /// Routes ConfigureNotify to the fullscreen deferred-bar-hide/show logic.
 fn handleConfigureNotify(event: *anyopaque) void {
-    const e: *xcb.xcb_configure_notify_event_t = @ptrCast(@alignCast(event));
+    const e = eventCast(*xcb.xcb_configure_notify_event_t, event);
     fullscreen.notifyConfigureIfPending(e.window, e.width, e.height);
 }
 
@@ -63,14 +62,14 @@ fn handleConfigureNotify(event: *anyopaque) void {
 /// This clears any pending deferred bar-show for a window that exits fullscreen
 /// and is then destroyed before it can send a ConfigureNotify.
 fn handleDestroyNotify(event: *anyopaque) void {
-    const e: *xcb.xcb_destroy_notify_event_t = @ptrCast(@alignCast(event));
+    const e = eventCast(*xcb.xcb_destroy_notify_event_t, event);
     fullscreen.onWindowGone(e.window);
     window.handleDestroyNotify(e);
 }
 
 /// O(1) dispatch via a comptime-built table indexed by XCB event type (low 7 bits).
 const dispatch_table = blk: {
-    var table = [_]?EventHandler{null} ** EVENT_DISPATCH_TABLE;
+    var table = [_]?EventHandler{null} ** constants.Limits.EVENT_DISPATCH_TABLE;
 
     table[xcb.XCB_ENTER_NOTIFY] = asHandler(window.handleEnterNotify);
     table[xcb.XCB_LEAVE_NOTIFY] = asHandler(window.handleLeaveNotify);
@@ -102,7 +101,7 @@ fn dispatch(event_type: u8, event: *anyopaque) void {
     // this branch such errors would be silently dropped — making real-world
     // X11 failures (bad grabs, stale window ids, wrong atoms) undiagnosable.
     if (event_type == 0) {
-        const e: *xcb.xcb_generic_error_t = @ptrCast(@alignCast(event));
+        const e = eventCast(*xcb.xcb_generic_error_t, event);
         debug.warn("Unchecked XCB request failed: code={} major={} minor={} resource={x}", .{
             e.error_code, e.major_code, e.minor_code, e.resource_id,
         });
@@ -215,12 +214,12 @@ fn fillGrabCookies(cookies: []CookieEntry) usize {
 
         // Check once per keybinding that the full lock-modifier set fits.
         // Avoids a per-lock branch and prevents partial grabs if the buffer is nearly full.
-        if (n + LOCK_MODIFIERS.len > cookies.len) {
-            debug.warn("Too many keybindings. Increase MAX_KEYBIND_COOKIES (currently {})", .{MAX_KEYBIND_COOKIES});
+        if (n + constants.LOCK_MODIFIERS.len > cookies.len) {
+            debug.warn("Too many keybindings. Increase MAX_KEYBIND_COOKIES (currently {})", .{constants.Limits.MAX_KEYBIND_COOKIES});
             break;
         }
 
-        for (LOCK_MODIFIERS) |lock| {
+        for (constants.LOCK_MODIFIERS) |lock| {
             cookies[n] = .{
                 .cookie = xcb.xcb_grab_key_checked(
                     cs.conn,
@@ -259,7 +258,7 @@ pub fn grabKeybindings() void {
     const cs = core.getState();
     _ = xcb.xcb_ungrab_key(cs.conn, xcb.XCB_GRAB_ANY, cs.root, xcb.XCB_MOD_MASK_ANY);
 
-    var cookies: [MAX_KEYBIND_COOKIES]CookieEntry = undefined;
+    var cookies: [constants.Limits.MAX_KEYBIND_COOKIES]CookieEntry = undefined;
     const n = fillGrabCookies(&cookies);
 
     const failed = checkGrabCookies(cookies[0..n]);
@@ -353,8 +352,7 @@ fn handleXcbEvents() void {
     // timer paths (clock, cursor blink) indefinitely. Unread events stay in the
     // socket buffer and the fd stays readable, so they're handled on the next
     // poll round.
-    var handled: usize = 0;
-    while (handled < MAX_EVENTS_PER_BATCH) : (handled += 1) {
+    for (0..MAX_EVENTS_PER_BATCH) |_| {
         const event = xcb.xcb_poll_for_event(conn) orelse break;
         defer std.c.free(event);
         dispatch(@as(*u8, @ptrCast(event)).*, event);

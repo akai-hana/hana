@@ -11,6 +11,20 @@ const parser = @import("parser");
 const carousel = @import("carousel");
 const utils = @import("utils");
 
+/// Warn-and-return-default for an out-of-range value, shared by getInRange and
+/// getScalableInRange so the warning wording (and its boilerplate) lives once.
+inline fn reject(
+    comptime T: type,
+    key: []const u8,
+    value: T,
+    comptime verb: []const u8,
+    bound: T,
+    default: anytype,
+) @TypeOf(default) {
+    debug.warn("Value for '{s}' ({any}) " ++ verb ++ " ({any}), using default", .{ key, value, bound });
+    return default;
+}
+
 /// Returns `default` when the key is absent, the wrong type, or out of range
 /// (values are warn-and-revert, not clamped).
 fn getInRange(
@@ -28,29 +42,18 @@ fn getInRange(
             const i = section.getInt(key) orelse return default;
             // A negative int would trap on the @intCast below; warn-and-default
             // it here so the out-of-range contract holds for negatives too.
-            if (i < 0) {
-                debug.warn("Value for '{s}' ({d}) below minimum (0), using default", .{ key, i });
-                return default;
-            }
+            if (i < 0) return reject(i64, key, i, "below minimum", 0, default);
             // Guard the type's own range before the cast: an int larger than T
             // can hold would trap on @intCast even when no explicit max is set.
             // (For u64/usize the comparison is comptime-folded away.)
-            if (std.math.maxInt(T) < std.math.maxInt(i64) and i > std.math.maxInt(T)) {
-                debug.warn("Value for '{s}' ({d}) above maximum ({d}), using default", .{ key, i, std.math.maxInt(T) });
-                return default;
-            }
+            if (std.math.maxInt(T) < std.math.maxInt(i64) and i > std.math.maxInt(T))
+                return reject(i64, key, i, "above maximum", std.math.maxInt(T), default);
             break :blk @as(T, @intCast(i));
         },
         else => @compileError("Unsupported type"),
     };
-    if (comptime min) |m| if (value < m) {
-        debug.warn("Value for '{s}' ({any}) below minimum ({any}), using default", .{ key, value, m });
-        return default;
-    };
-    if (comptime max) |m| if (value > m) {
-        debug.warn("Value for '{s}' ({any}) above maximum ({any}), using default", .{ key, value, m });
-        return default;
-    };
+    if (comptime min) |m| if (value < m) return reject(T, key, value, "below minimum", m, default);
+    if (comptime max) |m| if (value > m) return reject(T, key, value, "above maximum", m, default);
     return value;
 }
 

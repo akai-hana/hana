@@ -187,6 +187,23 @@ pub inline fn configureWithHintsAndRaiseIfVisible(ctx: *const LayoutCtx, win: u3
     }
 }
 
+/// Prefer `ctx.focused_win` when it appears in `windows`, else `fallback`.
+pub fn focusedElse(ctx: *const LayoutCtx, windows: []const u32, fallback: u32) u32 {
+    if (ctx.focused_win) |f| if (std.mem.indexOfScalar(u32, windows, f) != null) return f;
+    return fallback;
+}
+
+/// Raise/configure `top` on-screen and push every other window in `windows`
+/// offscreen. Only raises on-screen (respects LayoutCtx.is_background via
+/// configureWithHintsAndRaiseIfVisible).
+pub fn showOneHideRest(ctx: *const LayoutCtx, windows: []const u32, top: u32, top_rect: utils.Rect) void {
+    configureWithHintsAndRaiseIfVisible(ctx, top, top_rect);
+    for (windows) |win| {
+        if (win == top) continue;
+        pushWindowOffscreenAndInvalidate(ctx, win);
+    }
+}
+
 /// Apply ICCCM §4.1.2.3 hints to a raw rect: increment snap, max-size clamp,
 /// then aspect clamp (with a re-snap, since a client may declare both).
 /// Declared minimums are intentionally NOT enforced — tiling owns window size,

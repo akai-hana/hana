@@ -27,35 +27,38 @@ pub const Value = union(enum) {
     scalable: ScalableValue,
 
     /// Duplicate keys accumulate into a flat array (see `accumulate`), so
-    /// `.array` cases below implement "later declaration wins" — the latest
-    /// value is the LAST element, array consumers see the full accumulation.
-    /// Not `inline`: recursion into an accumulated duplicate array is rejected.
-    pub fn asInt(self: Value) ?i64 {
+    /// scalar reads implement "later declaration wins" — the latest value is
+    /// the LAST element, array consumers see the full accumulation. Not
+    /// `inline`: recursion into an accumulated duplicate array is rejected.
+    /// Routes every scalar accessor through one shared last-element descent.
+    fn lastScalar(self: Value) ?Value {
         return switch (self) {
+            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].lastScalar() else null,
+            else => self,
+        };
+    }
+    pub fn asInt(self: Value) ?i64 {
+        return switch (self.lastScalar() orelse return null) {
             .integer => |i| i,
-            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asInt() else null,
             else => null,
         };
     }
     pub fn asBool(self: Value) ?bool {
-        return switch (self) {
+        return switch (self.lastScalar() orelse return null) {
             .boolean => |b| b,
             .integer => |i| i != 0,
-            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asBool() else null,
             else => null,
         };
     }
     pub fn asString(self: Value) ?[]const u8 {
-        return switch (self) {
+        return switch (self.lastScalar() orelse return null) {
             .string => |s| s,
-            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asString() else null,
             else => null,
         };
     }
     pub fn asColor(self: Value) ?u32 {
-        return switch (self) {
+        return switch (self.lastScalar() orelse return null) {
             .color => |c| c,
-            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asColor() else null,
             else => null,
         };
     }
@@ -70,10 +73,9 @@ pub const Value = union(enum) {
     /// `%`-suffixed ones). `.integer` is retained for callers needing a true
     /// integer (workspace/master counts) and widened losslessly here.
     pub fn asScalable(self: Value) ?ScalableValue {
-        return switch (self) {
+        return switch (self.lastScalar() orelse return null) {
             .scalable => |s| s,
             .integer => |i| ScalableValue.absolute(@floatFromInt(i)),
-            .array => |arr| if (arr.items.len > 0) arr.items[arr.items.len - 1].asScalable() else null,
             else => null,
         };
     }
@@ -500,33 +502,17 @@ const Parser = struct {
 
         // Single-quoted strings are literal (matching TOML): backslashes kept
         // verbatim, no escapes — 'C:\temp' would otherwise be rejected for
-        // its invalid '\t'.
-        if (quote == '\'') {
-            var end_pos = start;
-            while (end_pos < self.content.len and self.content[end_pos] != quote) {
-                if (self.content[end_pos] == '\n') return ParseError.InvalidValue;
-                end_pos += 1;
-            }
-            if (end_pos >= self.content.len) return ParseError.InvalidValue;
-            const result = try self.allocator.dupe(u8, self.content[start..end_pos]);
-            self.pos = end_pos + 1;
-            return result;
-        }
-
-        // Scan ahead to determine whether escape processing is needed.
+        // its invalid '\t'. Double-quoted strings scan only for the escape
+        // terminator here; actual escape processing happens below.
         var has_escapes = false;
         var end_pos = start;
         while (end_pos < self.content.len) {
             const c = self.content[end_pos];
             if (c == quote) break;
-            if (c == '\\') {
-                has_escapes = true;
-                break;
-            }
+            if (c == '\\' and quote == '"') { has_escapes = true; break; }
             if (c == '\n') return ParseError.InvalidValue;
             end_pos += 1;
         }
-
         if (!has_escapes) {
             if (end_pos >= self.content.len) return ParseError.InvalidValue;
             const result = try self.allocator.dupe(u8, self.content[start..end_pos]);
@@ -675,16 +661,14 @@ const Parser = struct {
         // Bare colors require an explicit '#' or '0x' prefix: the old
         // hex-only sniffing parsed all-a-f identifiers ("dead", "cafe") as
         // `.color` instead of `.string`, breaking asString()/ACTION_MAP
-        // lookups for layout/variant/segment names.
-        if (raw[0] == '#') {
-            // A leading '#' marks the token as a color, not a comment. If it
-            // does not form a valid color the line is invalid — the same
-            // outcome as a bare '#' after '=' always produced before.
-            if (parseColor(raw)) |color| return .{ .color = color } else |_| return ParseError.InvalidValue;
-        }
-
-        if (raw.len > 2 and raw[0] == '0' and (raw[1] == 'x' or raw[1] == 'X')) {
-            if (parseColor(raw)) |color| return .{ .color = color } else |_| {}
+        // lookups for layout/variant/segment names. A leading '#' marks the
+        // token as a color, not a comment; if it does not form a valid color
+        // the line is invalid — the same outcome as a bare '#' after '='
+        // always produced before. An invalid `0x...` instead falls through
+        // to the string fallback below.
+        if (raw[0] == '#' or (raw.len > 2 and raw[0] == '0' and (raw[1] == 'x' or raw[1] == 'X'))) {
+            if (parseColor(raw)) |color| return .{ .color = color };
+            if (raw[0] == '#') return ParseError.InvalidValue;
         }
 
         if (std.fmt.parseInt(i64, raw, 10)) |int_val| return .{ .integer = int_val } else |_| {

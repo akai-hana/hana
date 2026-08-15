@@ -124,7 +124,7 @@ pub const TitleSnapshot = struct {
     /// title cache has multi-window data).
     titles: []const []const u8 = &.{},
 
-    /// Pre-fetched window geometry (see `fetchWindowGeom`), indexed like
+    /// Pre-fetched window geometry (see `batchFetchWindowInfosInto`), indexed like
     /// `titles`. Non-blocking fallback for windows the tiling cache doesn't
     /// cover (e.g. floating), so this path — including the drawCached fast
     /// path on the carousel thread — never issues an xcb_get_geometry
@@ -305,7 +305,7 @@ pub fn hitTest(
     // `.title` may point into `owned_titles`' memory.
     var window_info_buf: [max_visible_windows]WindowInfo = undefined;
     var owned_titles: [max_visible_windows]?[]const u8 = undefined;
-    for (owned_titles[0..win_count]) |*t| t.* = null;
+    @memset(owned_titles[0..win_count], null);
     defer for (owned_titles[0..win_count]) |t| if (t) |s| allocator.free(s);
 
     const info_count = try gatherWindowInfos(ctx, snapshot, allocator, windows[0..win_count], &window_info_buf, &owned_titles);
@@ -358,19 +358,6 @@ pub fn fetchWindowTitleInto(
     ) catch {};
 }
 
-/// Fetch the geometry of `win`, preferring the tiling cache (zero round-trips)
-/// and falling back to a blocking xcb_get_geometry on a miss; returns an
-/// offscreen sentinel if the reply can't be read.
-///
-/// Must be called on the MAIN THREAD (same contract as `fetchWindowTitleInto`).
-/// Called once per non-minimized workspace window so `drawSegmentedTitles` —
-/// including the carousel-thread `drawCached` fast path — never issues its own
-/// xcb_get_geometry for windows the tiling cache doesn't cover.
-pub fn fetchWindowGeom(conn: *xcb.xcb_connection_t, win: u32) utils.Rect {
-    if (tiling.getWindowGeom(win)) |cached| return cached;
-    return collectGeometryReply(conn, xcb.xcb_get_geometry(conn, win));
-}
-
 /// Collect the reply for a fired `xcb_get_geometry` request without a blocking
 /// wait when the reply is already buffered (see `bench.pollReply`). In a
 /// non-bench build this reduces to a single blocking reply call. Returns the
@@ -384,12 +371,6 @@ fn tryCollectGeometryReply(conn: *xcb.xcb_connection_t, cookie: xcb.xcb_get_geom
     const r = xcb.xcb_get_geometry_reply(conn, cookie, null) orelse return null;
     defer std.c.free(r);
     return geometryFromReply(r);
-}
-
-/// `tryCollectGeometryReply`, falling back to the off-screen sentinel when
-/// the reply can't be read.
-fn collectGeometryReply(conn: *xcb.xcb_connection_t, cookie: xcb.xcb_get_geometry_cookie_t) utils.Rect {
-    return tryCollectGeometryReply(conn, cookie) orelse offscreen_rect;
 }
 
 fn geometryFromReply(r: *xcb.xcb_get_geometry_reply_t) utils.Rect {
@@ -522,7 +503,7 @@ const WindowDataBatch = struct {
 
 /// Batch pre-fetch of title and geometry for every window in `wins`, writing
 /// one entry per window into `out_titles`/`out_geoms` in parallel order.
-/// Replaces the sequential `fetchWindowTitleInto` + `fetchWindowGeom` loop in
+/// Replaces the sequential per-window `fetchWindowTitleInto` loop in
 /// `bar.captureStateIntoSlot`.
 ///
 /// `focused_idx` is the focused window's index; its already-fetched
@@ -555,18 +536,14 @@ pub fn batchFetchWindowInfosInto(
     // Assemble the parallel output lists. A missing title becomes "" so
     // `out_titles` stays index-aligned with `out_geoms` and `wins`.
     for (wins, 0..) |win, i| {
-        if (focused_idx == i) {
-            // Duped like every other title: `focused_title` lives in the
-            // snapshot's separate buffer, freed independently of
-            // window_titles — an alias would dangle once that deinit's.
-            const owned = title_allocator.dupe(u8, focused_title) catch null;
-            if (owned) |t|
-                out_titles.append(allocator, t) catch {}
-            else
-                out_titles.append(allocator, "") catch {};
-        } else {
-            out_titles.append(allocator, owned_titles[i] orelse "") catch {};
-        }
+        // Duped like every other title: `focused_title` lives in the
+        // snapshot's separate buffer, freed independently of window_titles —
+        // an alias would dangle once that deinit's.
+        const title: []const u8 = if (focused_idx == i)
+            title_allocator.dupe(u8, focused_title) catch ""
+        else
+            owned_titles[i] orelse "";
+        out_titles.append(allocator, title) catch {};
 
         const geom: utils.Rect = batch.geometryFor(i, minimized.contains(win), null) orelse offscreen_rect;
         out_geoms.append(allocator, geom) catch {};
@@ -785,7 +762,7 @@ fn drawSegmentedTitles(
     // initialized — previously this zero-filled all `max_visible_windows`
     // slots every call regardless of how many windows were visible.
     var owned_titles: [max_visible_windows]?[]const u8 = undefined;
-    for (owned_titles[0..win_count]) |*t| t.* = null;
+    @memset(owned_titles[0..win_count], null);
     defer for (owned_titles[0..win_count]) |t| if (t) |s| allocator.free(s);
 
     const info_count = try gatherWindowInfos(

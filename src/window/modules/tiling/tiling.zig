@@ -338,12 +338,7 @@ pub fn getWindowFilteredIndex(win: u32) ?usize {
     const s = getStateOpt() orelse return null;
     if (!s.is_enabled) return null;
     std.debug.assert(tracking.isOnCurrentWorkspace(win));
-    var filtered_idx: usize = 0;
-    for (s.windows.items()) |w| {
-        if (w == win) return filtered_idx;
-        if (tracking.isOnCurrentWorkspace(w)) filtered_idx += 1;
-    }
-    return null;
+    return std.mem.indexOfScalar(u32, collectWorkspaceWindows(s, null), win);
 }
 
 /// Add `win` to the tiling list and place it at workspace-filtered position
@@ -542,22 +537,19 @@ pub fn stepLayoutVariantReverse() void {
     applyLayoutVariantStep(false);
 }
 
+/// Cycle one layout-variant enum, then log its new value with `label`.
+inline fn cycleVariant(comptime T: type, variant: *T, comptime label: []const u8, comptime forward: bool) void {
+    cycleEnum(variant, forward);
+    debug.info("{s} variant: {s}", .{ label, @tagName(variant.*) });
+}
+
 /// Shared body for stepLayoutVariant/stepLayoutVariantReverse.
 inline fn applyLayoutVariantStep(comptime forward: bool) void {
     const s = getState();
     switch (s.config.layout) {
-        .master => {
-            cycleEnum(&s.config.layout_variants.master, forward);
-            debug.info("Master variant: {s}", .{@tagName(s.config.layout_variants.master)});
-        },
-        .monocle => {
-            cycleEnum(&s.config.layout_variants.monocle, forward);
-            debug.info("Monocle variant: {s}", .{@tagName(s.config.layout_variants.monocle)});
-        },
-        .grid => {
-            cycleEnum(&s.config.layout_variants.grid, forward);
-            debug.info("Grid variant: {s}", .{@tagName(s.config.layout_variants.grid)});
-        },
+        .master => cycleVariant(MasterVariant, &s.config.layout_variants.master, "Master", forward),
+        .monocle => cycleVariant(MonocleVariant, &s.config.layout_variants.monocle, "Monocle", forward),
+        .grid => cycleVariant(GridVariant, &s.config.layout_variants.grid, "Grid", forward),
         else => {
             debug.info("{s} has no variants", .{@tagName(s.config.layout)});
             return;
@@ -703,7 +695,7 @@ pub inline fn scrollViewRight() void {
 ///   • .scroll: snaps the viewport to the focused window when off-screen, then
 ///     retiles.
 ///   • .monocle: always retiles. Monocle hides every window but the focused one
-///     off-screen (monocle.pushBackgroundWindowsOffscreen), not by lowering in
+///     off-screen (layouts.showOneHideRest), not by lowering in
 ///     the stacking order, so the plain raise that setFocus() performs is a
 ///     no-op — only a retile brings the newly focused window back and pushes
 ///     the previous one off.
@@ -878,14 +870,12 @@ inline fn stepLayout(s: *const State, current: Layout, comptime forward: bool) L
 fn calcMasterWidth() f32 {
     const cs = core.getState();
     const raw = scale.scaleMasterWidth(cs.config.tiling.master_width);
-    if (raw < 0) {
-        const ratio = -raw / @as(f32, @floatFromInt(cs.screen.width_in_pixels));
-        return @min(max_master_width_ratio, @max(constants.MIN_MASTER_WIDTH, ratio));
-    }
+    const screen_w: f32 = @floatFromInt(cs.screen.width_in_pixels);
+    const value: f32 = if (raw < 0) -raw / screen_w else raw;
     // Percentage path gets the same [MIN, MAX] clamp as the pixel path — a
     // value at or beyond the cap (e.g. `master_width = 100%`) must still
     // leave the stack column its minimum share of the screen.
-    return @min(max_master_width_ratio, @max(constants.MIN_MASTER_WIDTH, raw));
+    return @min(max_master_width_ratio, @max(constants.MIN_MASTER_WIDTH, value));
 }
 
 fn initState() State {
@@ -984,15 +974,7 @@ fn invokeLayout(
 
 /// Screen area available for tiling, with bar height subtracted from the appropriate edge.
 inline fn calcScreenArea() utils.Rect {
-    const bar_height: u16 = if (bar.isVisible()) bar.getBarHeight() else 0;
-    const cs = core.getState();
-    const is_bar_at_bottom = cs.config.bar.bar_position == .bottom;
-    return .{
-        .x = 0,
-        .y = if (is_bar_at_bottom) 0 else @intCast(bar_height),
-        .width = cs.screen.width_in_pixels,
-        .height = cs.screen.height_in_pixels -| bar_height,
-    };
+    return bar.workAreaRect();
 }
 
 fn selectLayout(s: *State, ws_state: ?*WsState, ws_idx: u8, is_global: bool) Layout {

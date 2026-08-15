@@ -9,16 +9,14 @@ const xcb = core.xcb;
 pub const XK = core.XK;
 
 // Private integer aliases so switch arms can match against raw xcb_keysym_t values.
-// `pub` so prompt.zig's basic insert handler can match on the same values.
-pub const XK_BackSpace = @intFromEnum(XK.BackSpace);
-pub const XK_Return = @intFromEnum(XK.Return);
-pub const XK_Escape = @intFromEnum(XK.Escape);
-pub const XK_Delete = @intFromEnum(XK.Delete);
-pub const XK_Left = @intFromEnum(XK.Left);
-pub const XK_Right = @intFromEnum(XK.Right);
-pub const XK_Home = @intFromEnum(XK.Home);
-pub const XK_End = @intFromEnum(XK.End);
-
+const XK_BackSpace = @intFromEnum(XK.BackSpace);
+const XK_Return = @intFromEnum(XK.Return);
+const XK_Escape = @intFromEnum(XK.Escape);
+const XK_Delete = @intFromEnum(XK.Delete);
+const XK_Left = @intFromEnum(XK.Left);
+const XK_Right = @intFromEnum(XK.Right);
+const XK_Home = @intFromEnum(XK.Home);
+const XK_End = @intFromEnum(XK.End);
 // Public constants
 
 pub const default_max_input: usize = 512;
@@ -85,7 +83,7 @@ const DotRecord = union(DotKind) {
 };
 
 /// Result returned by motion functions.
-pub const MotionResult = struct {
+const MotionResult = struct {
     // Destination cursor position
     pos: usize,
 
