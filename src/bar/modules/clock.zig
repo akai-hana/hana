@@ -27,17 +27,7 @@ const debug = @import("debug");
 
 const c = @cImport(@cInclude("time.h"));
 
-/// Mirrors the ABI of C's `struct timespec` (two word-sized fields on LP64).
-/// We can't use `c.timespec` directly: recent glibc headers define it with
-/// endian-conditional anonymous bitfield padding that Zig's C translator
-/// can't represent, so it comes through as an opaque type. This struct has
-/// the same layout, so a pointer is safe across the C boundary via `@ptrCast`.
-const Timespec = extern struct {
-    tv_sec: i64,
-    tv_nsec: i64,
-};
-
-const ns_per_s: i64 = 1_000_000_000;
+const ns_per_s = std.time.ns_per_s;
 
 /// Measurement string used to pre-compute the clock segment width.
 /// Wider than the default "%Y-%m-%d %H:%M:%S" format (19 chars) so that
@@ -67,10 +57,7 @@ var last_formatted_sec: i64 = -1;
 /// (consumed) by the main thread when it redraws the clock segment.
 var clock_dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-var clock_mutex: utils.Mutex = .{};
-var clock_cond: utils.Condition = .{};
-var clock_quit: bool = false;
-var clock_thread: ?std.Thread = null;
+var clock_thread: utils.CondThread = .{};
 
 /// Format string duped from the config at startThread(); owned by this module
 /// and freed at stopThread(). Only ever read by the clock thread, and only
@@ -83,13 +70,7 @@ pub fn startThread(allocator: std.mem.Allocator, format: []const u8) void {
         return;
     };
     clock_format_owned = owned;
-    // timedWait uses a CLOCK_MONOTONIC deadline; safe to re-init on every
-    // call (init/reload) since the thread is never running while this fires.
-    clock_cond.initMonotonic();
-    clock_mutex.lock();
-    clock_quit = false;
-    clock_mutex.unlock();
-    clock_thread = std.Thread.spawn(.{}, runClockThread, .{}) catch |e| {
+    clock_thread.start(runClockThread, .{&clock_thread}) catch |e| {
         allocator.free(owned);
         clock_format_owned = "";
         debug.err("Clock thread spawn failed: {s}", .{@errorName(e)});
@@ -99,14 +80,7 @@ pub fn startThread(allocator: std.mem.Allocator, format: []const u8) void {
 }
 
 pub fn stopThread(allocator: std.mem.Allocator) void {
-    clock_mutex.lock();
-    clock_quit = true;
-    clock_cond.signal();
-    clock_mutex.unlock();
-    if (clock_thread) |t| {
-        t.join();
-        clock_thread = null;
-    }
+    clock_thread.stop();
     if (clock_format_owned.len > 0) {
         allocator.free(clock_format_owned);
         clock_format_owned = "";
@@ -114,25 +88,25 @@ pub fn stopThread(allocator: std.mem.Allocator) void {
     debug.info("Clock thread stopped", .{});
 }
 
-fn runClockThread() void {
+fn runClockThread(t: *utils.CondThread) void {
     // One-time alignment: sleep just long enough to land on the next whole
     // second so the periodic loop starts in phase with the wall clock.
     // Uses the interruptible timedWait so stopThread() returns immediately
     // even if it fires during alignment.
-    if (!sleepUntilNextSecond()) return;
+    if (!sleepUntilNextSecond(t)) return;
 
     // Plain periodic loop from here on. No re-anchoring: a fixed 1s sleep can
     // accumulate slight scheduling drift over long uptime, but a reload (which
     // re-runs the alignment above) resets it, so it never compounds.
     while (true) {
-        clock_mutex.lock();
-        if (clock_quit) {
-            clock_mutex.unlock();
+        t.mutex.lock();
+        if (t.quit) {
+            t.mutex.unlock();
             return;
         }
-        clock_cond.timedWait(&clock_mutex, ns_per_s) catch {};
-        const quit = clock_quit;
-        clock_mutex.unlock();
+        t.cond.timedWait(&t.mutex, ns_per_s) catch {};
+        const quit = t.quit;
+        t.mutex.unlock();
         if (quit) return;
         // Pango-free: format the time string into the shared cache and flag
         // the main thread to redraw the segment. No DrawContext access here.
@@ -144,28 +118,25 @@ fn runClockThread() void {
 /// requested mid-sleep. A spurious early wakeup or racing quit signal just
 /// recomputes the remaining time and keeps sleeping, so the periodic loop
 /// always starts in phase with the wall clock.
-fn sleepUntilNextSecond() bool {
-    var ts: Timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK_REALTIME, @ptrCast(&ts));
-    var remaining: i64 = ns_per_s - ts.tv_nsec;
+fn sleepUntilNextSecond(t: *utils.CondThread) bool {
+    var remaining: i64 = @intCast(ns_per_s - utils.realtimeNs() % ns_per_s);
     while (remaining > 0) {
-        clock_mutex.lock();
-        if (clock_quit) {
-            clock_mutex.unlock();
+        t.mutex.lock();
+        if (t.quit) {
+            t.mutex.unlock();
             return false;
         }
         // error.Timeout means the full `remaining` elapsed: we've reached
         // the boundary. A normal return is a signal (quit) or spurious wake.
-        const timed_out = if (clock_cond.timedWait(&clock_mutex, @intCast(remaining))) |_|
+        const timed_out = if (t.cond.timedWait(&t.mutex, @intCast(remaining))) |_|
             false
         else |err|
             err == error.Timeout;
-        const quit = clock_quit;
-        clock_mutex.unlock();
+        const quit = t.quit;
+        t.mutex.unlock();
         if (quit) return false;
         if (timed_out) return true;
-        _ = c.clock_gettime(c.CLOCK_REALTIME, @ptrCast(&ts));
-        remaining = ns_per_s - ts.tv_nsec;
+        remaining = @intCast(ns_per_s - utils.realtimeNs() % ns_per_s);
         if (remaining < 0) remaining = 0;
     }
     return true;
@@ -209,39 +180,31 @@ pub fn nextTickWaitMs() i64 {
 
 /// Draws the current time string on the bar. Returns the x position after the segment.
 pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, start_x: u16) !u16 {
-    // Snapshot the cached time string into a local buffer under the cache
-    // lock, then render after releasing it — the clock thread may be formatting
-    // the next second concurrently, so drawSegment must not read a torn string.
-    var buf: [64]u8 = undefined;
-    var len: usize = 0;
+    // The cache lock covers rendering: the clock thread may be formatting the
+    // next second concurrently, so drawSegment must not read a torn string.
     const sec = currentEpochSeconds();
     cache_mutex.lock();
     defer cache_mutex.unlock();
+    var str: []const u8 = undefined;
     if (sec == last_formatted_sec) {
-        len = last_formatted_len;
-        @memcpy(buf[0..len], last_formatted_time[0..len]);
+        str = last_formatted_time[0..last_formatted_len];
     } else {
         // Fallback format path (e.g. before the clock thread's first tick):
         // same guarded cache, so a concurrent publishCurrentTime can't race.
-        const str = try formatTime(&last_formatted_time, sec, config.clock_format);
-        last_formatted_len = str.len;
+        const s = try formatTime(&last_formatted_time, sec, config.clock_format);
+        last_formatted_len = s.len;
         last_formatted_sec = sec;
-        @memcpy(buf[0..str.len], str);
-        len = str.len;
+        str = s;
     }
-    return dc.drawSegment(start_x, height, buf[0..len], config.scaledSegmentPadding(height), config.bg, config.fg);
+    return dc.drawSegment(start_x, height, str, config.scaledSegmentPadding(height), config.bg, config.fg);
 }
 
 fn currentEpochSeconds() i64 {
-    var ts: Timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK_REALTIME, @ptrCast(&ts));
-    return ts.tv_sec;
+    return @intCast(utils.realtimeNs() / ns_per_s);
 }
 
 fn realtimeMs() i64 {
-    var ts: Timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK_REALTIME, @ptrCast(&ts));
-    return ts.tv_sec * 1000 + @divTrunc(ts.tv_nsec, 1_000_000);
+    return @intCast(utils.realtimeNs() / 1_000_000);
 }
 
 /// Formats `sec` (seconds since the Unix epoch) into `buf` using `fmt` as a

@@ -64,15 +64,27 @@ fn snapDistance() i32 {
 fn workArea() WorkArea {
     const cs = core.getState();
     const sw: i32 = cs.screen.width_in_pixels;
-    const sh: i32 = cs.screen.height_in_pixels;
-    const bh: i32 = if (bar.isVisible()) bar.getBarHeight() else 0;
     const bw2: i32 = @as(i32, window.getBorderWidth()) * 2;
-    const bar_at_bottom = cs.config.bar.bar_position == .bottom;
+    const work = bar.workAreaRect();
     return .{
         .left = 0,
         .right = sw - bw2,
-        .top = if (bar_at_bottom) 0 else bh,
-        .bottom = (if (bar_at_bottom) sh - bh else sh) - bw2,
+        .top = work.y,
+        .bottom = work.y + @as(i32, work.height) - bw2,
+    };
+}
+
+/// Which sides of the window the grabbed corner anchors to (left/top = the
+/// corner is a left or top edge). Collapses the four per-axis corner switches
+/// in updateDrag into two booleans.
+const CornerAxes = struct { left: bool, top: bool };
+
+inline fn cornerAxes(corner: ResizeCorner) CornerAxes {
+    return switch (corner) {
+        .top_left => .{ .left = true, .top = true },
+        .top_right => .{ .left = false, .top = true },
+        .bottom_left => .{ .left = true, .top = false },
+        .bottom_right => .{ .left = false, .top = false },
     };
 }
 
@@ -182,17 +194,11 @@ pub fn updateDrag(x: i16, y: i16) void {
         .move => blk: {
             const raw_x: i32 = @as(i32, drag.start_win_x) + @as(i32, dx);
             const raw_y: i32 = @as(i32, drag.start_win_y) + @as(i32, dy);
-            if (was_pending_float) break :blk utils.Rect{
-                .x = @intCast(raw_x),
-                .y = @intCast(raw_y),
-                .width = drag.start_win_width,
-                .height = drag.start_win_height,
-            };
             const win_w: i32 = drag.start_win_width;
             const win_h: i32 = drag.start_win_height;
             break :blk utils.Rect{
-                .x = @intCast(snapAxis(raw_x, win_w, wa.left, wa.right, snap)),
-                .y = @intCast(snapAxis(raw_y, win_h, wa.top, wa.bottom, snap)),
+                .x = @intCast(if (was_pending_float) raw_x else snapAxis(raw_x, win_w, wa.left, wa.right, snap)),
+                .y = @intCast(if (was_pending_float) raw_y else snapAxis(raw_y, win_h, wa.top, wa.bottom, snap)),
                 .width = drag.start_win_width,
                 .height = drag.start_win_height,
             };
@@ -201,27 +207,16 @@ pub fn updateDrag(x: i16, y: i16) void {
             // Anchor = corner opposite the grabbed one, fixed; the moving
             // corner follows the cursor. min/max(anchor, moving) per axis
             // makes crossing the anchor flip growth automatically.
+            const axes = cornerAxes(drag.resize_corner);
             const start_x: i32 = drag.start_win_x;
             const start_y: i32 = drag.start_win_y;
             const start_w: i32 = drag.start_win_width;
             const start_h: i32 = drag.start_win_height;
 
-            const anchor_x: i32 = switch (drag.resize_corner) {
-                .top_left, .bottom_left => start_x + start_w,
-                .top_right, .bottom_right => start_x,
-            };
-            const anchor_y: i32 = switch (drag.resize_corner) {
-                .top_left, .top_right => start_y + start_h,
-                .bottom_left, .bottom_right => start_y,
-            };
-            const moving_x0: i32 = switch (drag.resize_corner) {
-                .top_left, .bottom_left => start_x,
-                .top_right, .bottom_right => start_x + start_w,
-            };
-            const moving_y0: i32 = switch (drag.resize_corner) {
-                .top_left, .top_right => start_y,
-                .bottom_left, .bottom_right => start_y + start_h,
-            };
+            const anchor_x: i32 = start_x + @as(i32, if (axes.left) start_w else 0);
+            const anchor_y: i32 = start_y + @as(i32, if (axes.top) start_h else 0);
+            const moving_x0: i32 = start_x + @as(i32, if (axes.left) 0 else start_w);
+            const moving_y0: i32 = start_y + @as(i32, if (axes.top) 0 else start_h);
 
             const raw_moving_x: i32 = moving_x0 + @as(i32, dx);
             const raw_moving_y: i32 = moving_y0 + @as(i32, dy);

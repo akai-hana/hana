@@ -5,7 +5,6 @@ const std = @import("std");
 const build = @import("build_options");
 
 const core = @import("core");
-const xcb = core.xcb;
 const utils = @import("utils");
 const debug = @import("debug");
 const window = @import("window");
@@ -140,19 +139,14 @@ pub fn minimizeWindow() void {
     // workspace (every window here is minimized), so the only correct
     // outcome is clearing focus — inlined here rather than going through
     // focus.focusBestAvailable() to keep the grab body free of reply waits.
-    if (restore_target) |t| {
-        if (restore_model) |m| focus.setFocusWithModel(t, .tiling_operation, m);
-    } else {
-        focus.clearFocus();
-    }
+    focus.focusOrClear(restore_target, restore_model, .tiling_operation);
 
     if (saved_fs != null) {
         bar.setBarState(.show_fullscreen);
     } else if (cs.config.tiling.enabled) {
         tiling.retileCurrentWorkspace();
     }
-    bar.redrawInsideGrab();
-    utils.ungrabAndFlush(cs.conn);
+    bar.commitInsideGrab();
 }
 
 /// Restore a window that has already been removed from g_minimized.
@@ -200,15 +194,14 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
         // from focus.getFocused() at retile time (monocle) would otherwise
         // retile against the still-focused old window with no follow-up retile
         // once focus lands on `win`.
-        focus.setFocusWithModel(win, .window_spawn, focus_model);
+        focus.focusWithPreGrabModel(win, .window_spawn, focus_model);
         tiling.retileCurrentWorkspace();
     } else {
         window.restoreFloatGeom(win);
-        focus.setFocusWithModel(win, .window_spawn, focus_model);
+        focus.focusWithPreGrabModel(win, .window_spawn, focus_model);
     }
 
-    bar.redrawInsideGrab();
-    utils.ungrabAndFlush(conn);
+    bar.commitInsideGrab();
 }
 
 pub const RestoreOrder = enum { lifo, fifo };
@@ -216,28 +209,14 @@ pub const RestoreOrder = enum { lifo, fifo };
 pub fn unminimize(order: RestoreOrder) void {
     const ws_idx = tracking.getCurrentWorkspace() orelse return;
 
-    // Buffer position is insertion order: LIFO wants the last matching entry,
-    // FIFO wants the first.
+    // Buffer position is insertion order. One forward scan serves both modes:
+    // FIFO breaks on the first matching entry, LIFO keeps scanning so the last
+    // (most recent) matching entry wins.
     var best_idx: ?usize = null;
-    switch (order) {
-        .lifo => {
-            var i = g_minimized.len;
-            while (i > 0) {
-                i -= 1;
-                if (g_minimized.items[i].entry.workspace_idx == ws_idx) {
-                    best_idx = i;
-                    break;
-                }
-            }
-        },
-        .fifo => {
-            for (g_minimized.constSlice(), 0..) |rec, i| {
-                if (rec.entry.workspace_idx == ws_idx) {
-                    best_idx = i;
-                    break;
-                }
-            }
-        },
+    for (g_minimized.constSlice(), 0..) |rec, i| {
+        if (rec.entry.workspace_idx != ws_idx) continue;
+        best_idx = i;
+        if (order == .fifo) break;
     }
 
     const idx = best_idx orelse return;
@@ -342,15 +321,14 @@ pub fn unminimizeAll() void {
             }
             // Focus must move to focus_target BEFORE the retile — see the
             // matching comment in restoreWindowImpl.
-            focus.setFocusWithModel(focus_target, .window_spawn, focus_model);
+            focus.focusWithPreGrabModel(focus_target, .window_spawn, focus_model);
             tiling.retileCurrentWorkspace();
         } else {
             for (plain_wins) |rec| window.restoreFloatGeom(rec.win);
-            focus.setFocusWithModel(focus_target, .window_spawn, focus_model);
+            focus.focusWithPreGrabModel(focus_target, .window_spawn, focus_model);
         }
 
-        bar.redrawInsideGrab();
-        utils.ungrabAndFlush(conn);
+        bar.commitInsideGrab();
     }
 
     // Each fullscreen window needs its own grab (enterFullscreen owns it).

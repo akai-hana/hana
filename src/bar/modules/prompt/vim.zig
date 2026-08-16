@@ -36,12 +36,8 @@ pub const Mode = enum(u2) {
     replace = 3,
 
     pub fn label(self: Mode) []const u8 {
-        return switch (self) {
-            .insert => "[INSERT]",
-            .normal => "[NORMAL]",
-            .visual => "[VISUAL]",
-            .replace => "[REPLACE]",
-        };
+        const labels = [_][]const u8{ "[INSERT]", "[NORMAL]", "[VISUAL]", "[REPLACE]" };
+        return labels[@intFromEnum(self)];
     }
 };
 
@@ -267,6 +263,13 @@ pub fn resetPendingCmd(vs: *VimState) void {
     vs.pending = .{};
 }
 
+/// Shared tail of the single-char pending handlers: clear pending command
+/// state and report no action.
+inline fn pendingDone(vs: *VimState) Action {
+    resetPendingCmd(vs);
+    return .none;
+}
+
 /// Called by prompt.zig when the prompt is deactivated.
 /// Clears transient recording/replay flags and pending command state so the
 /// engine is in a clean state when the prompt is next activated.
@@ -335,17 +338,20 @@ pub fn handleCtrl(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
             applyHistoryStep(vs, &vs.redo, &vs.undo),
         'w' => if (vs.mode == .insert) ctrlW(vs),
         'u' => if (vs.mode == .insert) ctrlU(vs),
-        'a' => if (vs.mode == .normal) {
-            ctrlAdjustNumber(vs, 1);
-            resetPendingCmd(vs);
-        },
-        'x' => if (vs.mode == .normal) {
-            ctrlAdjustNumber(vs, -1);
+        'a', 'x' => if (vs.mode == .normal) {
+            ctrlAdjustNumber(vs, if (sym == 'a') 1 else -1);
             resetPendingCmd(vs);
         },
         else => {},
     }
     return .none;
+}
+
+/// Leave insert/replace mode for normal mode, clamping the cursor to a valid
+/// normal-mode position.
+inline fn exitToNormal(vs: *VimState) void {
+    clampCursorForNormal(vs);
+    vs.mode = .normal;
 }
 
 /// Handles a key press in insert mode. Returns the Action the caller should take.
@@ -358,8 +364,7 @@ pub fn handleInsert(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
                 @memcpy(vs.dot_insert_buf[0..vs.insert_rec_len], vs.insert_rec_buf[0..vs.insert_rec_len]);
                 vs.dot_insert_len = vs.insert_rec_len;
             }
-            clampCursorForNormal(vs);
-            vs.mode = .normal;
+            exitToNormal(vs);
             resetPendingCmd(vs);
         },
         else => return insertKey(vs, sym),
@@ -427,8 +432,7 @@ fn handleReplaceCharPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
         undoPush(vs);
         applyReplaceChar(vs, ch, cnt);
     }
-    resetPendingCmd(vs);
-    return .none;
+    return pendingDone(vs);
 }
 
 /// Handles input while collecting an ex-command after ':' — :w → spawn_keep,
@@ -486,8 +490,7 @@ fn handleTextObjPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
             applyOperator(vs, vs.pending.op, mr);
         }
     }
-    resetPendingCmd(vs);
-    return .none;
+    return pendingDone(vs);
 }
 
 /// Records the cursor position under mark `sym` (a-z only).
@@ -495,8 +498,7 @@ fn handleTextObjPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 fn handleMarkSetPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     if (sym >= 'a' and sym <= 'z')
         vs.marks[@as(usize, @intCast(sym - 'a'))] = vs.cursor;
-    resetPendingCmd(vs);
-    return .none;
+    return pendingDone(vs);
 }
 
 /// Jumps to (or applies the pending operator up to) mark `sym`.
@@ -508,8 +510,7 @@ fn handleMarkJumpPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
             if (vs.pending.op != 0) applyOperator(vs, vs.pending.op, mr) else setCursor(vs, mr);
         }
     }
-    resetPendingCmd(vs);
-    return .none;
+    return pendingDone(vs);
 }
 
 /// Arms an operator (d/c/y) on the first press, or — on a doubled press
@@ -572,9 +573,7 @@ fn execNormalKey(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) Action {
         'S' => {
             vs.dot = .{ .direct = .{ .sym = 'S', .count = cnt } };
             undoPush(vs);
-            yankRange(vs, 0, vs.len);
-            vs.len = 0;
-            vs.cursor = 0;
+            clearAndYankAll(vs);
             enterInsert(vs, false);
         },
 
@@ -626,6 +625,27 @@ fn execNormalKey(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) Action {
     return .none;
 }
 
+/// Arms a single-char-target prefix and returns true when `sym` was consumed:
+/// i/a after an operator (text object), r (replace char), m (set mark), '
+/// (jump to mark). Callers fall through to execNormalKey when false.
+fn tryArmSingleChar(vs: *VimState, sym: xcb.xcb_keysym_t) bool {
+    return switch (sym) {
+        'i', 'a' => if (vs.pending.op != 0) blk: {
+            vs.pending.awaiting = .{ .text_obj = @truncate(sym) };
+            break :blk true;
+        } else false,
+        'r', 'm' => if (vs.pending.op == 0) blk: {
+            vs.pending.awaiting = if (sym == 'r') .replace_char else .mark_set;
+            break :blk true;
+        } else false,
+        '\'' => blk: {
+            vs.pending.awaiting = .mark_jump;
+            break :blk true;
+        },
+        else => false,
+    };
+}
+
 /// Handles a key press in normal mode. Returns the Action the caller should take.
 ///
 /// Reads top-to-bottom as normal-mode precedence: a pending single-char target
@@ -633,8 +653,14 @@ fn execNormalKey(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) Action {
 /// tried; else a prefix key (d/c/y, i/a after an operator, r/m/') arms state
 /// for the *next* key; else execNormalKey handles it as a bare command.
 pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
-    if (vs.pending.awaiting == .replace_char) return handleReplaceCharPending(vs, sym);
-    if (vs.pending.awaiting == .colon_cmd) return handleColonCmdPending(vs, sym);
+    switch (vs.pending.awaiting) {
+        .none, .find_char, .g_prefix => {},
+        .replace_char => return handleReplaceCharPending(vs, sym),
+        .colon_cmd => return handleColonCmdPending(vs, sym),
+        .text_obj => return handleTextObjPending(vs, sym),
+        .mark_set => return handleMarkSetPending(vs, sym),
+        .mark_jump => return handleMarkJumpPending(vs, sym),
+    }
 
     // ':' with no pending operator arms colon command mode.
     if (sym == ':' and vs.pending.op == 0) {
@@ -655,34 +681,11 @@ pub fn handleNormal(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
         return .none;
     }
 
-    // Normal-mode-specific pending states (only reachable when resolveMotionKey
-    // bailed out because one of these flags was set).
-    if (vs.pending.awaiting == .text_obj) return handleTextObjPending(vs, sym);
-    if (vs.pending.awaiting == .mark_set) return handleMarkSetPending(vs, sym);
-    if (vs.pending.awaiting == .mark_jump) return handleMarkJumpPending(vs, sym);
-
     // Operator arming (d/c/y) and doubled-operator line commands (dd/cc/yy).
     if (sym == 'd' or sym == 'c' or sym == 'y') return handleOperatorArm(vs, sym);
 
-    // i/a after an operator arms the text-object resolver.
-    if ((sym == 'i' or sym == 'a') and vs.pending.op != 0) {
-        vs.pending.awaiting = .{ .text_obj = @truncate(sym) };
-        return .none;
-    }
-
-    // r/m/' prefix arming (single-char targets; not consumed by resolveMotionKey).
-    if (sym == 'r' and vs.pending.op == 0) {
-        vs.pending.awaiting = .replace_char;
-        return .none;
-    }
-    if (sym == 'm' and vs.pending.op == 0) {
-        vs.pending.awaiting = .mark_set;
-        return .none;
-    }
-    if (sym == '\'') {
-        vs.pending.awaiting = .mark_jump;
-        return .none;
-    }
+    // Single-char-target arming: i/a after an operator (text object), r/m/'.
+    if (tryArmSingleChar(vs, sym)) return .none;
 
     return execNormalKey(vs, sym, effectiveCount(vs));
 }
@@ -736,14 +739,12 @@ pub fn handleVisual(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 pub fn handleReplace(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     switch (sym) {
         XK_Escape => {
-            clampCursorForNormal(vs);
-            vs.mode = .normal;
+            exitToNormal(vs);
         },
 
         XK_Return => return .spawn,
 
-        XK_BackSpace => blk: {
-            if (vs.cursor <= vs.replace_origin_cursor) break :blk;
+        XK_BackSpace => if (vs.cursor > vs.replace_origin_cursor) {
             vs.cursor -= 1;
             if (vs.cursor < vs.replace_origin_len) {
                 vs.buf[vs.cursor] = vs.replace_origin_buf[vs.cursor];
@@ -755,8 +756,7 @@ pub fn handleReplace(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
             }
         },
 
-        else => blk: {
-            if (!isPrintableAscii(sym)) break :blk;
+        else => if (isPrintableAscii(sym)) {
             const ch: u8 = @truncate(sym);
             if (vs.cursor < vs.len) {
                 vs.buf[vs.cursor] = ch;
@@ -867,13 +867,6 @@ fn resolveMotionKey(vs: *VimState, sym: xcb.xcb_keysym_t) ?MotionKeyResult {
     // Pending g-prefix.
     if (vs.pending.awaiting == .g_prefix) return resolvePendingGPrefix(vs, sym);
 
-    // Bail out so handleNormal can service its own pending states (text-object,
-    // mark set/jump) before we consume digits or simple motions.
-    switch (vs.pending.awaiting) {
-        .text_obj, .mark_set, .mark_jump => return null,
-        else => {},
-    }
-
     // Digit accumulation.
     if (tryAccumulateDigit(vs, sym)) return .{};
 
@@ -960,17 +953,15 @@ fn setCursor(vs: *VimState, mr: MotionResult) void {
     vs.cursor = @min(mr.pos, vs.len -| 1);
 }
 
-/// Low-level deletion ops; `pub` so prompt.zig's basic insert handler reuses them.
-pub fn deleteBefore(vs: *VimState) void {
+/// Low-level deletion ops; used by the insert/replace handlers.
+fn deleteBefore(vs: *VimState) void {
     if (vs.cursor == 0) return;
     vs.cursor -= 1;
     deleteAfter(vs);
 }
 
-pub fn deleteAfter(vs: *VimState) void {
-    if (vs.cursor >= vs.len) return;
-    std.mem.copyForwards(u8, vs.buf[vs.cursor .. vs.len - 1], vs.buf[vs.cursor + 1 .. vs.len]);
-    vs.len -= 1;
+fn deleteAfter(vs: *VimState) void {
+    deleteRange(vs, vs.cursor, vs.cursor + 1);
 }
 
 fn deleteRange(vs: *VimState, from: usize, to: usize) void {
@@ -996,6 +987,14 @@ fn deleteAndYank(vs: *VimState, from: usize, to: usize) void {
     undoPush(vs);
     yankRange(vs, from, to);
     deleteRange(vs, from, to);
+}
+
+/// Yank the whole buffer, then clear it and move the cursor to 0. Used by
+/// `S` and its dot replay.
+fn clearAndYankAll(vs: *VimState) void {
+    yankRange(vs, 0, vs.len);
+    vs.len = 0;
+    vs.cursor = 0;
 }
 
 fn pasteAfter(vs: *VimState) void {
@@ -1184,9 +1183,7 @@ fn replayDot(vs: *VimState) void {
                 },
                 '~' => for (0..cnt) |_| toggleCaseOnce(vs),
                 'S' => {
-                    yankRange(vs, 0, vs.len);
-                    vs.len = 0;
-                    vs.cursor = 0;
+                    clearAndYankAll(vs);
                     insertSlice(vs, vs.dot_insert_buf[0..vs.dot_insert_len]);
                 },
                 'r' => applyReplaceChar(vs, d.replace_char, cnt),
@@ -1338,14 +1335,9 @@ fn motionFind(vs: *VimState, kind: u8, ch: u8, cnt: u32) MotionResult {
             'F', 'T' => {
                 if (p == 0) break;
                 var q = p - 1;
-                while (vs.buf[q] != ch) {
-                    if (q == 0) {
-                        q = vs.len;
-                        break;
-                    }
-                    q -= 1;
-                }
-                if (q < vs.len) p = if (kind == 'T') q + 1 else q else break;
+                while (q > 0 and vs.buf[q] != ch) q -= 1;
+                if (vs.buf[q] != ch) break;
+                p = if (kind == 'T') q + 1 else q;
             },
             else => {},
         }
@@ -1363,6 +1355,44 @@ fn reverseFindKind(kind: u8) u8 {
 
 // Private — bracket matching and text objects
 
+/// Scans from `start` in the direction of `step` (1 forward, -1 backward)
+/// tracking bracket depth, and returns the index of the bracket matching the
+/// pair endpoint at `start` — null when the run is unbalanced. The starting
+/// character participates in the scan: a forward scan counts an opening
+/// bracket at `start` toward the depth (so a closing bracket that returns the
+/// depth to zero is its match), and a backward scan starts with the closing
+/// bracket under the cursor counted toward the depth and returns the opening
+/// bracket that brings the depth back to zero.
+fn scanBracket(buf: []const u8, start: usize, step: i8, open_ch: u8, close_ch: u8) ?usize {
+    var p = start;
+    var depth: i32 = 0;
+    while (p < buf.len) {
+        const c = buf[p];
+        if (step > 0) {
+            if (c == open_ch) {
+                depth += 1;
+            } else if (c == close_ch) {
+                depth -= 1;
+                if (depth == 0) return p;
+            }
+        } else {
+            if (c == close_ch) {
+                depth += 1;
+            } else if (c == open_ch) {
+                depth -= 1;
+                if (depth == 0) return p;
+            }
+        }
+        if (step > 0) {
+            p += 1;
+        } else {
+            if (p == 0) break;
+            p -= 1;
+        }
+    }
+    return null;
+}
+
 /// Jump to the bracket that matches the one under the cursor.
 fn motionMatchBracket(vs: *VimState) usize {
     if (vs.cursor >= vs.len) return vs.cursor;
@@ -1379,32 +1409,8 @@ fn motionMatchBracket(vs: *VimState) usize {
         else => return vs.cursor,
     };
 
-    var depth: i32 = 0;
-
-    if (pair.forward) {
-        var p = vs.cursor;
-        while (p < vs.len) : (p += 1) {
-            if (vs.buf[p] == pair.open) {
-                depth += 1;
-            } else if (vs.buf[p] == pair.close) {
-                depth -= 1;
-                if (depth == 0) return p;
-            }
-        }
-    } else {
-        var p = vs.cursor;
-        while (true) {
-            if (vs.buf[p] == pair.close) {
-                depth += 1;
-            } else if (vs.buf[p] == pair.open) {
-                depth -= 1;
-                if (depth == 0) return p;
-            }
-            if (p == 0) break;
-            p -= 1;
-        }
-    }
-    return vs.cursor;
+    const step: i8 = if (pair.forward) 1 else -1;
+    return scanBracket(vs.buf, vs.cursor, step, pair.open, pair.close) orelse vs.cursor;
 }
 
 fn resolveTextObject(vs: *VimState, kind: u8, delim: u8) ?MotionResult {
@@ -1473,7 +1479,16 @@ fn textObjQuote(vs: *VimState, q: u8, inner: bool) ?MotionResult {
 }
 
 fn textObjBracket(vs: *VimState, open: u8, close: u8, inner: bool) ?MotionResult {
-    var lo: ?usize = null;
+    // scanBracket matches the bracket at `start` to its partner. Finding the
+    // pair enclosing the cursor is different: the original counts any closing
+    // bracket at or before the cursor toward the depth and keeps scanning for
+    // the outermost opening bracket (a cursor sitting on a closing bracket
+    // still targets the pair around it, not that bracket's own partner). That
+    // scan cannot be expressed through scanBracket, so it stays here; the
+    // forward (matching-close) scan below is scanBracket's, starting at the
+    // found open so the pair's open is counted toward the depth exactly as the
+    // original's `lv + 1` start with a pre-decrement check did.
+    var lv: ?usize = null;
     var depth: i32 = 0;
     var p = vs.cursor;
     while (true) {
@@ -1481,7 +1496,7 @@ fn textObjBracket(vs: *VimState, open: u8, close: u8, inner: bool) ?MotionResult
             depth += 1;
         } else if (vs.buf[p] == open) {
             if (depth == 0) {
-                lo = p;
+                lv = p;
                 break;
             }
             depth -= 1;
@@ -1489,28 +1504,14 @@ fn textObjBracket(vs: *VimState, open: u8, close: u8, inner: bool) ?MotionResult
         if (p == 0) break;
         p -= 1;
     }
-    const lv = lo orelse return null;
+    const lvv = lv orelse return null;
 
-    var hi: ?usize = null;
-    depth = 0;
-    p = lv + 1;
-    while (p < vs.len) : (p += 1) {
-        if (vs.buf[p] == open) {
-            depth += 1;
-        } else if (vs.buf[p] == close) {
-            if (depth == 0) {
-                hi = p;
-                break;
-            }
-            depth -= 1;
-        }
-    }
-    const hv = hi orelse return null;
+    const hv = scanBracket(vs.buf, lvv, 1, open, close) orelse return null;
 
     if (inner) {
-        if (lv + 1 >= hv) return null;
-        return MotionResult{ .pos = hv, .inclusive = false, .range_start_override = lv + 1 };
+        if (lvv + 1 >= hv) return null;
+        return MotionResult{ .pos = hv, .inclusive = false, .range_start_override = lvv + 1 };
     } else {
-        return MotionResult{ .pos = hv + 1, .inclusive = false, .range_start_override = lv };
+        return MotionResult{ .pos = hv + 1, .inclusive = false, .range_start_override = lvv };
     }
 }

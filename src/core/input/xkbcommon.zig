@@ -158,39 +158,51 @@ inline fn retryDelay(attempt: u8) void {
     }
 }
 
-// retrySetup, retryDeviceId, and retryKeymap share a retry-loop shape but
-// differ in return type (!void vs !i32 vs !*xkb_keymap), so they're separate.
+/// Runs `op.call()` up to MAX_ATTEMPTS times, sleeping retryDelay between
+/// tries, and returns the first non-null result (null = that attempt failed).
+/// `op` is a value-capturing struct with a `call(self) ?T` method so each
+/// retrying wrapper passes the args its attempt needs without a closure.
+fn retryPoll(comptime T: type, op: anytype) ?T {
+    for (0..MAX_ATTEMPTS) |i| {
+        if (op.call()) |result| return result;
+        retryDelay(@intCast(i));
+    }
+    return null;
+}
 
 /// Calls xkb_x11_setup_xkb_extension, retrying up to MAX_ATTEMPTS times.
 /// The extension may not be ready immediately at WM startup.
 fn retrySetup(xcb_conn: *anyopaque) !void {
-    for (0..MAX_ATTEMPTS) |i| {
-        const ok = xkb.xkb_x11_setup_xkb_extension(
-            @ptrCast(xcb_conn),
-            xkb.XKB_X11_MIN_MAJOR_XKB_VERSION,
-            xkb.XKB_X11_MIN_MINOR_XKB_VERSION,
-            xkb.XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS,
-            null,
-            null,
-            null,
-            null,
-        );
-        if (ok != 0) return;
-        retryDelay(@intCast(i));
-    }
-    return error.XkbSetupFailed;
+    const attempts = struct {
+        conn: *anyopaque,
+        fn call(self: @This()) ?void {
+            const ok = xkb.xkb_x11_setup_xkb_extension(
+                @ptrCast(self.conn),
+                xkb.XKB_X11_MIN_MAJOR_XKB_VERSION,
+                xkb.XKB_X11_MIN_MINOR_XKB_VERSION,
+                xkb.XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS,
+                null,
+                null,
+                null,
+                null,
+            );
+            return if (ok != 0) {} else null;
+        }
+    }{ .conn = xcb_conn };
+    if (retryPoll(void, attempts) == null) return error.XkbSetupFailed;
 }
 
 /// Calls xkb_x11_get_core_keyboard_device_id, retrying up to MAX_ATTEMPTS
 /// times — the core keyboard device may not be enumerable yet in the same
 /// early-startup window retrySetup guards against.
 fn retryDeviceId(xcb_conn: *anyopaque) !i32 {
-    for (0..MAX_ATTEMPTS) |i| {
-        const device_id = xkb.xkb_x11_get_core_keyboard_device_id(@ptrCast(xcb_conn));
-        if (device_id != -1) return device_id;
-        retryDelay(@intCast(i));
-    }
-    return error.XkbNoKeyboard;
+    return retryPoll(i32, struct {
+        conn: *anyopaque,
+        fn call(self: @This()) ?i32 {
+            const device_id = xkb.xkb_x11_get_core_keyboard_device_id(@ptrCast(self.conn));
+            return if (device_id != -1) device_id else null;
+        }
+    }{ .conn = xcb_conn }) orelse error.XkbNoKeyboard;
 }
 
 /// Minimum reachable keysyms in 8..128 for a keymap to count as populated.
@@ -214,21 +226,20 @@ fn keymapHasEnoughSymbols(km: *xkb_keymap) bool {
 /// Retries keymap creation up to MAX_ATTEMPTS times, accepting only a
 /// sufficiently populated keymap to guard against early-startup races.
 fn retryKeymap(ctx: *xkb_context, xcb_conn: *anyopaque, device_id: i32) !*xkb_keymap {
-    for (0..MAX_ATTEMPTS) |i| {
-        const km = xkb.xkb_x11_keymap_new_from_device(
-            ctx,
-            @ptrCast(xcb_conn),
-            device_id,
-            xkb.XKB_KEYMAP_COMPILE_NO_FLAGS,
-        ) orelse {
-            retryDelay(@intCast(i));
-            continue;
-        };
-
-        if (keymapHasEnoughSymbols(km)) return km;
-
-        xkb.xkb_keymap_unref(km);
-        retryDelay(@intCast(i));
-    }
-    return error.XkbKeymapFailed;
+    return retryPoll(*xkb_keymap, struct {
+        ctx: *xkb_context,
+        conn: *anyopaque,
+        device_id: i32,
+        fn call(self: @This()) ?*xkb_keymap {
+            const km = xkb.xkb_x11_keymap_new_from_device(
+                self.ctx,
+                @ptrCast(self.conn),
+                self.device_id,
+                xkb.XKB_KEYMAP_COMPILE_NO_FLAGS,
+            ) orelse return null;
+            if (keymapHasEnoughSymbols(km)) return km;
+            xkb.xkb_keymap_unref(km);
+            return null;
+        }
+    }{ .ctx = ctx, .conn = xcb_conn, .device_id = device_id }) orelse error.XkbKeymapFailed;
 }

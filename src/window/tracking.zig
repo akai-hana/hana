@@ -119,10 +119,6 @@ pub const Entry = struct {
 const FOCUS_MRU_CAP: usize = 12; // 8-16 entries is plenty for real usage; bounded like g_minimized.
 var g_focus_mru: [constants.MAX_WORKSPACES]utils.BoundedList(u32, FOCUS_MRU_CAP) = @splat(.{});
 
-fn matchMruWin(win: u32, item: u32) bool {
-    return item == win;
-}
-
 /// Record `win` as the most-recently-defocused window on workspace `ws_idx`.
 /// Moves `win` to the top if it was already present, so a window that gets
 /// focused/defocused repeatedly doesn't accumulate duplicate, increasingly
@@ -131,7 +127,7 @@ fn matchMruWin(win: u32, item: u32) bool {
 pub fn pushFocusMru(ws_idx: u8, win: u32) void {
     if (ws_idx >= constants.MAX_WORKSPACES) return;
     const list = &g_focus_mru[ws_idx];
-    if (list.indexOf(win, matchMruWin)) |i| list.orderedRemove(i);
+    if (list.indexOfScalar(win)) |i| list.orderedRemove(i);
     if (!list.append(win)) {
         list.orderedRemove(0);
         _ = list.append(win);
@@ -163,7 +159,7 @@ pub fn popFocusMru(ws_idx: u8, visible: *const fn (u32) bool) ?u32 {
 /// same ID.
 fn removeFromFocusMruAll(win: u32) void {
     for (&g_focus_mru) |*list| {
-        if (list.indexOf(win, matchMruWin)) |i| list.orderedRemove(i);
+        if (list.indexOfScalar(win)) |i| list.orderedRemove(i);
     }
 }
 
@@ -324,6 +320,32 @@ pub inline fn getWorkspaceCount() usize {
 /// any call that may add or remove windows.
 pub fn allWindows() []const Entry {
     return g_windows.items;
+}
+
+/// Iterates tracked entries, yielding only those whose workspace mask contains
+/// `bit`, and optionally skipping a single window id (`skip` = 0 = none).
+/// When the caller wants no mask filter it passes an all-ones `bit`.
+pub const WorkspaceIter = struct {
+    entries: []const Entry,
+    idx: usize = 0,
+    bit: u64,
+    skip: u32,
+
+    pub fn next(self: *WorkspaceIter) ?Entry {
+        while (self.idx < self.entries.len) {
+            const e = self.entries[self.idx];
+            self.idx += 1;
+            if (e.mask & self.bit == 0) continue;
+            if (e.win == self.skip) continue;
+            return e;
+        }
+        return null;
+    }
+};
+
+/// Iterate entries on workspace `bit` (via `WorkspaceIter`), skipping `skip`.
+pub fn onWorkspace(bit: u64, skip: u32) WorkspaceIter {
+    return .{ .entries = allWindows(), .bit = bit, .skip = skip };
 }
 
 /// True when at least one window has ws_idx set in its mask.

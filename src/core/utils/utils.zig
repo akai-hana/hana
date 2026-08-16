@@ -26,16 +26,16 @@ pub var running = std.atomic.Value(bool).init(true);
 /// Consumed by `consumeReload` in the main event loop.
 var should_reload = std.atomic.Value(bool).init(false);
 
-/// Write end of the signal self-pipe (owned by events.zig), registered via
+/// Write end of the signal self-pipe (owned by signals.zig), registered via
 /// `setSignalWriteFd`. The `reload_config` keybinding has no signal byte, so
 /// `reload()` writes a wake byte here to poke the event loop out of poll
 /// immediately instead of waiting for an unrelated signal.
 var signal_write_fd: std.posix.fd_t = -1;
 
 /// Byte `reload()` writes to the signal pipe to wake the event loop. Must not
-/// be a real signal number: `handleSignalPipe` dispatches every byte it reads,
-/// and re-dispatching the wake byte as SIGHUP would make the drain loop call
-/// `reload()` again — writing another wake byte and spinning forever.
+/// be a real signal number: `signals.drainAndDispatch` dispatches every byte
+/// it reads, and re-dispatching the wake byte as SIGHUP would make the drain
+/// loop call `reload()` again — writing another wake byte and spinning forever.
 pub const WAKE_BYTE: u8 = 0xff;
 
 /// Registers the write end of the signal self-pipe so `reload()` can wake the
@@ -187,6 +187,13 @@ pub inline fn getAtomCached(comptime name: []const u8) error{AtomCacheNotInitial
     comptime if (!@hasField(AtomCache, name)) @compileError("atom not in cache: " ++ name);
     const cache = atom_cache orelse return error.AtomCacheNotInitialized;
     return @field(cache, name);
+}
+
+/// Like getAtomCached but returns 0 (the X11 "no atom" sentinel) instead of
+/// erroring when the cache isn't ready. Callers guard `if (atom != 0)` before
+/// issuing an X request.
+pub inline fn getAtomOrZero(comptime name: []const u8) u32 {
+    return getAtomCached(name) catch 0;
 }
 
 // EWMH root window advertisement
@@ -392,9 +399,15 @@ pub inline fn ungrabAndFlush(conn: *xcb.xcb_connection_t) void {
     _ = xcb.xcb_flush(conn);
 }
 
+/// Set a window's border pixel color with a single change-window-attributes
+/// request.
+pub inline fn setBorderPixel(conn: *xcb.xcb_connection_t, win: u32, pixel: u32) void {
+    _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{pixel});
+}
+
 /// Creates a pipe with O_NONBLOCK | O_CLOEXEC on both ends via pipe2(2).
 ///
-/// Shared by input.zig (double-fork spawn plumbing) and events.zig (signal
+/// Shared by input.zig (double-fork spawn plumbing) and signals.zig (signal
 /// self-pipe), avoiding byte-equivalent copies of this in each.
 pub fn makePipe() ![2]std.posix.fd_t {
     var fds: [2]std.posix.fd_t = undefined;
@@ -534,6 +547,24 @@ pub fn BoundedList(comptime T: type, comptime capacity: usize) type {
         pub fn indexOf(self: *const Self, context: anytype, comptime match: fn (@TypeOf(context), T) bool) ?usize {
             for (self.items[0..self.len], 0..) |item, i| {
                 if (match(context, item)) return i;
+            }
+            return null;
+        }
+
+        /// Returns the index of the first item whose `.id` field equals `id`,
+        /// or null. For element types keyed by a single `id` field.
+        pub fn indexOfById(self: *const Self, id: u32) ?usize {
+            for (self.items[0..self.len], 0..) |item, i| {
+                if (item.id == id) return i;
+            }
+            return null;
+        }
+
+        /// Returns the index of the first item equal to `scalar`, or null.
+        /// For scalar element types (e.g. u32 window-ID lists).
+        pub fn indexOfScalar(self: *const Self, scalar: T) ?usize {
+            for (self.items[0..self.len], 0..) |item, i| {
+                if (item == scalar) return i;
             }
             return null;
         }

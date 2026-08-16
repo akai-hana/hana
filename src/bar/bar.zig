@@ -114,7 +114,7 @@ const BarSnapshot = struct {
     is_title_invalidated: bool = false,
     is_full_redraw: bool = true, // workspace_count changed or full-redraw forced
     is_workspace_dirty: bool = true, // workspace state changed
-    is_title_dirty: bool = true, // title / focus / minimised state changed
+    is_title_dirty: bool = true, // title / focus / minimized state changed
 
     /// Pre-fetched window titles, indexed parallel to `current_workspace_windows`;
     /// fetched once per snapshot so the segmented-title draw path never issues
@@ -694,7 +694,7 @@ fn minimizedTitleFor(wins: []const u32, minimized: *const std.AutoHashMapUnmanag
     return if (wins.len > 0 and minimized.contains(wins[0]) and titles.len > 0) titles[0] else "";
 }
 
-/// Returns true when the two minimised sets differ in membership (not just count).
+/// Returns true when the two minimized sets differ in membership (not just count).
 fn hasMinimizedSetChanged(
     a: *const std.AutoHashMapUnmanaged(u32, void),
     b: *const std.AutoHashMapUnmanaged(u32, void),
@@ -943,12 +943,11 @@ fn createBar(height: u16, y_pos: i16) !BarSetup {
 fn createBarWindow(height: u16, y_pos: i16) BarWindowSetup {
     const cs = core.getState();
     const want_transparency = cs.config.bar.getAlpha16() < 0xFFFF;
-    const visual_info = if (want_transparency)
+    const visual_id = if (want_transparency)
         drawing.findVisualByDepth(cs.screen, 32)
     else
-        drawing.VisualInfo{ .visual_id = cs.screen.root_visual };
+        cs.screen.root_visual;
     const depth: u8 = if (want_transparency) 32 else xcb.XCB_COPY_FROM_PARENT;
-    const visual_id = visual_info.visual_id;
     const colormap: u32 = if (want_transparency) blk: {
         const cmap = xcb.xcb_generate_id(cs.conn);
         _ = xcb.xcb_create_colormap(cs.conn, xcb.XCB_COLORMAP_ALLOC_NONE, cmap, cs.screen.root, visual_id);
@@ -959,6 +958,9 @@ fn createBarWindow(height: u16, y_pos: i16) BarWindowSetup {
         xcb.XCB_CW_OVERRIDE_REDIRECT | xcb.XCB_CW_EVENT_MASK |
         if (want_transparency) xcb.XCB_CW_COLORMAP else 0;
     const base_events = xcb.XCB_EVENT_MASK_EXPOSURE | xcb.XCB_EVENT_MASK_BUTTON_PRESS;
+    // Positional slots, in the same order as the CW_* bits above:
+    // [0]=BACK_PIXEL, [1]=BORDER_PIXEL, [2]=OVERRIDE_REDIRECT,
+    // [3]=EVENT_MASK, [4]=COLORMAP.
     const value_list = [5]u32{ 0, 0, 1, base_events, colormap };
     _ = xcb.xcb_create_window(cs.conn, depth, win_id, cs.screen.root, 0, y_pos, cs.screen.width_in_pixels, height, 0, xcb.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual_id, @intCast(value_mask), &value_list);
     return .{ .win_id = win_id, .visual_id = visual_id, .has_argb = want_transparency, .colormap = colormap };
@@ -1263,6 +1265,14 @@ pub fn redrawInsideGrab() void {
     s.is_dirty = false;
 }
 
+/// Commit a grab-held batch: render the bar to the off-screen pixmap and queue
+/// the copy, then release the server grab and flush everything to the
+/// compositor atomically — exactly one frame, no intermediate states.
+pub fn commitInsideGrab() void {
+    redrawInsideGrab();
+    ungrabAndFlush();
+}
+
 pub fn raiseBar() void {
     if (gBar.state) |s|
         _ = xcb.xcb_configure_window(s.win.conn, s.win.win_id, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
@@ -1333,7 +1343,7 @@ pub fn setBarState(action: BarAction) void {
     if (show) _ = xcb.xcb_map_window(conn, s.win.win_id) else _ = xcb.xcb_unmap_window(conn, s.win.win_id);
     if (grabbed) {
         const effective_visible = if (is_fullscreen) s.is_globally_visible else s.is_visible;
-        retileAllWorkspaces(effective_visible);
+        retileAllWorkspaces(s, effective_visible);
         window.updateFloatingWindowBorders();
         window.markBordersFlushed();
         ungrabAndFlush();
@@ -1558,19 +1568,13 @@ fn isTilingActive() bool {
 /// Must be called without holding the X server grab.
 /// `effective_visible` is the bar-visibility value that tilers should observe;
 /// it may differ from `s.is_visible` when a fullscreen override is in effect.
-fn retileAllWorkspaces(effective_visible: bool) void {
+fn retileAllWorkspaces(s: *State, effective_visible: bool) void {
     // Temporarily expose the effective visibility so tiling code reading
-    // isVisible() sees the intended value, not the transitional state.
-    //
-    // NOTE: the save/restore is scoped to the whole function — a `defer`
-    // inside `if (gBar.state) |st| { ... }` would fire as soon as that block
-    // ends (before any retiling below), silently defeating the override.
-    const st_opt = gBar.state;
-    const saved_visible = if (st_opt) |st| st.is_visible else false;
-    if (st_opt) |st| st.is_visible = effective_visible;
-    defer if (st_opt) |st| {
-        st.is_visible = saved_visible;
-    };
+    // isVisible() sees the intended value, not the transitional state, for the
+    // duration of this function.
+    const saved_visible = s.is_visible;
+    s.is_visible = effective_visible;
+    defer s.is_visible = saved_visible;
     if (!core.getState().config.workspaces.enabled) {
         tiling.retileCurrentWorkspace();
         return;

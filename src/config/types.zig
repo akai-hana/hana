@@ -267,6 +267,15 @@ pub const LayoutVariantOverride = union(enum) {
     grid: GridVariant,
 };
 
+/// Single source of truth mapping a variant-owning layout's config name to
+/// its variant enum type, the `LayoutVariantOverride` tag, and the field on
+/// `TilingConfig` that stores the parsed value.
+pub const VARIANT_LAYOUTS = [_]struct { name: []const u8, variant: type, tag: []const u8, field: []const u8 }{
+    .{ .name = "master-stack", .variant = MasterVariant, .tag = "master", .field = "master_variant" },
+    .{ .name = "monocle", .variant = MonocleVariant, .tag = "monocle", .field = "monocle_variant" },
+    .{ .name = "grid", .variant = GridVariant, .tag = "grid", .field = "grid_variant" },
+};
+
 /// Per-workspace startup layout assignment, overriding the global default.
 /// variant is null -> use the per-layout section default.
 pub const WorkspaceLayoutOverride = struct {

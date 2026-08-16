@@ -384,19 +384,10 @@ fn executeSwapMaster(action: *const types.Action) void {
     // derive their raised window from focus.getFocused() at retile time
     // (e.g. monocle) retile against the stale window with no follow-up fix.
     if (displaced) |win|
-        if (displaced_model) |model| focus.setFocusWithModel(win, .tiling_operation, model);
+        if (displaced_model) |model| focus.focusWithPreGrabModel(win, .tiling_operation, model);
 
     tiling.retileCurrentWorkspaceDeferred(new_master);
-
-    // Async pointer-sync: queues the cookie without blocking so no premature
-    // flush occurs inside the grab. drainPointerSync() consumes it next loop.
-    focus.beginPointerSync();
-    window.updateFloatingWindowBorders();
-    window.markBordersFlushed();
-    // redrawInsideGrab renders to the off-screen pixmap and queues xcb_copy_area
-    // without flushing; ungrabAndFlush sends everything atomically.
-    bar.redrawInsideGrab();
-    utils.ungrabAndFlush(conn);
+    finishTilingOp(conn, true);
 }
 
 /// Dispatches workspace-related actions. workspaces.zig self-gates to a
@@ -642,7 +633,7 @@ fn finishSpawn(entry: *PendingSpawn) void {
 }
 
 /// Reaps zombie intermediate children without blocking. Called from the
-/// SIGCHLD handler; the spawn-pipe drain stays in events.zig so it doesn't
+/// SIGCHLD handler; the spawn-pipe drain stays in signals.zig so it doesn't
 /// run twice per SIGCHLD.
 pub fn reapPendingChildren() void {
     for (g_pending.slice()) |*entry| {
@@ -715,6 +706,29 @@ inline fn withTilingGrab(op: anytype) void {
 ///
 /// Suppression stays active until reflow crossing events are filtered — see
 /// beginTilingOpSettle in focus.zig for why that can't be synchronous.
+/// Shared grab-finish tail for tiling operations: refresh floating-window
+/// borders, mark the batch border-swept, render the bar to the off-screen
+/// pixmap, resolve focus per `sync_pointer` (queueing the pointer query or
+/// deferring suppression-clearing via beginTilingOpSettle, since `op()`'s
+/// configure_window calls aren't sent until ungrabAndFlush), then release the
+/// server grab and flush everything atomically.
+inline fn finishTilingOp(conn: *xcb.xcb_connection_t, sync_pointer: bool) void {
+    window.updateFloatingWindowBorders();
+    window.markBordersFlushed();
+    bar.redrawInsideGrab();
+    if (sync_pointer) {
+        // Once the layout has settled, resolve focus against the pointer's
+        // resting spot: clears suppression and queues a query that
+        // drainPointerSync() consumes next loop.
+        focus.beginPointerSync();
+    } else {
+        // Suppression still needs clearing, but not synchronously: clearing
+        // now would disable the filtering too early.
+        focus.beginTilingOpSettle();
+    }
+    utils.ungrabAndFlush(conn);
+}
+
 inline fn withTilingGrabKeepFocus(op: anytype) void {
     withTilingGrabImpl(op, false);
 }
@@ -731,21 +745,7 @@ inline fn withTilingGrabImpl(op: anytype, sync_pointer: bool) void {
         else => op.call(),
     }
     window.updateFloatingWindowBorders();
-    window.markBordersFlushed();
-    bar.redrawInsideGrab();
-    if (sync_pointer) {
-        // Once the layout has settled, resolve focus against the pointer's
-        // resting spot: clears suppression and queues a query that
-        // drainPointerSync() consumes next loop (mirrors executeSwapMaster).
-        focus.beginPointerSync();
-    } else {
-        // Suppression still needs clearing, but not synchronously: `op()`'s
-        // configure_window calls aren't sent until ungrabAndFlush, so clearing
-        // now would disable the filtering too early. beginTilingOpSettle
-        // defers it until after reflow crossing events are filtered.
-        focus.beginTilingOpSettle();
-    }
-    utils.ungrabAndFlush(conn);
+    finishTilingOp(conn, sync_pointer);
 }
 
 /// Replays a frozen pointer event without releasing the keyboard grab.

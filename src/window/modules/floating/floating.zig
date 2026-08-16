@@ -26,13 +26,10 @@ pub fn tileWithOffset(
     _: u16,
 ) void {
     const cs = core.getState();
-    const sw: i32 = cs.screen.width_in_pixels;
-    const sh: i32 = cs.screen.height_in_pixels;
-
-    const bh: i32 = if (bar.isVisible()) bar.getBarHeight() else 0;
-    const bar_at_bottom = cs.config.bar.bar_position == .bottom;
-    const work_top: i32 = if (bar_at_bottom) 0 else bh;
-    const work_h: i32 = sh - bh;
+    const work = bar.workAreaRect();
+    const sw: i32 = work.width;
+    const work_top: i32 = work.y;
+    const work_h: i32 = work.height;
 
     var base: usize = 0;
     while (base < windows.len) {

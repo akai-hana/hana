@@ -4,27 +4,20 @@
 const std = @import("std");
 
 const core = @import("core");
-const xcb = core.xcb;
 const debug = @import("debug");
 
 const c = @import("render");
 
-// Public types
-
-pub const VisualInfo = struct {
-    visual_id: u32,
-};
-
 /// Falls back to the root visual if no matching depth is found.
-pub fn findVisualByDepth(screen: *core.xcb.xcb_screen_t, depth: u8) VisualInfo {
+pub fn findVisualByDepth(screen: *core.xcb.xcb_screen_t, depth: u8) u32 {
     var di = core.xcb.xcb_screen_allowed_depths_iterator(screen);
     while (di.rem > 0) : (core.xcb.xcb_depth_next(&di)) {
         if (di.data.*.depth != depth) continue;
         const vi = core.xcb.xcb_depth_visuals_iterator(di.data);
         if (vi.rem == 0) continue;
-        return .{ .visual_id = vi.data.*.visual_id };
+        return vi.data.*.visual_id;
     }
-    return .{ .visual_id = screen.root_visual };
+    return screen.root_visual;
 }
 
 // Module-level font cache shared across all DrawContext instances (measurement + render DCs).
@@ -118,6 +111,14 @@ inline fn checkXcbCookie(conn: *core.xcb.xcb_connection_t, cookie: core.xcb.xcb_
         std.c.free(err);
         return error.GCCreationFailed;
     }
+}
+
+/// Positions `layout` at `x` on `baseline` (accounting for the layout's own
+/// baseline — font fallback can shift it per-run) and renders it. Shared by the
+/// DrawContext text paths and CarouselPixmap's two copy positions.
+inline fn showAtBaseline(ctx: *c.cairo_t, layout: *c.PangoLayout, x: u16, baseline: u16) void {
+    c.cairo_move_to(ctx, @as(f64, @floatFromInt(x)), @as(f64, @floatFromInt(baseline)) - pangoToF64(c.pango_layout_get_baseline(layout)));
+    c.pango_cairo_show_layout(ctx, layout);
 }
 
 pub const DrawContext = struct {
@@ -267,14 +268,6 @@ pub const DrawContext = struct {
         c.pango_layout_set_text(self.font.pango_layout, text.ptr, @intCast(text.len));
     }
 
-    // pango_layout_get_baseline is called unconditionally: font fallback can change the
-    // baseline per-run (e.g. a CJK glyph triggering Noto Sans CJK), so caching it
-    // would silently misalign text in multi-font configurations.
-    inline fn moveToTextBaseline(self: *DrawContext, x: u16, y: u16) void {
-        const baseline = pangoToF64(c.pango_layout_get_baseline(self.font.pango_layout));
-        c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - baseline);
-    }
-
     /// Uses XCB rather than Cairo to write straight-alpha pixels (picom expects straight-alpha;
     /// Cairo's XRender backend writes premultiplied). `last_gc_color` skips xcb_change_gc
     /// when the color is unchanged, which is the common case for adjacent same-background segments.
@@ -324,8 +317,7 @@ pub const DrawContext = struct {
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
         self.setColor(color);
         self.setPangoText(text);
-        self.moveToTextBaseline(x, y);
-        c.pango_cairo_show_layout(self.ctx, self.font.pango_layout);
+        showAtBaseline(self.ctx, self.font.pango_layout, x, y);
     }
 
     /// Resets Pango width/ellipsize to defaults after rendering; subsequent draws unaffected.
@@ -343,8 +335,7 @@ pub const DrawContext = struct {
         c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.END);
 
         self.setColor(color);
-        self.moveToTextBaseline(x, y);
-        c.pango_cairo_show_layout(self.ctx, self.font.pango_layout);
+        showAtBaseline(self.ctx, self.font.pango_layout, x, y);
 
         c.pango_layout_set_width(self.font.pango_layout, -1);
         c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.NONE);
@@ -415,8 +406,7 @@ pub const DrawContext = struct {
         const width: u16 = @as(u16, @intCast(tw)) + padding * 2;
         self.fillRect(x, 0, width, height, bg);
         self.setColor(fg);
-        self.moveToTextBaseline(x + padding, self.baselineY(height));
-        c.pango_cairo_show_layout(self.ctx, self.font.pango_layout);
+        showAtBaseline(self.ctx, self.font.pango_layout, x + padding, self.baselineY(height));
         return x + width;
     }
 };
@@ -534,15 +524,10 @@ pub const CarouselPixmap = struct {
 
         setCairoColor(ctx, fg);
 
-        const text_y = @as(f64, @floatFromInt(baseline)) - pangoToF64(c.pango_layout_get_baseline(layout));
-
-        // Copy A
-        c.cairo_move_to(ctx, @as(f64, @floatFromInt(left_pad)), text_y);
-        c.pango_cairo_show_layout(ctx, layout);
-
-        // Copy B — one cycle_w to the right; same layout, different position.
-        c.cairo_move_to(ctx, @as(f64, @floatFromInt(left_pad + cycle_w)), text_y);
-        c.pango_cairo_show_layout(ctx, layout);
+        // Copy A at left_pad, copy B one cycle_w to the right; same layout,
+        // two positions. showAtBaseline recomputes the layout baseline per call
+        // (font fallback can shift it per-run), matching the DrawContext paths.
+        for ([_]u16{ left_pad, left_pad + cycle_w }) |x| showAtBaseline(ctx, layout, x, baseline);
 
         c.cairo_surface_flush(self.surface);
     }

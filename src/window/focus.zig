@@ -520,6 +520,28 @@ pub fn clearFocus() void {
     advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
 }
 
+/// Focus `target` with `model` when both are present, else clear focus when
+/// `target` is null. `target` non-null with a null `model` is a no-op (the
+/// caller decided not to focus, mirroring the inline `if (model) |m|` pattern
+/// it replaces).
+pub fn focusOrClear(target: ?u32, model: ?window.InputModel, reason: Reason) void {
+    if (target) |t| {
+        if (model) |m| setFocusWithModel(t, reason, m);
+        return;
+    }
+    clearFocus();
+}
+
+/// Focus `win` with a caller-resolved input model, for callers running inside
+/// a server grab. `model` must be resolved BEFORE utils.grabServer so the grab
+/// body stays free of blocking reply waits — resolving it here would implicitly
+/// flush the queued X batch to the compositor mid-grab (see setFocusWithModel).
+/// Identical to setFocusWithModel; this name documents the pre-grab contract at
+/// the call site.
+pub fn focusWithPreGrabModel(win: u32, reason: Reason, model: window.InputModel) void {
+    setFocusWithModel(win, reason, model);
+}
+
 inline fn advertiseActiveWindow(win: u32) void {
     if (state.net_active_window == xcb.XCB_ATOM_NONE) return;
     const cs = core.getState();

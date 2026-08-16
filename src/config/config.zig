@@ -69,6 +69,14 @@ inline fn getColor(section: *parser.Section, key: []const u8, default: u32) u32 
     return default;
 }
 
+/// Frees every owned string in `list` and empties it, keeping the capacity for
+/// reuse on the next reload. Extracted to avoid repeating the same two-step
+/// pattern for every string list reset site.
+inline fn clearStrings(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8)) void {
+    for (list.items) |s| allocator.free(s);
+    list.clearRetainingCapacity();
+}
+
 /// Like getInRange, but for ScalableValue fields. Only enforces a lower bound
 /// on the raw `.value` (percentages and absolute pixels share no meaningful
 /// ceiling) — enough to reject a negative like `gap_width = -50`. Returns
@@ -583,6 +591,43 @@ fn resolveAndParseAction(allocator: std.mem.Allocator, cmd: []const u8, ws_idx: 
     return parseAction(allocator, after_ws);
 }
 
+/// Resolves one `binds` value into a single Action, or null when the entry
+/// should be skipped (empty array, or a value that is neither string nor
+/// array). A one-element array unwraps to its sole action; a multi-element
+/// array becomes a `.sequence`.
+fn actionFromValue(
+    allocator: std.mem.Allocator,
+    value: parser.Value,
+    ws_idx: u16,
+    kill: ?[]const u8,
+) !?types.Action {
+    return switch (value) {
+        .array => |arr| {
+            var acts: std.ArrayList(types.Action) = .empty;
+            errdefer {
+                for (acts.items) |*a| a.deinit(allocator);
+                acts.deinit(allocator);
+            }
+            for (arr.items) |elem| {
+                const cmd = elem.asString() orelse continue;
+                try acts.append(allocator, try resolveAndParseAction(allocator, cmd, ws_idx, kill));
+            }
+            if (acts.items.len == 0) {
+                acts.deinit(allocator);
+                return null;
+            }
+            if (acts.items.len == 1) {
+                const only = acts.items[0];
+                acts.deinit(allocator);
+                return only;
+            }
+            return .{ .sequence = try acts.toOwnedSlice(allocator) };
+        },
+        .string => |command| try resolveAndParseAction(allocator, command, ws_idx, kill),
+        else => null,
+    };
+}
+
 fn parseKeybindings(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     const section = doc.getSection("binds") orelse doc.getSection("Keybindings") orelse return;
     // Find Mod and kill placeholders with a single pass over the pairs so that
@@ -612,37 +657,15 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *t
             allocator.free(glob_entries);
         }
         for (glob_entries) |ge| {
-            const keybind_str: []const u8 = blk: {
-                if (mod_placeholder) |mod| if (std.ascii.startsWithIgnoreCase(ge.key, "mod+"))
-                    break :blk try std.fmt.allocPrint(allocator, "{s}+{s}", .{ mod, ge.key["mod+".len..] });
-                break :blk ge.key;
-            };
+            const keybind_str: []const u8 = if (mod_placeholder) |mod|
+                if (std.ascii.startsWithIgnoreCase(ge.key, "mod+"))
+                    try std.fmt.allocPrint(allocator, "{s}+{s}", .{ mod, ge.key["mod+".len..] })
+                else
+                    ge.key
+            else
+                ge.key;
             defer if (keybind_str.ptr != ge.key.ptr) allocator.free(keybind_str);
-            const action: types.Action = act: {
-                if (entry.value.asArray()) |arr| {
-                    var acts: std.ArrayList(types.Action) = .empty;
-                    errdefer {
-                        for (acts.items) |*a| a.deinit(allocator);
-                        acts.deinit(allocator);
-                    }
-                    for (arr) |elem| {
-                        const cmd = elem.asString() orelse continue;
-                        try acts.append(allocator, try resolveAndParseAction(allocator, cmd, ge.ws_idx, kill_placeholder));
-                    }
-                    if (acts.items.len == 0) {
-                        acts.deinit(allocator);
-                        continue;
-                    }
-                    if (acts.items.len == 1) {
-                        const only = acts.items[0];
-                        acts.deinit(allocator);
-                        break :act only;
-                    }
-                    break :act .{ .sequence = try acts.toOwnedSlice(allocator) };
-                } else if (entry.value.asString()) |command| {
-                    break :act try resolveAndParseAction(allocator, command, ge.ws_idx, kill_placeholder);
-                } else continue;
-            };
+            const action = try actionFromValue(allocator, entry.value, ge.ws_idx, kill_placeholder) orelse continue;
             const bind = parseBindString(keybind_str) catch |err| {
                 debug.warn("Failed to parse keybind '{s}': {}", .{ keybind_str, err });
                 continue;
@@ -823,8 +846,7 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.
     const section = doc.getSection("tiling") orelse return;
     cfg.tiling.enabled = getInRange(bool, section, "enabled", cfg.tiling.enabled, null, null);
     if (section.getArray("layouts")) |arr| {
-        for (cfg.tiling.layouts.items) |layout| allocator.free(layout);
-        cfg.tiling.layouts.clearRetainingCapacity();
+        clearStrings(allocator, &cfg.tiling.layouts);
         cfg.tiling.workspace_layout_overrides.clearRetainingCapacity();
         try parseLayoutsArray(allocator, arr, cfg);
         if (cfg.tiling.layouts.items.len > 0) cfg.tiling.layout = cfg.tiling.layouts.items[0];
@@ -833,8 +855,7 @@ fn parseTiling(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.
         // fallback is (types.TilingConfig{}).layout, NOT cfg.tiling.layout —
         // that aliases layouts.items[0], freed below, so using it would read
         // freed memory when the key is absent.
-        for (cfg.tiling.layouts.items) |l| allocator.free(l);
-        cfg.tiling.layouts.clearRetainingCapacity();
+        clearStrings(allocator, &cfg.tiling.layouts);
         const layout_str = getInRange([]const u8, section, "layout", (types.TilingConfig{}).layout, null, null);
         try cfg.tiling.layouts.append(allocator, try allocator.dupe(u8, layout_str));
         cfg.tiling.layout = cfg.tiling.layouts.items[0];
@@ -906,28 +927,12 @@ inline fn tryParseVariant(
 }
 
 fn parseTilingVariants(doc: *parser.Document, cfg: *types.Config) void {
-    inline for (.{
-        .{ "tiling.layouts.master-stack", types.MasterVariant, "master-stack", "master_variant" },
-        .{ "tiling.layouts.monocle", types.MonocleVariant, "monocle", "monocle_variant" },
-        .{ "tiling.layouts.grid", types.GridVariant, "grid", "grid_variant" },
-    }) |e| if (doc.getSection(e[0])) |ms| {
-        tryParseVariant(e[1], ms, e[2], &@field(cfg.tiling, e[3]));
-    };
-}
-
-/// Returns true if `name` (case-insensitive) is a recognised layout name in
-/// types.LAYOUT_TABLE.
-inline fn isKnownLayout(name: []const u8) bool {
-    return switch (types.lowerStringCI(32, name)) {
-        .too_long => false,
-        .ok => |r| blk: {
-            const lower = r.slice();
-            for (types.LAYOUT_TABLE) |entry| {
-                if (std.mem.eql(u8, lower, entry.name)) break :blk true;
-            }
-            break :blk false;
-        },
-    };
+    inline for (types.VARIANT_LAYOUTS) |e| {
+        const section_name = "tiling.layouts." ++ e.name;
+        if (doc.getSection(section_name)) |ms| {
+            tryParseVariant(e.variant, ms, e.name, &@field(cfg.tiling, e.field));
+        }
+    }
 }
 
 /// Returns true if `s` looks like a workspace-number list: only digits, commas, spaces,
@@ -946,26 +951,20 @@ inline fn isWorkspaceList(s: []const u8) bool {
 }
 
 /// Canonicalises a layout name via types.LAYOUT_TABLE's aliases (e.g. "master"
-/// -> "master-stack"). Unmatched names come back lowercased, unchanged;
-/// isKnownLayout rejects those at the call site.
-inline fn canonicalLayout(name: []const u8, buf: *[32]u8) []const u8 {
-    // Overlong names are returned unchanged: isKnownLayout's lowerStringCI
-    // also reports `.too_long`, routing the name into the "unknown layout"
-    // warning instead of crashing or truncating.
-    switch (types.lowerStringCI(32, name)) {
-        .too_long => return name,
-        .ok => |r| {
-            const lower = r.slice();
-            for (types.LAYOUT_TABLE) |entry| {
-                if (std.mem.eql(u8, lower, entry.name)) return entry.name;
-                for (entry.aliases) |alias| {
-                    if (std.mem.eql(u8, lower, alias)) return entry.name;
-                }
-            }
-            @memcpy(buf[0..lower.len], lower);
-            return buf[0..lower.len];
-        },
+/// -> "master-stack"), case-insensitively. Returns null for names that are
+/// overlong or match no entry; the caller distinguishes the two for its warning.
+inline fn canonicalLayout(name: []const u8) ?[]const u8 {
+    const lowered = switch (types.lowerStringCI(32, name)) {
+        .too_long => return null,
+        .ok => |r| r.slice(),
+    };
+    for (types.LAYOUT_TABLE) |entry| {
+        if (std.mem.eql(u8, lowered, entry.name)) return entry.name;
+        for (entry.aliases) |alias| {
+            if (std.mem.eql(u8, lowered, alias)) return entry.name;
+        }
     }
+    return null;
 }
 
 /// Parses a variants string for the given layout name into a LayoutVariantOverride.
@@ -981,18 +980,13 @@ fn parseLayoutVariant(layout_name: []const u8, variants_str: []const u8) ?types.
         return null;
     }
     const lower_layout = lowered.ok.slice();
-    const typed_layouts = .{
-        .{ "master-stack", types.MasterVariant, "master" },
-        .{ "monocle", types.MonocleVariant, "monocle" },
-        .{ "grid", types.GridVariant, "grid" },
-    };
-    inline for (typed_layouts) |entry| {
-        if (std.mem.eql(u8, lower_layout, entry[0])) {
-            const v = std.meta.stringToEnum(entry[1], variants_str) orelse {
-                debug.warn("Unknown {s} variants '{s}' in layouts array, ignoring", .{ entry[0], variants_str });
+    inline for (types.VARIANT_LAYOUTS) |entry| {
+        if (std.mem.eql(u8, lower_layout, entry.name)) {
+            const v = std.meta.stringToEnum(entry.variant, variants_str) orelse {
+                debug.warn("Unknown {s} variants '{s}' in layouts array, ignoring", .{ entry.name, variants_str });
                 return null;
             };
-            return @unionInit(types.LayoutVariantOverride, entry[2], v);
+            return @unionInit(types.LayoutVariantOverride, entry.tag, v);
         }
     }
     return null;
@@ -1013,16 +1007,14 @@ fn parseLayoutsArray(
             debug.warn("layouts array: expected a string at index {}, skipping", .{i});
             continue;
         };
-        var name_buf: [32]u8 = undefined;
-        const canonical = canonicalLayout(name_str, &name_buf);
-        if (!isKnownLayout(canonical)) {
-            if (name_str.len > name_buf.len) {
-                debug.warn("layouts array: layout name '{s}' at index {} is longer than the {}-byte limit, skipping", .{ name_str, i, name_buf.len });
+        const canonical = canonicalLayout(name_str) orelse {
+            if (name_str.len > 32) {
+                debug.warn("layouts array: layout name '{s}' at index {} is longer than the 32-byte limit, skipping", .{ name_str, i });
             } else {
                 debug.warn("layouts array: unknown layout name '{s}' at index {}, skipping", .{ name_str, i });
             }
             continue;
-        }
+        };
         // Skip if this canonical name is already listed — pointless cycle
         // entries when the user repeats a layout, while separate
         // [tiling.layouts.*] sections still allow distinct variant entries.
@@ -1042,8 +1034,8 @@ fn parseLayoutsArray(
         var variants: ?types.LayoutVariantOverride = null;
         var ws_list_str: ?[]const u8 = null;
         if (i + 1 < arr.len) {
-            if (arr[i + 1].asString()) |peek| {
-                if (!isKnownLayout(peek)) {
+        if (arr[i + 1].asString()) |peek| {
+            if (canonicalLayout(peek) == null) {
                     if (isWorkspaceList(peek)) {
                         ws_list_str = peek;
                         i += 1;
@@ -1086,38 +1078,40 @@ const BAR_COLOR_FIELDS = [_][]const u8{
     "bg", "fg", "selected_bg", "selected_fg", "accent_color",
 };
 
-/// Parses transparency from integers (0–100, always percentages), decimals
-/// (0.0–1.0), or `%` values into a [0.0, 1.0] opacity, off
-/// asInt()/asScalable() since the parser already recognises bare decimals.
-/// `= 1` collides (1% with a warning) — use `1.0`/`100%` for fully opaque;
-/// quoted values fall to the default, warned.
-fn parseTransparency(value: parser.Value) f32 {
+/// Parses `section.key` into a [0.0, 1.0] ratio, falling back to `default`
+/// when the key is absent or out of range. Bare integers are always
+/// percentages (0–100, `= 1` resolving to 1% with a warning); decimals and
+/// `%`-suffixed values are ratios directly; quoted values fall to the
+/// default, warned. Off asInt()/asScalable() since the parser already
+/// recognises bare decimals.
+inline fn getRatio(section: *parser.Section, key: []const u8, default: f32) f32 {
+    const value = section.get(key) orelse return default;
     if (value.asInt()) |i| {
         if (i == 0) return 0.0;
         if (i >= 2 and i <= 100) return @as(f32, @floatFromInt(i)) / 100.0;
         if (i == 1) {
-            // `= 1` is ambiguous (1% opacity or 1.0 fully opaque); per the
-            // "bare integers are percentages" rule it resolves to 1%, but we
-            // warn so a user who meant fully opaque writes `1.0` or `100%`.
-            debug.warn("Transparency value 1 is ambiguous (1% opacity or 1.0 fully opaque?); " ++
-                "treating as 1% opacity. Use '1.0' or '100%' for fully opaque.", .{});
+            // `= 1` is ambiguous (1% or 1.0); per the "bare integers are
+            // percentages" rule it resolves to 1%, but we warn so a user who
+            // meant the full value writes `1.0` or `100%`.
+            debug.warn("{s} value 1 is ambiguous (1% or 1.0 ratio?); " ++
+                "treating as 1%. Use '1.0' or '100%' for 100%.", .{key});
             return 0.01;
         } else {
-            debug.warn("Invalid transparency value {} (must be 0–100), using default", .{i});
+            debug.warn("Invalid {s} value {} (must be 0–100), using default", .{ key, i });
         }
-        return 1.0;
+        return default;
     }
     if (value.asScalable()) |s| {
         const f = utils.scaling.asRatio(s);
         if (f < 0.0 or f > 1.0) {
-            debug.warn("Invalid transparency value {d} (must be 0.0–1.0 or 0–100%), using default", .{f});
-            return 1.0;
+            debug.warn("Invalid {s} value {d} (must be 0.0–1.0 or 0–100%), using default", .{ key, f });
+            return default;
         }
         return f;
     }
     if (value.asString()) |str|
-        debug.warn("Transparency value '{s}' is quoted; write it unquoted (e.g. transparency = 0.5), using default", .{str});
-    return 1.0;
+        debug.warn("{s} value '{s}' is quoted; write it unquoted (e.g. {s} = 0.5), using default", .{ key, str, key });
+    return default;
 }
 
 /// Dupes `val` into `*view`, freeing the previous value first. `*view` must
@@ -1178,21 +1172,7 @@ fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Con
         };
     }
 
-    if (section.get("indicator_padding")) |val| {
-        // Bare integers are always a percentage (0–100), matching transparency;
-        // decimals are a 0.0–1.0 ratio directly. `= 1` resolves to 1% padding
-        // (bare-integer rule) with a warning — `= 1.0` would mean 100%.
-        const f: f32 = if (val.asInt()) |i| blk: {
-            if (i == 1)
-                debug.warn("indicator_padding value 1 is ambiguous (1% or 1.0 ratio?); " ++
-                    "treating as 1%. Use '1.0' or '100%' for 100%.", .{});
-            break :blk @as(f32, @floatFromInt(i)) / 100.0;
-        } else if (val.asScalable()) |sv|
-            utils.scaling.asRatio(sv)
-        else
-            0.1;
-        cfg.bar.indicator_padding = std.math.clamp(f, 0.0, 1.0);
-    }
+    cfg.bar.indicator_padding = getRatio(section, "indicator_padding", cfg.bar.indicator_padding);
     // indicator_focused/unfocused: if only one is set, the other mirrors it.
     // Always duped (even the literal defaults) so deinit can free unconditionally.
     const raw_focused = section.getString("indicator_focused");
@@ -1202,8 +1182,7 @@ fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Con
 
     if (section.get("indicator_color")) |_| // null = inherit workspace fg
         cfg.bar.indicator_color = getColor(section, "indicator_color", cfg.bar.fg);
-    if (section.get("transparency")) |value|
-        cfg.bar.transparency = std.math.clamp(parseTransparency(value), 0.0, 1.0);
+    cfg.bar.transparency = getRatio(section, "transparency", cfg.bar.transparency);
     try parseWorkspaceIcons(allocator, section, cfg);
     try parseBarLayout(allocator, doc, cfg);
     // Segment accent colors from [bar.colors], falling back to accent_color / bg.
@@ -1232,14 +1211,13 @@ fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Con
     // Carousel: enabled flag, scroll_speed (px/s, min 1), refresh rate
     // (Hz, 0 = auto). Pushed to live globals only after a validated config
     // is swapped in, so a rejected reload can't leak them into effect.
-    cfg.bar.carousel_enabled = getInRange(bool, section, "carousel_enabled", true, null, null);
-    cfg.bar.scroll_speed = getInRange(u16, section, "scroll_speed", 125, 1, null);
-    cfg.bar.carousel_refresh_rate = getInRange(u16, section, "carousel_refresh_rate", 0, null, null);
+    cfg.bar.carousel_enabled = getInRange(bool, section, "carousel_enabled", (types.BarConfig{}).carousel_enabled, null, null);
+    cfg.bar.scroll_speed = getInRange(u16, section, "scroll_speed", (types.BarConfig{}).scroll_speed, 1, null);
+    cfg.bar.carousel_refresh_rate = getInRange(u16, section, "carousel_refresh_rate", (types.BarConfig{}).carousel_refresh_rate, null, null);
 }
 
 fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *parser.Section, cfg: *types.Config) !void {
-    for (cfg.bar.workspace_icons.items) |icon| allocator.free(icon);
-    cfg.bar.workspace_icons.clearRetainingCapacity();
+    clearStrings(allocator, &cfg.bar.workspace_icons);
     if (section.getArray("icons")) |arr| {
         for (arr) |item| {
             if (item.asString()) |s| {

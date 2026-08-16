@@ -321,10 +321,10 @@ fn mergeIntoArray(allocator: std.mem.Allocator, old_val: *Value, incoming: Value
 /// Scalar reads resolve to the last declaration (later file wins); array
 /// reads see the full accumulation; `src` is unmodified.
 fn mergeSectionsInto(allocator: std.mem.Allocator, dst: *Section, src: *const Section) !void {
-    var iter = src.pairs.iterator();
+    var iter = src.orderedIterator();
     while (iter.next()) |entry| {
-        const src_key = entry.key_ptr.*;
-        const src_val = entry.value_ptr.*;
+        const src_key = entry.key;
+        const src_val = entry.value;
         if (dst.pairs.getPtr(src_key)) |old_val| {
             // Duplicate key: accumulate into an array, flattening an
             // array-valued `incoming` so two files declaring an array produce
@@ -667,7 +667,7 @@ const Parser = struct {
         // always produced before. An invalid `0x...` instead falls through
         // to the string fallback below.
         if (raw[0] == '#' or (raw.len > 2 and raw[0] == '0' and (raw[1] == 'x' or raw[1] == 'X'))) {
-            if (parseColor(raw)) |color| return .{ .color = color };
+            if (parseColor(raw)) |color| return .{ .color = color } else |_| {}
             if (raw[0] == '#') return ParseError.InvalidValue;
         }
 
@@ -742,10 +742,67 @@ const Parser = struct {
 
         if (self.peek() == '=') {
             _ = self.consume();
-            const value = self.parseValue() catch |err| return err;
+            const value = try self.parseValue();
             return .{ key, value };
         }
         return .{ key, Value{ .boolean = true } };
+    }
+
+    /// Parses `key = value` pairs (and bare `key` flags) until a blank line,
+    /// comment, `;` terminator, or end of content. Duplicate keys accumulate
+    /// into arrays so a repeated keybind or include runs all declarations.
+    fn parsePairs(self: *Parser, section: *Section) ParseError!void {
+        while (true) {
+            var kv = self.parseKeyValuePair() catch |err| {
+                debug.warn("Invalid key-value at line {}: {}", .{ self.line, err });
+                self.skipToNewline();
+                break;
+            };
+
+            errdefer {
+                self.allocator.free(kv[0]);
+                kv[1].deinit(self.allocator);
+            }
+
+            if (section.pairs.getPtr(kv[0])) |old| {
+                // Duplicate key: accumulate both values into an array rather
+                // than overwriting, so a keybind can bind multiple actions:
+                //
+                //   Mod+Shift+1 = "move_to_workspace_1"
+                //   Mod+Shift+1 = "toggle_tag_1"
+                //
+                // parseKeybindings treats array values as sequences; scalar
+                // reads of a repeated key resolve to the last declaration.
+                try accumulateScalar(self.allocator, old, kv[1]);
+                self.allocator.free(kv[0]);
+            } else {
+                try section.pairs.put(kv[0], kv[1]);
+                section.recordKey(self.allocator, kv[0]);
+            }
+
+            self.skipWhitespace();
+            const next = self.peek();
+
+            if (next == ';') {
+                _ = self.consume();
+                self.skipWhitespace();
+                const after = self.peek();
+                if (after == '\n' or after == '#' or after == null) {
+                    self.skipLineEnd(after);
+                    break;
+                }
+                continue;
+            }
+
+            if (next == '\n' or next == '#' or next == null) {
+                self.skipLineEnd(next);
+                break;
+            }
+
+            debug.warn("Unexpected character at line {}", .{self.line});
+            self.skipToNewline();
+            break;
+        }
     }
 };
 
@@ -761,12 +818,8 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
         p.skipWhitespace();
         const c = p.peek() orelse break;
 
-        if (c == '\n') {
-            _ = p.consume();
-            continue;
-        }
-        if (c == '#') {
-            p.skipToNewline();
+        if (c == '\n' or c == '#') {
+            p.skipLineEnd(c);
             continue;
         }
 
@@ -789,62 +842,10 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !Document {
                 current_section = doc.sections.getPtr(section_name).?;
             }
 
-            p.skipWhitespace();
-            if (p.peek() == '\n') _ = p.consume();
             continue;
         }
 
-        while (true) {
-            var kv = p.parseKeyValuePair() catch |err| {
-                debug.warn("Invalid key-value at line {}: {}", .{ p.line, err });
-                p.skipToNewline();
-                break;
-            };
-
-            errdefer {
-                allocator.free(kv[0]);
-                kv[1].deinit(allocator);
-            }
-
-            if (current_section.pairs.getPtr(kv[0])) |old| {
-                // Duplicate key: accumulate both values into an array rather
-                // than overwriting, so a keybind can bind multiple actions:
-                //
-                //   Mod+Shift+1 = "move_to_workspace_1"
-                //   Mod+Shift+1 = "toggle_tag_1"
-                //
-                // parseKeybindings treats array values as sequences; scalar
-                // reads of a repeated key resolve to the last declaration.
-                try accumulateScalar(allocator, old, kv[1]);
-                allocator.free(kv[0]);
-            } else {
-                try current_section.pairs.put(kv[0], kv[1]);
-                current_section.recordKey(allocator, kv[0]);
-            }
-
-            p.skipWhitespace();
-            const next = p.peek();
-
-            if (next == ';') {
-                _ = p.consume();
-                p.skipWhitespace();
-                const after = p.peek();
-                if (after == '\n' or after == '#' or after == null) {
-                    p.skipLineEnd(after);
-                    break;
-                }
-                continue;
-            }
-
-            if (next == '\n' or next == '#' or next == null) {
-                p.skipLineEnd(next);
-                break;
-            }
-
-            debug.warn("Unexpected character at line {}", .{p.line});
-            p.skipToNewline();
-            break;
-        }
+        try p.parsePairs(current_section);
     }
 
     return doc;

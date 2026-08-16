@@ -79,8 +79,8 @@ pub fn init() void {
 
     // Re-resolve the EWMH fullscreen atoms from the shared atom cache rather
     // than interning them again here.
-    g_net_wm_state = utils.getAtomCached("_NET_WM_STATE") catch 0;
-    g_net_wm_state_fullscreen = utils.getAtomCached("_NET_WM_STATE_FULLSCREEN") catch 0;
+    g_net_wm_state = utils.getAtomOrZero("_NET_WM_STATE");
+    g_net_wm_state_fullscreen = utils.getAtomOrZero("_NET_WM_STATE_FULLSCREEN");
 }
 
 pub fn deinit() void {
@@ -184,35 +184,16 @@ pub fn forEachFullscreen(cb: anytype) void {
         if (slot) |info| cb(@intCast(i), info);
 }
 
-/// Iterates windows on the current workspace, skipping `skip`. Uses the
-/// workspace window list when workspaces are enabled, otherwise falls back
-/// to the global window list.
-const WorkspaceWindowIter = struct {
-    entries: []const tracking.Entry,
-    idx: usize = 0,
-    skip: u32,
-    filtered: bool,
-    bit: u64 = 0,
-
-    fn next(self: *@This()) ?u32 {
-        while (self.idx < self.entries.len) {
-            const entry = self.entries[self.idx];
-            self.idx += 1;
-            if (self.filtered and entry.mask & self.bit == 0) continue;
-            if (entry.win == self.skip) continue;
-            return entry.win;
-        }
-        return null;
-    }
-};
-
-fn windowsOnCurrentWorkspace(skip: u32) WorkspaceWindowIter {
+/// Iterate windows on the current workspace, skipping `skip`. Uses the
+/// shared tracking.WorkspaceIter with a workspace-mask filter when workspaces
+/// are enabled, otherwise the global window list (all-ones bit = no filter).
+fn windowsOnCurrentWorkspace(skip: u32) tracking.WorkspaceIter {
     if (core.getState().config.workspaces.enabled) {
         const cur = tracking.getCurrentWorkspace() orelse
-            return .{ .entries = &.{}, .skip = skip, .filtered = true };
-        return .{ .entries = tracking.allWindows(), .skip = skip, .filtered = true, .bit = tracking.workspaceBit(cur) };
+            return .{ .entries = &.{}, .skip = skip, .bit = ~@as(u64, 0) };
+        return tracking.onWorkspace(tracking.workspaceBit(cur), skip);
     }
-    return .{ .entries = tracking.allWindows(), .skip = skip, .filtered = false };
+    return .{ .entries = tracking.allWindows(), .skip = skip, .bit = ~@as(u64, 0) };
 }
 
 // Geometry helpers
@@ -224,13 +205,7 @@ fn windowsOnCurrentWorkspace(skip: u32) WorkspaceWindowIter {
 fn fetchWindowGeom(win: u32) core.WindowGeometry {
     if (tiling.getWindowGeom(win)) |rect| {
         const bw: u16 = if (tiling.getStateOpt()) |ts| ts.config.border_width else 0;
-        return .{
-            .x = rect.x,
-            .y = rect.y,
-            .width = rect.width,
-            .height = rect.height,
-            .border_width = bw,
-        };
+        return window.geomFromRect(rect, bw);
     }
 
     // Screen dimensions are u16; dividing by a power of two is unambiguous on unsigned values.
@@ -275,16 +250,24 @@ fn fetchWindowGeom(win: u32) core.WindowGeometry {
 // the identical "remember position, restore it later" problem. No private
 // snapshot array needed: as long as a window's cache entry is valid, it's
 // already exactly what we'd have saved ourselves.
-/// Warm the geometry cache for every non-minimized, non-tiled window on the
-/// current workspace (except `skip_win`) that has no cache entry yet — a
-/// live round-trip only for the rare window the cache has never seen.
+
+/// True when `win` is free-floating — not minimized and not tiled — i.e. its
+/// geometry is owned by the floating cache rather than the tiling engine.
+/// Shared by warmFloatingWindowGeoms and restoreFloatingWindows.
+inline fn isFreeFloating(win: u32) bool {
+    return !minimize.isMinimized(win) and !tiling.isWindowTiled(win);
+}
+
+/// Warm the geometry cache for every free-floating window on the current
+/// workspace (except `skip_win`) that has no cache entry yet — a live
+/// round-trip only for the rare window the cache has never seen.
 /// Must run BEFORE xcb_grab_server: a round-trip can't happen inside a grab.
 fn warmFloatingWindowGeoms(skip_win: u32) void {
     const conn = core.getState().conn;
     var it = windowsOnCurrentWorkspace(skip_win);
-    while (it.next()) |w| {
-        if (minimize.isMinimized(w)) continue;
-        if (tiling.isWindowTiled(w)) continue;
+    while (it.next()) |entry| {
+        const w = entry.win;
+        if (!isFreeFloating(w)) continue;
         if (tiling.getWindowGeom(w) != null) continue; // cache already correct
 
         const reply = xcb.xcb_get_geometry_reply(conn, xcb.xcb_get_geometry(conn, w), null) orelse continue;
@@ -293,20 +276,20 @@ fn warmFloatingWindowGeoms(skip_win: u32) void {
         // switch) — saving that position would poison the cache for every
         // future restore, not just this one.
         if (isOffscreenReply(reply)) continue;
-        window.saveWindowGeom(w, .{ .x = reply.*.x, .y = reply.*.y, .width = reply.*.width, .height = reply.*.height });
+        window.saveWindowGeom(w, utils.Rect.fromXcb(reply));
     }
 }
 
-/// Restore every non-minimized, non-tiled window on the current workspace
-/// (except `skip_win`) to its cached position, falling back to the float
-/// default position when the cache has no entry (window.restoreFloatGeom).
+/// Restore every free-floating window on the current workspace (except
+/// `skip_win`) to its cached position, falling back to the float default
+/// position when the cache has no entry (window.restoreFloatGeom).
 /// Safe inside xcb_grab_server: restoreFloatGeom only ever reads the cache,
 /// never issues a live round-trip.
 fn restoreFloatingWindows(skip_win: u32) void {
     var it = windowsOnCurrentWorkspace(skip_win);
-    while (it.next()) |w| {
-        if (minimize.isMinimized(w)) continue;
-        if (tiling.isWindowTiled(w)) continue;
+    while (it.next()) |entry| {
+        const w = entry.win;
+        if (!isFreeFloating(w)) continue;
         window.restoreFloatGeom(w);
     }
 }
@@ -369,7 +352,8 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
 
     // Push every other window offscreen; workspace dispatch is through the shared iterator.
     var it = windowsOnCurrentWorkspace(win);
-    while (it.next()) |w| {
+    while (it.next()) |entry| {
+        const w = entry.win;
         utils.pushWindowOffscreen(core.getState().conn, w);
         // Only invalidate tiled windows — floating windows' cache entries
         // hold the geometry we need to restore on exit.
