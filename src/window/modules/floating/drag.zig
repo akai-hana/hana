@@ -10,9 +10,8 @@ const utils = @import("utils");
 const window = @import("window");
 const focus = @import("focus");
 
-const tiling = @import("tiling");
+const hooks = @import("hooks");
 const fullscreen = @import("fullscreen");
-const bar = @import("bar");
 
 // Drag state
 
@@ -65,7 +64,7 @@ fn workArea() WorkArea {
     const cs = core.getState();
     const sw: i32 = cs.screen.width_in_pixels;
     const bw2: i32 = @as(i32, window.getBorderWidth()) * 2;
-    const work = bar.workAreaRect();
+    const work = hooks.barWorkAreaRect();
     return .{
         .left = 0,
         .right = sw - bw2,
@@ -127,13 +126,13 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
     const cs = core.getState();
     if (!cs.config.drag_enabled) return;
     if (g_state.drag.active) return;
-    if (bar.isBarWindow(win)) return;
+    if (hooks.isBarWindow(win)) return;
     if (fullscreen.isFullscreen(win)) return; // fullscreen geometry must not be touched
 
     // Prefer the tiling cache (always current) over a live XCB round-trip;
     // fall back to a live query for floating windows the tiler never tracked.
     const geom = blk: {
-        if (tiling.getWindowGeom(win)) |g| break :blk g;
+        if (hooks.tilingGetWindowGeom(win)) |g| break :blk g;
         break :blk window.getGeometry(cs.conn, win) orelse return;
     };
 
@@ -160,7 +159,7 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
         // A tiled window in a non-floating layout detaches on first motion
         // (see updateDrag); move also skips snap on that first event so the
         // window doesn't appear frozen at a tiled edge.
-        .pending_float = tiling.isWindowTiled(win) and !tiling.isFloatingLayout(),
+        .pending_float = hooks.tilingIsWindowTiled(win) and !hooks.tilingIsFloatingLayout(),
     };
     focus.setFocus(win, .user_command);
     utils.raiseWindow(cs.conn, win);
@@ -233,8 +232,8 @@ pub fn updateDrag(x: i16, y: i16) void {
         g_state.pending_float = false;
         const conn = core.getState().conn;
         utils.grabServer(conn);
-        tiling.removeWindow(drag.window);
-        tiling.retileCurrentWorkspace();
+        hooks.tilingRemoveWindow(drag.window);
+        hooks.tilingRetileCurrentWorkspace();
         utils.ungrabAndFlush(conn);
     }
 
@@ -270,18 +269,28 @@ pub fn cancelDragForWindow(win: u32) void {
     if (g_state.drag.active and g_state.drag.window == win) g_state = .{};
 }
 
-pub inline fn isDragging() bool {
+pub fn isDragging() bool {
     return g_state.drag.active;
 }
 
 /// True when a resize drag is active on `win` — used to deny min-size
 /// configure requests from the window being resized, preventing flicker.
-pub inline fn isResizingWindow(win: u32) bool {
+pub fn isResizingWindow(win: u32) bool {
     return g_state.drag.active and g_state.drag.mode == .resize and g_state.drag.window == win;
 }
 
 /// Rect last applied during the active drag. Only meaningful while
 /// isDragging() and after at least one motion event.
-pub inline fn getDragLastRect() utils.Rect {
+pub fn getDragLastRect() utils.Rect {
     return g_state.drag.last_rect;
 }
+
+pub const hook_map = .{
+    .drag_start = startDrag,
+    .drag_update = updateDrag,
+    .drag_stop = stopDrag,
+    .drag_cancel_for_window = cancelDragForWindow,
+    .drag_is_dragging = isDragging,
+    .drag_is_resizing_window = isResizingWindow,
+    .drag_get_last_rect = getDragLastRect,
+};

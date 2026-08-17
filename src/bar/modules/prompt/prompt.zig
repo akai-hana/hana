@@ -6,12 +6,12 @@ const std = @import("std");
 const core = @import("core");
 const xcb = core.xcb;
 
-const bar = @import("bar");
+const hooks = @import("hooks");
 const types = @import("types");
 
 const drawing = @import("drawing");
 const title = @import("title");
-const vim = @import("vim.zig");
+const vim = @import("vim");
 
 const debug = @import("debug");
 
@@ -200,7 +200,7 @@ fn closeWindowOrPromptUnderCursor() bool {
 
     const child: u32 = if (ptr_reply) |r| r.*.child else 0;
 
-    if (bar.isBarWindow(child)) {
+    if (hooks.isBarWindow(child)) {
         // Cursor is on the bar — kill the prompt.
         deactivate();
         return true;
@@ -414,7 +414,7 @@ fn activate() void {
     g.redraw_pending = true;
     // Force the bar to the absolute top for the prompt's duration so it's
     // always visible/reachable; reversed in deactivate() via dismissAfterPrompt().
-    bar.presentForPrompt();
+    hooks.barPresentForPrompt();
     // No xcb_flush: xcb_grab_keyboard_reply already drained the output buffer
     // and presentForPrompt() flushes its own requests — nothing is pending
     // here. Contrast with deactivate(), where xcb_ungrab_keyboard must arrive
@@ -432,7 +432,7 @@ fn deactivate() void {
     // Return the bar to whatever state it was actually in before the prompt
     // forced it to the top (e.g. re-hide it if a fullscreen window is still
     // active) — see the comment on presentForPrompt() in activate().
-    bar.dismissAfterPrompt();
+    hooks.barDismissAfterPrompt();
 }
 
 // Private — PATH completion
@@ -1227,3 +1227,10 @@ fn drawActive(
     dc.blitAndFlush(start_x, width);
     return end_x;
 }
+
+pub const hook_map = .{
+    .prompt_blink_poll_timeout_ms = blinkPollTimeoutMs,
+    .prompt_blink_tick = blinkTick,
+    .prompt_handle_keypress = handlePromptKeypress,
+    .prompt_toggle = toggle,
+};

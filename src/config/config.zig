@@ -8,7 +8,7 @@ const constants = @import("constants");
 const debug = @import("debug");
 const xkbcommon = @import("xkbcommon");
 const parser = @import("parser");
-const carousel = @import("carousel");
+const hooks = @import("hooks");
 const utils = @import("utils");
 
 /// Warn-and-return-default for an out-of-range value, shared by getInRange and
@@ -807,9 +807,9 @@ pub fn load(allocator: std.mem.Allocator, screen: *core.xcb.xcb_screen_t, xkb_st
 /// after the validated config has been swapped in — so settings from a
 /// rejected config can never leak into effect.
 pub fn applyCarouselSettings(cfg: *const types.Config) void {
-    carousel.setCarouselEnabled(cfg.bar.carousel_enabled);
-    carousel.setScrollSpeed(@as(f64, @floatFromInt(cfg.bar.scroll_speed)));
-    carousel.setRefreshRateOverride(@as(f64, @floatFromInt(cfg.bar.carousel_refresh_rate)));
+    hooks.carouselSetEnabled(cfg.bar.carousel_enabled);
+    hooks.carouselSetScrollSpeed(@as(f64, @floatFromInt(cfg.bar.scroll_speed)));
+    hooks.carouselSetRefreshRateOverride(@as(f64, @floatFromInt(cfg.bar.carousel_refresh_rate)));
 }
 
 fn parseDrag(doc: *parser.Document, cfg: *types.Config) void {

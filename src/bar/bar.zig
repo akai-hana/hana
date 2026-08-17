@@ -19,10 +19,8 @@ const fullscreen = @import("fullscreen");
 const minimize = @import("minimize");
 const workspaces = @import("workspaces");
 
-const drag = @import("drag");
+const hooks = @import("hooks");
 const window = @import("window");
-
-const tiling = @import("tiling");
 
 const drawing = @import("drawing");
 const prompt = @import("prompt");
@@ -1175,7 +1173,7 @@ pub fn toggleBarSegmentAnchor() void {
     };
     const no_fullscreen = fullscreen.getForWorkspace(current_ws) == null;
     if (no_fullscreen)
-        tiling.retileCurrentWorkspace();
+        hooks.tilingRetileCurrentWorkspace();
     window.updateFloatingWindowBorders();
     window.markBordersFlushed();
     ungrabAndFlush();
@@ -1349,7 +1347,7 @@ pub fn setBarState(action: BarAction) void {
         window.markBordersFlushed();
         ungrabAndFlush();
     } else {
-        tiling.retileCurrentWorkspace();
+        hooks.tilingRetileCurrentWorkspace();
     }
     debug.info("Bar {s} ({s})", .{ if (should_be_visible) "shown" else "hidden", @tagName(action) });
 }
@@ -1408,7 +1406,7 @@ pub fn tickCarousel() void {
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t) void {
     if (gBar.state) |s| if (event.window == s.win.win_id and event.count == 0) {
         gBar.pending_force_full_redraw = true;
-        if (drag.isDragging()) s.is_dirty = true else submitDraw();
+        if (hooks.isDragging()) s.is_dirty = true else submitDraw();
     };
 }
 
@@ -1468,13 +1466,13 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 
     if (s.layout_cache.layout_bounds.contains(x))
     {
-        if (left) withTilingGrabForClick(tiling.toggleLayout) else withTilingGrabForClick(tiling.toggleLayoutReverse);
+        if (left) withTilingGrabForClick(hooks.tilingToggleLayout) else withTilingGrabForClick(hooks.tilingToggleLayoutReverse);
         return;
     }
 
     if (s.layout_cache.variants_bounds.contains(x))
     {
-        if (left) withTilingGrabForClick(tiling.stepLayoutVariant) else withTilingGrabForClick(tiling.stepLayoutVariantReverse);
+        if (left) withTilingGrabForClick(hooks.tilingStepLayoutVariant) else withTilingGrabForClick(hooks.tilingStepLayoutVariantReverse);
         return;
     }
 }
@@ -1557,7 +1555,7 @@ inline fn withTilingGrabForClick(op: anytype) void {
 
 fn isTilingActive() bool {
     return core.getState().config.tiling.enabled and
-        if (tiling.getStateOpt()) |t| t.is_enabled else false;
+        if (hooks.tilingGetStateOpt()) |t| t.is_enabled else false;
 }
 
 /// Must be called without holding the X server grab.
@@ -1572,7 +1570,7 @@ fn retileAllWorkspaces(s: *State, effective_visible: bool) void {
     defer s.is_visible = saved_visible;
     const multi_ws = core.getState().config.workspaces.enabled and isTilingActive();
     if (!multi_ws) {
-        tiling.retileCurrentWorkspace();
+        hooks.tilingRetileCurrentWorkspace();
         return;
     }
     const ws_state = workspaces.getState() orelse return;
@@ -1581,8 +1579,36 @@ fn retileAllWorkspaces(s: *State, effective_visible: bool) void {
         if (tracking.countWindowsOnWorkspace(ws_idx) == 0) continue;
         if (fullscreen.getForWorkspace(ws_idx) != null) continue;
         if (ws_idx != ws_state.current)
-            tiling.retileInactiveWorkspace(ws_idx)
+            hooks.tilingRetileInactiveWorkspace(ws_idx)
         else
-            tiling.retileCurrentWorkspace();
+            hooks.tilingRetileCurrentWorkspace();
     }
 }
+
+pub const hook_map = .{
+    .bar_init = init,
+    .bar_deinit = deinit,
+    .bar_reload = reload,
+    .bar_submit_draw = submitDraw,
+    .bar_toggle_segment_anchor = toggleBarSegmentAnchor,
+    .bar_schedule_focus_redraw = scheduleFocusRedraw,
+    .bar_is_bar_window = isBarWindow,
+    .bar_get_bar_height = getBarHeight,
+    .bar_work_area_rect = workAreaRect,
+    .bar_schedule_redraw = scheduleRedraw,
+    .bar_schedule_full_redraw = scheduleFullRedraw,
+    .bar_schedule_title_redraw = scheduleTitleRedraw,
+    .bar_is_visible = isVisible,
+    .bar_redraw_inside_grab = redrawInsideGrab,
+    .bar_commit_inside_grab = commitInsideGrab,
+    .bar_raise_bar = raiseBar,
+    .bar_present_for_prompt = presentForPrompt,
+    .bar_dismiss_after_prompt = dismissAfterPrompt,
+    .bar_set_bar_state = @as(?*const fn (hooks.BarAction) void, @ptrCast(&setBarState)),
+    .bar_update_if_dirty = updateIfDirty,
+    .bar_update_clock = updateClock,
+    .bar_tick_carousel = tickCarousel,
+    .bar_handle_expose = handleExpose,
+    .bar_handle_property_notify = handlePropertyNotify,
+    .bar_handle_button_press = handleButtonPress,
+};

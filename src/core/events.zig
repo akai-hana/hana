@@ -14,9 +14,7 @@ const input = @import("input");
 const window = @import("window");
 const focus = @import("focus");
 
-const tiling = @import("tiling");
-const bar = @import("bar");
-const prompt = @import("prompt");
+const hooks = @import("hooks");
 const clock = @import("clock");
 const fullscreen = @import("fullscreen");
 const refresh_rate = @import("refresh_rate");
@@ -54,10 +52,15 @@ inline fn eventCast(comptime T: type, event: *anyopaque) T {
     return @ptrCast(@alignCast(event));
 }
 
+/// Delegates bar expose events through the hook registry.
+fn dispatchBarHandleExpose(event: *anyopaque) void {
+    hooks.barHandleExpose(eventCast(*xcb.xcb_expose_event_t, event));
+}
+
 /// Fans out PropertyNotify to both bar (title) and window (WM_PROTOCOLS cache).
 fn handlePropertyNotify(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_property_notify_event_t, event);
-    bar.handlePropertyNotify(e);
+    hooks.barHandlePropertyNotify(e);
     window.handlePropertyNotify(e);
 }
 
@@ -105,7 +108,7 @@ const dispatch_table = blk: {
     table[xcb.XCB_FOCUS_IN] = asHandler(focus.handleFocusIn);
     table[xcb.XCB_PROPERTY_NOTIFY] = asHandler(handlePropertyNotify);
 
-    table[xcb.XCB_EXPOSE] = asHandler(bar.handleExpose);
+    table[xcb.XCB_EXPOSE] = asHandler(dispatchBarHandleExpose);
 
     table[xcb.XCB_CONFIGURE_NOTIFY] = asHandler(handleConfigureNotify);
 
@@ -256,8 +259,8 @@ fn handleConfigReload() !void {
     committed = true;
 
     window.reloadBorders();
-    tiling.reloadConfig();
-    bar.reload();
+    hooks.tilingReloadConfig();
+    hooks.barReload();
 
     old_config.deinit(cs.alloc);
 
@@ -295,7 +298,7 @@ fn handleXcbEvents() void {
     // spawn queue entry.
     input.drainPendingSpawns();
 
-    tiling.retileIfDirty();
+    hooks.tilingRetileIfDirty();
     focus.drainPendingConfirm();
     focus.drainPointerSync();
     // Must run after the event-draining loop above: any EnterNotify a tiling
@@ -304,7 +307,7 @@ fn handleXcbEvents() void {
     // See beginTilingOpSettle's doc comment in focus.zig.
     focus.drainTilingOpSettle();
     window.updateWorkspaceBordersIfNeeded();
-    bar.updateIfDirty() catch |err| debug.err("Failed to update bar: {}", .{err});
+    hooks.barUpdateIfDirty() catch |err| debug.err("Failed to update bar: {}", .{err});
 
     _ = xcb.xcb_flush(conn);
 }
@@ -324,7 +327,7 @@ pub fn run() !void {
         // loop ticking even when nothing else is happening, and also provides
         // the short-retry behaviour inside clock.nextTickWaitMs when the clock
         // thread is late publishing a second.
-        const blink_ms = prompt.blinkPollTimeoutMs();
+        const blink_ms = hooks.promptBlinkPollTimeoutMs();
         const cursor_is_blinking = blink_ms >= 0;
         const clock_ms: i32 = @intCast(clock.nextTickWaitMs());
         const poll_ms: i32 = if (blink_ms < 0) clock_ms else @min(blink_ms, clock_ms);
@@ -340,8 +343,8 @@ pub fn run() !void {
 
         if (ready == 0) {
             if (cursor_is_blinking) {
-                prompt.blinkTick();
-                bar.submitDraw();
+                hooks.promptBlinkTick();
+                hooks.barSubmitDraw();
                 _ = xcb.xcb_flush(core.getState().conn);
             }
         } else if ((fds[FD_XCB].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0) {
@@ -361,6 +364,6 @@ pub fn run() !void {
                 handleConfigReload() catch |err| debug.err("Reload failed: {}", .{err});
         }
 
-        _ = bar.updateClock();
+        _ = hooks.barUpdateClock();
     }
 }

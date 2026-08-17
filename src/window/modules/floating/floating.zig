@@ -8,7 +8,7 @@ const xcb = core.xcb;
 
 const layouts = @import("layouts");
 
-const bar = @import("bar");
+const hooks = @import("hooks");
 
 // Geometry cookies are all issued before any reply is awaited — one round-trip
 // per batch instead of one per window. 64 covers a typical workspace.
@@ -26,7 +26,7 @@ pub fn tileWithOffset(
     _: u16,
 ) void {
     const cs = core.getState();
-    const work = bar.workAreaRect();
+    const work = hooks.barWorkAreaRect();
     const sw: i32 = work.width;
     const work_top: i32 = work.y;
     const work_h: i32 = work.height;
@@ -76,3 +76,7 @@ pub fn tileWithOffset(
         base = end;
     }
 }
+
+pub const hook_map = .{
+    .floating_tile_with_offset = @as(?*const fn (*const layouts.LayoutCtx, *const anyopaque, []const u32, u16, u16, u16) void, @ptrCast(&tileWithOffset)),
+};

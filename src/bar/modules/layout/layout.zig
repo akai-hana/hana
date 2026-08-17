@@ -4,10 +4,10 @@
 const core = @import("core");
 const types = @import("types");
 const drawing = @import("drawing");
-const tiling = @import("tiling");
+const hooks = @import("hooks");
 
 /// Returns the icon string for the given layout.
-fn getIcon(layout: tiling.Layout) []const u8 {
+fn getIcon(layout: hooks.TilingLayout) []const u8 {
     return switch (layout) {
         .master => "[]=",
         .monocle => "[M]",
@@ -25,7 +25,7 @@ pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, star
     if (!core.getState().config.tiling.enabled)
         return dc.drawSegment(start_x, height, getIcon(.floating), config.scaledSegmentPadding(height), config.bg, config.fg);
 
-    const t_state = tiling.getStateOpt() orelse return start_x;
+    const t_state = hooks.tilingGetStateOpt() orelse return start_x;
     const icon = getIcon(t_state.config.layout);
     return dc.drawSegment(start_x, height, icon, config.scaledSegmentPadding(height), config.bg, config.fg);
 }

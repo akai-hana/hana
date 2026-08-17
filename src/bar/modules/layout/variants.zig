@@ -5,19 +5,19 @@ const core = @import("core");
 const types = @import("types");
 
 const drawing = @import("drawing");
-const tiling = @import("tiling");
+const hooks = @import("hooks");
 
 /// Draws the layout variants icon on the bar.
 pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, start_x: u16) !u16 {
     if (!core.getState().config.tiling.enabled) return start_x;
-    const t_state = tiling.getStateOpt() orelse return start_x;
+    const t_state = hooks.tilingGetStateOpt() orelse return start_x;
     const indicator = getIndicator(t_state);
     if (indicator.len == 0) return start_x;
     return dc.drawSegment(start_x, height, indicator, config.scaledSegmentPadding(height), config.bg, config.fg);
 }
 
 /// Accessor for the icon of each layout's variants.
-fn getIndicator(s: *const tiling.State) []const u8 {
+fn getIndicator(s: *const hooks.TilingState) []const u8 {
     return switch (s.config.layout) {
         .master => switch (s.config.layout_variants.master) {
             .lifo => "[N]",

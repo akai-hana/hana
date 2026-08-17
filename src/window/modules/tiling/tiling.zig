@@ -15,14 +15,12 @@ const tracking = @import("tracking");
 const focus = @import("focus");
 
 const layouts = @import("layouts");
-const floating = @import("floating");
+const hooks = @import("hooks");
 
 const fullscreen = @import("fullscreen");
 const workspaces = @import("workspaces");
 const WsState = workspaces.State;
 const WsWorkspace = workspaces.Workspace;
-
-const bar = @import("bar");
 
 const master = @import("master");
 const monocle = @import("monocle");
@@ -224,7 +222,7 @@ pub fn reloadConfig() void {
             _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{ns.config.border_width});
         }
         retileCurrentWorkspace();
-        bar.redrawInsideGrab();
+        hooks.barRedrawInsideGrab();
         utils.ungrabAndFlush(conn);
     }
 }
@@ -369,7 +367,7 @@ pub fn invalidateGeomCache(window_id: u32) void {
 
 /// Clear the workspace-valid bit for `ws_idx` so the next restoreWorkspaceGeom
 /// for that workspace triggers a full retile.
-pub inline fn invalidateWsGeomBit(ws_idx: u8) void {
+pub fn invalidateWsGeomBit(ws_idx: u8) void {
     const s = getState();
     if (ws_idx < max_workspaces) s.geom.workspace_geom_valid_bits &= ~tracking.workspaceBit(ws_idx);
 }
@@ -378,7 +376,7 @@ pub inline fn invalidateWsGeomBit(ws_idx: u8) void {
 /// Unlike `markDirtyAndInvalidateGeom`, this does NOT invalidate the geometry
 /// cache — use it when only a redraw (not a full retile with new positions) is
 /// needed.
-pub inline fn markDirty() void {
+pub fn markDirty() void {
     getState().is_dirty = true;
 }
 
@@ -402,7 +400,7 @@ pub fn retileCurrentWorkspaceWithOpts(opts: RetileOpts) void {
         _ = restoreWorkspaceGeom();
         return;
     }
-    retileImpl(bar.workAreaRect(), opts);
+    retileImpl(hooks.barWorkAreaRect(), opts);
     s.is_dirty = false;
 }
 
@@ -432,7 +430,7 @@ pub fn retileInactiveWorkspace(ws_idx: u8) void {
         return;
     }
 
-    retileImpl(bar.workAreaRect(), .{ .for_ws = ws_idx });
+    retileImpl(hooks.barWorkAreaRect(), .{ .for_ws = ws_idx });
 
     // Defense in depth: monocle (and fibonacci's overflow fallback) now skip
     // raising during a background retile (see LayoutCtx.is_background), but
@@ -459,7 +457,7 @@ pub fn retileForRestore() void {
     // lands. The cache is only used as a fallback float position.
     s.config.layout = .master;
     defer s.config.layout = saved;
-    retileImpl(bar.workAreaRect(), .{});
+    retileImpl(hooks.barWorkAreaRect(), .{});
     s.is_dirty = false;
 }
 
@@ -477,7 +475,7 @@ pub fn restoreWorkspaceGeom() bool {
     if (current_ws >= max_workspaces) return false;
     if (s.geom.workspace_geom_valid_bits & tracking.workspaceBit(current_ws) == 0) return false;
 
-    const current_screen = bar.workAreaRect();
+    const current_screen = hooks.barWorkAreaRect();
     if (!current_screen.eql(s.geom.last_retile_area)) return false;
 
     // Pass 1 — validate all cache entries before emitting any XCB calls.
@@ -645,7 +643,7 @@ pub fn adjustStackBalance(delta: f32) void {
 /// `delta` is +1 (right/forward) or -1 (left/backward).
 /// No-op when the current layout is not .scroll.
 pub fn stepScrollView(delta: i32) void {
-    if (scroll.step(getState(), delta, bar.workAreaRect().width)) retileCurrentWorkspace();
+    if (scroll.step(getState(), delta, hooks.barWorkAreaRect().width)) retileCurrentWorkspace();
 }
 
 /// Brings the newly focused window into view after keyboard focus-cycle
@@ -668,7 +666,7 @@ pub fn snapScrollToFocused() void {
         .monocle => retileCurrentWorkspace(),
         .scroll => {
             const win = focus.getFocused() orelse return;
-            if (scroll.snapOffsetToWindow(s, collectWorkspaceWindows(s, null), win, bar.workAreaRect().width)) retileCurrentWorkspace();
+            if (scroll.snapOffsetToWindow(s, collectWorkspaceWindows(s, null), win, hooks.barWorkAreaRect().width)) retileCurrentWorkspace();
         },
         else => {},
     }
@@ -906,7 +904,7 @@ fn invokeLayout(
         .fibonacci => fibonacci.tileWithOffset(ctx, s, wins, w, h, y),
         .leaf => leaf.tileWithOffset(ctx, s, wins, w, h, y),
         .scroll => scroll.tileWithOffset(ctx, s, wins, w, h, y),
-        .floating => floating.tileWithOffset(ctx, s, wins, w, h, y),
+        .floating => if (hooks.h.floating_tile_with_offset) |f| f(ctx, @ptrCast(s), wins, w, h, y),
     }
     // Centralized flush of the deferred swap_master rect (see LayoutCtx.deferred
     // and emitOrDefer's doc comment). This is the single place that flushes —
@@ -1128,7 +1126,7 @@ fn swapWindowsInList(s: *State, idx_a: usize, idx_b: usize) void {
     // view picks up the new geometry (via the re-run pre-fetch) without
     // clearing the whole bar: focus and the window-ID set are unchanged, so
     // the workspace/layout/clock segments don't need repainting.
-    bar.scheduleTitleRedraw();
+    hooks.barScheduleTitleRedraw();
 }
 
 /// Locates the focused window and the current workspace's master window in
@@ -1213,7 +1211,7 @@ inline fn applyLayoutStep(comptime forward: bool) void {
     }
     // In global mode all workspaces share the same layout; inactive caches are stale.
     commitConfigChange(core.getState().config.tiling.global_layout);
-    bar.scheduleFullRedraw();
+    hooks.barScheduleFullRedraw();
     debug.info("Layout: {s}", .{@tagName(layout)});
 }
 
@@ -1225,3 +1223,46 @@ inline fn cycleEnum(v: anytype, comptime forward: bool) void {
     const cur = @intFromEnum(v.*);
     v.* = @enumFromInt(if (forward) (cur + 1) % len else (cur + len - 1) % len);
 }
+
+pub const hook_map = .{
+    .tiling_init = init,
+    .tiling_deinit = deinit,
+    .tiling_reload_config = reloadConfig,
+    .tiling_cache_size_hints = cacheSizeHints,
+    .tiling_add_window = addWindow,
+    .tiling_remove_window = removeWindow,
+    .tiling_toggle_window_float = toggleWindowFloat,
+    .tiling_get_window_filtered_index = getWindowFilteredIndex,
+    .tiling_add_window_at_filtered_index = addWindowAtFilteredIndex,
+    .tiling_save_window_geom = saveWindowGeom,
+    .tiling_get_window_geom = getWindowGeom,
+    .tiling_invalidate_geom_cache = invalidateGeomCache,
+    .tiling_invalidate_ws_geom_bit = invalidateWsGeomBit,
+    .tiling_mark_dirty = markDirty,
+    .tiling_retile_current_workspace_with_opts = @as(?*const fn (hooks.TilingRetileOpts) void, @ptrCast(&retileCurrentWorkspaceWithOpts)),
+    .tiling_retile_current_workspace = retileCurrentWorkspace,
+    .tiling_retile_if_dirty = retileIfDirty,
+    .tiling_retile_inactive_workspace = retileInactiveWorkspace,
+    .tiling_retile_for_restore = retileForRestore,
+    .tiling_restore_workspace_geom = restoreWorkspaceGeom,
+    .tiling_toggle_layout = toggleLayout,
+    .tiling_toggle_layout_reverse = toggleLayoutReverse,
+    .tiling_step_layout_variant = stepLayoutVariant,
+    .tiling_step_layout_variant_reverse = stepLayoutVariantReverse,
+    .tiling_apply_workspace_layout = @as(?*const fn (*const anyopaque) void, @ptrCast(&applyWorkspaceLayout)),
+    .tiling_default_layout = @as(?*const fn () hooks.TilingLayout, @ptrCast(&defaultLayout)),
+    .tiling_layout_from_string = @as(?*const fn ([]const u8) ?hooks.TilingLayout, @ptrCast(&layoutFromString)),
+    .tiling_adjust_master_count = adjustMasterCount,
+    .tiling_adjust_master_width = adjustMasterWidth,
+    .tiling_adjust_stack_balance = adjustStackBalance,
+    .tiling_step_scroll_view = stepScrollView,
+    .tiling_snap_scroll_to_focused = snapScrollToFocused,
+    .tiling_swap_with_master = swapWithMaster,
+    .tiling_swap_windows_by_id = swapWindowsById,
+    .tiling_is_window_tiled = isWindowTiled,
+    .tiling_is_floating_layout = isFloatingLayout,
+    .tiling_is_window_active_tiled = isWindowActiveTiled,
+    .tiling_update_window_focus = updateWindowFocus,
+    .tiling_take_prev_focused_for_scroll = takePrevFocusedForScroll,
+    .tiling_send_border_color_if_changed = sendBorderColorIfChanged,
+};

@@ -11,8 +11,7 @@ const window = @import("window");
 const tracking = @import("tracking");
 const focus = @import("focus");
 const fullscreen = @import("fullscreen");
-const tiling = @import("tiling");
-const bar = @import("bar");
+const hooks = @import("hooks");
 
 /// Per-window minimize record.
 const MinimizedEntry = struct {
@@ -98,9 +97,9 @@ pub fn minimizeWindow() void {
         saved_fs = fullscreen.getForWorkspace(fs_ws).?.saved_geometry;
         fullscreen.removeForWorkspace(fs_ws);
     }
-    const tiling_index = tiling.getWindowFilteredIndex(win);
+    const tiling_index = hooks.tilingGetWindowFilteredIndex(win);
 
-    if (cs.config.tiling.enabled) tiling.removeWindow(win);
+    if (cs.config.tiling.enabled) hooks.tilingRemoveWindow(win);
 
     // Capacity was already checked above, so this always succeeds.
     _ = g_minimized.append(.{ .id = win, .entry = .{
@@ -138,11 +137,11 @@ pub fn minimizeWindow() void {
     restore_ctx.apply(.tiling_operation);
 
     if (saved_fs != null) {
-        bar.setBarState(.show_fullscreen);
+        hooks.barSetBarState(.show_fullscreen);
     } else if (cs.config.tiling.enabled) {
-        tiling.retileCurrentWorkspace();
+        hooks.tilingRetileCurrentWorkspace();
     }
-    bar.commitInsideGrab();
+    hooks.barCommitInsideGrab();
 }
 
 /// Restore a window that has already been removed from g_minimized.
@@ -161,13 +160,13 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
         // an untiled window, so it configures it to the saved geometry
         // directly and never hands it back to the tiling engine — it keeps
         // its dimensions but is permanently stuck outside the tiled layout.
-        if (tiling_index) |ti| tiling.addWindowAtFilteredIndex(win, ti);
+        if (tiling_index) |ti| hooks.tilingAddWindowAtFilteredIndex(win, ti);
 
         // enterFullscreen owns its own server grab, so we must not be inside one.
         // Use scheduleRedraw (next event-loop iteration) rather than redrawInsideGrab.
         focus.setFocus(win, .window_spawn);
         fullscreen.enterFullscreen(win, geom);
-        bar.scheduleRedraw();
+        hooks.barScheduleRedraw();
         return;
     }
 
@@ -183,21 +182,21 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
         // Restore at the original layout slot so a former master returns to
         // master rather than being appended to the stack end.
         if (tiling_index) |ti|
-            tiling.addWindowAtFilteredIndex(win, ti)
+            hooks.tilingAddWindowAtFilteredIndex(win, ti)
         else
-            tiling.addWindow(win);
+            hooks.tilingAddWindow(win);
         // Move focus BEFORE the retile: layouts that pick their visible window
         // from focus.getFocused() at retile time (monocle) would otherwise
         // retile against the still-focused old window with no follow-up retile
         // once focus lands on `win`.
         focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
-        tiling.retileCurrentWorkspace();
+        hooks.tilingRetileCurrentWorkspace();
     } else {
         window.restoreFloatGeom(win);
         focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
     }
 
-    bar.commitInsideGrab();
+        hooks.barCommitInsideGrab();
 }
 
 pub const RestoreOrder = enum { lifo, fifo };
@@ -291,14 +290,14 @@ fn restorePlainWindowsTiling(plain_wins: []MinimizedRecord, focus_target: u32, f
     }.lt);
     for (plain_wins) |rec| {
         if (rec.entry.tiling_index) |ti|
-            tiling.addWindowAtFilteredIndex(rec.id, ti)
+            hooks.tilingAddWindowAtFilteredIndex(rec.id, ti)
         else
-            tiling.addWindow(rec.id);
+            hooks.tilingAddWindow(rec.id);
     }
     // Focus must move to focus_target BEFORE the retile — see the
     // matching comment in restoreWindowImpl.
     focus.setFocusWithModel(focus_target, .window_spawn, focus_model);
-    tiling.retileCurrentWorkspace();
+    hooks.tilingRetileCurrentWorkspace();
 }
 
 pub fn unminimizeAll() void {
@@ -344,7 +343,7 @@ pub fn unminimizeAll() void {
             focus.setFocusWithModel(focus_target, .window_spawn, focus_ctx.model.?);
         }
 
-        bar.commitInsideGrab();
+    hooks.barCommitInsideGrab();
     }
 
     // Each fullscreen window needs its own grab (enterFullscreen owns it).

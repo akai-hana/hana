@@ -5,6 +5,7 @@ const std = @import("std");
 
 const core = @import("core");
 const constants = @import("constants");
+const hooks = @import("hooks");
 const utils = @import("utils");
 const minimize = @import("minimize");
 
@@ -385,7 +386,6 @@ pub fn prefetchAndSaveGeometry(
     skip_win: u32,
     skip_ws: u8,
 ) void {
-    const tiling = @import("tiling");
     const window = @import("window");
     const conn = core.getState().conn;
     var it = onWorkspace(ws_bit, skip_win);
@@ -393,7 +393,7 @@ pub fn prefetchAndSaveGeometry(
         const win = entry.win;
         if (skip_ws < 64 and isWindowOnWorkspace(win, skip_ws)) continue;
         if (!predicate(win)) continue;
-        if (tiling.getWindowGeom(win) != null) continue;
+        if (hooks.tilingGetWindowGeom(win) != null) continue;
         const reply = core.xcb.xcb_get_geometry_reply(conn, core.xcb.xcb_get_geometry(conn, win), null) orelse continue;
         defer std.c.free(reply);
         if (utils.isOffscreenGeomReply(reply)) continue;

@@ -597,3 +597,10 @@ fn advanceCarouselOffset(e: *CarouselEntry, now_ns: u64) u16 {
     e.pixel_offset = @truncate((@as(u32, e.pixel_offset) + wrapped_advance) % @as(u32, e.cycle_w));
     return e.pixel_offset;
 }
+
+pub const hook_map = .{
+    .carousel_set_enabled = setCarouselEnabled,
+    .carousel_set_scroll_speed = setScrollSpeed,
+    .carousel_set_refresh_rate_override = setRefreshRateOverride,
+    .carousel_notify_focus_changed = notifyFocusChanged,
+};
