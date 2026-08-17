@@ -58,24 +58,26 @@ const DotRecord = union(DotKind) {
         sym: xcb.xcb_keysym_t = 0,
     },
 
-    op_motion: struct {
-        op: u8 = 0,
-        op_count: u32 = 1,
-        motion_count: u32 = 1,
-        has_g_prefix: bool = false, // ge / gE
-        find_kind: u8 = 0, // f/F/t/T motion (0 = none)
-        find_ch: u8 = 0,
-        tobj_kind: u8 = 0,
-        tobj_delim: u8 = 0,
-
-        motion_sym: xcb.xcb_keysym_t = 0,
-    },
+    op_motion: DotOpMotion,
 
     op_line: struct {
         op: u8 = 0,
     },
 
     insert_session: void,
+};
+
+const DotOpMotion = struct {
+    op: u8 = 0,
+    op_count: u32 = 1,
+    motion_count: u32 = 1,
+    has_g_prefix: bool = false, // ge / gE
+    find_kind: u8 = 0, // f/F/t/T motion (0 = none)
+    find_ch: u8 = 0,
+    tobj_kind: u8 = 0,
+    tobj_delim: u8 = 0,
+
+    motion_sym: xcb.xcb_keysym_t = 0,
 };
 
 /// Result returned by motion functions.
@@ -109,6 +111,8 @@ pub const RingStack = struct {
 
 // Internal types
 
+const colon_buf_size = 4;
+
 /// What the engine is waiting for between keystrokes; the union makes the
 /// "exactly one" exclusivity structural, so a new pending state is one new tag
 /// rather than new booleans, `if` blocks, and bail-out conditions.
@@ -135,9 +139,13 @@ const PendingCmd = struct {
 
     // colon_buf/colon_len are only meaningful in the .colon_cmd state;
     // kept flat here to avoid nesting.
-    colon_buf: [4]u8 = .{ 0, 0, 0, 0 },
+    colon_buf: [colon_buf_size]u8 = .{ 0, 0, 0, 0 },
     colon_len: u8 = 0,
 };
+
+// Comptime list of editing-buffer field names shared by init, deinit, and
+// reset so adding a buffer only requires touching one place.
+const buf_fields = .{ "buf", "yank_buf", "replace_origin_buf", "insert_rec_buf", "dot_insert_buf" };
 
 // Public state type
 
@@ -200,7 +208,7 @@ pub const VimState = struct {
         // Allocate all five same-sized editing buffers in a single loop so that
         // adding or removing a buffer only requires touching this list and the
         // matching list in `deinit` — the compiler enforces symmetry at a glance.
-        inline for (.{ "buf", "yank_buf", "replace_origin_buf", "insert_rec_buf", "dot_insert_buf" }) |field| {
+        inline for (buf_fields) |field| {
             @field(vs, field) = try allocator.alloc(u8, max_input);
         }
         vs.undo.entries = try allocator.alloc(UndoEntry, undo_max);
@@ -215,29 +223,26 @@ pub const VimState = struct {
     /// Reset all editing state for a new editing session, preserving heap
     /// allocations (buf, yank_buf, undo/redo entries, etc.).
     pub fn reset(vs: *VimState) void {
-        const allocator = vs.allocator;
-        const max_input = vs.max_input;
-        const undo_max = vs.undo_max;
-        const buf = vs.buf;
-        const yank_buf = vs.yank_buf;
-        const replace_origin_buf = vs.replace_origin_buf;
-        const insert_rec_buf = vs.insert_rec_buf;
-        const dot_insert_buf = vs.dot_insert_buf;
-        const undo_entries = vs.undo.entries;
-        const redo_entries = vs.redo.entries;
+        var saved_bufs: [buf_fields.len][]u8 = undefined;
+        inline for (buf_fields, 0..) |field, i| {
+            saved_bufs[i] = @field(vs, field);
+        }
+        const saved_allocator = vs.allocator;
+        const saved_max_input = vs.max_input;
+        const saved_undo_max = vs.undo_max;
+        const saved_undo_entries = vs.undo.entries;
+        const saved_redo_entries = vs.redo.entries;
 
-        vs.* = .{
-            .allocator = allocator,
-            .max_input = max_input,
-            .undo_max = undo_max,
-            .buf = buf,
-            .yank_buf = yank_buf,
-            .replace_origin_buf = replace_origin_buf,
-            .insert_rec_buf = insert_rec_buf,
-            .dot_insert_buf = dot_insert_buf,
-            .undo = .{ .entries = undo_entries },
-            .redo = .{ .entries = redo_entries },
-        };
+        vs.* = .{};
+
+        vs.allocator = saved_allocator;
+        vs.max_input = saved_max_input;
+        vs.undo_max = saved_undo_max;
+        inline for (buf_fields, 0..) |field, i| {
+            @field(vs, field) = saved_bufs[i];
+        }
+        vs.undo.entries = saved_undo_entries;
+        vs.redo.entries = saved_redo_entries;
     }
 
     /// Free all heap buffers.  The `VimState` must not be used after this call.
@@ -248,8 +253,8 @@ pub const VimState = struct {
         for (vs.redo.entries) |*e| vs.allocator.free(e.buf);
         vs.allocator.free(vs.redo.entries);
 
-        // Mirror of the init loop — same field order in reverse; keep in sync.
-        inline for (.{ "dot_insert_buf", "insert_rec_buf", "replace_origin_buf", "yank_buf", "buf" }) |field| {
+        // Mirror of the init loop — same field order; keep in sync.
+        inline for (buf_fields) |field| {
             vs.allocator.free(@field(vs, field));
         }
         vs.* = .{}; // poison all fields
@@ -259,7 +264,7 @@ pub const VimState = struct {
 // Public helpers
 
 /// Reset all in-progress command state (counts, pending operators, prefix flags).
-pub fn resetPendingCmd(vs: *VimState) void {
+fn resetPendingCmd(vs: *VimState) void {
     vs.pending = .{};
 }
 
@@ -281,7 +286,7 @@ pub fn onDeactivate(vs: *VimState) void {
 
 /// Enter INSERT mode.  `push_undo` = true for standalone commands (i/a/I/A/S);
 /// false for c-operators that already pushed an undo snapshot before deleting.
-pub fn enterInsert(vs: *VimState, push_undo: bool) void {
+fn enterInsert(vs: *VimState, push_undo: bool) void {
     if (!vs.is_replaying_dot) {
         if (push_undo) undoPush(vs);
         vs.insert_rec_len = 0;
@@ -552,14 +557,14 @@ fn execNormalKey(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) Action {
             _ = execDirectSym(vs, @truncate(sym), cnt);
         },
 
-        'p', 'P' => {
-            if (vs.yank_len > 0) {
-                vs.dot = .{ .direct = .{ .sym = sym, .count = cnt } };
-                undoPush(vs);
-                var i: u32 = 0;
-                while (i < cnt) : (i += 1) {
-                    if (sym == 'p') pasteAfter(vs) else pasteBefore(vs);
-                }
+        'p', 'P' => if (vs.yank_len > 0) {
+            vs.dot = .{ .direct = .{ .sym = sym, .count = cnt } };
+            undoPush(vs);
+            var i: u32 = 0;
+            if (sym == 'p') {
+                while (i < cnt) : (i += 1) pasteAfter(vs);
+            } else {
+                while (i < cnt) : (i += 1) pasteBefore(vs);
             }
         },
 
@@ -698,6 +703,8 @@ pub fn handleVisual(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
         return .none;
     }
 
+    const sel = visualRange(vs);
+
     switch (sym) {
         XK_Escape, 'v' => exitVisual(vs),
 
@@ -707,7 +714,6 @@ pub fn handleVisual(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
         },
 
         'd', 'x', 'c' => {
-            const sel = visualRange(vs);
             vs.dot = .{ .op_line = .{ .op = if (sym == 'c') @as(u8, 'c') else @as(u8, 'd') } };
             deleteAndYank(vs, sel[0], sel[1]);
             exitVisual(vs);
@@ -715,14 +721,12 @@ pub fn handleVisual(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
         },
 
         'y' => {
-            const sel = visualRange(vs);
             yankRange(vs, sel[0], sel[1]);
             vs.cursor = sel[0];
             exitVisual(vs);
         },
 
         '~' => {
-            const sel = visualRange(vs);
             undoPush(vs);
             var i = sel[0];
             while (i < sel[1]) : (i += 1) vs.buf[i] = toggleCaseChar(vs.buf[i]);
@@ -744,16 +748,16 @@ pub fn handleReplace(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 
         XK_Return => return .spawn,
 
-        XK_BackSpace => if (vs.cursor > vs.replace_origin_cursor) {
+        XK_BackSpace => {
+            if (vs.cursor <= vs.replace_origin_cursor) return .none;
             vs.cursor -= 1;
             if (vs.cursor < vs.replace_origin_len) {
                 vs.buf[vs.cursor] = vs.replace_origin_buf[vs.cursor];
-            } else {
-                if (vs.cursor < vs.len - 1) {
-                    std.mem.copyForwards(u8, vs.buf[vs.cursor .. vs.len - 1], vs.buf[vs.cursor + 1 .. vs.len]);
-                }
-                vs.len -= 1;
+                return .none;
             }
+            if (vs.cursor < vs.len - 1)
+                std.mem.copyForwards(u8, vs.buf[vs.cursor .. vs.len - 1], vs.buf[vs.cursor + 1 .. vs.len]);
+            vs.len -= 1;
         },
 
         else => if (isPrintableAscii(sym)) {
@@ -1072,21 +1076,14 @@ fn ctrlAdjustNumber(vs: *VimState, delta: i64) void {
 
 /// Apply an operator to the range described by `mr`.
 fn applyOperator(vs: *VimState, op: u8, mr: MotionResult) void {
-    var from: usize = undefined;
-    var to: usize = undefined;
-
-    if (mr.range_start_override) |rso| {
-        from = rso;
-        to = @min(mr.pos, vs.len);
-    } else if (mr.pos >= vs.cursor) {
-        from = vs.cursor;
-        to = @min(mr.pos + @as(usize, @intFromBool(mr.inclusive)), vs.len);
-    } else {
-        from = mr.pos;
-        // For inclusive backward motions (e.g. dF, dB) the cursor character
-        // is part of the range; add 1 and clamp to len.
-        to = @min(vs.cursor + @as(usize, @intFromBool(mr.inclusive)), vs.len);
-    }
+    const from: usize, const to: usize = blk: {
+        if (mr.range_start_override) |rso|
+            break :blk .{ rso, @min(mr.pos, vs.len) };
+        const inc: usize = @intFromBool(mr.inclusive);
+        if (mr.pos >= vs.cursor)
+            break :blk .{ vs.cursor, @min(mr.pos + inc, vs.len) };
+        break :blk .{ mr.pos, @min(vs.cursor + inc, vs.len) };
+    };
 
     if (from >= to) return;
 
@@ -1193,21 +1190,7 @@ fn replayDot(vs: *VimState) void {
 
         .op_motion => |om| {
             const cnt: u32 = resolveCount(om.op_count) * resolveCount(om.motion_count);
-            const mr_opt: ?MotionResult =
-                if (om.find_kind != 0)
-                    motionFind(vs, om.find_kind, om.find_ch, cnt)
-                else if (om.tobj_kind != 0)
-                    resolveTextObject(vs, om.tobj_kind, om.tobj_delim)
-                else if (om.has_g_prefix)
-                    if (resolveGPrefixPos(vs, om.motion_sym, cnt)) |pos|
-                        MotionResult{ .pos = pos, .inclusive = (om.motion_sym == 'e' or om.motion_sym == 'E') }
-                    else
-                        null
-                else if (om.motion_sym == '%')
-                    MotionResult{ .pos = motionMatchBracket(vs), .inclusive = true }
-                else
-                    resolveSimpleMotion(vs, om.motion_sym, cnt);
-            if (mr_opt) |mr| {
+            if (resolveDotMotion(vs, om, cnt)) |mr| {
                 applyOperator(vs, om.op, mr);
                 replayInsertIfChange(vs, om.op);
             }
@@ -1222,6 +1205,21 @@ fn replayDot(vs: *VimState) void {
             insertSlice(vs, vs.dot_insert_buf[0..vs.dot_insert_len]);
         },
     }
+}
+
+fn resolveDotMotion(vs: *VimState, om: DotOpMotion, cnt: u32) ?MotionResult {
+    if (om.find_kind != 0)
+        return motionFind(vs, om.find_kind, om.find_ch, cnt);
+    if (om.tobj_kind != 0)
+        return resolveTextObject(vs, om.tobj_kind, om.tobj_delim);
+    if (om.has_g_prefix) {
+        if (resolveGPrefixPos(vs, om.motion_sym, cnt)) |pos|
+            return MotionResult{ .pos = pos, .inclusive = (om.motion_sym == 'e' or om.motion_sym == 'E') };
+        return null;
+    }
+    if (om.motion_sym == '%')
+        return MotionResult{ .pos = motionMatchBracket(vs), .inclusive = true };
+    return resolveSimpleMotion(vs, om.motion_sym, cnt);
 }
 
 // Private — count helpers and dot record building
@@ -1355,40 +1353,20 @@ fn reverseFindKind(kind: u8) u8 {
 
 // Private — bracket matching and text objects
 
-/// Scans from `start` in the direction of `step` (1 forward, -1 backward)
-/// tracking bracket depth, and returns the index of the bracket matching the
-/// pair endpoint at `start` — null when the run is unbalanced. The starting
-/// character participates in the scan: a forward scan counts an opening
-/// bracket at `start` toward the depth (so a closing bracket that returns the
-/// depth to zero is its match), and a backward scan starts with the closing
-/// bracket under the cursor counted toward the depth and returns the opening
-/// bracket that brings the depth back to zero.
-fn scanBracket(buf: []const u8, start: usize, step: i8, open_ch: u8, close_ch: u8) ?usize {
-    var p = start;
+fn scanBracket(comptime forward: bool, buf: []const u8, start: usize, open: u8, close: u8) ?usize {
+    const inc_ch = if (forward) open else close;
+    const dec_ch = if (forward) close else open;
+    var p: isize = @intCast(start);
     var depth: i32 = 0;
-    while (p < buf.len) {
-        const c = buf[p];
-        if (step > 0) {
-            if (c == open_ch) {
-                depth += 1;
-            } else if (c == close_ch) {
-                depth -= 1;
-                if (depth == 0) return p;
-            }
-        } else {
-            if (c == close_ch) {
-                depth += 1;
-            } else if (c == open_ch) {
-                depth -= 1;
-                if (depth == 0) return p;
-            }
+    while (if (forward) p < @as(isize, @intCast(buf.len)) else p >= 0) {
+        const c = buf[@intCast(p)];
+        if (c == inc_ch) {
+            depth += 1;
+        } else if (c == dec_ch) {
+            depth -= 1;
+            if (depth == 0) return @intCast(p);
         }
-        if (step > 0) {
-            p += 1;
-        } else {
-            if (p == 0) break;
-            p -= 1;
-        }
+        if (forward) p += 1 else p -= 1;
     }
     return null;
 }
@@ -1409,8 +1387,10 @@ fn motionMatchBracket(vs: *VimState) usize {
         else => return vs.cursor,
     };
 
-    const step: i8 = if (pair.forward) 1 else -1;
-    return scanBracket(vs.buf, vs.cursor, step, pair.open, pair.close) orelse vs.cursor;
+    return (if (pair.forward)
+        scanBracket(true, vs.buf, vs.cursor, pair.open, pair.close)
+    else
+        scanBracket(false, vs.buf, vs.cursor, pair.open, pair.close)) orelse vs.cursor;
 }
 
 fn resolveTextObject(vs: *VimState, kind: u8, delim: u8) ?MotionResult {
@@ -1488,7 +1468,7 @@ fn textObjBracket(vs: *VimState, open: u8, close: u8, inner: bool) ?MotionResult
     // forward (matching-close) scan below is scanBracket's, starting at the
     // found open so the pair's open is counted toward the depth exactly as the
     // original's `lv + 1` start with a pre-decrement check did.
-    var lv: ?usize = null;
+    var open_pos: ?usize = null;
     var depth: i32 = 0;
     var p = vs.cursor;
     while (true) {
@@ -1496,7 +1476,7 @@ fn textObjBracket(vs: *VimState, open: u8, close: u8, inner: bool) ?MotionResult
             depth += 1;
         } else if (vs.buf[p] == open) {
             if (depth == 0) {
-                lv = p;
+                open_pos = p;
                 break;
             }
             depth -= 1;
@@ -1504,14 +1484,14 @@ fn textObjBracket(vs: *VimState, open: u8, close: u8, inner: bool) ?MotionResult
         if (p == 0) break;
         p -= 1;
     }
-    const lvv = lv orelse return null;
+    const left = open_pos orelse return null;
 
-    const hv = scanBracket(vs.buf, lvv, 1, open, close) orelse return null;
+    const right = scanBracket(true, vs.buf, left, open, close) orelse return null;
 
     if (inner) {
-        if (lvv + 1 >= hv) return null;
-        return MotionResult{ .pos = hv, .inclusive = false, .range_start_override = lvv + 1 };
+        if (left + 1 >= right) return null;
+        return MotionResult{ .pos = right, .inclusive = false, .range_start_override = left + 1 };
     } else {
-        return MotionResult{ .pos = hv + 1, .inclusive = false, .range_start_override = lvv };
+        return MotionResult{ .pos = right + 1, .inclusive = false, .range_start_override = left };
     }
 }

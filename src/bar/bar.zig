@@ -6,6 +6,7 @@ const std = @import("std");
 const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
+const refresh_rate = @import("refresh_rate");
 const scale = @import("scale");
 const debug = @import("debug");
 const bench = @import("bench");
@@ -212,7 +213,15 @@ const RenderCtx = struct {
 
 /// On-screen hit-test bounds of a clickable segment, recorded by
 /// recordClickBounds during the last full layout pass.
-const SegBounds = struct { x: u16 = 0, w: u16 = 0, has: bool = false };
+const SegBounds = struct {
+    x: u16 = 0,
+    w: u16 = 0,
+    has: bool = false,
+
+    inline fn contains(self: SegBounds, px: u16) bool {
+        return self.has and px >= self.x and px < self.x + self.w;
+    }
+};
 
 /// Per-draw layout geometry; invalidated when workspace_count changes or the
 /// clock position is reset.
@@ -389,19 +398,14 @@ const State = struct {
             .variants => try variants.draw(r.dc, r.config, r.height, x),
             .title => prompt.draw(
                 self.titleCtx(x, width orelse TITLE_MIN_WIDTH, &self.title_cache.title, &self.title_cache.title_window),
-                .{
-                    .focused_window = snap.focused_window,
-                    .focused_title = snap.focused_title.items,
-                    .minimized_title = minimizedTitleFor(
-                        snap.current_workspace_windows.items,
-                        &snap.minimized_windows,
-                        snap.window_titles.list.items,
-                    ),
-                    .current_ws_wins = snap.current_workspace_windows.items,
-                    .minimized_set = &snap.minimized_windows,
-                    .titles = snap.window_titles.list.items,
-                    .geoms = snap.window_geoms.items,
-                },
+                makeTitleSnapshot(
+                    snap.focused_window,
+                    snap.focused_title.items,
+                    snap.current_workspace_windows.items,
+                    &snap.minimized_windows,
+                    snap.window_titles.list.items,
+                    snap.window_geoms.items,
+                ),
                 r.allocator,
                 snap.is_title_invalidated,
             ),
@@ -456,21 +460,6 @@ const State = struct {
         };
     }
 
-    /// Reserve `seg_w` px for the upcoming segment, plus `scaled_spacing` for
-    /// the inter-segment gap when the segment to the right drew. `reclaimSpace`
-    /// is the exact reverse, applied when the segment ends up drawing nothing.
-    fn reserveSpace(right_x: *u16, seg_w: u16, scaled_spacing: u16, with_gap: bool) void {
-        right_x.* -= seg_w;
-        if (with_gap) right_x.* -= scaled_spacing;
-    }
-
-    /// Reverse of `reserveSpace`: give the reservation back when the segment
-    /// drew nothing, so the next segment isn't placed in a phantom dead zone.
-    fn reclaimSpace(right_x: *u16, seg_w: u16, scaled_spacing: u16, with_gap: bool) void {
-        right_x.* += seg_w;
-        if (with_gap) right_x.* += scaled_spacing;
-    }
-
     /// Paint the inter-segment gap starting at `gap_x`.
     fn paintGap(self: *State, gap_x: u16, scaled_spacing: u16) void {
         self.render.dc.fillRect(gap_x, 0, scaled_spacing, self.render.height, self.render.config.bg);
@@ -486,16 +475,18 @@ const State = struct {
         while (i > 0) {
             i -= 1;
             const seg_w = self.measureSegmentWidth(snap, segments[i]);
-            reserveSpace(&right_x, seg_w, scaled_spacing, pending_gap);
+            right_x -= seg_w;
+            if (pending_gap) right_x -= scaled_spacing;
 
             if (segments[i] == .clock) self.layout_cache.clock_x = right_x;
             self.recordClickBounds(segments[i], right_x, seg_w);
 
             const drew = self.drawSegmentSafe(snap, segments[i], right_x, null) != right_x;
             if (drew) {
-                if (pending_gap) paintGap(self, right_x + seg_w, scaled_spacing);
+                if (pending_gap) self.paintGap(right_x + seg_w, scaled_spacing);
             } else {
-                reclaimSpace(&right_x, seg_w, scaled_spacing, pending_gap);
+                right_x += seg_w;
+                if (pending_gap) right_x += scaled_spacing;
             }
             pending_gap = drew;
         }
@@ -586,24 +577,14 @@ const State = struct {
 
         _ = title.drawCached(
             self.titleCtx(self.title_cache.title_x, self.title_cache.title_width, null, null),
-            .{
-                .focused_window = new_focused,
-                .focused_title = self.title_cache.title.items,
-                .minimized_title = minimizedTitleFor(
-                    self.title_cache.workspace_windows.items,
-                    &self.title_cache.minimized_windows,
-                    self.title_cache.window_titles.list.items,
-                ),
-                .current_ws_wins = self.title_cache.workspace_windows.items,
-                .minimized_set = &self.title_cache.minimized_windows,
-                // Supply cached pre-fetched titles so drawSegmentedTitles skips
-                // xcb_get_property calls on this fast-path redraw too.
-                .titles = self.title_cache.window_titles.list.items,
-                // Supply cached pre-fetched geometry so drawSegmentedTitles skips
-                // xcb_get_geometry here too — this path runs on the carousel thread,
-                // where a blocking X11 round-trip would stall the scroll animation.
-                .geoms = self.title_cache.window_geoms.items,
-            },
+            makeTitleSnapshot(
+                new_focused,
+                self.title_cache.title.items,
+                self.title_cache.workspace_windows.items,
+                &self.title_cache.minimized_windows,
+                self.title_cache.window_titles.list.items,
+                self.title_cache.window_geoms.items,
+            ),
             self.render.allocator,
         ) catch |e| {
             debug.warnOnErr(e, "drawTitleOnly");
@@ -694,6 +675,25 @@ fn minimizedTitleFor(wins: []const u32, minimized: *const std.AutoHashMapUnmanag
     return if (wins.len > 0 and minimized.contains(wins[0]) and titles.len > 0) titles[0] else "";
 }
 
+fn makeTitleSnapshot(
+    focused_window: ?u32,
+    focused_title: []const u8,
+    workspace_windows: []const u32,
+    minimized: *const std.AutoHashMapUnmanaged(u32, void),
+    titles: []const []const u8,
+    geoms: []const utils.Rect,
+) title.TitleSnapshot {
+    return .{
+        .focused_window = focused_window,
+        .focused_title = focused_title,
+        .minimized_title = minimizedTitleFor(workspace_windows, minimized, titles),
+        .current_ws_wins = workspace_windows,
+        .minimized_set = minimized,
+        .titles = titles,
+        .geoms = geoms,
+    };
+}
+
 /// Returns true when the two minimized sets differ in membership (not just count).
 fn hasMinimizedSetChanged(
     a: *const std.AutoHashMapUnmanaged(u32, void),
@@ -720,7 +720,7 @@ fn captureWorkspaceState(snap: *BarSnapshot, allocator: std.mem.Allocator) !void
     snap.is_all_view_active = ws_state.all_view_temp_wins.items.len > 0;
     try snap.workspace_has_windows.resize(allocator, snap.workspace_count);
     for (ws_state.workspaces, 0..) |_, i|
-        snap.workspace_has_windows.items[i] = tracking.hasWindowsOnWorkspace(@intCast(i));
+        snap.workspace_has_windows.items[i] = tracking.countWindowsOnWorkspace(@intCast(i)) > 0;
     snap.current_workspace_windows.clearRetainingCapacity();
     if (ws_state.current < ws_state.workspaces.len) {
         const cur_bit = tracking.workspaceBit(ws_state.current);
@@ -981,7 +981,8 @@ fn loadBarFonts(dc: anytype) !void {
         else
             f;
     }
-    return dc.loadFonts(sized);
+    try dc.font.loadFonts(sized);
+    if (sized.len > 1) debug.info("Loaded {} fonts with fallback support", .{sized.len});
 }
 
 /// Set an EWMH atom property on the bar window.
@@ -1017,7 +1018,7 @@ fn measureFontMetrics() ?struct { asc: i32, desc: i32 } {
     var mc = drawing.MeasureContext.init(core.getState().alloc, core.dpi_info) catch return null;
     defer mc.deinit();
     loadBarFonts(&mc) catch return null;
-    const asc, const desc = mc.getMetrics();
+    const asc, const desc = mc.font.getMetrics();
     return .{ .asc = asc, .desc = desc };
 }
 
@@ -1033,7 +1034,7 @@ fn resolvePercentageFontSize(bar_height: u16) ?u16 {
     return @max(1, @as(u16, @intFromFloat(@round(max_size_pt * (cs.config.bar.font_size.value / 100.0)))));
 }
 
-fn calcBarHeight() !u16 {
+fn calcBarHeightAndFontSize() !u16 {
     const cs = core.getState();
     if (cs.config.bar.height) |h| {
         const height = scale.scaleBarHeight(h, cs.screen.height_in_pixels);
@@ -1070,7 +1071,7 @@ fn createDrawContext(setup: BarWindowSetup, height: u16) !*drawing.DrawContext {
 fn startBarThreads() void {
     const cs = core.getState();
     carousel.startThread();
-    clock.startThread(cs.alloc, cs.config.bar.clock_format);
+    clock.startThread(cs.alloc, cs.config.bar.clock_format orelse types.DEFAULT_CLOCK_FORMAT);
 }
 
 fn stopBarThreads() void {
@@ -1085,8 +1086,8 @@ pub fn init() !void {
     initAtoms();
     // Detect refresh rate before the carousel thread spawns so
     // carousel.wakeIntervalNs() returns the real rate from the first tick.
-    scale.ensureRefreshRateDetected(cs.conn);
-    const height = try calcBarHeight();
+    refresh_rate.ensureRefreshRateDetected(cs.conn);
+    const height = try calcBarHeightAndFontSize();
     const bar = try createBar(height, calcBarYPos(height));
     gBar.state = bar.state;
     startBarThreads();
@@ -1120,7 +1121,7 @@ pub fn reload() void {
         deinit();
         return;
     }
-    const height = calcBarHeight() catch DEFAULT_BAR_HEIGHT;
+    const height = calcBarHeightAndFontSize() catch DEFAULT_BAR_HEIGHT;
     applyReload(old, height) catch |err| {
         debug.err("Bar reload failed ({s}), keeping old bar", .{@errorName(err)});
     };
@@ -1330,19 +1331,19 @@ pub fn setBarState(action: BarAction) void {
     const s = gBar.state orelse return;
     if (action == .toggle) s.is_globally_visible = !s.is_globally_visible;
     const current_ws = tracking.getCurrentWorkspace() orelse 0;
-    const is_fullscreen = action != .hide_fullscreen and
+    const bar_forced_hidden_by_fullscreen = action != .hide_fullscreen and
         fullscreen.getForWorkspace(current_ws) != null;
-    const show = !is_fullscreen and s.is_globally_visible and action != .hide_fullscreen;
-    if (s.is_visible == show and action != .toggle) return;
-    s.is_visible = show;
-    if (show) submitFullRedrawWithCarouselReset(s);
+    const should_be_visible = !bar_forced_hidden_by_fullscreen and s.is_globally_visible and action != .hide_fullscreen;
+    if (s.is_visible == should_be_visible and action != .toggle) return;
+    s.is_visible = should_be_visible;
+    if (should_be_visible) submitFullRedrawWithCarouselReset(s);
 
     const conn = core.getState().conn;
     const grabbed = action == .toggle;
     if (grabbed) utils.grabServer(conn);
-    if (show) _ = xcb.xcb_map_window(conn, s.win.win_id) else _ = xcb.xcb_unmap_window(conn, s.win.win_id);
+    if (should_be_visible) _ = xcb.xcb_map_window(conn, s.win.win_id) else _ = xcb.xcb_unmap_window(conn, s.win.win_id);
     if (grabbed) {
-        const effective_visible = if (is_fullscreen) s.is_globally_visible else s.is_visible;
+        const effective_visible = if (bar_forced_hidden_by_fullscreen) s.is_globally_visible else s.is_visible;
         retileAllWorkspaces(s, effective_visible);
         window.updateFloatingWindowBorders();
         window.markBordersFlushed();
@@ -1350,7 +1351,7 @@ pub fn setBarState(action: BarAction) void {
     } else {
         tiling.retileCurrentWorkspace();
     }
-    debug.info("Bar {s} ({s})", .{ if (show) "shown" else "hidden", @tagName(action) });
+    debug.info("Bar {s} ({s})", .{ if (should_be_visible) "shown" else "hidden", @tagName(action) });
 }
 
 pub fn updateIfDirty() !void {
@@ -1437,12 +1438,6 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
 /// forward/backward; left/right-clicking the layout variants indicator
 /// cycles the current layout's variant forward/backward the same way.
 ///
-/// Hit-testing uses the bounds cached by `recordClickBounds`/`syncTitleCache`
-/// during the last full layout pass, so no extra X11 I/O here.
-inline fn inSeg(has: bool, px: u16, start: u16, w: u16) bool {
-    return has and px >= start and px < start + w;
-}
-
 pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     const s = gBar.state orelse return;
     if (!s.is_visible) return;
@@ -1453,7 +1448,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     const right = event.detail == mouse_button_right;
     if (!left and !right) return;
 
-    if (inSeg(s.layout_cache.workspaces_bounds.has, x, s.layout_cache.workspaces_bounds.x, s.layout_cache.workspaces_bounds.w))
+    if (s.layout_cache.workspaces_bounds.contains(x))
     {
         const offset = x - s.layout_cache.workspaces_bounds.x;
         if (left) handleWorkspacesClick(offset) else handleWorkspacesRightClick(offset);
@@ -1471,26 +1466,31 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
         return;
     }
 
-    if (inSeg(s.layout_cache.layout_bounds.has, x, s.layout_cache.layout_bounds.x, s.layout_cache.layout_bounds.w))
+    if (s.layout_cache.layout_bounds.contains(x))
     {
         if (left) withTilingGrabForClick(tiling.toggleLayout) else withTilingGrabForClick(tiling.toggleLayoutReverse);
         return;
     }
 
-    if (inSeg(s.layout_cache.variants_bounds.has, x, s.layout_cache.variants_bounds.x, s.layout_cache.variants_bounds.w))
+    if (s.layout_cache.variants_bounds.contains(x))
     {
         if (left) withTilingGrabForClick(tiling.stepLayoutVariant) else withTilingGrabForClick(tiling.stepLayoutVariantReverse);
         return;
     }
 }
 
+fn resolveWorkspaceClick(offset: u16) ?usize {
+    const cell_w = tags.getCachedWorkspaceWidth();
+    if (cell_w == 0) return null;
+    const ws_state = workspaces.getState() orelse return null;
+    const idx: usize = @intCast(offset / cell_w);
+    if (idx >= ws_state.workspaces.len) return null;
+    return idx;
+}
+
 /// `offset` is the click position relative to the workspaces segment's start.
 fn handleWorkspacesClick(offset: u16) void {
-    const cell_w = tags.getCachedWorkspaceWidth();
-    if (cell_w == 0) return;
-    const ws_state = workspaces.getState() orelse return;
-    const idx: usize = @intCast(offset / cell_w);
-    if (idx >= ws_state.workspaces.len) return;
+    const idx = resolveWorkspaceClick(offset) orelse return;
     workspaces.switchTo(@intCast(idx));
 }
 
@@ -1499,11 +1499,7 @@ fn handleWorkspacesClick(offset: u16) void {
 /// there's no focused window or it's already exclusively on that workspace
 /// (see `workspaces.moveWindowTo`).
 fn handleWorkspacesRightClick(offset: u16) void {
-    const cell_w = tags.getCachedWorkspaceWidth();
-    if (cell_w == 0) return;
-    const ws_state = workspaces.getState() orelse return;
-    const idx: usize = @intCast(offset / cell_w);
-    if (idx >= ws_state.workspaces.len) return;
+    const idx = resolveWorkspaceClick(offset) orelse return;
     const win = focus.getFocused() orelse return;
     workspaces.moveWindowTo(win, @intCast(idx)) catch |e| debug.warnOnErr(e, "bar workspace right-click move");
 }
@@ -1520,15 +1516,14 @@ fn handleTitleClick(s: *State, offset: u16) void {
     if (s.title_cache.workspace_windows.items.len == 0) return;
 
     const ctx = s.titleCtx(s.title_cache.title_x, s.title_cache.title_width, null, null);
-    const snapshot = title.TitleSnapshot{
-        .focused_window = s.title_cache.focused_window,
-        .focused_title = "",
-        .minimized_title = "",
-        .current_ws_wins = s.title_cache.workspace_windows.items,
-        .minimized_set = &s.title_cache.minimized_windows,
-        .titles = s.title_cache.window_titles.list.items,
-        .geoms = s.title_cache.window_geoms.items,
-    };
+    const snapshot = makeTitleSnapshot(
+        s.title_cache.focused_window,
+        "",
+        s.title_cache.workspace_windows.items,
+        &s.title_cache.minimized_windows,
+        s.title_cache.window_titles.list.items,
+        s.title_cache.window_geoms.items,
+    );
 
     const target = (title.hitTest(ctx, snapshot, s.render.allocator, offset) catch |e| {
         debug.warnOnErr(e, "bar title click hitTest");
@@ -1575,20 +1570,18 @@ fn retileAllWorkspaces(s: *State, effective_visible: bool) void {
     const saved_visible = s.is_visible;
     s.is_visible = effective_visible;
     defer s.is_visible = saved_visible;
-    if (!core.getState().config.workspaces.enabled) {
+    const multi_ws = core.getState().config.workspaces.enabled and isTilingActive();
+    if (!multi_ws) {
         tiling.retileCurrentWorkspace();
         return;
     }
     const ws_state = workspaces.getState() orelse return;
-    if (!isTilingActive()) {
-        tiling.retileCurrentWorkspace();
-        return;
-    }
     for (ws_state.workspaces, 0..) |_, idx| {
-        if (!tracking.hasWindowsOnWorkspace(@intCast(idx))) continue;
-        if (fullscreen.getForWorkspace(@intCast(idx)) != null) continue;
-        if (@as(u8, @intCast(idx)) != ws_state.current)
-            tiling.retileInactiveWorkspace(@intCast(idx))
+        const ws_idx: u8 = @intCast(idx);
+        if (tracking.countWindowsOnWorkspace(ws_idx) == 0) continue;
+        if (fullscreen.getForWorkspace(ws_idx) != null) continue;
+        if (ws_idx != ws_state.current)
+            tiling.retileInactiveWorkspace(ws_idx)
         else
             tiling.retileCurrentWorkspace();
     }

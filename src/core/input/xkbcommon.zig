@@ -173,36 +173,34 @@ fn retryPoll(comptime T: type, op: anytype) ?T {
 /// Calls xkb_x11_setup_xkb_extension, retrying up to MAX_ATTEMPTS times.
 /// The extension may not be ready immediately at WM startup.
 fn retrySetup(xcb_conn: *anyopaque) !void {
-    const attempts = struct {
-        conn: *anyopaque,
-        fn call(self: @This()) ?void {
-            const ok = xkb.xkb_x11_setup_xkb_extension(
-                @ptrCast(self.conn),
-                xkb.XKB_X11_MIN_MAJOR_XKB_VERSION,
-                xkb.XKB_X11_MIN_MINOR_XKB_VERSION,
-                xkb.XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS,
-                null,
-                null,
-                null,
-                null,
-            );
-            return if (ok != 0) {} else null;
-        }
-    }{ .conn = xcb_conn };
-    if (retryPoll(void, attempts) == null) return error.XkbSetupFailed;
+    var ok: c_int = 0;
+    inline for (0..MAX_ATTEMPTS) |i| {
+        ok = xkb.xkb_x11_setup_xkb_extension(
+            @ptrCast(xcb_conn),
+            xkb.XKB_X11_MIN_MAJOR_XKB_VERSION,
+            xkb.XKB_X11_MIN_MINOR_XKB_VERSION,
+            xkb.XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS,
+            null,
+            null,
+            null,
+            null,
+        );
+        if (ok != 0) return;
+        retryDelay(@intCast(i));
+    }
+    return error.XkbSetupFailed;
 }
 
 /// Calls xkb_x11_get_core_keyboard_device_id, retrying up to MAX_ATTEMPTS
 /// times — the core keyboard device may not be enumerable yet in the same
 /// early-startup window retrySetup guards against.
 fn retryDeviceId(xcb_conn: *anyopaque) !i32 {
-    return retryPoll(i32, struct {
-        conn: *anyopaque,
-        fn call(self: @This()) ?i32 {
-            const device_id = xkb.xkb_x11_get_core_keyboard_device_id(@ptrCast(self.conn));
-            return if (device_id != -1) device_id else null;
-        }
-    }{ .conn = xcb_conn }) orelse error.XkbNoKeyboard;
+    inline for (0..MAX_ATTEMPTS) |i| {
+        const device_id = xkb.xkb_x11_get_core_keyboard_device_id(@ptrCast(xcb_conn));
+        if (device_id != -1) return device_id;
+        retryDelay(@intCast(i));
+    }
+    return error.XkbNoKeyboard;
 }
 
 /// Minimum reachable keysyms in 8..128 for a keymap to count as populated.
@@ -213,11 +211,9 @@ const MIN_KEYMAP_SYMBOLS: u32 = 40;
 /// Returns true if `km` has at least MIN_KEYMAP_SYMBOLS reachable keysyms in the 8..128 range.
 /// Guards against accepting a partially-initialised keymap on early startup.
 fn keymapHasEnoughSymbols(km: *xkb_keymap) bool {
-    const test_state = xkb.xkb_state_new(km) orelse return false;
-    defer xkb.xkb_state_unref(test_state);
     var valid_keys: u32 = 0;
     for (8..128) |kc| {
-        if (xkb.xkb_state_key_get_one_sym(test_state, @intCast(kc)) != xkb.XKB_KEY_NoSymbol)
+        if (baseSymbol(km, @intCast(kc)) != xkb.XKB_KEY_NoSymbol)
             valid_keys += 1;
     }
     return valid_keys >= MIN_KEYMAP_SYMBOLS;

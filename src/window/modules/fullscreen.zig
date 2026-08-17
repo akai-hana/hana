@@ -66,14 +66,6 @@ fn resetState() void {
     g_net_wm_state_fullscreen = 0;
 }
 
-/// Returns true when the reply geometry indicates the window is parked
-/// offscreen. Used by both warmFloatingWindowGeoms and fetchWindowGeom so
-/// the sentinel check is not duplicated.
-inline fn isOffscreenReply(r: *const xcb.xcb_get_geometry_reply_t) bool {
-    return r.x < constants.OFFSCREEN_SENTINEL_MIN or
-        r.y < constants.OFFSCREEN_SENTINEL_MIN;
-}
-
 pub fn init() void {
     resetState();
 
@@ -184,18 +176,6 @@ pub fn forEachFullscreen(cb: anytype) void {
         if (slot) |info| cb(@intCast(i), info);
 }
 
-/// Iterate windows on the current workspace, skipping `skip`. Uses the
-/// shared tracking.WorkspaceIter with a workspace-mask filter when workspaces
-/// are enabled, otherwise the global window list (all-ones bit = no filter).
-fn windowsOnCurrentWorkspace(skip: u32) tracking.WorkspaceIter {
-    if (core.getState().config.workspaces.enabled) {
-        const cur = tracking.getCurrentWorkspace() orelse
-            return .{ .entries = &.{}, .skip = skip, .bit = ~@as(u64, 0) };
-        return tracking.onWorkspace(tracking.workspaceBit(cur), skip);
-    }
-    return .{ .entries = tracking.allWindows(), .skip = skip, .bit = ~@as(u64, 0) };
-}
-
 // Geometry helpers
 
 /// Retrieve the pre-fullscreen geometry for `win`: tiled windows hit the
@@ -227,17 +207,11 @@ fn fetchWindowGeom(win: u32) core.WindowGeometry {
 
     // Also reject zero-size geometry: a window mapped but not yet sized reports
     // width=0/height=0; saving and restoring those dimensions would leave it invisible.
-    if (isOffscreenReply(reply) or
+    if (utils.isOffscreenGeomReply(reply) or
         reply.*.width == 0 or
         reply.*.height == 0) return default;
 
-    return .{
-        .x = reply.*.x,
-        .y = reply.*.y,
-        .width = reply.*.width,
-        .height = reply.*.height,
-        .border_width = reply.*.border_width,
-    };
+    return window.geometryFromXcbReply(reply);
 }
 
 // Floating geometry save/restore
@@ -253,31 +227,21 @@ fn fetchWindowGeom(win: u32) core.WindowGeometry {
 
 /// True when `win` is free-floating — not minimized and not tiled — i.e. its
 /// geometry is owned by the floating cache rather than the tiling engine.
-/// Shared by warmFloatingWindowGeoms and restoreFloatingWindows.
-inline fn isFreeFloating(win: u32) bool {
+/// Shared by warmFloatingWindowGeoms and restoreFloatingWindows. Declared as
+/// a plain fn (not inline) so it can be passed as a *const fn(u32)bool
+/// predicate (see tracking.prefetchAndSaveGeometryOnCurrentWorkspace).
+fn isFreeFloating(win: u32) bool {
     return !minimize.isMinimized(win) and !tiling.isWindowTiled(win);
 }
 
 /// Warm the geometry cache for every free-floating window on the current
 /// workspace (except `skip_win`) that has no cache entry yet — a live
-/// round-trip only for the rare window the cache has never seen.
+/// round-trip only for the rare window the cache has never seen. Shares its
+/// prefetch/save/offscreen-skip logic with workspaces.zig's pre-switch
+/// geometry warm via tracking.prefetchAndSaveGeometryOnCurrentWorkspace.
 /// Must run BEFORE xcb_grab_server: a round-trip can't happen inside a grab.
 fn warmFloatingWindowGeoms(skip_win: u32) void {
-    const conn = core.getState().conn;
-    var it = windowsOnCurrentWorkspace(skip_win);
-    while (it.next()) |entry| {
-        const w = entry.win;
-        if (!isFreeFloating(w)) continue;
-        if (tiling.getWindowGeom(w) != null) continue; // cache already correct
-
-        const reply = xcb.xcb_get_geometry_reply(conn, xcb.xcb_get_geometry(conn, w), null) orelse continue;
-        defer std.c.free(reply);
-        // Skip windows that are already offscreen (e.g. during a fullscreen
-        // switch) — saving that position would poison the cache for every
-        // future restore, not just this one.
-        if (isOffscreenReply(reply)) continue;
-        window.saveWindowGeom(w, utils.Rect.fromXcb(reply));
-    }
+    tracking.prefetchAndSaveGeometryOnCurrentWorkspace(&isFreeFloating, skip_win);
 }
 
 /// Restore every free-floating window on the current workspace (except
@@ -286,7 +250,7 @@ fn warmFloatingWindowGeoms(skip_win: u32) void {
 /// Safe inside xcb_grab_server: restoreFloatGeom only ever reads the cache,
 /// never issues a live round-trip.
 fn restoreFloatingWindows(skip_win: u32) void {
-    var it = windowsOnCurrentWorkspace(skip_win);
+    var it = tracking.windowsOnCurrentWorkspace(skip_win);
     while (it.next()) |entry| {
         const w = entry.win;
         if (!isFreeFloating(w)) continue;
@@ -351,7 +315,7 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     });
 
     // Push every other window offscreen; workspace dispatch is through the shared iterator.
-    var it = windowsOnCurrentWorkspace(win);
+    var it = tracking.windowsOnCurrentWorkspace(win);
     while (it.next()) |entry| {
         const w = entry.win;
         utils.pushWindowOffscreen(core.getState().conn, w);
@@ -519,20 +483,15 @@ pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
     const screen_h = @as(u16, @intCast(cs.screen.height_in_pixels));
 
     // Deferred bar hide (enter-fullscreen path): window must report exactly
-    // screen dimensions before we hide the bar.
-    if (g_pending_bar_hide_win != 0 and g_pending_bar_hide_win == win) {
+    // screen dimensions before we hide the bar. Deferred bar show (exit
+    // path) must report non-fullscreen dimensions first. The else-if makes
+    // the mutual exclusion explicit: both can never match for the same win.
+    if (g_pending_bar_hide_win == win) {
         if (width == screen_w and height == screen_h) {
             g_pending_bar_hide_win = 0;
             bar.setBarState(.hide_fullscreen);
         }
-        return;
-    }
-
-    // Deferred bar show (exit path): window must report non-fullscreen
-    // dimensions first. Fires as soon as the retile configure_window is
-    // acknowledged — before the window has repainted — so the bar appears
-    // exactly when the window starts rendering at its new tiled size.
-    if (g_pending_bar_show_win != 0 and g_pending_bar_show_win == win) {
+    } else if (g_pending_bar_show_win == win) {
         if (width != screen_w or height != screen_h) {
             g_pending_bar_show_win = 0;
             bar.setBarState(.show_fullscreen);

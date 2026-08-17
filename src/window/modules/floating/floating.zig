@@ -39,18 +39,18 @@ pub fn tileWithOffset(
         // Issue geometry requests for every window not already placed;
         // replies are collected below — only the first reply pays for a round-trip.
         var cookies: [BATCH]xcb.xcb_get_geometry_cookie_t = undefined;
-        var needs_query = [_]bool{false} ** BATCH;
-        var any_needs: bool = false;
+        var pending: [BATCH]usize = undefined;
+        var pending_len: usize = 0;
         for (batch, 0..) |win, i| {
             const already_placed = if (ctx.cache.getPtr(win)) |wd| wd.hasValidRect() else false;
             if (already_placed) continue;
             cookies[i] = xcb.xcb_get_geometry(cs.conn, win);
-            needs_query[i] = true;
-            any_needs = true;
+            pending[pending_len] = i;
+            pending_len += 1;
         }
-        if (any_needs) {
-            for (batch, 0..) |win, i| {
-                if (!needs_query[i]) continue;
+        if (pending_len > 0) {
+            for (pending[0..pending_len]) |i| {
+                const win = batch[i];
                 const reply = xcb.xcb_get_geometry_reply(cs.conn, cookies[i], null) orelse continue;
                 defer std.c.free(reply);
 

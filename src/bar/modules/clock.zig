@@ -89,25 +89,25 @@ pub fn stopThread(allocator: std.mem.Allocator) void {
 }
 
 fn runClockThread(t: *utils.CondThread) void {
-    // One-time alignment: sleep just long enough to land on the next whole
-    // second so the periodic loop starts in phase with the wall clock.
-    // Uses the interruptible timedWait so stopThread() returns immediately
-    // even if it fires during alignment.
-    if (!sleepUntilNextSecond(t)) return;
-
-    // Plain periodic loop from here on. No re-anchoring: a fixed 1s sleep can
-    // accumulate slight scheduling drift over long uptime, but a reload (which
-    // re-runs the alignment above) resets it, so it never compounds.
-    while (true) {
-        t.mutex.lock();
-        if (t.quit) {
-            t.mutex.unlock();
-            return;
-        }
-        t.cond.timedWait(&t.mutex, ns_per_s) catch {};
-        const quit = t.quit;
-        t.mutex.unlock();
-        if (quit) return;
+    // Every tick re-anchors to the next whole-second wall-clock boundary via
+    // sleepUntilNextSecond, rather than a flat timedWait(ns_per_s) relative
+    // sleep. A flat relative sleep looked harmless but wasn't: each loop
+    // iteration has a small amount of unavoidable overhead (mutex lock/
+    // unlock, publishCurrentTime's cache_mutex + strftime) that happens
+    // *after* the sleep and *before* the next one is scheduled, so the next
+    // "1 second from now" deadline is always measured slightly later than
+    // the true boundary. That overhead isn't huge on its own, but nothing
+    // ever corrected it, so it compounded every single tick for as long as
+    // the thread ran. Once accumulated drift pushed a tick outside
+    // nextTickWaitMs()'s ~10ms detection window, the main loop's poll
+    // stopped noticing new ticks in time and stalled for almost a full
+    // extra second before its next boundary check - visible as the clock
+    // "falling behind", repeatedly, the longer the process stayed up.
+    // Re-anchoring every iteration means each tick is computed fresh from
+    // the real wall clock, so drift can never accumulate past a single
+    // iteration's overhead (sub-millisecond) - it resets every second
+    // instead of only at reload.
+    while (sleepUntilNextSecond(t)) {
         // Pango-free: format the time string into the shared cache and flag
         // the main thread to redraw the segment. No DrawContext access here.
         publishCurrentTime();
@@ -142,16 +142,35 @@ fn sleepUntilNextSecond(t: *utils.CondThread) bool {
     return true;
 }
 
+/// Returns the formatted time string for `sec` from the cache, formatting it
+/// with `fmt` on a cache miss. Caller must hold `cache_mutex`.
+fn getOrFormatTime(sec: i64, fmt: []const u8) ![]const u8 {
+    if (sec == last_formatted_sec) return last_formatted_time[0..last_formatted_len];
+    const str = try formatTime(&last_formatted_time, sec, fmt);
+    last_formatted_len = str.len;
+    last_formatted_sec = sec;
+    return str;
+}
+
 /// Formats the current wall-clock time into the shared cache (no Pango, no
 /// draw_mutex) and publishes it for the main thread to draw.
 fn publishCurrentTime() void {
     const sec = currentEpochSeconds();
     cache_mutex.lock();
     defer cache_mutex.unlock();
-    if (sec == last_formatted_sec) return;
-    const str = formatTime(&last_formatted_time, sec, clock_format_owned) catch return;
-    last_formatted_len = str.len;
-    last_formatted_sec = sec;
+    if (sec == last_formatted_sec) {
+        // Someone else (draw()'s fallback path, from an unrelated full-bar
+        // redraw) already formatted this second into the cache before we
+        // got here. The string is correct, but the main loop hasn't been
+        // told: nextTickWaitMs()'s grace/retry window is only ~35ms wide,
+        // so if we return silently here the poll deadline falls through to
+        // waiting for the *next* whole-second boundary and the clock stalls
+        // for almost a full extra second. Flag dirty anyway so the drain
+        // path still runs this tick.
+        clock_dirty.store(true, .release);
+        return;
+    }
+    _ = getOrFormatTime(sec, clock_format_owned) catch return;
     clock_dirty.store(true, .release);
 }
 
@@ -185,17 +204,7 @@ pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, star
     const sec = currentEpochSeconds();
     cache_mutex.lock();
     defer cache_mutex.unlock();
-    var str: []const u8 = undefined;
-    if (sec == last_formatted_sec) {
-        str = last_formatted_time[0..last_formatted_len];
-    } else {
-        // Fallback format path (e.g. before the clock thread's first tick):
-        // same guarded cache, so a concurrent publishCurrentTime can't race.
-        const s = try formatTime(&last_formatted_time, sec, config.clock_format);
-        last_formatted_len = s.len;
-        last_formatted_sec = sec;
-        str = s;
-    }
+    const str = try getOrFormatTime(sec, config.clock_format orelse types.DEFAULT_CLOCK_FORMAT);
     return dc.drawSegment(start_x, height, str, config.scaledSegmentPadding(height), config.bg, config.fg);
 }
 

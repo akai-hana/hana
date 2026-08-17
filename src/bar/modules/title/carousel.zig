@@ -4,7 +4,7 @@
 const std = @import("std");
 const utils = @import("utils");
 
-const scale = @import("scale");
+const refresh_rate = @import("refresh_rate");
 const drawing = @import("drawing");
 const bar = @import("bar");
 const debug = @import("debug");
@@ -137,7 +137,7 @@ pub fn setRefreshRateOverride(hz: f64) void {
 /// timedWait that follows.
 pub fn wakeIntervalNs() u64 {
     const rate_override = scroll_config.rate_override.load(.monotonic);
-    const hz: f64 = if (rate_override > 0.0) rate_override else scale.getDetectedRateHz();
+    const hz: f64 = if (rate_override > 0.0) rate_override else refresh_rate.getDetectedRateHz();
     return @intFromFloat(1_000_000_000.0 / hz);
 }
 
@@ -334,6 +334,15 @@ pub fn drawSegCarouselTickAuto(dc: *drawing.DrawContext, accent: u32) bool {
 
 // Public API — single-window title rendering
 
+/// Recover text_w from the live carousel entry when the title hasn't changed,
+/// avoiding a Pango measurement on the common steady-state path.
+fn recoverTextWidth(dc: *drawing.DrawContext, text: []const u8, window: ?u32, title_invalidated: bool) u16 {
+    if (!title_invalidated) {
+        if (render.single) |e| if (e.window == window) return e.cycle_w - carousel_gap_px;
+    }
+    return dc.measureTextWidth(text);
+}
+
 /// Render `text` into the segment described by `geom`.
 ///
 /// Fits: draw statically, free any carousel. Overflows + enabled: build (or
@@ -354,12 +363,7 @@ pub fn drawScrollingTitle(
     window: ?u32,
     title_invalidated: bool,
 ) !void {
-    // Recover text_w from the live entry when the title hasn't changed,
-    // avoiding a Pango measurement on the common steady-state path.
-    const text_w: u16 = if (!title_invalidated) blk: {
-        if (render.single) |e| if (e.window == window) break :blk e.cycle_w - carousel_gap_px;
-        break :blk dc.measureTextWidth(text);
-    } else dc.measureTextWidth(text);
+    const text_w: u16 = recoverTextWidth(dc, text, window, title_invalidated);
 
     if (text_w <= geom.avail_w) {
         deinitSingleCarousel();

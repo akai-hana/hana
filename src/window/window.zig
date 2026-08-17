@@ -16,14 +16,11 @@ const workspaces = @import("workspaces");
 const tiling = @import("tiling");
 const drag = @import("drag");
 const bar = @import("bar");
-const scale = @import("scale");
 
 // XSizeHints flags (ICCCM §4.1.2.3)
-const XSizeHintsFlags = struct {
-    const p_max_size: u32 = 0x20;
-    const p_resize_inc: u32 = 0x40;
-    const p_aspect: u32 = 0x80;
-};
+const P_MAX_SIZE: u32 = 0x20;
+const P_RESIZE_INC: u32 = 0x40;
+const P_ASPECT: u32 = 0x80;
 
 // WM_HINTS constants (ICCCM §4.1.2.4)
 const WM_HINTS_INPUT_FLAG: u32 = 1 << 0;
@@ -106,7 +103,7 @@ const Pos = struct { x: i16, y: i16 };
 
 /// Returns the default floating window position
 /// (one quarter of the screen in from the top-left).
-pub inline fn floatDefaultPos() Pos {
+pub fn floatDefaultPos() Pos {
     const screen = core.getState().screen;
     return .{
         .x = @intCast(@min(screen.width_in_pixels / 4, std.math.maxInt(i16))),
@@ -131,7 +128,7 @@ pub fn restoreFloatGeom(win: u32) void {
 
 /// Moves, resizes, and sets border_width atomically,
 /// preventing a one-frame flash on fullscreen enter/exit or workspace switch.
-pub inline fn configureWindowGeom(conn: *xcb.xcb_connection_t, win: u32, geom: core.WindowGeometry) void {
+pub fn configureWindowGeom(conn: *xcb.xcb_connection_t, win: u32, geom: core.WindowGeometry) void {
     _ = xcb.xcb_configure_window(
         conn,
         win,
@@ -151,7 +148,7 @@ pub inline fn configureWindowGeom(conn: *xcb.xcb_connection_t, win: u32, geom: c
 /// Wrap a rectangle plus border width as a `WindowGeometry` (used by callers
 /// that hold a `Rect`/size pair instead of a full geometry, e.g. the tiling
 /// cache and the drag-resize echo).
-pub inline fn geomFromRect(rect: utils.Rect, border: u16) core.WindowGeometry {
+pub fn geomFromRect(rect: utils.Rect, border: u16) core.WindowGeometry {
     return .{
         .x = rect.x,
         .y = rect.y,
@@ -651,11 +648,10 @@ pub fn init(alloc: std.mem.Allocator) !void {
 }
 
 pub fn deinit() void {
-    // Teardown order: optional subsystems in approximate reverse-init order,
-    // then InputModelCache (which must precede focus and tracking — see the
-    // init-order note in the InputModelCache section above), then focus, then
-    // tracking. This is NOT strict reverse-init order; the InputModelCache
-    // dependency intentionally breaks strict symmetry.
+    // Teardown order: heap-backed state freed before the struct reset below,
+    // then InputModelCache torn down before focus and tracking (they may sweep
+    // managed windows and must not encounter a partially-valid cache), then
+    // the remaining subsystems in reverse-init order.
     tiling.deinit();
     fullscreen.deinit();
     workspaces.deinit();
@@ -763,14 +759,12 @@ fn findSpawnQueueWorkspace(
         break :pid u32Values(pid_reply)[0];
     };
 
-    const entries = state.spawn_queue.items;
-
     // Exact PID match only. Daemon-mode entries (pid == 0) are intentionally
     // NOT matched against windows without _NET_WM_PID (win_pid == 0): that
     // would conflate "terminal that will fork a grandchild" with "app that
     // simply doesn't set _NET_WM_PID", letting an unrelated app silently
     // consume the daemon entry and route to the wrong workspace.
-    for (entries, 0..) |e, i| {
+    for (state.spawn_queue.items, 0..) |e, i| {
         if (win_pid != 0 and e.pid == win_pid) {
             _ = state.spawn_queue.swapRemove(i);
             return e.workspace;
@@ -894,7 +888,7 @@ fn mapWindowToScreen(win: u32) void {
     // focused immediately instead of lagging by one retile.
     if (tilingActive()) {
         tiling.addWindow(win);
-        tiling.retileCurrentWorkspaceWithPendingFocus(win);
+        tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = win });
     } else {
         if (fullscreen.hasAnyFullscreen()) {
             // Leave it offscreen — restoreFloatGeom would immediately move it
@@ -1001,6 +995,30 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t) void {
 
 // Unmap / destroy
 
+const PreGrabState = struct {
+    ptr_reply: ?*xcb.xcb_query_pointer_reply_t,
+    target: ?DestroyFocusTarget,
+    model: ?InputModel,
+};
+
+fn resolvePreGrabState(was_focused: bool, conn: *xcb.xcb_connection_t) PreGrabState {
+    if (!was_focused) return .{ .ptr_reply = null, .target = null, .model = null };
+
+    const ptr_reply = xcb.xcb_query_pointer_reply(
+        conn,
+        xcb.xcb_query_pointer(conn, core.getState().root),
+        null,
+    );
+
+    const target = resolveDestroyFocusTarget(ptr_reply);
+    const model: ?InputModel = if (target) |t| blk: {
+        if (t.reason == .pointer_sync and !focus.isWindowMapped(conn, t.win)) break :blk null;
+        break :blk getInputModel(conn, t.win);
+    } else null;
+
+    return .{ .ptr_reply = ptr_reply, .target = target, .model = model };
+}
+
 fn unmanageWindow(win: u32) void {
     const cs = core.getState();
     const fs_ws = fullscreen.workspaceFor(win);
@@ -1029,25 +1047,8 @@ fn unmanageWindow(win: u32) void {
     minimize.untrackWindow(win);
     workspaces.removeWindow(win);
 
-    // Fire the pointer query and drain the reply before grabbing. Draining
-    // inside the grab would implicitly flush queued configure/set_input_focus
-    // requests to the compositor before xcb_ungrab_server, breaking the
-    // grab's atomicity. The pointer position is at most microseconds staler.
-    const ptr_reply: ?*xcb.xcb_query_pointer_reply_t = if (was_focused) blk: {
-        const cookie = xcb.xcb_query_pointer(cs.conn, cs.root);
-        break :blk xcb.xcb_query_pointer_reply(cs.conn, cookie, null);
-    } else null;
-    defer if (ptr_reply) |r| std.c.free(r);
-
-    // Resolve the post-close focus target and its input model BEFORE the grab
-    // so the grab body performs no blocking reply waits (same atomicity
-    // hazard as above). setFocus's .pointer_sync liveness guard is replicated
-    // here, pre-grab.
-    const destroy_target = if (was_focused) resolveDestroyFocusTarget(ptr_reply) else null;
-    const destroy_model: ?InputModel = if (destroy_target) |t| blk: {
-        if (t.reason == .pointer_sync and !focus.isWindowMapped(cs.conn, t.win)) break :blk null;
-        break :blk getInputModel(cs.conn, t.win);
-    } else null;
+    const pre_grab = resolvePreGrabState(was_focused, cs.conn);
+    defer if (pre_grab.ptr_reply) |r| std.c.free(r);
 
     utils.grabServer(cs.conn);
 
@@ -1060,10 +1061,13 @@ fn unmanageWindow(win: u32) void {
         // would read that stale ID — focus-driven layouts (monocle) fall back
         // to an arbitrary window — and nothing retiles again once focus lands.
         focus.clearFocus();
-        // destroy_model is null only when the liveness guard failed above; in
-        // that case skip focus, matching setFocus's early return.
-        if (destroy_target) |t|
-            if (destroy_model) |model| focus.focusWithPreGrabModel(t.win, t.reason, model);
+        // pre_grab.target is null only when the liveness guard failed above;
+        // in that case skip focus, matching setFocus's early return.
+        if (pre_grab.target) |t| {
+            if (pre_grab.model) |model| {
+                focus.setFocusWithModel(t.win, t.reason, model);
+            }
+        }
         if (tilingActive()) tiling.retileIfDirty();
     } else if (!was_fullscreen and tilingActive()) {
         if (window_workspace) |ws|
@@ -1162,6 +1166,17 @@ fn sendConfigureNotify(win: u32, geom: core.WindowGeometry) void {
     _ = xcb.xcb_send_event(core.getState().conn, 0, win, xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY, @ptrCast(&ev));
 }
 
+/// Construct a `WindowGeometry` from an XCB get_geometry reply.
+pub fn geometryFromXcbReply(reply: *xcb.xcb_get_geometry_reply_t) core.WindowGeometry {
+    return .{
+        .x = reply.*.x,
+        .y = reply.*.y,
+        .width = reply.*.width,
+        .height = reply.*.height,
+        .border_width = reply.*.border_width,
+    };
+}
+
 /// Resolve the window's current geometry, cheapest source first:
 ///
 ///   1. Tiling cache — zero round-trips (always current after a retile).
@@ -1197,13 +1212,7 @@ fn resolveConfigureGeometry(win: u32) ?core.WindowGeometry {
         null,
     ) orelse return null;
     defer std.c.free(reply);
-    return .{
-        .x = reply.*.x,
-        .y = reply.*.y,
-        .width = reply.*.width,
-        .height = reply.*.height,
-        .border_width = reply.*.border_width,
-    };
+    return geometryFromXcbReply(reply);
 }
 
 fn sendSyntheticConfigureNotify(win: u32) void {
@@ -1245,22 +1254,13 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
         return;
     }
 
-    const GeomField = struct { bit: u16, value: u32 };
-    const geom_fields = [_]GeomField{
-        .{ .bit = xcb.XCB_CONFIG_WINDOW_X, .value = utils.toXcbCoord(event.x) },
-        .{ .bit = xcb.XCB_CONFIG_WINDOW_Y, .value = utils.toXcbCoord(event.y) },
-        .{ .bit = xcb.XCB_CONFIG_WINDOW_WIDTH, .value = event.width },
-        .{ .bit = xcb.XCB_CONFIG_WINDOW_HEIGHT, .value = event.height },
-        .{ .bit = xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, .value = event.border_width },
-    };
     var values: [5]u32 = undefined;
     var n: usize = 0;
-    for (geom_fields) |f| {
-        if (mask & f.bit != 0) {
-            values[n] = f.value;
-            n += 1;
-        }
-    }
+    if (mask & xcb.XCB_CONFIG_WINDOW_X != 0) { values[n] = utils.toXcbCoord(event.x); n += 1; }
+    if (mask & xcb.XCB_CONFIG_WINDOW_Y != 0) { values[n] = utils.toXcbCoord(event.y); n += 1; }
+    if (mask & xcb.XCB_CONFIG_WINDOW_WIDTH != 0) { values[n] = event.width; n += 1; }
+    if (mask & xcb.XCB_CONFIG_WINDOW_HEIGHT != 0) { values[n] = event.height; n += 1; }
+    if (mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0) { values[n] = event.border_width; n += 1; }
     _ = xcb.xcb_configure_window(core.getState().conn, win, mask, &values);
 }
 
@@ -1296,30 +1296,20 @@ inline fn maybeFocusWindow(win: u32) void {
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     focus.setLastEventTime(event.time);
+    debugLogEnterNotify(event);
+    if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
+        event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR)
+        return;
+    if (drag.isDragging()) return;
+    if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
+    if (focus.shouldSuppressEnterNotify()) return;
+    maybeFocusWindow(findManagedWindow(core.getState().conn, event.event, tracking.isManaged));
+}
+
+fn debugLogEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     debug.info("[ENTER] win=0x{x} mode={} detail={} root_x={} root_y={}", .{
         event.event, event.mode, event.detail, event.root_x, event.root_y,
     });
-    if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
-        event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR)
-    {
-        debug.info("[ENTER] -> filtered: mode={} detail={}", .{ event.mode, event.detail });
-        return;
-    }
-    if (drag.isDragging()) {
-        debug.info("[ENTER] -> filtered: dragging", .{});
-        return;
-    }
-    if (suppressSpawnCrossing(event.root_x, event.root_y)) {
-        debug.info("[ENTER] -> filtered: spawn crossing suppressed", .{});
-        return;
-    }
-    if (focus.shouldSuppressEnterNotify()) {
-        debug.info("[ENTER] -> filtered: focus suppressed for hover", .{});
-        return;
-    }
-    const managed = findManagedWindow(core.getState().conn, event.event, tracking.isManaged);
-    debug.info("[ENTER] -> resolved managed=0x{x}", .{managed});
-    maybeFocusWindow(managed);
 }
 
 pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t) void {
@@ -1366,6 +1356,16 @@ inline fn clampToU16(v: u32) u16 {
     return @intCast(@min(v, std.math.maxInt(u16)));
 }
 
+/// Extract a pair of consecutive u16 fields when the flag is set and enough
+/// fields are present. Shared by max_size and resize_inc extraction which
+/// share the same 2-field pattern.
+const SizePair = struct { width: u16, height: u16 };
+
+inline fn extractFieldPair(fields: [*]const u32, field_count: u32, want: bool, comptime off: usize) SizePair {
+    if (want and field_count >= off + 2) return .{ .width = clampToU16(fields[off]), .height = clampToU16(fields[off + 1]) };
+    return .{ .width = 0, .height = 0 };
+}
+
 /// Issues an async WM_NORMAL_HINTS fetch and folds the reply into the
 /// tiling size-hint cache. Called at map time and whenever WM_NORMAL_HINTS
 /// changes post-map (see handlePropertyNotify).
@@ -1400,34 +1400,22 @@ fn parseSizeHintsIntoCache(
     // layout engine owns all dimensions.  All other ICCCM constraints are
     // forwarded so windows with max-size, resize-increment, or aspect-ratio
     // hints behave correctly.
-    const want_max = flags & XSizeHintsFlags.p_max_size != 0;
-    const want_inc = flags & XSizeHintsFlags.p_resize_inc != 0;
-    const want_asp = flags & XSizeHintsFlags.p_aspect != 0;
+    const want_max = flags & P_MAX_SIZE != 0;
+    const want_inc = flags & P_RESIZE_INC != 0;
+    const want_asp = flags & P_ASPECT != 0;
 
     if (!want_max and !want_inc and !want_asp) return;
 
-    var max_width: u16 = 0;
-    var max_height: u16 = 0;
-    var inc_width: u16 = 0;
-    var inc_height: u16 = 0;
-    var min_aspect: f32 = 0.0;
-    var max_aspect: f32 = 0.0;
-
-    // PMaxSize: fields[7] = max_width, fields[8] = max_height.
-    if (want_max and field_count >= 9) {
-        max_width = clampToU16(fields[7]);
-        max_height = clampToU16(fields[8]);
-    }
-
-    // PResizeInc: fields[9] = width_inc, fields[10] = height_inc.
-    if (want_inc and field_count >= 11) {
-        inc_width = clampToU16(fields[9]);
-        inc_height = clampToU16(fields[10]);
-    }
+    // PMaxSize: fields[7..9] and PResizeInc: fields[9..11] share the same
+    // pattern: flag-check + field_count gate + 2-field extraction.
+    const max_pair = extractFieldPair(fields, field_count, want_max, 7);
+    const inc_pair = extractFieldPair(fields, field_count, want_inc, 9);
 
     // PAspect: fields[11..14] = min_aspect.x/y, max_aspect.x/y.
     // dwm convention: min_aspect = y/x (lower bound on h/w),
     //                 max_aspect = x/y (upper bound on w/h).
+    var min_aspect: f32 = 0.0;
+    var max_aspect: f32 = 0.0;
     if (want_asp and field_count >= 15) {
         const min_x = fields[11];
         const min_y = fields[12];
@@ -1438,10 +1426,10 @@ fn parseSizeHintsIntoCache(
     }
 
     tiling.cacheSizeHints(win, .{
-        .max_width = max_width,
-        .max_height = max_height,
-        .inc_width = inc_width,
-        .inc_height = inc_height,
+        .max_width = max_pair.width,
+        .max_height = max_pair.height,
+        .inc_width = inc_pair.width,
+        .inc_height = inc_pair.height,
         .min_aspect = min_aspect,
         .max_aspect = max_aspect,
     });
@@ -1453,7 +1441,7 @@ fn parseSizeHintsIntoCache(
 pub inline fn getBorderWidth() u16 {
     if (tiling.getStateOpt()) |s| return s.config.border_width;
     const cs = core.getState();
-    return scale.scaleBorderWidth(
+    return utils.scaling.scaleBorderWidth(
         cs.config.tiling.border_width,
         cs.screen.height_in_pixels,
     );
@@ -1560,14 +1548,14 @@ pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
         2 => !is_fs, // _NET_WM_STATE_TOGGLE
         else => return,
     };
-    if (should_enter and !is_fs) {
-        fullscreen.enterFullscreen(win, null);
-    } else if (!should_enter and is_fs) {
+    if (should_enter == is_fs) return;
+    if (should_enter)
+        fullscreen.enterFullscreen(win, null)
+    else
         // Use the per-window exit path, not toggle() (which acts on whatever
         // the fullscreen module deems "current") — multiple workspaces can
         // each hold a fullscreen window.
         fullscreen.exitFullscreen(win);
-    }
 }
 
 /// Push updated border width and colors to every managed window across all

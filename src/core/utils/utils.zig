@@ -80,7 +80,19 @@ pub const Rect = struct {
     pub inline fn fromXcb(geom: *const xcb.xcb_get_geometry_reply_t) Rect {
         return .{ .x = geom.x, .y = geom.y, .width = geom.width, .height = geom.height };
     }
+
+    pub inline fn eql(self: Rect, other: Rect) bool {
+        return self.x == other.x and self.y == other.y and self.width == other.width and self.height == other.height;
+    }
 };
+
+/// True when a get_geometry reply reports the window parked at (or past) the
+/// off-screen sentinel position written by `pushWindowOffscreen`. Shared by
+/// every call site that live-fetches geometry and must not cache that
+/// parking spot as if it were the window's real, restorable position.
+pub inline fn isOffscreenGeomReply(r: *const xcb.xcb_get_geometry_reply_t) bool {
+    return r.x < constants.OFFSCREEN_SENTINEL_MIN or r.y < constants.OFFSCREEN_SENTINEL_MIN;
+}
 
 /// Gap and border widths applied around a tiled window.
 pub const Margins = struct {
@@ -321,33 +333,30 @@ inline fn clockTs(clock_id: std.os.linux.clockid_t) std.os.linux.timespec {
     return ts;
 }
 
-/// Returns the current monotonic clock time in nanoseconds.
-pub fn monotonicNs() u64 {
-    const ts = clockTs(.MONOTONIC);
+/// Returns the current clock time in nanoseconds for the given clock id.
+pub fn clockNs(clock_id: std.os.linux.clockid_t) u64 {
+    const ts = clockTs(clock_id);
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
+/// Returns the current monotonic clock time in nanoseconds.
+pub inline fn monotonicNs() u64 {
+    return clockNs(.MONOTONIC);
+}
+
 /// Returns the current realtime clock time in nanoseconds since the Unix epoch.
-pub fn realtimeNs() u64 {
-    const ts = clockTs(.REALTIME);
-    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+pub inline fn realtimeNs() u64 {
+    return clockNs(.REALTIME);
 }
 
 // XCB grab helpers
 
-/// Moves `win` to the offscreen holding area (outside visible display bounds).
-/// Uses only XCB_CONFIG_WINDOW_X.
 pub inline fn pushWindowOffscreen(conn: *xcb.xcb_connection_t, win: u32) void {
     _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
 }
 
 /// Like `pushWindowOffscreen`, but also drops `win` to the bottom of the
-/// global stacking order in the same request. Nothing in this codebase ever
-/// lowers a window otherwise (only XCB_STACK_MODE_ABOVE is used, by raises),
-/// so a window that got raised once — e.g. by a layout that isn't supposed
-/// to raise during a background retile — would otherwise stay first in
-/// stacking order forever, regardless of how far offscreen its X coordinate
-/// is parked. Use this instead of `pushWindowOffscreen` for any window whose
+/// global stacking order in the same request. Use this for any window whose
 /// hidden state must be defended even if something upstream raised it.
 pub inline fn pushWindowOffscreenAndLower(conn: *xcb.xcb_connection_t, win: u32) void {
     _ = xcb.xcb_configure_window(
@@ -469,12 +478,11 @@ pub const Condition = struct {
     /// Uses a CLOCK_MONOTONIC absolute deadline — requires that `initMonotonic()`
     /// was called on this instance at startup.
     pub fn timedWait(c: *Condition, m: *Mutex, timeout_ns: u64) error{Timeout}!void {
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-        // Saturating add prevents overflow when timeout_ns is near u64 max.
-        const new_nsec = @as(u64, @intCast(ts.nsec)) +| timeout_ns;
-        ts.sec += @intCast(new_nsec / std.time.ns_per_s);
-        ts.nsec = @intCast(new_nsec % std.time.ns_per_s);
+        const deadline_ns = monotonicNs() +| timeout_ns;
+        var ts: std.os.linux.timespec = .{
+            .sec = @intCast(deadline_ns / std.time.ns_per_s),
+            .nsec = @intCast(deadline_ns % std.time.ns_per_s),
+        };
         const rc = std.c.pthread_cond_timedwait(&c.inner, &m.inner, @ptrCast(&ts));
         if (rc == std.posix.E.TIMEDOUT) return error.Timeout;
     }
@@ -495,9 +503,7 @@ pub const CondThread = struct {
 
     pub fn start(self: *CondThread, comptime f: anytype, args: anytype) !void {
         self.cond.initMonotonic();
-        self.mutex.lock();
         self.quit = false;
-        self.mutex.unlock();
         self.thread = try std.Thread.spawn(.{}, f, args);
     }
 
@@ -554,19 +560,17 @@ pub fn BoundedList(comptime T: type, comptime capacity: usize) type {
         /// Returns the index of the first item whose `.id` field equals `id`,
         /// or null. For element types keyed by a single `id` field.
         pub fn indexOfById(self: *const Self, id: u32) ?usize {
-            for (self.items[0..self.len], 0..) |item, i| {
-                if (item.id == id) return i;
-            }
-            return null;
+            return self.indexOf(id, struct {
+                fn match(i: u32, item: T) bool { return item.id == i; }
+            }.match);
         }
 
         /// Returns the index of the first item equal to `scalar`, or null.
         /// For scalar element types (e.g. u32 window-ID lists).
         pub fn indexOfScalar(self: *const Self, scalar: T) ?usize {
-            for (self.items[0..self.len], 0..) |item, i| {
-                if (item == scalar) return i;
-            }
-            return null;
+            return self.indexOf(scalar, struct {
+                fn match(s: T, item: T) bool { return item == s; }
+            }.match);
         }
 
         /// Appends `item` if there's room. Returns false and leaves the
