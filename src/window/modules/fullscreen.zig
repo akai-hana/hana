@@ -182,7 +182,7 @@ pub fn forEachFullscreen(cb: anytype) void {
 /// window is offscreen, or reports zero dimensions.
 fn fetchWindowGeom(win: u32) core.WindowGeometry {
     if (hooks.tilingGetWindowGeom(win)) |rect| {
-        const bw: u16 = if (hooks.tilingGetStateOpt()) |ts| ts.config.border_width else 0;
+        const bw: u16 = hooks.tilingGetBorderWidth();
         return window.geomFromRect(rect, bw);
     }
 

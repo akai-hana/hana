@@ -668,13 +668,10 @@ fn dumpState() void {
             debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(@intCast(i)) });
     }
 
-    if (hooks.tilingGetStateOpt()) |t| {
-        debug.info("Tiling enabled: {}", .{t.is_enabled});
-        debug.info("Tiling layout:  {s}", .{@tagName(t.config.layout)});
-        debug.info("Tiled windows:  {}", .{t.windows.len});
-        debug.info("Master count:   {}", .{t.config.master_count});
-        debug.info("Master width:   {d:.2}", .{t.config.master_width});
-        debug.info("Stack balance:  {d:.2} (+ = top slave grown, - = bottom slave grown)", .{t.config.stack_balance});
+    if (hooks.tilingIsEnabled()) {
+        debug.info("Tiling enabled: true", .{});
+        debug.info("Tiling layout:  {s}", .{@tagName(hooks.tilingGetCurrentLayout())});
+        debug.info("Tiled windows:  {}", .{hooks.tilingGetTiledWindows().len});
     }
 
     debug.info("================================", .{});

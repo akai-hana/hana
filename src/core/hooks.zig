@@ -10,11 +10,8 @@ const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
 const types = @import("types");
-const tracking = @import("tracking");
 const layouts = @import("layouts");
 const constants = @import("constants");
-const focus = @import("focus");
-const fullscreen = @import("fullscreen");
 
 // -- Shared types ---------------------------------------------------------------
 
@@ -29,55 +26,6 @@ pub const TilingLayoutVariants = struct {
     grid: GridVariant = .rigid,
 };
 
-pub const TilingLayoutConfig = struct {
-    layout: TilingLayout = .master,
-    layout_variants: TilingLayoutVariants = .{},
-    master_side: types.MasterSide = .left,
-    master_width: f32 = 0.5,
-    master_count: u8 = 1,
-    stack_balance: f32 = 0.0,
-    gap_width: u16 = 0,
-    border_width: u16 = 1,
-    border_focused: u32 = 0xffffff,
-    border_unfocused: u32 = 0x888888,
-    min_window_dim: u16 = 50,
-    enabled_layouts: [types.LAYOUT_TABLE.len]TilingLayout = init: {
-        var result: [types.LAYOUT_TABLE.len]TilingLayout = undefined;
-        for (&result, 0..) |*slot, i| slot.* = types.LAYOUT_TABLE[i].tag;
-        break :init result;
-    },
-    enabled_layout_count: u8 = types.LAYOUT_TABLE.len,
-};
-
-pub const TilingScrollState = struct {
-    offset: i32 = 0,
-    prev_n: usize = 0,
-    prev_focused: ?u32 = null,
-};
-
-pub const TilingGeomCache = struct {
-    workspace_geom_valid_bits: u64 = 0,
-    last_retile_area: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
-};
-
-pub const TilingState = struct {
-    is_enabled: bool = false,
-    is_dirty: bool = false,
-    config: TilingLayoutConfig = .{},
-    windows: tracking.Tracking = .{},
-    geom: TilingGeomCache = .{},
-    scroll: TilingScrollState = .{},
-
-    pub inline fn margins(self: *const TilingState) utils.Margins {
-        return .{ .gap = self.config.gap_width, .border = self.config.border_width };
-    }
-
-    pub inline fn borderColor(self: *const TilingState, win: u32) u32 {
-        if (fullscreen.isFullscreen(win)) return 0;
-        return if (focus.getFocused() == win) self.config.border_focused else self.config.border_unfocused;
-    }
-};
-
 pub const TilingRetileOpts = struct {
     for_ws: ?u8 = null,
     defer_win: ?u32 = null,
@@ -86,26 +34,7 @@ pub const TilingRetileOpts = struct {
 
 pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
 
-pub const DragMode = enum { move, resize };
-pub const ResizeCorner = enum { top_left, top_right, bottom_left, bottom_right };
-pub const DragState = struct {
-    active: bool = false,
-    window: core.WindowId = 0,
-    mode: DragMode = .move,
-    resize_corner: ResizeCorner = .bottom_right,
-    start_x: i16 = 0,
-    start_y: i16 = 0,
-    start_win_x: i16 = 0,
-    start_win_y: i16 = 0,
-    start_win_width: u16 = 0,
-    start_win_height: u16 = 0,
-    last_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
-    snap_px: i32 = 0,
-};
-
 // -- Static defaults ------------------------------------------------------------
-
-var static_tiling_state: TilingState = .{};
 
 fn fullScreenRect() utils.Rect {
     return .{
@@ -202,6 +131,13 @@ pub const Hooks = struct {
     tiling_update_window_focus: ?*const fn (?u32, ?u32) void = null,
     tiling_take_prev_focused_for_scroll: ?*const fn () ?u32 = null,
     tiling_send_border_color_if_changed: ?*const fn (u32, u32) bool = null,
+
+    // -- Tiling focused accessors (replace tilingGetState/tilingGetStateOpt) -
+    tiling_is_enabled: ?*const fn () bool = null,
+    tiling_get_border_width: ?*const fn () u16 = null,
+    tiling_get_current_layout: ?*const fn () TilingLayout = null,
+    tiling_get_layout_variants: ?*const fn () TilingLayoutVariants = null,
+    tiling_get_tiled_windows: ?*const fn () []const u32 = null,
 
     // -- Drag hooks -------------------------------------------------------
     drag_start: ?*const fn (u32, u8, i16, i16) void = null,
@@ -561,15 +497,36 @@ pub inline fn tilingSendBorderColorIfChanged(win: u32, color: u32) bool {
     return false;
 }
 
-/// Returns a pointer to the live tiling state, or a pointer to a static
-/// empty state when tiling is not compiled in.
-pub inline fn tilingGetStateOpt() ?*TilingState {
-    if (h.tiling_is_window_active_tiled != null) return &static_tiling_state;
-    return null;
+// -- Tiling focused accessors -------------------------------------------------
+// These replace the old tilingGetState()/tilingGetStateOpt() which returned a
+// pointer to a never-synced static copy. Each accessor delegates to the real
+// tiling module through its hook; callers get live data, not stale defaults.
+
+pub inline fn tilingIsEnabled() bool {
+    if (h.tiling_is_enabled) |f| return f();
+    return false;
 }
 
-pub inline fn tilingGetState() *TilingState {
-    return &static_tiling_state;
+pub inline fn tilingGetBorderWidth() u16 {
+    if (h.tiling_get_border_width) |f| return f();
+    return 0;
+}
+
+pub inline fn tilingGetCurrentLayout() TilingLayout {
+    if (h.tiling_get_current_layout) |f| return f();
+    return .master;
+}
+
+pub inline fn tilingGetLayoutVariants() TilingLayoutVariants {
+    if (h.tiling_get_layout_variants) |f| return f();
+    return .{};
+}
+
+/// Returns a slice of tiled window IDs for the current workspace.
+/// The returned slice is valid until the next tiling mutation.
+pub inline fn tilingGetTiledWindows() []const u32 {
+    if (h.tiling_get_tiled_windows) |f| return f();
+    return &static_empty_windows;
 }
 
 // -- Drag convenience accessors -----------------------------------------------

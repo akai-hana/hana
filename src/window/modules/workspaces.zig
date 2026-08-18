@@ -179,7 +179,7 @@ pub fn init() !void {
     const count = if (cs.config.workspaces.enabled) cs.config.workspaces.count else 1;
     const wss = try cs.alloc.alloc(Workspace, count);
 
-    const default_layout: TilingLayout = hooks.tilingGetState().config.layout;
+    const default_layout: TilingLayout = hooks.tilingDefaultLayout();
     const cfg_tiling = &cs.config.tiling;
 
     for (wss, 0..) |*ws, i| {
@@ -560,7 +560,7 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
     /// window on the first frame instead of reading focus.getFocused(), still
 /// the old workspace's window until the real setFocus() below.
 fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8, pending_focus: ?u32) void {
-    const tiling_active = hooks.tilingGetState().is_enabled;
+    const tiling_active = hooks.tilingIsEnabled();
 
     if (tiling_active) {
         if (!core.getState().config.tiling.global_layout) hooks.tilingApplyWorkspaceLayout(@ptrCast(ws));

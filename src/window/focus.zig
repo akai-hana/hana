@@ -692,11 +692,9 @@ inline fn appendVisible(w: u32, len: *usize) void {
 fn collectVisibleWindows() usize {
     var len: usize = 0;
 
-    if (hooks.tilingGetStateOpt()) |t| {
-        if (t.is_enabled) {
-            for (t.windows.items()) |w| appendVisible(w, &len);
-            if (len > 0) return len;
-        }
+    if (hooks.tilingIsEnabled()) {
+        for (hooks.tilingGetTiledWindows()) |w| appendVisible(w, &len);
+        if (len > 0) return len;
     }
 
     // Fallback: all visible windows in tracking-table order. No pre-insertion

@@ -1189,7 +1189,7 @@ pub fn geometryFromXcbReply(reply: *xcb.xcb_get_geometry_reply_t) core.WindowGeo
 /// Returns null when even the fallback fails (window gone).
 fn resolveConfigureGeometry(win: u32) ?core.WindowGeometry {
     if (hooks.tilingGetWindowGeom(win)) |rect| {
-        const border: u16 = if (hooks.tilingGetStateOpt()) |s| s.config.border_width else 0;
+        const border: u16 = hooks.tilingGetBorderWidth();
         return geomFromRect(rect, border);
     }
 
@@ -1437,7 +1437,8 @@ fn parseSizeHintsIntoCache(
 
 /// Returns the DPI-scaled border width.
 pub inline fn getBorderWidth() u16 {
-    if (hooks.tilingGetStateOpt()) |s| return s.config.border_width;
+    const bw = hooks.tilingGetBorderWidth();
+    if (bw != 0) return bw;
     const cs = core.getState();
     return utils.scaling.scaleBorderWidth(
         cs.config.tiling.border_width,

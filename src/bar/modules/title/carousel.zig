@@ -574,8 +574,8 @@ fn buildCarouselEntry(
 ///
 /// This distributes 0 px and 1 px advances evenly across frames rather than
 /// clustering the fractional debt into occasional jumps: at 125 px/s on
-/    // 165 Hz the raw advance is ~=0.758 px/frame, and flooring each frame would
-/    // freeze every ~4-5 frames then snap 1 px.
+/// 165 Hz the raw advance is ~=0.758 px/frame, and flooring each frame would
+/// freeze every ~4-5 frames then snap 1 px.
 ///
 /// Caller must hold a mutable pointer to the entry.
 fn advanceCarouselOffset(e: *CarouselEntry, now_ns: u64) u16 {

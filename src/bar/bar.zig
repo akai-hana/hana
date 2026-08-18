@@ -34,7 +34,7 @@ const tags = @import("tags");
 
 // Public API types
 
-pub const BarAction = enum { toggle, hide_fullscreen, show_fullscreen };
+pub const BarAction = hooks.BarAction;
 
 // Constants
 
@@ -1554,8 +1554,7 @@ inline fn withTilingGrabForClick(op: anytype) void {
 }
 
 fn isTilingActive() bool {
-    return core.getState().config.tiling.enabled and
-        if (hooks.tilingGetStateOpt()) |t| t.is_enabled else false;
+    return core.getState().config.tiling.enabled and hooks.tilingIsEnabled();
 }
 
 /// Must be called without holding the X server grab.
@@ -1604,7 +1603,7 @@ pub const hook_map = .{
     .bar_raise_bar = raiseBar,
     .bar_present_for_prompt = presentForPrompt,
     .bar_dismiss_after_prompt = dismissAfterPrompt,
-    .bar_set_bar_state = @as(?*const fn (hooks.BarAction) void, @ptrCast(&setBarState)),
+    .bar_set_bar_state = setBarState,
     .bar_update_if_dirty = updateIfDirty,
     .bar_update_clock = updateClock,
     .bar_tick_carousel = tickCarousel,

@@ -1224,6 +1224,34 @@ inline fn cycleEnum(v: anytype, comptime forward: bool) void {
     v.* = @enumFromInt(if (forward) (cur + 1) % len else (cur + len - 1) % len);
 }
 
+// Focused accessors for hooks.zig — expose live tiling state fields directly
+// instead of returning a pointer to a never-synced static copy.
+
+pub inline fn isEnabled() bool {
+    const s = getStateOpt() orelse return false;
+    return s.is_enabled;
+}
+
+pub inline fn getBorderWidth() u16 {
+    const s = getStateOpt() orelse return 0;
+    return s.config.border_width;
+}
+
+pub inline fn getCurrentLayout() Layout {
+    const s = getStateOpt() orelse return .master;
+    return s.config.layout;
+}
+
+pub inline fn getLayoutVariants() LayoutVariants {
+    const s = getStateOpt() orelse return .{};
+    return s.config.layout_variants;
+}
+
+pub fn getTiledWindows() []const u32 {
+    const s = getStateOpt() orelse return &.{};
+    return s.windows.items();
+}
+
 pub const hook_map = .{
     .tiling_init = init,
     .tiling_deinit = deinit,
@@ -1265,4 +1293,9 @@ pub const hook_map = .{
     .tiling_update_window_focus = updateWindowFocus,
     .tiling_take_prev_focused_for_scroll = takePrevFocusedForScroll,
     .tiling_send_border_color_if_changed = sendBorderColorIfChanged,
+    .tiling_is_enabled = isEnabled,
+    .tiling_get_border_width = getBorderWidth,
+    .tiling_get_current_layout = getCurrentLayout,
+    .tiling_get_layout_variants = getLayoutVariants,
+    .tiling_get_tiled_windows = getTiledWindows,
 };
