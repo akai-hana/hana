@@ -19,7 +19,9 @@ const minimize = @import("minimize");
 // tracking.allWindows inside windowsOnCurrentWorkspace; a top-level
 // workspaces import is not needed here.
 
-const hooks = @import("hooks");
+const build_options = @import("build_options");
+const bar = if (build_options.has_bar) @import("bar") else null;
+const tiling = if (build_options.has_tiling) @import("tiling") else null;
 
 // Fullscreen types
 
@@ -181,8 +183,8 @@ pub fn forEachFullscreen(cb: anytype) void {
 /// Falls back to a centred quarter-screen default if the reply fails, the
 /// window is offscreen, or reports zero dimensions.
 fn fetchWindowGeom(win: u32) core.WindowGeometry {
-    if (hooks.tilingGetWindowGeom(win)) |rect| {
-        const bw: u16 = hooks.tilingGetBorderWidth();
+    if (if (build_options.has_tiling) tiling.getWindowGeom(win) else null) |rect| {
+        const bw: u16 = if (build_options.has_tiling) tiling.getBorderWidth() else 0;
         return window.geomFromRect(rect, bw);
     }
 
@@ -229,7 +231,7 @@ fn fetchWindowGeom(win: u32) core.WindowGeometry {
 /// a plain fn (not inline) so it can be passed as a *const fn(u32)bool
 /// predicate (see tracking.prefetchAndSaveGeometryOnCurrentWorkspace).
 fn isFreeFloating(win: u32) bool {
-    return !minimize.isMinimized(win) and !hooks.tilingIsWindowTiled(win);
+    return !minimize.isMinimized(win) and !(if (build_options.has_tiling) tiling.isWindowTiled(win) else false);
 }
 
 /// Warm the geometry cache for every free-floating window on the current
@@ -319,7 +321,7 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
         utils.pushWindowOffscreen(core.getState().conn, w);
         // Only invalidate tiled windows; floating windows' cache entries
         // hold the geometry we need to restore on exit.
-        if (hooks.tilingIsWindowTiled(w)) hooks.tilingInvalidateGeomCache(w);
+        if (build_options.has_tiling and tiling.isWindowTiled(w)) tiling.invalidateGeomCache(w);
     }
 
     // Configure and raise BEFORE hiding the bar: deferring the bar hide until
@@ -330,7 +332,7 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     // Evict the fullscreen window's own cache entry: on exit retile it would
     // hit the stale pre-fullscreen rect and skip configure_window, leaving the
     // window stuck at fullscreen dimensions.
-    hooks.tilingInvalidateGeomCache(win);
+    if (build_options.has_tiling) tiling.invalidateGeomCache(win);
 
     // Cancel any pending deferred bar-show from a previous exit: entering
     // fullscreen again means the bar should stay hidden.
@@ -360,7 +362,7 @@ fn exitFullscreenCommit(win: u32, ws: u8) void {
     // Drawing outside the grab prevents captureStateIntoSlot's implicit flush
     // from delivering xcb_grab_server early and stalling the compositor.
 
-    const win_is_tiled = hooks.tilingIsWindowTiled(win);
+    const win_is_tiled = if (build_options.has_tiling) tiling.isWindowTiled(win) else false;
     // Tiled: geometry managed by tiling engine; applyBorder restores border.
     // Floating: configureWindowGeom restores position + size + border
     // atomically; saveWindowGeom re-syncs the shared geometry cache, which
@@ -390,7 +392,7 @@ pub fn cleanupFullscreenForMove(win: u32, src_ws: u8) void {
 
     // Cancel deferred bar-show if one was in flight for this window.
     g_pending_bar_show_win = 0;
-    hooks.barSetBarState(.show_fullscreen);
+    if (build_options.has_bar) bar.setBarState(.show_fullscreen);
     restoreFloatingWindows(win);
     window.applyBorder(win);
     setEwmhFullscreenState(win, false);
@@ -422,7 +424,7 @@ pub fn exitFullscreen(win: u32) void {
     utils.grabServer(conn);
     exitFullscreenCommit(win, ws);
     restoreFloatingWindows(win);
-    hooks.tilingRetileCurrentWorkspace();
+    if (build_options.has_tiling) tiling.retileCurrentWorkspace();
     // Record the pending show AFTER retile so the window ID is set before
     // the grab is released and ConfigureNotify can arrive.
     g_pending_bar_show_win = win;
@@ -487,12 +489,12 @@ pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
     if (g_pending_bar_hide_win == win) {
         if (width == screen_w and height == screen_h) {
             g_pending_bar_hide_win = 0;
-            hooks.barSetBarState(.hide_fullscreen);
+            if (build_options.has_bar) bar.setBarState(.hide_fullscreen);
         }
     } else if (g_pending_bar_show_win == win) {
         if (width != screen_w or height != screen_h) {
             g_pending_bar_show_win = 0;
-            hooks.barSetBarState(.show_fullscreen);
+            if (build_options.has_bar) bar.setBarState(.show_fullscreen);
         }
     }
 }
@@ -504,6 +506,6 @@ pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
 pub fn onWindowGone(win: u32) void {
     if (g_pending_bar_show_win == win) {
         g_pending_bar_show_win = 0;
-        hooks.barSetBarState(.show_fullscreen);
+        if (build_options.has_bar) bar.setBarState(.show_fullscreen);
     }
 }

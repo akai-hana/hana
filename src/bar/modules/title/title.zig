@@ -16,7 +16,8 @@ const types = @import("types");
 
 const drawing = @import("drawing");
 const carousel = @import("carousel");
-const hooks = @import("hooks");
+const build_options = @import("build_options");
+const tiling = if (build_options.has_tiling) @import("tiling") else null;
 
 // Module constants
 
@@ -462,7 +463,7 @@ const WindowDataBatch = struct {
             self.needs_xcb_geometry[i] = false;
             self.tiling_geoms[i] = null;
             if (!minimized.contains(win)) {
-                self.tiling_geoms[i] = hooks.tilingGetWindowGeom(win);
+                self.tiling_geoms[i] = if (build_options.has_tiling) tiling.getWindowGeom(win) else null;
                 if (self.tiling_geoms[i] == null and !has_prefetched_geoms) {
                     self.geom_cookies[i] = xcb.xcb_get_geometry(self.conn, win);
                     self.needs_xcb_geometry[i] = true;

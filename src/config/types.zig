@@ -215,6 +215,13 @@ pub const GridVariant = enum {
     relaxed, // last window in incomplete row expands to fill the row
 };
 
+/// Combined layout variant state, matching the per-layout defaults.
+pub const LayoutVariants = struct {
+    master: MasterVariant = .lifo,
+    monocle: MonocleVariant = .gapless,
+    grid: GridVariant = .rigid,
+};
+
 /// The tiling layout algorithm.
 /// Defined here (not tiling.zig) to avoid a circular import; tiling.zig
 /// re-exports this as `tiling.Layout`.

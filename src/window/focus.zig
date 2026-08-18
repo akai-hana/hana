@@ -9,7 +9,9 @@ const constants = @import("constants");
 const utils = @import("utils");
 const window = @import("window");
 const tracking = @import("tracking");
-const hooks = @import("hooks");
+const build_options = @import("build_options");
+const bar = if (build_options.has_bar) @import("bar") else null;
+const tiling = if (build_options.has_tiling) @import("tiling") else null;
 
 // Module state
 //
@@ -271,9 +273,9 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
         state.confirm_win = win;
     }
 
-    hooks.tilingUpdateWindowFocus(old, win);
-    hooks.carouselNotifyFocusChanged(win);
-    if (flags.schedule_bar) hooks.barScheduleFocusRedraw(win);
+    if (build_options.has_tiling) tiling.updateWindowFocus(old, win);
+    if (build_options.has_bar) bar.carouselNotifyFocusChanged(win);
+    if (flags.schedule_bar) if (build_options.has_bar) bar.scheduleFocusRedraw(win);
 
     advertiseActiveWindow(win);
 }
@@ -512,15 +514,15 @@ pub fn focusBestAvailable() void {
 pub fn clearFocus() void {
     if (state.focused_window) |old_win| {
         grabButtons(old_win, false);
-        hooks.tilingUpdateWindowFocus(old_win, null);
+        if (build_options.has_tiling) tiling.updateWindowFocus(old_win, null);
     }
     cancelPendingConfirm();
     state.focused_window = null;
     state.suppress_reason = .none;
     const cs = core.getState();
     focusNow(cs.conn, cs.root);
-    hooks.carouselNotifyFocusChanged(null);
-    hooks.barScheduleFocusRedraw(null);
+    if (build_options.has_bar) bar.carouselNotifyFocusChanged(null);
+    if (build_options.has_bar) bar.scheduleFocusRedraw(null);
     advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
 }
 
@@ -575,7 +577,7 @@ inline fn advertiseActiveWindow(win: u32) void {
 /// pairs that confuse Electron's internal focus state machine.
 inline fn shouldRaise(reason: Reason, win: u32) bool {
     return switch (reason) {
-        .mouse_click, .user_command, .pointer_sync => !hooks.tilingIsWindowActiveTiled(win),
+        .mouse_click, .user_command, .pointer_sync => !(if (build_options.has_tiling) tiling.isWindowActiveTiled(win) else false),
         .mouse_enter, .tiling_operation, .window_spawn, .workspace_switch => false,
     };
 }
@@ -692,8 +694,8 @@ inline fn appendVisible(w: u32, len: *usize) void {
 fn collectVisibleWindows() usize {
     var len: usize = 0;
 
-    if (hooks.tilingIsEnabled()) {
-        for (hooks.tilingGetTiledWindows()) |w| appendVisible(w, &len);
+    if ((if (build_options.has_tiling) tiling.isEnabled() else false)) {
+        for (if (build_options.has_tiling) tiling.getTiledWindows() else &.{}) |w| appendVisible(w, &len);
         if (len > 0) return len;
     }
 
@@ -744,7 +746,7 @@ fn moveWindowCycle(comptime forward: bool) void {
     const focused = state.focused_window orelse return;
     const idx = std.mem.indexOfScalar(u32, wins, focused) orelse return;
     const target = wins[cycleIndex(forward, idx, len)];
-    hooks.tilingSwapWindowsById(focused, target);
+    if (build_options.has_tiling) tiling.swapWindowsById(focused, target);
 }
 
 /// Move the focused window one step forward in the cycle (Mod+Shift+k).

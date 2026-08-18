@@ -32,9 +32,64 @@ const title = @import("title");
 const variants = @import("variants");
 const tags = @import("tags");
 
+const build_options = @import("build_options");
+const tiling = if (build_options.has_tiling) @import("tiling") else null;
+const drag = if (build_options.has_drag) @import("drag") else null;
+
+pub const plugin = hooks.Plugin{
+    .init = init,
+    .deinit = deinit,
+    .reload = reload,
+    .on_expose = handleExpose,
+    .on_property_notify = handlePropertyNotify,
+    .on_button_press = handleButtonPress,
+    .post_batch = updateIfDirty,
+    .iteration_end = updateClock,
+    .poll_timeout_ms = promptBlinkPollTimeoutMs,
+    .on_poll_wakeup = onPollWakeup,
+};
+
+fn onPollWakeup() void {
+    submitDraw();
+    prompt.blinkTick();
+}
+
+/// Exposes prompt's blink poll timeout for the event loop.
+pub fn promptBlinkPollTimeoutMs() i32 {
+    return prompt.blinkPollTimeoutMs();
+}
+
+/// Wraps prompt.handlePromptKeypress for input.zig.
+pub fn promptHandleKeypress(event: *const xcb.xcb_key_press_event_t, matched: ?*const types.Action) bool {
+    return prompt.handlePromptKeypress(event, matched);
+}
+
+/// Wraps prompt.toggle for input.zig.
+pub fn promptToggle() void {
+    prompt.toggle();
+}
+
+/// Wraps carousel settings for config.zig.
+pub fn carouselSetEnabled(enabled: bool) void {
+    carousel.setCarouselEnabled(enabled);
+}
+
+pub fn carouselSetScrollSpeed(speed: f64) void {
+    carousel.setScrollSpeed(speed);
+}
+
+pub fn carouselSetRefreshRateOverride(rate: f64) void {
+    carousel.setRefreshRateOverride(rate);
+}
+
+/// Wraps carousel.notifyFocusChanged for focus.zig.
+pub fn carouselNotifyFocusChanged(win: ?u32) void {
+    carousel.notifyFocusChanged(win);
+}
+
 // Public API types
 
-pub const BarAction = hooks.BarAction;
+pub const Action = enum { toggle, hide_fullscreen, show_fullscreen };
 
 // Constants
 
@@ -1172,8 +1227,8 @@ pub fn toggleBarSegmentAnchor() void {
         return;
     };
     const no_fullscreen = fullscreen.getForWorkspace(current_ws) == null;
-    if (no_fullscreen)
-        hooks.tilingRetileCurrentWorkspace();
+        if (no_fullscreen)
+            if (build_options.has_tiling) tiling.retileCurrentWorkspace();
     window.updateFloatingWindowBorders();
     window.markBordersFlushed();
     ungrabAndFlush();
@@ -1325,7 +1380,7 @@ pub fn dismissAfterPrompt() void {
     _ = xcb.xcb_flush(s.win.conn);
 }
 
-pub fn setBarState(action: BarAction) void {
+pub fn setBarState(action: Action) void {
     const s = gBar.state orelse return;
     if (action == .toggle) s.is_globally_visible = !s.is_globally_visible;
     const current_ws = tracking.getCurrentWorkspace() orelse 0;
@@ -1347,7 +1402,7 @@ pub fn setBarState(action: BarAction) void {
         window.markBordersFlushed();
         ungrabAndFlush();
     } else {
-        hooks.tilingRetileCurrentWorkspace();
+        if (build_options.has_tiling) tiling.retileCurrentWorkspace();
     }
     debug.info("Bar {s} ({s})", .{ if (should_be_visible) "shown" else "hidden", @tagName(action) });
 }
@@ -1406,7 +1461,8 @@ pub fn tickCarousel() void {
 pub fn handleExpose(event: *const xcb.xcb_expose_event_t) void {
     if (gBar.state) |s| if (event.window == s.win.win_id and event.count == 0) {
         gBar.pending_force_full_redraw = true;
-        if (hooks.isDragging()) s.is_dirty = true else submitDraw();
+        const dragging = if (build_options.has_drag) drag.isDragging() else false;
+        if (dragging) s.is_dirty = true else submitDraw();
     };
 }
 
@@ -1466,13 +1522,13 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 
     if (s.layout_cache.layout_bounds.contains(x))
     {
-        if (left) withTilingGrabForClick(hooks.tilingToggleLayout) else withTilingGrabForClick(hooks.tilingToggleLayoutReverse);
+        if (left) withTilingGrabForClick(tilingToggleLayout) else withTilingGrabForClick(tilingToggleLayoutReverse);
         return;
     }
 
     if (s.layout_cache.variants_bounds.contains(x))
     {
-        if (left) withTilingGrabForClick(hooks.tilingStepLayoutVariant) else withTilingGrabForClick(hooks.tilingStepLayoutVariantReverse);
+        if (left) withTilingGrabForClick(tilingStepLayoutVariant) else withTilingGrabForClick(tilingStepLayoutVariantReverse);
         return;
     }
 }
@@ -1553,8 +1609,13 @@ inline fn withTilingGrabForClick(op: anytype) void {
     utils.ungrabAndFlush(conn);
 }
 
+fn tilingToggleLayout() void { if (build_options.has_tiling) tiling.toggleLayout(); }
+fn tilingToggleLayoutReverse() void { if (build_options.has_tiling) tiling.toggleLayoutReverse(); }
+fn tilingStepLayoutVariant() void { if (build_options.has_tiling) tiling.stepLayoutVariant(); }
+fn tilingStepLayoutVariantReverse() void { if (build_options.has_tiling) tiling.stepLayoutVariantReverse(); }
+
 fn isTilingActive() bool {
-    return core.getState().config.tiling.enabled and hooks.tilingIsEnabled();
+    return core.getState().config.tiling.enabled and (if (build_options.has_tiling) tiling.isEnabled() else false);
 }
 
 /// Must be called without holding the X server grab.
@@ -1569,7 +1630,7 @@ fn retileAllWorkspaces(s: *State, effective_visible: bool) void {
     defer s.is_visible = saved_visible;
     const multi_ws = core.getState().config.workspaces.enabled and isTilingActive();
     if (!multi_ws) {
-        hooks.tilingRetileCurrentWorkspace();
+        if (build_options.has_tiling) tiling.retileCurrentWorkspace();
         return;
     }
     const ws_state = workspaces.getState() orelse return;
@@ -1578,36 +1639,8 @@ fn retileAllWorkspaces(s: *State, effective_visible: bool) void {
         if (tracking.countWindowsOnWorkspace(ws_idx) == 0) continue;
         if (fullscreen.getForWorkspace(ws_idx) != null) continue;
         if (ws_idx != ws_state.current)
-            hooks.tilingRetileInactiveWorkspace(ws_idx)
+            if (build_options.has_tiling) tiling.retileInactiveWorkspace(ws_idx)
         else
-            hooks.tilingRetileCurrentWorkspace();
+            if (build_options.has_tiling) tiling.retileCurrentWorkspace();
     }
 }
-
-pub const hook_map = .{
-    .bar_init = init,
-    .bar_deinit = deinit,
-    .bar_reload = reload,
-    .bar_submit_draw = submitDraw,
-    .bar_toggle_segment_anchor = toggleBarSegmentAnchor,
-    .bar_schedule_focus_redraw = scheduleFocusRedraw,
-    .bar_is_bar_window = isBarWindow,
-    .bar_get_bar_height = getBarHeight,
-    .bar_work_area_rect = workAreaRect,
-    .bar_schedule_redraw = scheduleRedraw,
-    .bar_schedule_full_redraw = scheduleFullRedraw,
-    .bar_schedule_title_redraw = scheduleTitleRedraw,
-    .bar_is_visible = isVisible,
-    .bar_redraw_inside_grab = redrawInsideGrab,
-    .bar_commit_inside_grab = commitInsideGrab,
-    .bar_raise_bar = raiseBar,
-    .bar_present_for_prompt = presentForPrompt,
-    .bar_dismiss_after_prompt = dismissAfterPrompt,
-    .bar_set_bar_state = setBarState,
-    .bar_update_if_dirty = updateIfDirty,
-    .bar_update_clock = updateClock,
-    .bar_tick_carousel = tickCarousel,
-    .bar_handle_expose = handleExpose,
-    .bar_handle_property_notify = handlePropertyNotify,
-    .bar_handle_button_press = handleButtonPress,
-};

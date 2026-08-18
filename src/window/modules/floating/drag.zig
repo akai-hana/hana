@@ -10,7 +10,10 @@ const utils = @import("utils");
 const window = @import("window");
 const focus = @import("focus");
 
+const build_options = @import("build_options");
 const hooks = @import("hooks");
+const bar = if (build_options.has_bar) @import("bar") else null;
+const tiling = if (build_options.has_tiling) @import("tiling") else null;
 const fullscreen = @import("fullscreen");
 
 // Drag state
@@ -64,7 +67,7 @@ fn workArea() WorkArea {
     const cs = core.getState();
     const sw: i32 = cs.screen.width_in_pixels;
     const bw2: i32 = @as(i32, window.getBorderWidth()) * 2;
-    const work = hooks.barWorkAreaRect();
+    const work = if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.screen.width, .height = core.screen.height };
     return .{
         .left = 0,
         .right = sw - bw2,
@@ -126,13 +129,13 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
     const cs = core.getState();
     if (!cs.config.drag_enabled) return;
     if (g_state.drag.active) return;
-    if (hooks.isBarWindow(win)) return;
+    if ((if (build_options.has_bar) bar.isBarWindow(win) else false)) return;
     if (fullscreen.isFullscreen(win)) return; // fullscreen geometry must not be touched
 
     // Prefer the tiling cache (always current) over a live XCB round-trip;
     // fall back to a live query for floating windows the tiler never tracked.
     const geom = blk: {
-        if (hooks.tilingGetWindowGeom(win)) |g| break :blk g;
+        if (if (build_options.has_tiling) tiling.getWindowGeom(win) else null) |g| break :blk g;
         break :blk window.getGeometry(cs.conn, win) orelse return;
     };
 
@@ -159,7 +162,7 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
         // A tiled window in a non-floating layout detaches on first motion
         // (see updateDrag); move also skips snap on that first event so the
         // window doesn't appear frozen at a tiled edge.
-        .pending_float = hooks.tilingIsWindowTiled(win) and !hooks.tilingIsFloatingLayout(),
+        .pending_float = (if (build_options.has_tiling) tiling.isWindowTiled(win) else false) and !(if (build_options.has_tiling) tiling.isFloatingLayout() else false),
     };
     focus.setFocus(win, .user_command);
     utils.raiseWindow(cs.conn, win);
@@ -232,8 +235,8 @@ pub fn updateDrag(x: i16, y: i16) void {
         g_state.pending_float = false;
         const conn = core.getState().conn;
         utils.grabServer(conn);
-        hooks.tilingRemoveWindow(drag.window);
-        hooks.tilingRetileCurrentWorkspace();
+        if (build_options.has_tiling) tiling.removeWindow(drag.window);
+        if (build_options.has_tiling) tiling.retileCurrentWorkspace();
         utils.ungrabAndFlush(conn);
     }
 
@@ -285,12 +288,4 @@ pub fn getDragLastRect() utils.Rect {
     return g_state.drag.last_rect;
 }
 
-pub const hook_map = .{
-    .drag_start = startDrag,
-    .drag_update = updateDrag,
-    .drag_stop = stopDrag,
-    .drag_cancel_for_window = cancelDragForWindow,
-    .drag_is_dragging = isDragging,
-    .drag_is_resizing_window = isResizingWindow,
-    .drag_get_last_rect = getDragLastRect,
-};
+pub const plugin = hooks.Plugin{};

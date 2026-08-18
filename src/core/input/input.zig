@@ -23,7 +23,10 @@ const fullscreen = @import("fullscreen");
 const minimize = @import("minimize");
 const workspaces = @import("workspaces");
 const xkbcommon = @import("xkbcommon");
-const hooks = @import("hooks");
+const build_options = @import("build_options");
+const bar = if (build_options.has_bar) @import("bar") else null;
+const tiling = if (build_options.has_tiling) @import("tiling") else null;
+const drag = if (build_options.has_drag) @import("drag") else null;
 
 // Constants
 
@@ -39,18 +42,18 @@ const mouse_buttons = [_]u8{
 };
 
 // Named adapter functions for tiling actions that need argument forwarding.
-fn tilingIncreaseMaster() void { hooks.tilingAdjustMasterWidth(0.025); }
-fn tilingDecreaseMaster() void { hooks.tilingAdjustMasterWidth(-0.025); }
-fn tilingIncreaseMasterCount() void { hooks.tilingAdjustMasterCount(1); }
-fn tilingDecreaseMasterCount() void { hooks.tilingAdjustMasterCount(-1); }
-fn tilingGrowStackTop() void { hooks.tilingAdjustStackBalance(0.5); }
-fn tilingGrowStackBottom() void { hooks.tilingAdjustStackBalance(-0.5); }
-fn tilingScrollLeft() void { hooks.tilingStepScrollView(-1); }
-fn tilingScrollRight() void { hooks.tilingStepScrollView(1); }
-fn tilingSnapScrollToFocused() void { hooks.tilingSnapScrollToFocused(); }
-fn tilingToggleLayout() void { hooks.tilingToggleLayout(); }
-fn tilingToggleLayoutReverse() void { hooks.tilingToggleLayoutReverse(); }
-fn tilingStepLayoutVariant() void { hooks.tilingStepLayoutVariant(); }
+fn tilingIncreaseMaster() void { if (build_options.has_tiling) tiling.adjustMasterWidth(0.025); }
+fn tilingDecreaseMaster() void { if (build_options.has_tiling) tiling.adjustMasterWidth(-0.025); }
+fn tilingIncreaseMasterCount() void { if (build_options.has_tiling) tiling.adjustMasterCount(1); }
+fn tilingDecreaseMasterCount() void { if (build_options.has_tiling) tiling.adjustMasterCount(-1); }
+fn tilingGrowStackTop() void { if (build_options.has_tiling) tiling.adjustStackBalance(0.5); }
+fn tilingGrowStackBottom() void { if (build_options.has_tiling) tiling.adjustStackBalance(-0.5); }
+fn tilingScrollLeft() void { if (build_options.has_tiling) tiling.stepScrollView(-1); }
+fn tilingScrollRight() void { if (build_options.has_tiling) tiling.stepScrollView(1); }
+fn tilingSnapScrollToFocused() void { if (build_options.has_tiling) tiling.snapScrollToFocused(); }
+fn tilingToggleLayout() void { if (build_options.has_tiling) tiling.toggleLayout(); }
+fn tilingToggleLayoutReverse() void { if (build_options.has_tiling) tiling.toggleLayoutReverse(); }
+fn tilingStepLayoutVariant() void { if (build_options.has_tiling) tiling.stepLayoutVariant(); }
 
 // XKB state
 
@@ -137,7 +140,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) void {
     const matched: ?*const types.Action = config.lookupKeybinding(mods, keysym);
 
     // The prompt owns all key input while active; routing is handled inside it.
-    if (hooks.promptHandleKeypress(event, matched)) return;
+    if (build_options.has_bar) if (bar.promptHandleKeypress(event, matched)) return;
 
     debug.info("[KEY] keycode={} state=0x{x} mods=0x{x} keysym=0x{x}", .{ event.detail, event.state, mods, keysym });
 
@@ -163,8 +166,8 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     // managed-window/replay-pointer machinery built for the synchronous grab
     // a client-window click goes through. Super-held clicks fall through to
     // the normal mouse-binding/drag path.
-    if (!super_held and hooks.isBarWindow(clicked_window)) {
-        hooks.barHandleButtonPress(event);
+    if (!super_held and (if (build_options.has_bar) bar.isBarWindow(clicked_window) else false)) {
+        if (build_options.has_bar) bar.handleButtonPress(event);
         return;
     }
 
@@ -193,7 +196,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     if (tryConfigMouseBind(mods, event.detail, managed_window, event.time)) return;
 
     if (event.detail == mouse_button_left or event.detail == mouse_button_right) {
-        hooks.dragStart(managed_window, event.detail, event.root_x, event.root_y);
+        if (build_options.has_drag) drag.startDrag(managed_window, event.detail, event.root_x, event.root_y);
         keepDragGrab(event.time);
         return;
     }
@@ -202,7 +205,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 /// Stops any active drag and updates the last event timestamp.
 pub fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t) void {
     focus.setLastEventTime(event.time);
-    if (hooks.isDragging()) hooks.dragStop();
+    if ((if (build_options.has_drag) drag.isDragging() else false)) if (build_options.has_drag) drag.stopDrag();
 }
 
 /// Forwards motion to the drag engine, clears focus suppression, and re-arms POINTER_MOTION_HINT.
@@ -215,8 +218,8 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t) void {
     const cs = core.getState();
     xcb.xcb_discard_reply(cs.conn, xcb.xcb_query_pointer(cs.conn, cs.root).sequence);
 
-    if (hooks.isDragging()) {
-        hooks.dragUpdate(event.root_x, event.root_y);
+    if ((if (build_options.has_drag) drag.isDragging() else false)) {
+        if (build_options.has_drag) drag.updateDrag(event.root_x, event.root_y);
         return;
     }
 
@@ -294,8 +297,8 @@ fn executeAction(action: *const types.Action) void {
         => executeTilingAction(action),
 
         // Bar
-        .toggle_bar_visibility => hooks.barSetBarState(.toggle),
-        .toggle_bar_position => hooks.barToggleSegmentAnchor(),
+        .toggle_bar_visibility => if (build_options.has_bar) bar.setBarState(.toggle),
+        .toggle_bar_position => if (build_options.has_bar) bar.toggleBarSegmentAnchor(),
 
         // Minimize
         .minimize_window => minimize.minimizeWindow(),
@@ -313,7 +316,7 @@ fn executeAction(action: *const types.Action) void {
         => executeWorkspaceAction(action),
 
         // Prompt
-        .toggle_prompt => hooks.promptToggle(),
+        .toggle_prompt => if (build_options.has_bar) bar.promptToggle(),
 
         // Window focus cycling (dwm-style Mod+k / Mod+j).
         // Snaps the scroll-layout viewport to the newly focused window when
@@ -337,10 +340,9 @@ fn executeTilingAction(action: *const types.Action) void {
             const conn = core.getState().conn;
             utils.grabServer(conn);
             focus.setSuppressReason(.tiling_operation);
-            hooks.tilingToggleWindowFloat(win);
+            if (build_options.has_tiling) tiling.toggleWindowFloat(win);
             finishTilingOp(conn, false);
         },
-
         .toggle_layout => withTilingGrab(tilingToggleLayout),
         .toggle_layout_reverse => withTilingGrab(tilingToggleLayoutReverse),
         .cycle_layout_variants => withTilingGrab(tilingStepLayoutVariant),
@@ -371,7 +373,7 @@ fn executeSwapMaster(action: *const types.Action) void {
     // defer_configure; the shrinking window fills its new slot before the
     // growing window vacates its old one, eliminating a one-frame gap.
     const new_master = focus.getFocused();
-    const displaced = hooks.tilingSwapWithMaster();
+    const displaced = if (build_options.has_tiling) tiling.swapWithMaster() else false;
 
     // Resolve the displaced window's input model BEFORE the grab: the
     // WM_PROTOCOLS reply wait would implicitly flush the swap's configure_window
@@ -389,7 +391,7 @@ fn executeSwapMaster(action: *const types.Action) void {
     if (displaced) |win|
         if (displaced_model) |model| focus.setFocusWithModel(win, .tiling_operation, model);
 
-    hooks.tilingRetileCurrentWorkspaceWithOpts(.{ .defer_win = new_master });
+    if (build_options.has_tiling) tiling.retileCurrentWorkspaceWithOpts(.{ .defer_win = new_master });
     finishTilingOp(conn, true);
 }
 
@@ -416,7 +418,7 @@ fn executeMouseAction(action: *const types.Action, clicked_win: u32) void {
             const conn = core.getState().conn;
             utils.grabServer(conn);
             focus.setSuppressReason(.tiling_operation);
-            hooks.tilingToggleWindowFloat(clicked_win);
+            if (build_options.has_tiling) tiling.toggleWindowFloat(clicked_win);
             finishTilingOp(conn, true);
         },
         else => executeAction(action),
@@ -653,7 +655,7 @@ fn dumpState() void {
     debug.info("Focused:        {?x}", .{focus.getFocused()});
     debug.info("Total windows:  {}", .{tracking.windowCount()});
     debug.info("Suppress focus: {s}", .{@tagName(focus.getSuppressReason())});
-    debug.info("Drag active:    {}", .{hooks.isDragging()});
+    debug.info("Drag active:    {}", .{(if (build_options.has_drag) drag.isDragging() else false)});
 
     fullscreen.forEachFullscreen(struct {
         fn cb(ws: u8, info: fullscreen.FullscreenInfo) void {
@@ -668,10 +670,10 @@ fn dumpState() void {
             debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(@intCast(i)) });
     }
 
-    if (hooks.tilingIsEnabled()) {
+    if ((if (build_options.has_tiling) tiling.isEnabled() else false)) {
         debug.info("Tiling enabled: true", .{});
-        debug.info("Tiling layout:  {s}", .{@tagName(hooks.tilingGetCurrentLayout())});
-        debug.info("Tiled windows:  {}", .{hooks.tilingGetTiledWindows().len});
+        debug.info("Tiling layout:  {s}", .{@tagName((if (build_options.has_tiling) tiling.getCurrentLayout() else .master))});
+        debug.info("Tiled windows:  {}", .{(if (build_options.has_tiling) tiling.getTiledWindows() else &.{}).len});
     }
 
     debug.info("================================", .{});
@@ -713,7 +715,7 @@ inline fn withTilingGrab(op: *const fn () void) void {
 inline fn finishTilingOp(conn: *xcb.xcb_connection_t, sync_pointer: bool) void {
     window.updateFloatingWindowBorders();
     window.markBordersFlushed();
-    hooks.barRedrawInsideGrab();
+    if (build_options.has_bar) bar.redrawInsideGrab();
     if (sync_pointer) {
         // Once the layout has settled, resolve focus against the pointer's
         // resting spot: clears suppression and queues a query that

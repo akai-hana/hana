@@ -14,7 +14,7 @@ const scale = @import("scale");
 const debug = @import("debug");
 const input = @import("input");
 const window = @import("window");
-const hooks = @import("hooks");
+const plugins = @import("plugins");
 const build_options = @import("build_options");
 
 /// hana's startup sequence and event-loop entry point.
@@ -54,36 +54,9 @@ pub fn main() !void {
     try window.init(alloc);
     defer window.deinit();
 
-    // Register hooks from optional modules.
-    // Each module exports a hook_map struct mapping hook field names to functions.
-    if (build_options.has_bar) {
-        hooks.registerHooks(@import("bar").hook_map);
-        hooks.registerHooks(@import("carousel").hook_map);
-        hooks.registerHooks(@import("prompt").hook_map);
-    }
-
-    if (build_options.has_tiling) {
-        hooks.registerHooks(@import("tiling").hook_map);
-    }
-
-    if (build_options.has_drag) {
-        hooks.registerHooks(@import("drag").hook_map);
-    }
-
-    if (build_options.has_floating) {
-        hooks.registerHooks(@import("floating").hook_map);
-    }
-
-    // Initialize bar if present and enabled
-    const bar_enabled = core.getState().config.bar.enabled;
-    if (build_options.has_bar and bar_enabled) {
-        const bar = @import("bar");
-        bar.init() catch |err| debug.err("Bar init failed: {}", .{err});
-    }
-    defer if (build_options.has_bar) {
-        const bar = @import("bar");
-        bar.deinit();
-    };
+    // Initialize plugins (bar, tiling, drag, floating)
+    plugins.initAll();
+    defer plugins.deinitAll();
 
     _ = xcb.xcb_flush(x.conn);
     debug.info("hana booted up successfully!", .{});

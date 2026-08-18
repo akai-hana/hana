@@ -13,7 +13,10 @@ const focus = @import("focus");
 const fullscreen = @import("fullscreen");
 const minimize = @import("minimize");
 const workspaces = @import("workspaces");
-const hooks = @import("hooks");
+const build_options = @import("build_options");
+const bar = if (build_options.has_bar) @import("bar") else null;
+const tiling = if (build_options.has_tiling) @import("tiling") else null;
+const drag = if (build_options.has_drag) @import("drag") else null;
 
 // XSizeHints flags (ICCCM §4.1.2.3)
 const P_MAX_SIZE: u32 = 0x20;
@@ -88,7 +91,7 @@ var state: State = .{};
 /// Save `rect` as the last-known geometry for `win`. Delegates to tiling,
 /// which owns the one geometry cache shared by tiled and floating windows alike.
 pub fn saveWindowGeom(win: u32, rect: utils.Rect) void {
-    hooks.tilingSaveWindowGeom(win, rect);
+    if (build_options.has_tiling) tiling.saveWindowGeom(win, rect);
 }
 
 // Geometry helpers
@@ -117,7 +120,7 @@ pub fn floatDefaultPos() Pos {
 /// pattern that appears in minimize, workspaces, and fullscreen modules.
 pub fn restoreFloatGeom(win: u32) void {
     const conn = core.getState().conn;
-    if (hooks.tilingGetWindowGeom(win)) |rect| {
+    if (if (build_options.has_tiling) tiling.getWindowGeom(win) else null) |rect| {
         utils.configureWindow(conn, win, rect);
     } else {
         moveFloatToDefaultPos(win);
@@ -161,7 +164,7 @@ pub fn geomFromRect(rect: utils.Rect, border: u16) core.WindowGeometry {
 /// the next loop tick doesn't re-sweep. Callers must be inside a grab.
 pub fn flushGrabBorders() void {
     updateFloatingWindowBorders();
-    hooks.barRedrawInsideGrab();
+    if (build_options.has_bar) bar.redrawInsideGrab();
     markBordersFlushed();
 }
 
@@ -632,7 +635,7 @@ pub fn init(alloc: std.mem.Allocator) !void {
     tracking.init(alloc);
     focus.init();
     // tiling must precede workspaces: workspaces.init() calls tiling.getState().
-    hooks.tilingInit();
+    if (build_options.has_tiling) tiling.init();
     fullscreen.init();
     try workspaces.init();
     minimize.init();
@@ -650,7 +653,7 @@ pub fn deinit() void {
     // then InputModelCache torn down before focus and tracking (they may sweep
     // managed windows and must not encounter a partially-valid cache), then
     // the remaining subsystems in reverse-init order.
-    hooks.tilingDeinit();
+    if (build_options.has_tiling) tiling.deinit();
     fullscreen.deinit();
     workspaces.deinit();
     minimize.deinit();
@@ -684,7 +687,7 @@ inline fn tilingActive() bool {
 
 /// True for the null window, the root, or the bar, never valid focus/manage targets.
 pub inline fn isInvalidWindow(win: u32) bool {
-    return win == 0 or win == core.getState().root or hooks.isBarWindow(win);
+    return win == 0 or win == core.getState().root or (if (build_options.has_bar) bar.isBarWindow(win) else false);
 }
 
 pub inline fn isValidManagedWindow(win: u32) bool {
@@ -885,8 +888,8 @@ fn mapWindowToScreen(win: u32) void {
     // target so focus-driven layouts (e.g. monocle) treat the new window as
     // focused immediately instead of lagging by one retile.
     if (tilingActive()) {
-        hooks.tilingAddWindow(win);
-        hooks.tilingRetileCurrentWorkspaceWithOpts(.{ .focus_override = win });
+        if (build_options.has_tiling) tiling.addWindow(win);
+        if (build_options.has_tiling) tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = win });
     } else {
         if (fullscreen.hasAnyFullscreen()) {
             // Leave it offscreen, restoreFloatGeom would immediately move it
@@ -925,13 +928,13 @@ fn mapWindowToScreen(win: u32) void {
 
 /// Register a newly adopted window that is on a non-current workspace.
 fn registerWindowOffscreen(win: u32) void {
-    if (tilingActive()) hooks.tilingAddWindow(win);
+    if (tilingActive()) if (build_options.has_tiling) tiling.addWindow(win);
 
     applyBorder(win);
     focus.initWindowGrabs(win);
 
     // No xcb_flush here: the event-loop end-of-batch flush covers this.
-    hooks.barScheduleRedraw();
+    if (build_options.has_bar) bar.scheduleRedraw();
 }
 
 /// Handles a MapRequest by querying the properties it needs one at a time:
@@ -1041,7 +1044,7 @@ fn unmanageWindow(win: u32) void {
     // bookkeeping (no X requests), so they run pre-grab, letting the
     // post-close focus target be resolved against win-free tracking state,
     // with its input model queried BEFORE the grab.
-    hooks.tilingRemoveWindow(win);
+    if (build_options.has_tiling) tiling.removeWindow(win);
     minimize.untrackWindow(win);
     workspaces.removeWindow(win);
 
@@ -1050,7 +1053,7 @@ fn unmanageWindow(win: u32) void {
 
     utils.grabServer(cs.conn);
 
-    if (was_fullscreen) hooks.barSetBarState(.show_fullscreen);
+    if (was_fullscreen) if (build_options.has_bar) bar.setBarState(.show_fullscreen);
 
     if (was_focused) {
         // Resolve the real post-close focus BEFORE retiling: tiling.removeWindow
@@ -1066,10 +1069,15 @@ fn unmanageWindow(win: u32) void {
                 focus.setFocusWithModel(t.win, t.reason, model);
             }
         }
-        if (tilingActive()) hooks.tilingRetileIfDirty();
+        if (tilingActive()) if (build_options.has_tiling) tiling.retileIfDirty();
     } else if (!was_fullscreen and tilingActive()) {
-        if (window_workspace) |ws|
-            if (current_ws == ws) hooks.tilingRetileIfDirty() else hooks.tilingRetileInactiveWorkspace(ws);
+        if (window_workspace) |ws| {
+            if (current_ws == ws) {
+                if (build_options.has_tiling) tiling.retileIfDirty();
+            } else {
+                if (build_options.has_tiling) tiling.retileInactiveWorkspace(ws);
+            }
+        }
     }
 
     // Tiled-window borders are already current after retileIfDirty (handled by
@@ -1085,7 +1093,7 @@ pub fn handleUnmapNotify(event: *const xcb.xcb_unmap_notify_event_t) void {
 }
 
 pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t) void {
-    hooks.dragCancelForWindow(event.window);
+    if (build_options.has_drag) drag.cancelDragForWindow(event.window);
     if (isValidManagedWindow(event.window)) unmanageWindow(event.window);
 }
 
@@ -1110,7 +1118,7 @@ fn resolveDestroyFocusTarget(ptr_reply: ?*xcb.xcb_query_pointer_reply_t) ?Destro
     // over any managed window. Bypass pointer-based focus entirely and use the
     // focus history recorded by tiling.updateWindowFocus.
     // takePrevFocusedForScroll is a no-op (returns null) in all other layouts.
-    if (hooks.tilingTakePrevFocusedForScroll()) |prev| {
+    if ((if (build_options.has_tiling) tiling.takePrevFocusedForScroll() else null)) |prev| {
         if (tracking.isOnCurrentWorkspaceAndVisible(prev)) {
             return .{ .win = prev, .reason = .tiling_operation };
         }
@@ -1188,8 +1196,8 @@ pub fn geometryFromXcbReply(reply: *xcb.xcb_get_geometry_reply_t) core.WindowGeo
 ///
 /// Returns null when even the fallback fails (window gone).
 fn resolveConfigureGeometry(win: u32) ?core.WindowGeometry {
-    if (hooks.tilingGetWindowGeom(win)) |rect| {
-        const border: u16 = hooks.tilingGetBorderWidth();
+    if (if (build_options.has_tiling) tiling.getWindowGeom(win) else null) |rect| {
+        const border: u16 = (if (build_options.has_tiling) tiling.getBorderWidth() else 0);
         return geomFromRect(rect, border);
     }
 
@@ -1227,7 +1235,7 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
     const mask = event.value_mask & GEOMETRY_MASK;
     if (mask == 0) return;
 
-    const is_tiled = tilingActive() and hooks.tilingIsWindowActiveTiled(win);
+    const is_tiled = tilingActive() and (if (build_options.has_tiling) tiling.isWindowActiveTiled(win) else false);
     const is_fullscreen = fullscreen.isFullscreen(win);
     if (is_tiled or is_fullscreen) {
         sendSyntheticConfigureNotify(win);
@@ -1240,8 +1248,8 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
     // honouring it races the next MotionNotify and causes visible flicker.
     // Echo the geometry the WM already applied so the client settles without
     // fighting the drag.
-    if (hooks.isResizingWindow(win)) {
-        const last = hooks.dragGetLastRect();
+    if ((if (build_options.has_drag) drag.isResizingWindow(win) else false)) {
+        const last = if (build_options.has_drag) drag.getDragLastRect() else utils.Rect{ .x = 0, .y = 0, .width = 0, .height = 0 };
         if (last.width != 0) {
             sendConfigureNotify(win, geomFromRect(last, getBorderWidth()));
         } else {
@@ -1298,7 +1306,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
         event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR)
         return;
-    if (hooks.isDragging()) return;
+    if ((if (build_options.has_drag) drag.isDragging() else false)) return;
     if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
     if (focus.shouldSuppressEnterNotify()) return;
     maybeFocusWindow(findManagedWindow(core.getState().conn, event.event, tracking.isManaged));
@@ -1314,7 +1322,7 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t) void {
     focus.setLastEventTime(event.time);
     if (event.event != core.getState().root) return;
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL) return;
-    if (hooks.isDragging()) return;
+    if ((if (build_options.has_drag) drag.isDragging() else false)) return;
     if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
     // When child is zero the pointer left to an area not covered by any window.
     if (event.child == 0) return;
@@ -1423,7 +1431,7 @@ fn parseSizeHintsIntoCache(
         if (max_y > 0) max_aspect = @as(f32, @floatFromInt(max_x)) / @as(f32, @floatFromInt(max_y));
     }
 
-    hooks.tilingCacheSizeHints(win, .{
+    if (build_options.has_tiling) tiling.cacheSizeHints(win, .{
         .max_width = max_pair.width,
         .max_height = max_pair.height,
         .inc_width = inc_pair.width,
@@ -1437,7 +1445,7 @@ fn parseSizeHintsIntoCache(
 
 /// Returns the DPI-scaled border width.
 pub inline fn getBorderWidth() u16 {
-    const bw = hooks.tilingGetBorderWidth();
+    const bw = (if (build_options.has_tiling) tiling.getBorderWidth() else 0);
     if (bw != 0) return bw;
     const cs = core.getState();
     return utils.scaling.scaleBorderWidth(
@@ -1483,10 +1491,10 @@ fn sweepWorkspaceBorders(comptime skip_tiled: bool) void {
         if (entry.mask & cur_bit == 0) continue;
         const color = borderColor(win);
         if (comptime skip_tiled) {
-            if (tilingActive() and hooks.tilingIsWindowTiled(win)) continue;
+            if (tilingActive() and (if (build_options.has_tiling) tiling.isWindowTiled(win) else false)) continue;
         } else {
             // Dedup via the tiling CacheMap: skip the XCB call when unchanged.
-            if (hooks.tilingSendBorderColorIfChanged(win, color)) continue;
+            if ((if (build_options.has_tiling) tiling.sendBorderColorIfChanged(win, color) else false)) continue;
         }
         utils.setBorderPixel(conn, win, color);
     }

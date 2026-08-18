@@ -14,11 +14,12 @@ const input = @import("input");
 const window = @import("window");
 const focus = @import("focus");
 
-const hooks = @import("hooks");
+const plugins = @import("plugins");
 const clock = @import("clock");
 const fullscreen = @import("fullscreen");
 const refresh_rate = @import("refresh_rate");
 const signals = @import("signals");
+const build_options = @import("build_options");
 
 // Indices into the poll fd array.
 const FD_XCB = 0;
@@ -52,15 +53,20 @@ inline fn eventCast(comptime T: type, event: *anyopaque) T {
     return @ptrCast(@alignCast(event));
 }
 
-/// Delegates bar expose events through the hook registry.
-fn dispatchBarHandleExpose(event: *anyopaque) void {
-    hooks.barHandleExpose(eventCast(*xcb.xcb_expose_event_t, event));
+/// Fans out expose events to all plugins that handle them.
+fn dispatchExpose(event: *anyopaque) void {
+    const e = eventCast(*xcb.xcb_expose_event_t, event);
+    inline for (plugins.list[0..plugins.count]) |p| {
+        if (p.on_expose) |f| f(e);
+    }
 }
 
-/// Fans out PropertyNotify to both bar (title) and window (WM_PROTOCOLS cache).
+/// Fans out PropertyNotify to plugins and window.
 fn handlePropertyNotify(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_property_notify_event_t, event);
-    hooks.barHandlePropertyNotify(e);
+    inline for (plugins.list[0..plugins.count]) |p| {
+        if (p.on_property_notify) |f| f(e);
+    }
     window.handlePropertyNotify(e);
 }
 
@@ -108,7 +114,7 @@ const dispatch_table = blk: {
     table[xcb.XCB_FOCUS_IN] = asHandler(focus.handleFocusIn);
     table[xcb.XCB_PROPERTY_NOTIFY] = asHandler(handlePropertyNotify);
 
-    table[xcb.XCB_EXPOSE] = asHandler(dispatchBarHandleExpose);
+    table[xcb.XCB_EXPOSE] = asHandler(dispatchExpose);
 
     table[xcb.XCB_CONFIGURE_NOTIFY] = asHandler(handleConfigureNotify);
 
@@ -259,8 +265,7 @@ fn handleConfigReload() !void {
     committed = true;
 
     window.reloadBorders();
-    hooks.tilingReloadConfig();
-    hooks.barReload();
+    plugins.fanOut("reload", .{});
 
     old_config.deinit(cs.alloc);
 
@@ -298,7 +303,10 @@ fn handleXcbEvents() void {
     // spawn queue entry.
     input.drainPendingSpawns();
 
-    hooks.tilingRetileIfDirty();
+    // Post-batch housekeeping: fan out to all plugins
+    inline for (plugins.list[0..plugins.count]) |p| {
+        if (p.post_batch) |f| f() catch |err| debug.err("Plugin post_batch failed: {}", .{err});
+    }
     focus.drainPendingConfirm();
     focus.drainPointerSync();
     // Must run after the event-draining loop above: any EnterNotify a tiling
@@ -307,7 +315,6 @@ fn handleXcbEvents() void {
     // See beginTilingOpSettle's doc comment in focus.zig.
     focus.drainTilingOpSettle();
     window.updateWorkspaceBordersIfNeeded();
-    hooks.barUpdateIfDirty() catch |err| debug.err("Failed to update bar: {}", .{err});
 
     _ = xcb.xcb_flush(conn);
 }
@@ -322,16 +329,21 @@ pub fn run() !void {
     };
 
     while (utils.running.load(.acquire)) {
-        // Wake for the earlier of the cursor-blink deadline and the clock's
-        // next whole-second tick (plus grace). The clock deadline keeps the
-        // loop ticking even when nothing else is happening, and also provides
-        // the short-retry behaviour inside clock.nextTickWaitMs when the clock
-        // thread is late publishing a second.
-        const blink_ms = hooks.promptBlinkPollTimeoutMs();
-        const cursor_is_blinking = blink_ms >= 0;
-        const clock_ms: i32 = @intCast(clock.nextTickWaitMs());
-        const poll_ms: i32 = if (blink_ms < 0) clock_ms else @min(blink_ms, clock_ms);
-        const poll_rc = std.os.linux.poll(&fds, fds.len, poll_ms);
+        // Compute poll timeout from plugins that have a poll_timeout_ms hook
+        var poll_timeout_ms: i32 = @intCast(clock.nextTickWaitMs());
+        var cursor_is_blinking = false;
+        inline for (plugins.list[0..plugins.count]) |p| {
+            if (p.poll_timeout_ms) |f| {
+                const ms = f();
+                if (ms >= 0) {
+                    cursor_is_blinking = true;
+                    poll_timeout_ms = if (poll_timeout_ms < 0) ms else @min(poll_timeout_ms, ms);
+                }
+            }
+        }
+        if (poll_timeout_ms < 0) poll_timeout_ms = @intCast(clock.nextTickWaitMs());
+
+        const poll_rc = std.os.linux.poll(&fds, fds.len, poll_timeout_ms);
         const ready: usize = switch (std.posix.errno(poll_rc)) {
             .SUCCESS => @intCast(poll_rc),
             .INTR => continue,
@@ -343,8 +355,9 @@ pub fn run() !void {
 
         if (ready == 0) {
             if (cursor_is_blinking) {
-                hooks.promptBlinkTick();
-                hooks.barSubmitDraw();
+                inline for (plugins.list[0..plugins.count]) |p| {
+                    if (p.on_poll_wakeup) |f| f();
+                }
                 _ = xcb.xcb_flush(core.getState().conn);
             }
         } else if ((fds[FD_XCB].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0) {
@@ -364,6 +377,9 @@ pub fn run() !void {
                 handleConfigReload() catch |err| debug.err("Reload failed: {}", .{err});
         }
 
-        _ = hooks.barUpdateClock();
+        // End-of-iteration fan-out
+        inline for (plugins.list[0..plugins.count]) |p| {
+            if (p.iteration_end) |f| _ = f();
+        }
     }
 }

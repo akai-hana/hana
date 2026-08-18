@@ -7,8 +7,10 @@ const core = @import("core");
 const xcb = core.xcb;
 
 const layouts = @import("layouts");
-
 const hooks = @import("hooks");
+
+const build_options = @import("build_options");
+const bar = if (build_options.has_bar) @import("bar") else null;
 
 // Geometry cookies are all issued before any reply is awaited; one round-trip
 // per batch instead of one per window. 64 covers a typical workspace.
@@ -26,7 +28,7 @@ pub fn tileWithOffset(
     _: u16,
 ) void {
     const cs = core.getState();
-    const work = hooks.barWorkAreaRect();
+    const work = if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.getState().screen.width_in_pixels, .height = core.getState().screen.height_in_pixels };
     const sw: i32 = work.width;
     const work_top: i32 = work.y;
     const work_h: i32 = work.height;
@@ -77,6 +79,4 @@ pub fn tileWithOffset(
     }
 }
 
-pub const hook_map = .{
-    .floating_tile_with_offset = @as(?*const fn (*const layouts.LayoutCtx, *const anyopaque, []const u32, u16, u16, u16) void, @ptrCast(&tileWithOffset)),
-};
+pub const plugin = hooks.Plugin{};
