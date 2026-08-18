@@ -27,7 +27,7 @@ const MinimizedRecord = struct {
 };
 
 // Configurable via build_options.max_minimized_windows (default 32).
-// Exceeding it silently fails with a logged error — see minimizeWindow.
+// Exceeding it silently fails with a logged error; see minimizeWindow.
 // Intentionally distinct from constants.Limits.MAX_TILED_WINDOWS: this bounds
 // concurrently-minimized windows, not the tiled-window pool.
 const MAX_MINIMIZED: usize = if (@hasDecl(build, "max_minimized_windows"))
@@ -38,7 +38,7 @@ else
 // Entries are always appended at the end and removeFromBuf preserves relative
 // order, so buffer position IS insertion order: items[0] is the oldest
 // minimized window, items[len-1] the most recent. LIFO/FIFO restore read
-// directly off this — which is why removal uses orderedRemove, not swapRemove.
+// directly off this; which is why removal uses orderedRemove, not swapRemove.
 var g_minimized: utils.BoundedList(MinimizedRecord, MAX_MINIMIZED) = .{};
 
 // Lifecycle
@@ -88,7 +88,7 @@ pub fn minimizeWindow() void {
         return;
     }
 
-    // ── Side effects begin here — buffer slot is guaranteed ──────────────────
+    // -- Side effects begin here; buffer slot is guaranteed -------------------
 
     // Tear down fullscreen state if needed, saving geometry for later restore.
     var saved_fs: ?core.WindowGeometry = null;
@@ -116,7 +116,7 @@ pub fn minimizeWindow() void {
     // never hand focus to a window living on a workspace the user isn't even
     // looking at:
     //  1. The most recently focused-then-defocused window on this workspace,
-    //     per tracking's per-workspace focus MRU — this is "whichever window
+    //     per tracking's per-workspace focus MRU; this is "whichever window
     //     you were looking at before the one you just minimized", not merely
     //     *a* visible window.
     //  2. Fallback when the MRU has nothing eligible (e.g. right after a
@@ -132,7 +132,7 @@ pub fn minimizeWindow() void {
 
     // When restore_target is null, nothing eligible remains on this
     // workspace (every window here is minimized), so the only correct
-    // outcome is clearing focus — inlined here rather than going through
+    // outcome is clearing focus; inlined here rather than going through
     // focus.focusBestAvailable() to keep the grab body free of reply waits.
     restore_ctx.apply(.tiling_operation);
 
@@ -145,20 +145,20 @@ pub fn minimizeWindow() void {
 }
 
 /// Restore a window that has already been removed from g_minimized.
-/// Precondition: caller must remove the record before calling — asserted below.
+/// Precondition: caller must remove the record before calling; asserted below.
 fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?usize) void {
     std.debug.assert(!isMinimized(win));
 
     if (saved_fs) |geom| {
         // Fullscreen does not remove a window from the tiling pool (see
-        // fullscreen.zig's enterFullscreenCommit) — it just stops the layout
+        // fullscreen.zig's enterFullscreenCommit); it just stops the layout
         // from repositioning it. So if `win` was tiled when minimizeWindow()
         // tore down its fullscreen state, tiling_index is non-null and it
         // must be reinserted at its original slot now, BEFORE re-entering
         // fullscreen. Without this, isWindowTiled(win) stays false forever:
         // when this window later exits fullscreen, exitFullscreenCommit sees
         // an untiled window, so it configures it to the saved geometry
-        // directly and never hands it back to the tiling engine — it keeps
+        // directly and never hands it back to the tiling engine; it keeps
         // its dimensions but is permanently stuck outside the tiled layout.
         if (tiling_index) |ti| hooks.tilingAddWindowAtFilteredIndex(win, ti);
 
@@ -278,8 +278,8 @@ fn restorePlainWindowsTiling(plain_wins: []MinimizedRecord, focus_target: u32, f
     // windows must go first to avoid displacing higher-index targets.
     //
     // Example ([X, A, B, Z], A at ti=1, B at ti=2, minimized to [X, Z]):
-    //   insert A@1 → [X, A, Z]
-    //   insert B@2 → [X, A, B, Z]  ← correct
+    //   insert A@1 -> [X, A, Z]
+    //   insert B@2 -> [X, A, B, Z]  <- correct
     //   (reversed order would mis-place A at index 2)
     std.sort.pdq(MinimizedRecord, plain_wins, {}, struct {
         fn lt(_: void, a: MinimizedRecord, b: MinimizedRecord) bool {
@@ -294,7 +294,7 @@ fn restorePlainWindowsTiling(plain_wins: []MinimizedRecord, focus_target: u32, f
         else
             hooks.tilingAddWindow(rec.id);
     }
-    // Focus must move to focus_target BEFORE the retile — see the
+    // Focus must move to focus_target BEFORE the retile; see the
     // matching comment in restoreWindowImpl.
     focus.setFocusWithModel(focus_target, .window_spawn, focus_model);
     hooks.tilingRetileCurrentWorkspace();
@@ -327,12 +327,12 @@ pub fn unminimizeAll() void {
 
     if (plain_wins.len > 0) {
         // Focus the most recently minimized window (LIFO semantics):
-        // plain_wins is still in FIFO order here, so that's the last entry —
+        // plain_wins is still in FIFO order here, so that's the last entry;
         // captured before the tiling-index sort below reorders the array.
         const focus_target = plain_wins[plain_wins.len - 1].id;
 
         const conn = core.getState().conn;
-        // Resolve the input model BEFORE the grab — see restoreWindowImpl.
+        // Resolve the input model BEFORE the grab; see restoreWindowImpl.
         const focus_ctx = focus.FocusContext.resolve(focus_target);
         utils.grabServer(conn);
 

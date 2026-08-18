@@ -10,7 +10,7 @@ const layouts = @import("layouts");
 
 const hooks = @import("hooks");
 
-// Geometry cookies are all issued before any reply is awaited — one round-trip
+// Geometry cookies are all issued before any reply is awaited; one round-trip
 // per batch instead of one per window. 64 covers a typical workspace.
 const BATCH = 64;
 
@@ -37,7 +37,7 @@ pub fn tileWithOffset(
         const batch = windows[base..end];
 
         // Issue geometry requests for every window not already placed;
-        // replies are collected below — only the first reply pays for a round-trip.
+        // replies are collected below; only the first reply pays for a round-trip.
         var cookies: [BATCH]xcb.xcb_get_geometry_cookie_t = undefined;
         var pending: [BATCH]usize = undefined;
         var pending_len: usize = 0;
@@ -54,7 +54,7 @@ pub fn tileWithOffset(
                 const reply = xcb.xcb_get_geometry_reply(cs.conn, cookies[i], null) orelse continue;
                 defer std.c.free(reply);
 
-                // Not at (0,0): user already placed it before this pass — leave it.
+                // Not at (0,0): user already placed it before this pass; leave it.
                 if (reply.*.x != 0 or reply.*.y != 0) continue;
 
                 const w: i32 = reply.*.width;

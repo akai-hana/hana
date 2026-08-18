@@ -16,7 +16,7 @@ const constants = @import("constants");
 const focus = @import("focus");
 const fullscreen = @import("fullscreen");
 
-// ── Shared types ────────────────────────────────────────────────────────────
+// -- Shared types ---------------------------------------------------------------
 
 pub const TilingLayout = types.Layout;
 pub const MasterVariant = types.MasterVariant;
@@ -103,7 +103,7 @@ pub const DragState = struct {
     snap_px: i32 = 0,
 };
 
-// ── Static defaults ─────────────────────────────────────────────────────────
+// -- Static defaults ------------------------------------------------------------
 
 var static_tiling_state: TilingState = .{};
 
@@ -119,10 +119,10 @@ fn fullScreenRect() utils.Rect {
 var static_drag_last_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
 var static_empty_windows: [0]u32 = .{};
 
-// ── Global hooks ────────────────────────────────────────────────────────────
+// -- Global hooks ---------------------------------------------------------------
 
 pub const Hooks = struct {
-    // ── Bar hooks ───────────────────────────────────────────────────────
+    // -- Bar hooks --------------------------------------------------------------
     bar_init: ?*const fn () anyerror!void = null,
     bar_deinit: ?*const fn () void = null,
     bar_reload: ?*const fn () void = null,
@@ -149,19 +149,19 @@ pub const Hooks = struct {
     bar_handle_property_notify: ?*const fn (*const xcb.xcb_property_notify_event_t) void = null,
     bar_handle_button_press: ?*const fn (*const xcb.xcb_button_press_event_t) void = null,
 
-    // ── Carousel hooks ──────────────────────────────────────────────────
+    // -- Carousel hooks ---------------------------------------------------------
     carousel_set_enabled: ?*const fn (bool) void = null,
     carousel_set_scroll_speed: ?*const fn (f64) void = null,
     carousel_set_refresh_rate_override: ?*const fn (f64) void = null,
     carousel_notify_focus_changed: ?*const fn (?u32) void = null,
 
-    // ── Prompt hooks ────────────────────────────────────────────────────
+    // -- Prompt hooks -----------------------------------------------------
     prompt_blink_poll_timeout_ms: ?*const fn () i32 = null,
     prompt_blink_tick: ?*const fn () void = null,
     prompt_handle_keypress: ?*const fn (*const xcb.xcb_key_press_event_t, ?*const types.Action) bool = null,
     prompt_toggle: ?*const fn () void = null,
 
-    // ── Tiling hooks ────────────────────────────────────────────────────
+    // -- Tiling hooks -----------------------------------------------------
     tiling_init: ?*const fn () void = null,
     tiling_deinit: ?*const fn () void = null,
     tiling_reload_config: ?*const fn () void = null,
@@ -203,7 +203,7 @@ pub const Hooks = struct {
     tiling_take_prev_focused_for_scroll: ?*const fn () ?u32 = null,
     tiling_send_border_color_if_changed: ?*const fn (u32, u32) bool = null,
 
-    // ── Drag hooks ──────────────────────────────────────────────────────
+    // -- Drag hooks -------------------------------------------------------
     drag_start: ?*const fn (u32, u8, i16, i16) void = null,
     drag_update: ?*const fn (i16, i16) void = null,
     drag_stop: ?*const fn () void = null,
@@ -212,19 +212,19 @@ pub const Hooks = struct {
     drag_is_resizing_window: ?*const fn (u32) bool = null,
     drag_get_last_rect: ?*const fn () utils.Rect = null,
 
-    // ── Floating hooks ──────────────────────────────────────────────────
+    // -- Floating hooks ---------------------------------------------------
     floating_tile_with_offset: ?*const fn (*const layouts.LayoutCtx, *const anyopaque, []const u32, u16, u16, u16) void = null,
 };
 
 pub var h: Hooks = .{};
 
-// ── Auto-registration ────────────────────────────────────────────────────────
+// -- Auto-registration ---------------------------------------------------------
 
 /// Registers hooks from a mapping struct into the global hook table.
 ///
 /// `hook_map` is a struct whose field names must match `Hooks` struct field
 /// names exactly. Each value is the function pointer to assign. This keeps
-/// hook registration co-located with the providing module — adding a hook
+/// hook registration co-located with the providing module; adding a hook
 /// requires touching only the module (export in `hook_map`) and `hooks.zig`
 /// (struct field + accessor), never `main.zig`.
 ///
@@ -243,7 +243,7 @@ pub fn registerHooks(comptime hook_map: anytype) void {
     }
 }
 
-// ── Bar convenience accessors ───────────────────────────────────────────────
+// -- Bar convenience accessors ------------------------------------------------
 
 pub inline fn barInit() !void {
     if (h.bar_init) |f| try f();
@@ -350,7 +350,7 @@ pub inline fn barHandleButtonPress(event: *const xcb.xcb_button_press_event_t) v
     if (h.bar_handle_button_press) |f| f(event);
 }
 
-// ── Carousel convenience accessors ──────────────────────────────────────────
+// -- Carousel convenience accessors -------------------------------------------
 
 pub inline fn carouselSetEnabled(enabled: bool) void {
     if (h.carousel_set_enabled) |f| f(enabled);
@@ -368,7 +368,7 @@ pub inline fn carouselNotifyFocusChanged(win: ?u32) void {
     if (h.carousel_notify_focus_changed) |f| f(win);
 }
 
-// ── Prompt convenience accessors ────────────────────────────────────────────
+// -- Prompt convenience accessors ---------------------------------------------
 
 pub inline fn promptBlinkPollTimeoutMs() i32 {
     if (h.prompt_blink_poll_timeout_ms) |f| return f();
@@ -388,7 +388,7 @@ pub inline fn promptToggle() void {
     if (h.prompt_toggle) |f| f();
 }
 
-// ── Tiling convenience accessors ────────────────────────────────────────────
+// -- Tiling convenience accessors ---------------------------------------------
 
 pub inline fn tilingInit() void {
     if (h.tiling_init) |f| f();
@@ -572,7 +572,7 @@ pub inline fn tilingGetState() *TilingState {
     return &static_tiling_state;
 }
 
-// ── Drag convenience accessors ──────────────────────────────────────────────
+// -- Drag convenience accessors -----------------------------------------------
 
 pub inline fn dragStart(win: u32, button: u8, x: i16, y: i16) void {
     if (h.drag_start) |f| f(win, button, x, y);
@@ -603,4 +603,17 @@ pub inline fn isResizingWindow(win: u32) bool {
 pub inline fn dragGetLastRect() utils.Rect {
     if (h.drag_get_last_rect) |f| return f();
     return static_drag_last_rect;
+}
+
+// -- Floating convenience accessors -------------------------------------------
+
+pub inline fn floatingTileWithOffset(
+    ctx: *const layouts.LayoutCtx,
+    state: *const anyopaque,
+    windows: []const u32,
+    master_count: u16,
+    stack_count: u16,
+    master_width: u16,
+) void {
+    if (h.floating_tile_with_offset) |f| f(ctx, state, windows, master_count, stack_count, master_width);
 }

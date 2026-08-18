@@ -43,7 +43,7 @@ pub const FocusSuppressReason = enum {
 };
 
 // conn, screen, root, alloc, and config are written once during startup
-// (config is later replaced wholesale on reload — see events.zig). Bundled
+// (config is later replaced wholesale on reload; see events.zig). Bundled
 // into one optional State, rather than five `undefined` globals, so any
 // access before init() panics cleanly instead of reading undefined memory.
 // Mirrors the pattern tiling.zig uses for its own state.

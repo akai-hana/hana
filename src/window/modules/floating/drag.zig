@@ -262,7 +262,7 @@ pub fn stopDrag() void {
 }
 
 /// Clears the active drag if it targets `win`, without saving geometry. Used
-/// when the dragged window is destroyed mid-drag — a lost ButtonRelease would
+/// when the dragged window is destroyed mid-drag; a lost ButtonRelease would
 /// otherwise leave the drag stuck until the WM restarts, and there's no
 /// geometry to persist for a dead window.
 pub fn cancelDragForWindow(win: u32) void {
@@ -273,7 +273,7 @@ pub fn isDragging() bool {
     return g_state.drag.active;
 }
 
-/// True when a resize drag is active on `win` — used to deny min-size
+/// True when a resize drag is active on `win`; used to deny min-size
 /// configure requests from the window being resized, preventing flicker.
 pub fn isResizingWindow(win: u32) bool {
     return g_state.drag.active and g_state.drag.mode == .resize and g_state.drag.window == win;

@@ -72,14 +72,14 @@ pub fn deinitXkb() void {
 /// used by events.zig during config reloads.
 ///
 /// The returned pointer is invalidated by deinitXkb/initXkb (e.g. during a
-/// config reload) — callers must not cache it across those calls.
+/// config reload); callers must not cache it across those calls.
 pub fn getXkbState() *xkbcommon.XkbState {
     return &xkb_state.?;
 }
 
 /// Rebuilds the keymap/keysym table after the server changes the keyboard
 /// mapping (setxkbmap/xmodmap). Keybinding resolution is keysym-indexed, so
-/// rebuilding the flat keycode→keysym table keeps existing bindings working
+/// rebuilding the flat keycode->keysym table keeps existing bindings working
 /// under the new layout.
 pub fn handleMappingNotify() void {
     const cs = core.getState();
@@ -274,7 +274,7 @@ fn executeAction(action: *const types.Action) void {
         // Fullscreen
         .toggle_fullscreen => fullscreen.toggle(),
 
-        // Tiling — delegated to executeTilingAction
+        // Tiling, delegated to executeTilingAction
         .toggle_floating_window,
         .toggle_layout,
         .toggle_layout_reverse,
@@ -303,7 +303,7 @@ fn executeAction(action: *const types.Action) void {
         .unminimize_fifo => minimize.unminimize(.fifo),
         .unminimize_all => minimize.unminimizeAll(),
 
-        // Workspaces — delegated to executeWorkspaceAction
+        // Workspaces, delegated to executeWorkspaceAction
         .switch_workspace,
         .move_to_workspace,
         .toggle_tag,
@@ -368,7 +368,7 @@ fn executeSwapMaster(action: *const types.Action) void {
     const conn = core.getState().conn;
 
     // Capture the focused window ID before the swap so we can pass it as
-    // defer_configure — the shrinking window fills its new slot before the
+    // defer_configure; the shrinking window fills its new slot before the
     // growing window vacates its old one, eliminating a one-frame gap.
     const new_master = focus.getFocused();
     const displaced = hooks.tilingSwapWithMaster();
@@ -428,7 +428,7 @@ fn executeMouseAction(action: *const types.Action, clicked_win: u32) void {
 // Double-fork so the grandchild re-parents to init and the WM never
 // accumulates zombies. A single O_CLOEXEC pipe carries the outcome: success
 // closes its copy automatically; otherwise the intermediate child writes
-// TAG_PID and the grandchild writes TAG_FAILED only if execvp() fails — two
+// TAG_PID and the grandchild writes TAG_FAILED only if execvp() fails; two
 // independently-scheduled writers, so messages can arrive in either order
 // (finishSpawn() handles both). EOF ends the conversation; entries resolve via
 // drainPendingSpawns() (every event batch) or reapPendingChildren() (SIGCHLD).
@@ -444,7 +444,7 @@ const PID_MSG_LEN: usize = 1 + @sizeOf(c_int);
 
 /// Grandchild: detaches from the session and execs the command.
 /// On execvp failure, writes a TAG_FAILED byte to pipe_write before exiting.
-/// On success this function never returns far enough to write anything —
+/// On success this function never returns far enough to write anything;
 /// pipe_write's O_CLOEXEC copy closes itself as part of the exec.
 fn execAsGrandchild(pipe_write: c_int, cmd_z: [*:0]const u8) noreturn {
     _ = c.setsid();
@@ -503,7 +503,7 @@ const PendingSpawn = struct {
 // is needed.
 var g_pending: utils.BoundedList(PendingSpawn, MAX_PENDING_SPAWNS) = .{};
 
-/// Spawns `cmd` as a detached grandchild (double-fork). Returns immediately —
+/// Spawns `cmd` as a detached grandchild (double-fork). Returns immediately;
 /// lifecycle is tracked in g_pending and resolved by drainPendingSpawns() /
 /// reapPendingChildren() without blocking the event loop.
 fn executeShellCommand(cmd: []const u8) !void {
@@ -540,7 +540,7 @@ fn executeShellCommand(cmd: []const u8) !void {
     _ = c.close(pipe_fds[1]);
 
     // Cursor position for spawn-crossing suppression is queried synchronously
-    // in mapWindowToScreen when the MapRequest arrives — MapRequest is
+    // in mapWindowToScreen when the MapRequest arrives; MapRequest is
     // one-time per window, so the round-trip isn't worth pipelining here.
 
     const queued = g_pending.append(.{
@@ -550,14 +550,14 @@ fn executeShellCommand(cmd: []const u8) !void {
     });
     if (!queued) {
         // Table full: close the read end we won't track; reap `pid`
-        // synchronously — it exits almost instantly and isn't tracked (no zombie).
+        // synchronously; it exits almost instantly and isn't tracked (no zombie).
         _ = c.close(pipe_fds[0]);
         _ = c.waitpid(pid, null, 0);
     }
 }
 
 /// Drains pending spawn entries non-blockingly (every event batch and on
-/// SIGCHLD), until EOF or a full buffer — a full buffer already holds both
+/// SIGCHLD), until EOF or a full buffer; a full buffer already holds both
 /// possible messages, so EOF needn't be awaited. finishSpawn() classifies.
 pub fn drainPendingSpawns() void {
     var i: usize = 0;
@@ -570,12 +570,12 @@ pub fn drainPendingSpawns() void {
                 entry.len += @intCast(n);
                 if (entry.len == entry.buf.len) {
                     // Buffer full: both possible messages have necessarily
-                    // arrived already — no need to wait for EOF too.
+                    // arrived already; no need to wait for EOF too.
                     _ = c.close(entry.spawn_fd);
                     entry.spawn_fd = -1;
                 }
             } else if (n < 0 and std.posix.errno(n) == .AGAIN) {
-                // Not ready yet — retry on the next call.
+                // Not ready yet; retry on the next call.
             } else {
                 // EOF (n == 0) or a hard read error: conversation is over.
                 _ = c.close(entry.spawn_fd);
@@ -705,7 +705,7 @@ inline fn withTilingGrab(op: *const fn () void) void {
 /// keyboard-triggered action it could silently move focus onto an unrelated
 /// window under the cursor (e.g. a floating window stacked above the target).
 ///
-/// Suppression stays active until reflow crossing events are filtered — see
+/// Suppression stays active until reflow crossing events are filtered; see
 /// beginTilingOpSettle in focus.zig for why that can't be synchronous.
 /// Shared grab-finish tail for tiling operations: refresh floating-window
 /// borders, mark the batch border-swept, render the bar to the off-screen
@@ -746,7 +746,7 @@ inline fn withTilingGrabImpl(op: *const fn () void, sync_pointer: bool) void {
 }
 
 /// Replays a frozen pointer event without releasing the keyboard grab.
-/// Always pass event.time — never XCB_CURRENT_TIME.
+/// Always pass event.time, never XCB_CURRENT_TIME.
 inline fn replayPointer(time: u32) void {
     const conn = core.getState().conn;
     _ = xcb.xcb_allow_events(conn, xcb.XCB_ALLOW_REPLAY_POINTER, time);
@@ -765,8 +765,8 @@ inline fn finishGrab(time: u32, pointer_mode: c_uint) void {
 
 /// Releases both SYNC grabs acquired on Super+click, replaying the pointer so
 /// the click reaches the app underneath. Only safe for click paths that don't
-/// need to keep tracking the pointer afterward — NOT for drag start; use
-/// keepDragGrab. Always pass event.time — never XCB_CURRENT_TIME.
+/// need to keep tracking the pointer afterward; NOT for drag start; use
+/// keepDragGrab. Always pass event.time, never XCB_CURRENT_TIME.
 inline fn releaseGrab(time: u32) void { finishGrab(time, xcb.XCB_ALLOW_REPLAY_POINTER); }
 
 /// Un-freezes the pointer for a drag while keeping the Super+Button grab
@@ -775,7 +775,7 @@ inline fn releaseGrab(time: u32) void { finishGrab(time, xcb.XCB_ALLOW_REPLAY_PO
 /// release; the keyboard grab drops immediately. Always pass event.time.
 inline fn keepDragGrab(time: u32) void { finishGrab(time, xcb.XCB_ALLOW_ASYNC_POINTER); }
 
-// XcbCursor — declared manually because xcb_cursor_load_cursor is a static
+// XcbCursor, declared manually because xcb_cursor_load_cursor is a static
 // inline function cImport cannot bind.
 
 const XcbCursor = struct {
@@ -810,7 +810,7 @@ const XcbCursor = struct {
             std.c.free(err);
         }
 
-        // The server reference-counts cursors; freeing our handle is safe —
+        // The server reference-counts cursors; freeing our handle is safe;
         // it stays alive as long as the root window holds a reference.
         _ = xcb.xcb_free_cursor(conn, cursor);
     }

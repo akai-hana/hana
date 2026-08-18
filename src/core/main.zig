@@ -41,7 +41,7 @@ pub fn main() !void {
     // owner; must run before any core.getState() call.
     core.init(x.conn, x.screen, x.root, alloc, loaded_config);
     // Config.deinit tears the keybind_resolver down internally, before
-    // freeing the keybindings whose Actions it points into — so a single
+    // freeing the keybindings whose Actions it points into; so a single
     // defer on the config suffices (see KeybindResolver in types.zig).
     defer core.getState().config.deinit(alloc);
 

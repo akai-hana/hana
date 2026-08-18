@@ -118,7 +118,7 @@ const dispatch_table = blk: {
 fn dispatch(event_type: u8, event: *anyopaque) void {
     // Type 0 is an X error pseudo-event produced for a failed *unchecked*
     // request. Nothing else in this codebase subscribes to type-0, so without
-    // this branch such errors would be silently dropped — making real-world
+    // this branch such errors would be silently dropped, making real-world
     // X11 failures (bad grabs, stale window ids, wrong atoms) undiagnosable.
     if (event_type == 0) {
         const e = eventCast(*xcb.xcb_generic_error_t, event);
@@ -143,7 +143,7 @@ fn dispatch(event_type: u8, event: *anyopaque) void {
     // Guard the fixed-size table: extension events live above XCB_GE_GENERIC
     // and would index out of bounds. hana only selects core events today, but
     // the moment anyone subscribes to an extension this would become a
-    // memory-safety bug — cheap insurance.
+    // memory-safety bug; cheap insurance.
     if (idx >= dispatch_table.len) return;
     if (dispatch_table[idx]) |handler| handler(event);
 }
@@ -152,7 +152,7 @@ fn dispatch(event_type: u8, event: *anyopaque) void {
 
 const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };
 
-/// Fills `cookies` with one grab request per (keybinding × lock modifier) pair.
+/// Fills `cookies` with one grab request per (keybinding x lock modifier) pair.
 /// Returns the number of entries written.
 fn fillGrabCookies(cookies: []CookieEntry) usize {
     var n: usize = 0;
@@ -225,7 +225,7 @@ pub fn grabKeybindings() void {
 ///   2. The swap precedes the subsystem reloads (reloadBorders / reloadConfig /
 ///      bar.reload) so they rebuild from the NEW config. (The old ordering kept
 ///      stale settings, then old_config.deinit() freed string slices the new bar
-///      had shallow-copied — a use-after-free on the next draw.)
+///      had shallow-copied; a use-after-free on the next draw.)
 ///   3. grabKeybindings() runs post-swap because fillGrabCookies() reads the
 ///      live config.
 ///   4. `committed` flips the errdefer: pre-swap failure frees new_config;
@@ -359,7 +359,7 @@ pub fn run() !void {
             // The reload flag is also set directly by the reload_config keybinding
             // (which writes a wake byte to the pipe, but the byte can be dropped if
             // the pipe is full). Consume it every iteration so that path can never
-            // be lost — a flag-only request is picked up on the next poll timeout.
+            // be lost; a flag-only request is picked up on the next poll timeout.
             if (utils.consumeReload())
                 handleConfigReload() catch |err| debug.err("Reload failed: {}", .{err});
         }

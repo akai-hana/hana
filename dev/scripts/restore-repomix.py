@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""restore_repomix.py — restore files packed by Repomix back onto disk.
+"""restore_repomix.py: restore files packed by Repomix back onto disk.
 
 Repomix (https://repomix.com) packs a repository into one text file shaped
 like XML, with each source file embedded raw between
 `<file path="...">` / `</file>` markers. Critically, that content is *not*
-escaped — a `<`, `>`, or `&` inside your actual source shows up in the
+escaped, a `<`, `>`, or `&` inside your actual source shows up in the
 packed output completely unchanged. That means a real XML parser cannot be
 used here (it will choke on the first literal `<` inside a packed file), so
 this script deliberately parses the format line-by-line instead: a file's
@@ -14,11 +14,11 @@ that is *exactly* `</file>`.
 Treat a repomix snapshot as a lightweight backup: this script restores
 exactly the files present in it, and never touches or deletes anything
 that's on disk but absent from the snapshot (repomix snapshots are commonly
-partial — filtered by --include, .gitignore, etc. — so this is a restore,
+partial, filtered by --include, .gitignore, etc., so this is a restore,
 not a sync).
 
 Usage:
-    # Preview what would happen (default — this never writes anything)
+    # Preview what would happen (default, this never writes anything)
     ./restore_repomix.py repomix-output.xml
 
     # Preview with full unified diffs for every file that would change
@@ -72,7 +72,7 @@ class PackedFile:
 def parse_repomix(xml_path: Path) -> list[PackedFile]:
     """Extract (path, content) pairs from a Repomix XML-flavored output file.
 
-    Deliberately line-oriented rather than a real XML parse — see the
+    Deliberately line-oriented rather than a real XML parse, see the
     module docstring for why.
     """
     text = xml_path.read_text(encoding="utf-8", errors="surrogateescape")
@@ -105,7 +105,7 @@ def parse_repomix(xml_path: Path) -> list[PackedFile]:
 
     if not files:
         raise ValueError(
-            'No <file path="..."> entries found — is this really a '
+            'No <file path="..."> entries found: is this really a '
             "Repomix XML-style output?"
         )
     return files
@@ -216,7 +216,7 @@ def main() -> int:
     print(f"target directory: {target_root}")
     print(f"  {len(created)} file(s) to create")
     print(f"  {len(changed)} file(s) to overwrite (content differs)")
-    print(f"  {len(unchanged)} file(s) already match — no action")
+    print(f"  {len(unchanged)} file(s) already match, no action")
     print()
 
     if args.diff:
@@ -234,7 +234,7 @@ def main() -> int:
 
     if not args.apply:
         if created or changed:
-            print("Dry run only — rerun with --apply to write these changes.")
+            print("Dry run only, rerun with --apply to write these changes.")
         else:
             print("Nothing to do.")
         return 0
