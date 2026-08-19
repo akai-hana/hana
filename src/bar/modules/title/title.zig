@@ -190,10 +190,6 @@ fn extractPropertyString(
     return try allocator.dupe(u8, ptr[0..@intCast(len)]);
 }
 
-const SortedWindowInfos = struct {
-    infos: []WindowInfo,
-};
-
 /// `out_window_info_buf`/`out_owned_titles` are caller-owned storage, not
 /// locals of this function: a `WindowInfo.title` in the returned slice may
 /// point into `out_owned_titles`' memory, and that memory must still be
@@ -211,7 +207,7 @@ fn gatherAndSortWindowInfos(
     win_count: usize,
     out_window_info_buf: *[max_visible_windows]WindowInfo,
     out_owned_titles: *[max_visible_windows]?[]const u8,
-) !?SortedWindowInfos {
+) !?[]WindowInfo {
     @memset(out_owned_titles[0..win_count], null);
     const info_count = try gatherWindowInfos(ctx, snapshot, allocator, windows[0..win_count], out_window_info_buf, out_owned_titles);
     if (info_count == 0) {
@@ -220,7 +216,7 @@ fn gatherAndSortWindowInfos(
     }
     const window_infos = out_window_info_buf[0..info_count];
     std.mem.sort(WindowInfo, window_infos, {}, compareWindows);
-    return .{ .infos = window_infos };
+    return window_infos;
 }
 
 /// Shared body for draw() and drawCached(). `ctx.cached_title` is non-null
@@ -324,7 +320,7 @@ pub fn hitTest(
     const sorted = (try gatherAndSortWindowInfos(ctx, snapshot, allocator, windows, win_count, &window_info_buf, &owned_titles)) orelse return null;
     defer for (owned_titles[0..win_count]) |t| if (t) |s| allocator.free(s);
 
-    const window_infos = sorted.infos;
+    const window_infos = sorted;
 
     const n: u32 = @intCast(window_infos.len);
     // Inverse of the pixel-perfect tiling formula drawSegmentedTitles uses
@@ -762,7 +758,7 @@ fn drawSegmentedTitles(
     const sorted = (try gatherAndSortWindowInfos(ctx, snapshot, allocator, windows, win_count, &window_info_buf, &owned_titles)) orelse return;
     defer for (owned_titles[0..win_count]) |t| if (t) |s| allocator.free(s);
 
-    const window_infos = sorted.infos;
+    const window_infos = sorted;
 
     const window_count: u32 = @intCast(window_infos.len);
     const baseline_y = ctx.dc.baselineY(ctx.height);

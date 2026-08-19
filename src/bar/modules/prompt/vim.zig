@@ -683,7 +683,7 @@ pub fn handleVisual(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
         },
 
         'd', 'x', 'c' => {
-            vs.dot = .{ .op_line = .{ .op = if (sym == 'c') @as(u8, 'c') else @as(u8, 'd') } };
+            vs.dot = .{ .op_line = .{ .op = if (sym == 'c') 'c' else 'd' } };
             deleteAndYank(vs, sel[0], sel[1]);
             exitVisual(vs);
             if (sym == 'c') enterInsert(vs, false);
@@ -1318,21 +1318,17 @@ fn motionMatchBracket(vs: *VimState) usize {
     if (vs.cursor >= vs.len) return vs.cursor;
     const ch = vs.buf[vs.cursor];
 
-    const Pair = struct { open: u8, close: u8, forward: bool };
-    const pair: Pair = switch (ch) {
-        '(' => .{ .open = '(', .close = ')', .forward = true },
-        '[' => .{ .open = '[', .close = ']', .forward = true },
-        '{' => .{ .open = '{', .close = '}', .forward = true },
-        ')' => .{ .open = '(', .close = ')', .forward = false },
-        ']' => .{ .open = '[', .close = ']', .forward = false },
-        '}' => .{ .open = '{', .close = '}', .forward = false },
+    const open: u8, const close: u8, const forward: bool = switch (ch) {
+        '(' => .{ '(', ')', true },
+        ')' => .{ '(', ')', false },
+        '[' => .{ '[', ']', true },
+        ']' => .{ '[', ']', false },
+        '{' => .{ '{', '}', true },
+        '}' => .{ '{', '}', false },
         else => return vs.cursor,
     };
 
-    return (if (pair.forward)
-        scanBracket(true, vs.buf, vs.cursor, pair.open, pair.close)
-    else
-        scanBracket(false, vs.buf, vs.cursor, pair.open, pair.close)) orelse vs.cursor;
+    return scanBracket(forward, vs.buf, vs.cursor, open, close) orelse vs.cursor;
 }
 
 fn resolveTextObject(vs: *VimState, kind: u8, delim: u8) ?MotionResult {

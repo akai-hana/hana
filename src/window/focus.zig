@@ -270,7 +270,7 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
     }
 
     if (build_options.has_tiling) tiling.updateWindowFocus(old, win);
-    if (build_options.has_bar) bar.carouselNotifyFocusChanged(win);
+    if (build_options.has_bar) bar.carouprevNotifyFocusChanged(win);
     if (flags.schedule_bar) if (build_options.has_bar) bar.scheduleFocusRedraw(win);
 
     advertiseActiveWindow(win);
@@ -278,7 +278,6 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
 
 /// Returns true when `win` must never receive focus from any focus-granting
 /// path (setFocus). NOTE: handleFocusIn intentionally does NOT use this guard.
-const isInvalidFocusTarget = window.isInvalidWindow;
 
 /// True if `win` currently has map_state == Viewable. Guards destroy/unmap
 /// races on paths that can't guarantee the window is still alive.
@@ -295,7 +294,7 @@ pub fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
 }
 
 pub fn setFocus(win: u32, reason: Reason) void {
-    if (isInvalidFocusTarget(win)) return;
+    if (window.isInvalidWindow(win)) return;
     if (state.focused_window == win) return;
 
     const conn = core.getState().conn;
@@ -329,7 +328,7 @@ pub fn setFocus(win: u32, reason: Reason) void {
 /// liveness for .mouse_click/.user_command/.pointer_sync; setFocus's guard is
 /// deliberately NOT repeated here.
 pub fn setFocusWithModel(win: u32, reason: Reason, input_model: window.InputModel) void {
-    if (isInvalidFocusTarget(win)) return;
+    if (window.isInvalidWindow(win)) return;
     if (state.focused_window == win) return;
     if (input_model == .no_input) return;
 
@@ -459,10 +458,10 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
         if (event.event == exp) cancelPendingConfirm();
     }
     const cs = core.getState();
-    const is_offscreen_steal = !isInvalidFocusTarget(event.event) and
+    const is_offscreen_steal = !window.isInvalidWindow(event.event) and
         !tracking.isOnCurrentWorkspace(event.event);
 
-    const sel = state.focused_window orelse {
+    const prev = state.focused_window orelse {
         if (is_offscreen_steal) {
             focusNow(cs.conn, cs.root);
             advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
@@ -470,16 +469,16 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
         return;
     };
 
-    if (event.event == sel) return;
+    if (event.event == prev) return;
 
     // An off-workspace window (Wine, Electron, a game) that re-focuses
     // itself on every FocusOut would otherwise create a three-way
     // fight that never converges. Redirecting to root first breaks the
     // cycle: the thief fights root (which never replies), exhausting
-    // its retry budget, then sendFocusProtocol(sel) reclaims focus
+    // its retry budget, then sendFocusProtocol(prev) reclaims focus
     // with no active opponent.
     if (is_offscreen_steal) focusNow(cs.conn, cs.root);
-    sendFocusProtocol(sel);
+    sendFocusProtocol(prev);
 }
 
 /// Returns the first window satisfying `visible`, walking the tracking list.
@@ -516,7 +515,7 @@ pub fn clearFocus() void {
     state.suppress_reason = .none;
     const cs = core.getState();
     focusNow(cs.conn, cs.root);
-    if (build_options.has_bar) bar.carouselNotifyFocusChanged(null);
+    if (build_options.has_bar) bar.carouprevNotifyFocusChanged(null);
     if (build_options.has_bar) bar.scheduleFocusRedraw(null);
     advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
 }
@@ -569,7 +568,7 @@ inline fn advertiseActiveWindow(win: u32) void {
 /// pairs that confuse Electron's internal focus state machine.
 inline fn shouldRaise(reason: Reason, win: u32) bool {
     return switch (reason) {
-        .mouse_click, .user_command, .pointer_sync => !(if (build_options.has_tiling) tiling.isWindowActiveTiled(win) else false),
+        .mouse_click, .user_command, .pointer_sync => !(build_options.has_tiling and tiling.isWindowActiveTiled(win)),
         .mouse_enter, .tiling_operation, .window_spawn, .workspace_switch => false,
     };
 }
@@ -686,7 +685,7 @@ inline fn appendVisible(w: u32, len: *usize) void {
 fn collectVisibleWindows() usize {
     var len: usize = 0;
 
-    if ((if (build_options.has_tiling) tiling.isEnabled() else false)) {
+    if (build_options.has_tiling and tiling.isEnabled()) {
         for (if (build_options.has_tiling) tiling.getTiledWindows() else &.{}) |w| appendVisible(w, &len);
         if (len > 0) return len;
     }

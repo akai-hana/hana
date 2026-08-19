@@ -122,7 +122,6 @@ fn sleepUntilNextSecond(t: *utils.CondThread) bool {
         if (quit) return false;
         if (timed_out) return true;
         remaining = @intCast(ns_per_s - utils.realtimeNs() % ns_per_s);
-        if (remaining < 0) remaining = 0;
     }
     return true;
 }
@@ -176,7 +175,7 @@ pub fn nextTickWaitMs() i64 {
     const now_ms = realtimeMs();
     const m = @mod(now_ms, 1000);
     if (m <= DRAIN_GRACE_MS and !clock_dirty.load(.acquire)) return RETRY_MS;
-    const to_boundary = if (m == 0) 1000 else 1000 - m;
+    const to_boundary = 1000 - m;
     return to_boundary + DRAIN_GRACE_MS;
 }
 

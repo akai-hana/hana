@@ -117,12 +117,10 @@ fn dropOtherRecordsFor(win: u32, keep_ws: u8) void {
     const count = tracking.getWorkspaceCount();
     for (g_slots[0..count], 0..) |*slot, i| {
         if (i == keep_ws) continue;
-        if (slot.*) |info| {
-            if (info.window == win) {
-                setEwmhFullscreenState(win, false);
-                slot.* = null;
-            }
-        }
+        const info = slot.* orelse continue;
+        if (info.window != win) continue;
+        setEwmhFullscreenState(win, false);
+        slot.* = null;
     }
 }
 
@@ -132,10 +130,11 @@ fn dropOtherRecordsFor(win: u32, keep_ws: u8) void {
 pub fn pruneForWorkspaceMask(win: u32, new_mask: u64) void {
     const count = tracking.getWorkspaceCount();
     for (g_slots[0..count], 0..) |*slot, i| {
-        if (slot.*) |info| {
-            if (info.window == win and (new_mask & tracking.workspaceBit(@as(u8, @intCast(i)))) == 0)
-                dropRecord(@as(u8, @intCast(i)));
-        }
+        const info = slot.* orelse continue;
+        if (info.window != win) continue;
+        if (new_mask & tracking.workspaceBit(@as(u8, @intCast(i))) != 0) continue;
+        setEwmhFullscreenState(win, false);
+        g_slots[i] = null;
     }
 }
 
@@ -223,7 +222,7 @@ fn fetchWindowGeom(win: u32) core.WindowGeometry {
 // a plain fn (not inline) so it can be passed as a *const fn(u32)bool
 // predicate (see tracking.prefetchAndSaveGeometryOnCurrentWorkspace).
 fn isFreeFloating(win: u32) bool {
-    return !minimize.isMinimized(win) and !(if (build_options.has_tiling) tiling.isWindowTiled(win) else false);
+    return !minimize.isMinimized(win) and !(build_options.has_tiling and tiling.isWindowTiled(win));
 }
 
 // Warm the geometry cache for every free-floating window on the current
@@ -480,10 +479,14 @@ pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
         }
     } else if (g_pending_bar_show_win == win) {
         if (width != screen_w or height != screen_h) {
-            g_pending_bar_show_win = 0;
-            if (build_options.has_bar) bar.setBarState(.show_fullscreen);
+            resolvePendingBarShow();
         }
     }
+}
+
+fn resolvePendingBarShow() void {
+    g_pending_bar_show_win = 0;
+    if (build_options.has_bar) bar.setBarState(.show_fullscreen);
 }
 
 /// Called when a window is destroyed; clears its pending deferred bar op so
@@ -491,8 +494,5 @@ pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
 /// exitFullscreenCommit; this exists for the show case, where the window can
 /// be destroyed after exitFullscreen returns but before ConfigureNotify.
 pub fn onWindowGone(win: u32) void {
-    if (g_pending_bar_show_win == win) {
-        g_pending_bar_show_win = 0;
-        if (build_options.has_bar) bar.setBarState(.show_fullscreen);
-    }
+    if (g_pending_bar_show_win == win) resolvePendingBarShow();
 }

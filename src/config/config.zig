@@ -1287,8 +1287,7 @@ fn parseRules(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.C
         }
     }
 
-        try parseNumberedRuleSections(allocator, doc, cfg);
-    }
+    try parseNumberedRuleSections(allocator, doc, cfg);
 }
 
 /// Processes numbered rule sub-sections (e.g. [workspace.rules.1], [rules.3]).

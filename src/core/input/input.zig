@@ -166,8 +166,8 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     // managed-window/replay-pointer machinery built for the synchronous grab
     // a client-window click goes through. Super-held clicks fall through to
     // the normal mouse-binding/drag path.
-    if (!super_held and (if (build_options.has_bar) bar.isBarWindow(clicked_window) else false)) {
-        if (build_options.has_bar) bar.handleButtonPress(event);
+    if (!super_held and build_options.has_bar and bar.isBarWindow(clicked_window)) {
+        bar.handleButtonPress(event);
         return;
     }
 
@@ -205,7 +205,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 /// Stops any active drag and updates the last event timestamp.
 pub fn handleButtonRelease(event: *const xcb.xcb_button_release_event_t) void {
     focus.setLastEventTime(event.time);
-    if ((if (build_options.has_floating) floating.isDragging() else false)) if (build_options.has_floating) floating.stopDrag();
+    if (build_options.has_floating and floating.isDragging()) floating.stopDrag();
 }
 
 /// Forwards motion to the drag engine, clears focus suppression, and re-arms POINTER_MOTION_HINT.
@@ -218,8 +218,8 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t) void {
     const cs = core.getState();
     xcb.xcb_discard_reply(cs.conn, xcb.xcb_query_pointer(cs.conn, cs.root).sequence);
 
-    if ((if (build_options.has_floating) floating.isDragging() else false)) {
-        if (build_options.has_floating) floating.updateDrag(event.root_x, event.root_y);
+    if (build_options.has_floating and floating.isDragging()) {
+        floating.updateDrag(event.root_x, event.root_y);
         return;
     }
 
@@ -655,7 +655,7 @@ fn dumpState() void {
     debug.info("Focused:        {?x}", .{focus.getFocused()});
     debug.info("Total windows:  {}", .{tracking.windowCount()});
     debug.info("Suppress focus: {s}", .{@tagName(focus.getSuppressReason())});
-    debug.info("Drag active:    {}", .{(if (build_options.has_floating) floating.isDragging() else false)});
+    debug.info("Drag active:    {}", .{build_options.has_floating and floating.isDragging()});
 
     fullscreen.forEachFullscreen(struct {
         fn cb(ws: u8, info: fullscreen.FullscreenInfo) void {
@@ -670,10 +670,10 @@ fn dumpState() void {
             debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(@intCast(i)) });
     }
 
-    if ((if (build_options.has_tiling) tiling.isEnabled() else false)) {
+    if (build_options.has_tiling and tiling.isEnabled()) {
         debug.info("Tiling enabled: true", .{});
-        debug.info("Tiling layout:  {s}", .{@tagName((if (build_options.has_tiling) tiling.getCurrentLayout() else .master))});
-        debug.info("Tiled windows:  {}", .{(if (build_options.has_tiling) tiling.getTiledWindows() else &.{}).len});
+        debug.info("Tiling layout:  {s}", .{@tagName(tiling.getCurrentLayout())});
+        debug.info("Tiled windows:  {}", .{tiling.getTiledWindows().len});
     }
 
     debug.info("================================", .{});

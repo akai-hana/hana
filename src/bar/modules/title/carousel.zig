@@ -289,13 +289,13 @@ inline fn advanceAndBlit(e: *CarouselEntry, dc: *drawing.DrawContext) bool {
 /// No fill, no Cairo, no Pango.
 pub fn drawCarouselTick(
     dc: *drawing.DrawContext,
-    bg: u32,
+    accent: u32,
     seg_x: u16,
     seg_w: u16,
 ) bool {
     if (render.single == null) return false;
     const e = &render.single.?;
-    if (seg_x != e.geom.seg_x or seg_w != e.geom.seg_w or bg != e.last_bg)
+    if (seg_x != e.geom.seg_x or seg_w != e.geom.seg_w or accent != e.last_bg)
         return false;
 
     _ = advanceAndBlit(e, dc);

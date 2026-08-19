@@ -51,7 +51,7 @@ pub fn readFd() std.posix.fd_t {
 }
 
 // Dispatches a single signal byte to the appropriate handler.
-inline fn dispatchSignal(byte: u8) void {
+fn dispatchSignal(byte: u8) void {
     switch (@as(std.posix.SIG, @enumFromInt(byte))) {
         .HUP => utils.reload(),
         .TERM, .INT => utils.quit(),

@@ -52,26 +52,10 @@ pub fn build(b: *std.Build) !void {
     );
 
     // Optional module detection
-    const has_bar = blk: {
-        var dir = b.build_root.handle.openDir(b.graph.io, source_root ++ "bar", .{}) catch break :blk false;
-        dir.close(b.graph.io);
-        break :blk true;
-    };
-    const has_tiling = blk: {
-        var dir = b.build_root.handle.openDir(b.graph.io, source_root ++ "window/modules/tiling", .{}) catch break :blk false;
-        dir.close(b.graph.io);
-        break :blk true;
-    };
-    const has_floating = blk: {
-        var f = b.build_root.handle.openFile(b.graph.io, source_root ++ "window/modules/floating.zig", .{}) catch break :blk false;
-        f.close(b.graph.io);
-        break :blk true;
-    };
-    const has_vim = blk: {
-        var f = b.build_root.handle.openFile(b.graph.io, source_root ++ "bar/modules/prompt/vim.zig", .{}) catch break :blk false;
-        f.close(b.graph.io);
-        break :blk true;
-    };
+    const has_bar = pathExists(b.build_root.handle, b.graph.io, source_root ++ "bar");
+    const has_tiling = pathExists(b.build_root.handle, b.graph.io, source_root ++ "window/modules/tiling");
+    const has_floating = pathExists(b.build_root.handle, b.graph.io, source_root ++ "window/modules/floating.zig");
+    const has_vim = pathExists(b.build_root.handle, b.graph.io, source_root ++ "bar/modules/prompt/vim.zig");
 
     build_opts.addOption(bool, "has_bar", has_bar);
     build_opts.addOption(bool, "has_tiling", has_tiling);
@@ -222,6 +206,18 @@ fn stripIfRelease(mod: *std.Build.Module, optimize: std.builtin.OptimizeMode) vo
 fn injectShared(mod: *std.Build.Module, ctx: SharedBuildContext) void {
     mod.addImport("build_options", ctx.build_opts);
     mod.addImport("fallback_toml", ctx.fallback_toml);
+}
+
+fn pathExists(root: std.fs.Dir, io: anytype, rel_path: []const u8) bool {
+    if (root.openDir(io, rel_path, .{})) |*dir| {
+        dir.close(io);
+        return true;
+    } else |_| {}
+    if (root.openFile(io, rel_path, .{})) |*f| {
+        f.close(io);
+        return true;
+    } else |_| {}
+    return false;
 }
 
 // Module namespace discovery & wiring
@@ -399,16 +395,7 @@ const Module = struct {
     /// separator already, but comparing components keeps this correct on
     /// any host regardless.
     fn isEntryPointPath(rel_path: []const u8, entry_point: []const u8) bool {
-        var mine = std.mem.tokenizeAny(u8, rel_path, "/\\");
-        var theirs = std.mem.tokenizeAny(u8, entry_point, "/\\");
-
-        while (true) {
-            const a = mine.next();
-            const b = theirs.next();
-            if (a == null and b == null) return true;
-            if (a == null or b == null) return false;
-            if (!std.mem.eql(u8, a.?, b.?)) return false;
-        }
+        return std.mem.eql(u8, rel_path, entry_point);
     }
 };
 

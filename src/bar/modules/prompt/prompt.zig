@@ -847,10 +847,6 @@ const CursorStyle = struct {
     fg: u32,
 };
 
-fn makeCursorStyle(text_left_x: u16, scroll_end_x: u16, baseline: u16, height: u16, accent: u32, bg: u32, fg: u32) CursorStyle {
-    return .{ .text_left_x = text_left_x, .scroll_end_x = scroll_end_x, .baseline = baseline, .height = height, .accent = accent, .bg = bg, .fg = fg };
-}
-
 /// Draw a filled block cursor over `buf[lo..hi]` and advance `px.*` past it.
 ///
 /// Shared by visual selection highlighting and the normal/replace character
@@ -1054,7 +1050,7 @@ fn drawVisualMode(
     if (pre_sel.len > 0)
         try drawSpan(dc, px, text_left_x, scroll_end_x, baseline, pre_sel, null, fg);
 
-    try drawBlockCursor(dc, px, makeCursorStyle(text_left_x, scroll_end_x, baseline, height, accent, bg, fg), g.vim_state.buf, sel[0], sel[1], null, false);
+    try drawBlockCursor(dc, px, .{ .text_left_x = text_left_x, .scroll_end_x = scroll_end_x, .baseline = baseline, .height = height, .accent = accent, .bg = bg, .fg = fg }, g.vim_state.buf, sel[0], sel[1], null, false);
 
     try drawPostSpan(dc, px.*, text_left_x, ellipsis_end_x, baseline, post_sel, fg);
 }
@@ -1111,7 +1107,7 @@ fn drawNormalMode(
     if (pre_text.len > 0)
         try drawSpan(dc, px, text_left_x, scroll_end_x, baseline, pre_text, g.cached_pre_w, fg);
 
-    try drawBlockCursor(dc, px, makeCursorStyle(text_left_x, scroll_end_x, baseline, height, accent, bg, fg), g.vim_state.buf, g.vim_state.cursor, cur_hi, g.cached_caret_w, colon_active);
+    try drawBlockCursor(dc, px, .{ .text_left_x = text_left_x, .scroll_end_x = scroll_end_x, .baseline = baseline, .height = height, .accent = accent, .bg = bg, .fg = fg }, g.vim_state.buf, g.vim_state.cursor, cur_hi, g.cached_caret_w, colon_active);
 
     const post_text: []const u8 = if (g.vim_state.cursor < g.vim_state.len)
         g.vim_state.buf[g.vim_state.cursor + 1 .. g.vim_state.len]

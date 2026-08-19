@@ -599,17 +599,21 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
         else if (styleField(part, "slant=")) |v| slant = v;
     }
 
-    if (slant) |s| if (std.mem.eql(u8, s, "italic") or std.mem.eql(u8, s, "oblique")) {
-        try result.append(allocator, ' ');
-        try result.appendSlice(allocator, "Italic");
-    };
+    if (slant) |s| {
+        const is_italic = std.mem.eql(u8, s, "italic") or std.mem.eql(u8, s, "oblique");
+        if (is_italic) {
+            try result.append(allocator, ' ');
+            try result.appendSlice(allocator, "Italic");
+        }
+    }
 
     if (weight) |w| {
-        const token: ?[]const u8 =
-            if (std.mem.eql(u8, w, "bold")) "Bold" else if (std.mem.eql(u8, w, "light")) "Light" else null;
-        if (token) |t| {
+        const token = if (std.mem.eql(u8, w, "bold")) "Bold"
+            else if (std.mem.eql(u8, w, "light")) "Light"
+            else "";
+        if (token.len > 0) {
             try result.append(allocator, ' ');
-            try result.appendSlice(allocator, t);
+            try result.appendSlice(allocator, token);
         }
     }
 

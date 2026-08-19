@@ -1211,8 +1211,8 @@ pub fn toggleBarSegmentAnchor() void {
         return;
     };
     const no_fullscreen = fullscreen.getForWorkspace(current_ws) == null;
-        if (no_fullscreen)
-            if (build_options.has_tiling) tiling.retileCurrentWorkspace();
+    if (build_options.has_tiling and no_fullscreen)
+        tiling.retileCurrentWorkspace();
     window.updateFloatingWindowBorders();
     window.markBordersFlushed();
     ungrabAndFlush();
@@ -1220,8 +1220,7 @@ pub fn toggleBarSegmentAnchor() void {
 }
 
 /// Lightweight focus-only redraw; skipped when a full redraw is already pending.
-pub fn scheduleFocusRedraw(new_win: ?u32) void {
-    _ = new_win;
+pub fn scheduleFocusRedraw(_: ?u32) void {
     const s = gBar.state orelse return;
     if (!s.is_visible or s.is_dirty) return;
     // markDirty ensures a full redraw follows at end-of-batch via
@@ -1488,8 +1487,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     const right = event.detail == mouse_button_right;
     if (!left and !right) return;
 
-    if (s.layout_cache.workspaces_bounds.contains(x))
-    {
+    if (s.layout_cache.workspaces_bounds.contains(x)) {
         const offset = x - s.layout_cache.workspaces_bounds.x;
         if (left) handleWorkspacesClick(offset) else handleWorkspacesRightClick(offset);
         return;
@@ -1506,14 +1504,12 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
         return;
     }
 
-    if (s.layout_cache.layout_bounds.contains(x))
-    {
+    if (s.layout_cache.layout_bounds.contains(x)) {
         if (left) withTilingGrabForClick(tilingToggleLayout) else withTilingGrabForClick(tilingToggleLayoutReverse);
         return;
     }
 
-    if (s.layout_cache.variants_bounds.contains(x))
-    {
+    if (s.layout_cache.variants_bounds.contains(x)) {
         if (left) withTilingGrabForClick(tilingStepLayoutVariant) else withTilingGrabForClick(tilingStepLayoutVariantReverse);
         return;
     }
@@ -1583,7 +1579,7 @@ fn handleTitleClick(s: *State, offset: u16) void {
 /// pointer-based focus after the reflow). Reimplemented locally rather than
 /// exposed from input.zig because input.zig already imports this module;
 /// importing back would cycle.
-inline fn withTilingGrabForClick(op: anytype) void {
+fn withTilingGrabForClick(op: anytype) void {
     const conn = core.getState().conn;
     utils.grabServer(conn);
     focus.setSuppressReason(.tiling_operation);
@@ -1601,7 +1597,7 @@ fn tilingStepLayoutVariant() void { if (build_options.has_tiling) tiling.stepLay
 fn tilingStepLayoutVariantReverse() void { if (build_options.has_tiling) tiling.stepLayoutVariantReverse(); }
 
 fn isTilingActive() bool {
-    return core.getState().config.tiling.enabled and (if (build_options.has_tiling) tiling.isEnabled() else false);
+    return core.getState().config.tiling.enabled and build_options.has_tiling and tiling.isEnabled();
 }
 
 /// Must be called without holding the X server grab.
@@ -1624,9 +1620,10 @@ fn retileAllWorkspaces(s: *State, effective_visible: bool) void {
         const ws_idx: u8 = @intCast(idx);
         if (tracking.countWindowsOnWorkspace(ws_idx) == 0) continue;
         if (fullscreen.getForWorkspace(ws_idx) != null) continue;
+        if (!build_options.has_tiling) continue;
         if (ws_idx != ws_state.current)
-            if (build_options.has_tiling) tiling.retileInactiveWorkspace(ws_idx)
+            tiling.retileInactiveWorkspace(ws_idx)
         else
-            if (build_options.has_tiling) tiling.retileCurrentWorkspace();
+            tiling.retileCurrentWorkspace();
     }
 }

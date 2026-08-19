@@ -50,7 +50,7 @@ inline fn eventCast(comptime T: type, event: *anyopaque) T {
     return @ptrCast(@alignCast(event));
 }
 
-fn dispatchExpose(event: *anyopaque) void {
+fn handleExpose(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_expose_event_t, event);
     inline for (plugins.list[0..plugins.count]) |p| {
         if (p.on_expose) |f| f(e);
@@ -109,7 +109,7 @@ const dispatch_table = blk: {
     table[xcb.XCB_FOCUS_IN] = asHandler(focus.handleFocusIn);
     table[xcb.XCB_PROPERTY_NOTIFY] = asHandler(handlePropertyNotify);
 
-    table[xcb.XCB_EXPOSE] = asHandler(dispatchExpose);
+    table[xcb.XCB_EXPOSE] = asHandler(handleExpose);
 
     table[xcb.XCB_CONFIGURE_NOTIFY] = asHandler(handleConfigureNotify);
 
@@ -306,7 +306,8 @@ fn handleXcbEvents() void {
 }
 
 pub fn run() !void {
-    const x_fd: std.posix.fd_t = xcb.xcb_get_file_descriptor(core.getState().conn);
+    const cs = core.getState();
+    const x_fd: std.posix.fd_t = xcb.xcb_get_file_descriptor(cs.conn);
     const signal_fd: std.posix.fd_t = signals.readFd();
 
     var fds = [_]std.posix.pollfd{
@@ -343,7 +344,7 @@ pub fn run() !void {
                 inline for (plugins.list[0..plugins.count]) |p| {
                     if (p.on_poll_wakeup) |f| f();
                 }
-                _ = xcb.xcb_flush(core.getState().conn);
+                _ = xcb.xcb_flush(cs.conn);
             }
         } else if ((fds[FD_XCB].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0) {
             debug.err("X11 connection error, shutting down", .{});

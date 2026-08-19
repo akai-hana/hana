@@ -33,7 +33,12 @@ pub fn tileWithOffset(
     _: u16,
 ) void {
     const cs = core.getState();
-    const work = if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.getState().screen.width_in_pixels, .height = core.getState().screen.height_in_pixels };
+    const work = if (build_options.has_bar) bar.workAreaRect() else .{
+        .x = 0,
+        .y = 0,
+        .width = cs.screen.width_in_pixels,
+        .height = cs.screen.height_in_pixels,
+    };
     const sw: i32 = work.width;
     const work_top: i32 = work.y;
     const work_h: i32 = work.height;
@@ -187,7 +192,7 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
     const cs = core.getState();
     if (!cs.config.drag_enabled) return;
     if (g_state.drag.active) return;
-    if ((if (build_options.has_bar) bar.isBarWindow(win) else false)) return;
+    if (build_options.has_bar and bar.isBarWindow(win)) return;
     if (fullscreen.isFullscreen(win)) return; // fullscreen geometry must not be touched
 
     // Prefer the tiling cache (always current) over a live XCB round-trip;
@@ -220,7 +225,7 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
         // A tiled window in a non-floating layout detaches on first motion
         // (see updateDrag); move also skips snap on that first event so the
         // window doesn't appear frozen at a tiled edge.
-        .pending_float = (if (build_options.has_tiling) tiling.isWindowTiled(win) else false) and !(if (build_options.has_tiling) tiling.isFloatingLayout() else false),
+        .pending_float = (build_options.has_tiling and tiling.isWindowTiled(win)) and !(build_options.has_tiling and tiling.isFloatingLayout()),
     };
     focus.setFocus(win, .user_command);
     utils.raiseWindow(cs.conn, win);

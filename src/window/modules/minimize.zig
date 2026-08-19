@@ -197,7 +197,7 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
         focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
     }
 
-        if (build.has_bar) bar.commitInsideGrab();
+    if (build.has_bar) bar.commitInsideGrab();
 }
 
 pub const RestoreOrder = enum { lifo, fifo };
@@ -344,7 +344,7 @@ pub fn unminimizeAll() void {
             focus.setFocusWithModel(focus_target, .window_spawn, focus_ctx.model.?);
         }
 
-    if (build.has_bar) bar.commitInsideGrab();
+        if (build.has_bar) bar.commitInsideGrab();
     }
 
     // Each fullscreen window needs its own grab (enterFullscreen owns it).

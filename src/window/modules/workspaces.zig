@@ -80,7 +80,7 @@ inline fn setBits(mask: u64) SetBitIterator {
 /// Evict a window leaving the current workspace (offscreen + cache invalidation).
 inline fn evictWindow(win: u32) void {
     utils.pushWindowOffscreen(core.getState().conn, win);
-            if (build_options.has_tiling) tiling.invalidateGeomCache(win);
+    if (build_options.has_tiling) tiling.invalidateGeomCache(win);
 }
 
 /// Moves win's fullscreen record so it stays fullscreen after a tag/move.
@@ -158,8 +158,10 @@ pub fn applyWorkspaceOverrides(
         var ws_variant: ?types.LayoutVariantOverride = null;
         if (id < MAX_WS) {
             if (override_lookup[id]) |o| {
-                if (o.layout_idx < cfg_tiling.layouts.items.len)
-                    ws_layout = (if (build_options.has_tiling) tiling.layoutFromString(cfg_tiling.layouts.items[o.layout_idx]) else null) orelse (if (build_options.has_tiling) tiling.defaultLayout() else .master);
+                if (o.layout_idx < cfg_tiling.layouts.items.len) {
+                    const raw = if (build_options.has_tiling) tiling.layoutFromString(cfg_tiling.layouts.items[o.layout_idx]) else null;
+                    ws_layout = raw orelse if (build_options.has_tiling) tiling.defaultLayout() else .master;
+                }
                 ws_variant = o.variant;
             }
         }
@@ -180,7 +182,7 @@ pub fn init() !void {
     const count = if (cs.config.workspaces.enabled) cs.config.workspaces.count else 1;
     const wss = try cs.alloc.alloc(Workspace, count);
 
-    const default_layout: TilingLayout = (if (build_options.has_tiling) tiling.defaultLayout() else .master);
+    const default_layout: TilingLayout = if (build_options.has_tiling) tiling.defaultLayout() else .master;
     const cfg_tiling = &cs.config.tiling;
 
     for (wss, 0..) |*ws, i| {
@@ -530,7 +532,7 @@ fn prefetchAndSaveWindowGeometries(ws: *const Workspace, new_ws: u8) void {
 }
 
 fn prefetchGeometryFilter(win: u32) bool {
-    return !(if (build_options.has_tiling) tiling.isWindowActiveTiled(win) else false) and !minimize.isMinimized(win);
+    return !(build_options.has_tiling and tiling.isWindowActiveTiled(win)) and !minimize.isMinimized(win);
 }
 
 /// Grab step 1: move old-workspace windows offscreen. Windows also tagged to
@@ -544,7 +546,7 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
         if (tracking.isWindowOnWorkspace(win, new_ws)) continue;
 
         utils.pushWindowOffscreen(conn, win);
-            if ((if (build_options.has_tiling) tiling.isWindowActiveTiled(win) else false)) if (build_options.has_tiling) tiling.invalidateGeomCache(win);
+            if (build_options.has_tiling and tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
     }
 }
 
@@ -554,34 +556,35 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
 /// window on the first frame instead of reading focus.getFocused(), still
 /// the old workspace's window until the real setFocus() below.
 fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8, pending_focus: ?u32) void {
-    const tiling_active = (if (build_options.has_tiling) tiling.isEnabled() else false);
+    const tiling_active = build_options.has_tiling and tiling.isEnabled();
 
     if (tiling_active) {
-        if (!core.getState().config.tiling.global_layout) if (build_options.has_tiling) tiling.applyWorkspaceLayout(@ptrCast(ws));
+        if (!core.getState().config.tiling.global_layout and build_options.has_tiling) tiling.applyWorkspaceLayout(@ptrCast(ws));
 
         // On success only windows shared with old_ws need invalidation; on
         // failure invalidate everything tiled for a full retile.
-        const restore_ok = (if (build_options.has_tiling) tiling.restoreWorkspaceGeom() else false);
+        const restore_ok = build_options.has_tiling and tiling.restoreWorkspaceGeom();
         const bit = tracking.workspaceBit(ws.id);
         var it = tracking.onWorkspace(bit, 0);
         while (it.next()) |entry| {
             const win = entry.win;
-            if (!(if (build_options.has_tiling) tiling.isWindowTiled(win) else false)) continue;
+            if (build_options.has_tiling and !tiling.isWindowTiled(win)) continue;
             if (restore_ok and !tracking.isWindowOnWorkspace(win, old_ws)) continue;
-    if (build_options.has_tiling) tiling.invalidateGeomCache(win);
+            if (build_options.has_tiling) tiling.invalidateGeomCache(win);
         }
         if (!restore_ok) {
-            if (pending_focus) |pf|
-                if (build_options.has_tiling) tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = pf })
-            else
+            if (pending_focus) |pf| {
+                if (build_options.has_tiling) tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = pf });
+            } else {
                 if (build_options.has_tiling) tiling.retileCurrentWorkspace();
+            }
         }
-    } else if ((if (build_options.has_tiling) tiling.isFloatingLayout() else false)) {
+    } else if (build_options.has_tiling and tiling.isFloatingLayout()) {
         // Tiling is off, but a window's cache may have been zeroed the last
         // time it was left while tiling was still active. Try a fast cache
         // restore; fall back to a silent retile that recomputes positions
         // without changing the active layout.
-        if (!(if (build_options.has_tiling) tiling.restoreWorkspaceGeom() else false)) if (build_options.has_tiling) tiling.retileForRestore();
+        if (build_options.has_tiling and !tiling.restoreWorkspaceGeom()) tiling.retileForRestore();
     }
 
     const bit_map = tracking.workspaceBit(ws.id);
@@ -590,7 +593,7 @@ fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8, pending_focus: ?u32
     while (it.next()) |entry| {
         const win = entry.win;
         _ = xcb.xcb_map_window(conn, win);
-        if (!(if (build_options.has_tiling) tiling.isWindowActiveTiled(win) else false) and !minimize.isMinimized(win) and
+        if (!(build_options.has_tiling and tiling.isWindowActiveTiled(win)) and !minimize.isMinimized(win) and
             !tracking.isWindowOnWorkspace(win, old_ws))
         {
             window.restoreFloatGeom(win);
@@ -656,7 +659,7 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
             const win = entry.win;
             _ = xcb.xcb_map_window(cs.conn, win);
             utils.pushWindowOffscreen(cs.conn, win);
-        if ((if (build_options.has_tiling) tiling.isWindowActiveTiled(win) else false)) if (build_options.has_tiling) tiling.invalidateGeomCache(win);
+            if (build_options.has_tiling and tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
         }
         fullscreen.applyFullscreenGeometry(info.window);
     } else {

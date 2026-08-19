@@ -32,6 +32,10 @@ const fibonacci = @import("fibonacci");
 const leaf = @import("leaf");
 const scroll = @import("scroll");
 
+inline fn workArea() utils.Rect {
+    return if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.screen.width, .height = core.screen.height };
+}
+
 const max_master_count: u8 = 10;
 // Per-retile window list capacity. A single workspace can never hold more
 // tiled windows than the global pool (tracking.Tracking, s.windows below)
@@ -395,7 +399,7 @@ pub fn retileCurrentWorkspaceWithOpts(opts: RetileOpts) void {
         _ = restoreWorkspaceGeom();
         return;
     }
-    retileImpl((if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.screen.width, .height = core.screen.height }), opts);
+    retileImpl(workArea(), opts);
     s.is_dirty = false;
 }
 
@@ -423,7 +427,7 @@ pub fn retileInactiveWorkspace(ws_idx: u8) void {
         return;
     }
 
-    retileImpl((if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.screen.width, .height = core.screen.height }), .{ .for_ws = ws_idx });
+    retileImpl(workArea(), .{ .for_ws = ws_idx });
 
     // Defense in depth: monocle (and fibonacci's overflow fallback) now skip
     // raising during a background retile (see LayoutCtx.is_background), but
@@ -450,7 +454,7 @@ pub fn retileForRestore() void {
     // lands. The cache is only used as a fallback float position.
     s.config.layout = .master;
     defer s.config.layout = saved;
-    retileImpl((if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.screen.width, .height = core.screen.height }), .{});
+    retileImpl(workArea(), .{});
     s.is_dirty = false;
 }
 
@@ -468,7 +472,7 @@ pub fn restoreWorkspaceGeom() bool {
     if (current_ws >= max_workspaces) return false;
     if (s.geom.workspace_geom_valid_bits & tracking.workspaceBit(current_ws) == 0) return false;
 
-    const current_screen = (if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.screen.width, .height = core.screen.height });
+    const current_screen = workArea();
     if (!current_screen.eql(s.geom.last_retile_area)) return false;
 
     // Pass 1: validate all cache entries before emitting any XCB calls.
@@ -633,7 +637,7 @@ pub fn adjustStackBalance(delta: f32) void {
 /// `delta` is +1 (right/forward) or -1 (left/backward).
 /// No-op when the current layout is not .scroll.
 pub fn stepScrollView(delta: i32) void {
-    if (scroll.step(getState(), delta, (if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.screen.width, .height = core.screen.height }).width)) retileCurrentWorkspace();
+    if (scroll.step(getState(), delta, workArea().width)) retileCurrentWorkspace();
 }
 
 /// Brings the newly focused window into view after keyboard focus-cycle
@@ -656,7 +660,7 @@ pub fn snapScrollToFocused() void {
         .monocle => retileCurrentWorkspace(),
         .scroll => {
             const win = focus.getFocused() orelse return;
-            if (scroll.snapOffsetToWindow(s, collectWorkspaceWindows(s, null), win, (if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = core.screen.width, .height = core.screen.height }).width)) retileCurrentWorkspace();
+            if (scroll.snapOffsetToWindow(s, collectWorkspaceWindows(s, null), win, workArea().width)) retileCurrentWorkspace();
         },
         else => {},
     }

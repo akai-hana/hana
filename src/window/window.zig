@@ -661,7 +661,7 @@ inline fn tilingActive() bool {
 
 /// True for the null window, the root, or the bar, never valid focus/manage targets.
 pub inline fn isInvalidWindow(win: u32) bool {
-    return win == 0 or win == core.getState().root or (if (build_options.has_bar) bar.isBarWindow(win) else false);
+    return win == 0 or win == core.getState().root or (build_options.has_bar and bar.isBarWindow(win));
 }
 
 pub inline fn isValidManagedWindow(win: u32) bool {
@@ -1032,14 +1032,11 @@ fn unmanageWindow(win: u32) void {
             }
         }
         if (tilingActive()) if (build_options.has_tiling) tiling.retileIfDirty();
-    } else if (!was_fullscreen and tilingActive()) {
-        if (window_workspace) |ws| {
-            if (current_ws == ws) {
-                if (build_options.has_tiling) tiling.retileIfDirty();
-            } else {
-                if (build_options.has_tiling) tiling.retileInactiveWorkspace(ws);
-            }
-        }
+    } else if (!was_fullscreen and tilingActive() and build_options.has_tiling) {
+        if (window_workspace) |ws| if (current_ws == ws)
+            tiling.retileIfDirty()
+        else
+            tiling.retileInactiveWorkspace(ws);
     }
 
     // Tiled-window borders are already current after retileIfDirty (handled by
@@ -1194,7 +1191,7 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
     const mask = event.value_mask & GEOMETRY_MASK;
     if (mask == 0) return;
 
-    const is_tiled = tilingActive() and (if (build_options.has_tiling) tiling.isWindowActiveTiled(win) else false);
+    const is_tiled = tilingActive() and build_options.has_tiling and tiling.isWindowActiveTiled(win);
     const is_fullscreen = fullscreen.isFullscreen(win);
     if (is_tiled or is_fullscreen) {
         sendSyntheticConfigureNotify(win);
@@ -1207,8 +1204,8 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
     // honouring it races the next MotionNotify and causes visible flicker.
     // Echo the geometry the WM already applied so the client settles without
     // fighting the drag.
-    if ((if (build_options.has_floating) floating.isResizingWindow(win) else false)) {
-        const last = if (build_options.has_floating) floating.getDragLastRect() else utils.Rect{ .x = 0, .y = 0, .width = 0, .height = 0 };
+    if (build_options.has_floating and floating.isResizingWindow(win)) {
+        const last = floating.getDragLastRect();
         if (last.width != 0) {
             sendConfigureNotify(win, geomFromRect(last, getBorderWidth()));
         } else {
@@ -1263,7 +1260,7 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
         event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR)
         return;
-    if ((if (build_options.has_floating) floating.isDragging() else false)) return;
+    if (build_options.has_floating and floating.isDragging()) return;
     if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
     if (focus.shouldSuppressEnterNotify()) return;
     maybeFocusWindow(findManagedWindow(core.getState().conn, event.event, tracking.isManaged));
@@ -1279,7 +1276,7 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t) void {
     focus.setLastEventTime(event.time);
     if (event.event != core.getState().root) return;
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL) return;
-    if ((if (build_options.has_floating) floating.isDragging() else false)) return;
+    if (build_options.has_floating and floating.isDragging()) return;
     if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
     // When child is zero the pointer left to an area not covered by any window.
     if (event.child == 0) return;
@@ -1436,10 +1433,10 @@ fn sweepWorkspaceBorders(comptime skip_tiled: bool) void {
         if (entry.mask & cur_bit == 0) continue;
         const color = borderColor(win);
         if (comptime skip_tiled) {
-            if (tilingActive() and (if (build_options.has_tiling) tiling.isWindowTiled(win) else false)) continue;
+            if (tilingActive() and build_options.has_tiling and tiling.isWindowTiled(win)) continue;
         } else {
             // Dedup via the tiling CacheMap: skip the XCB call when unchanged.
-            if ((if (build_options.has_tiling) tiling.sendBorderColorIfChanged(win, color) else false)) continue;
+            if (build_options.has_tiling and tiling.sendBorderColorIfChanged(win, color)) continue;
         }
         utils.setBorderPixel(conn, win, color);
     }

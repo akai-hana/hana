@@ -358,11 +358,17 @@ pub const ParseError = error{
     OutOfMemory,
 };
 
+fn hexPrefixLen(value: []const u8) ?u2 {
+    if (value.len == 0) return null;
+    if (value[0] == '#') return 1;
+    if (value.len > 2 and value[0] == '0' and (value[1] == 'x' or value[1] == 'X')) return 2;
+    return null;
+}
+
 pub fn parseColor(value: []const u8) !u32 {
     if (value.len == 0) return error.InvalidColor;
 
-    const offset: u8 =
-        if (value[0] == '#') 1 else if (value.len > 2 and value[0] == '0' and (value[1] == 'x' or value[1] == 'X')) 2 else 0;
+    const offset: u8 = hexPrefixLen(value) orelse 0;
     const hex_part = value[offset..];
 
     if (hex_part.len == 0) return error.InvalidColor;
@@ -604,7 +610,7 @@ const Parser = struct {
         // the line is invalid: the same outcome as a bare '#' after '='
         // always produced before. An invalid `0x...` instead falls through
         // to the string fallback below.
-        if (raw[0] == '#' or (raw.len > 2 and raw[0] == '0' and (raw[1] == 'x' or raw[1] == 'X'))) {
+        if (hexPrefixLen(raw) != null) {
             if (parseColor(raw)) |color| return .{ .color = color } else |_| {}
             if (raw[0] == '#') return ParseError.InvalidValue;
         }
