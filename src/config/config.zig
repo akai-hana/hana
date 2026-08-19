@@ -123,7 +123,6 @@ fn initDefaultBarLayout(allocator: std.mem.Allocator, cfg: *types.Config) !void 
     }
 }
 
-/// Maximum bytes accepted from a single .toml file (1 MiB).
 const MAX_FILE_BYTES = 1024 * 1024;
 
 const default_tiling_layout = (types.TilingConfig{}).layout;
@@ -192,8 +191,6 @@ fn processIncludes(allocator: std.mem.Allocator, dst: *parser.Document, src_doc:
         defer allocator.free(abs);
         var inc_doc = tryParseTomlFile(allocator, abs) orelse continue;
         defer inc_doc.deinit();
-        // Note: inc_doc's own `include` array (if any) is intentionally NOT
-        // processed here; see the doc comment above.
         try parser.mergeDocumentsInto(allocator, dst, &inc_doc);
         debug.info("Merged (include): {s}", .{abs});
     }
@@ -395,7 +392,6 @@ fn getDefaultConfig(allocator: std.mem.Allocator) !types.Config {
     return cfg;
 }
 
-/// Builds a Config from a parsed Document: initialises defaults then applies all sections.
 fn buildConfigFromDoc(allocator: std.mem.Allocator, doc: *parser.Document) !types.Config {
     var cfg = try getDefaultConfig(allocator);
     // If any parse step below errors (OOM), free the partial Config so the
@@ -935,8 +931,6 @@ fn parseTilingVariants(doc: *parser.Document, cfg: *types.Config) void {
     }
 }
 
-/// Returns true if `s` looks like a workspace-number list: only digits, commas, spaces,
-/// and contains at least one digit.
 fn isWorkspaceList(s: []const u8) bool {
     if (s.len == 0) return false;
     var has_digit = false;
@@ -1293,10 +1287,8 @@ fn parseRules(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.C
         }
     }
 
-    // Numbered sub-sections like [workspace.rules.1] or [rules.3]: each
-    // section's keys are class names mapped to the workspace number in the
-    // section name suffix.
-    try parseNumberedRuleSections(allocator, doc, cfg);
+        try parseNumberedRuleSections(allocator, doc, cfg);
+    }
 }
 
 /// Processes numbered rule sub-sections (e.g. [workspace.rules.1], [rules.3]).

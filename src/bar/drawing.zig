@@ -28,8 +28,6 @@ var font_conversion_cache: ?std.StringHashMap([]const u8) = null;
 /// Pango font string used when no fonts are configured or a named font fails to load.
 const fallbackFont = "monospace:size=10";
 
-// FontState
-
 pub const FontState = struct {
     allocator: std.mem.Allocator,
     pango_layout: *c.PangoLayout,
@@ -77,8 +75,6 @@ pub const FontState = struct {
     }
 };
 
-// DrawContext
-
 /// Set the Cairo source color from a packed 0xRRGGBB u32 at full opacity.
 /// Shared by DrawContext.setColor and CarouselPixmap.render.
 inline fn setCairoColor(ctx: *c.cairo_t, color: u32) void {
@@ -88,12 +84,10 @@ inline fn setCairoColor(ctx: *c.cairo_t, color: u32) void {
     c.cairo_set_source_rgba(ctx, r, g, b, 1.0);
 }
 
-/// Converts Pango units (1/1024 px) to floating-point pixels.
 inline fn pangoToF64(pango_units: c_int) f64 {
     return @as(f64, @floatFromInt(pango_units)) / c.PANGO_SCALE;
 }
 
-/// Converts a pixel size to Pango units (1/1024 px).
 inline fn pxToPango(px: u16) f64 {
     return @as(f64, @floatFromInt(px)) * c.PANGO_SCALE;
 }
@@ -106,14 +100,12 @@ inline fn checkXcbCookie(conn: *core.xcb.xcb_connection_t, cookie: core.xcb.xcb_
     }
 }
 
-/// Creates an XCB pixmap and returns its id.
 inline fn createXcbPixmap(conn: *core.xcb.xcb_connection_t, depth: u8, drawable: u32, w: u16, h: u16) u32 {
     const pixmap = core.xcb.xcb_generate_id(conn);
     _ = core.xcb.xcb_create_pixmap(conn, depth, pixmap, drawable, w, h);
     return pixmap;
 }
 
-/// Creates a graphics context with checked creation, returning its id.
 inline fn createCheckedGC(conn: *core.xcb.xcb_connection_t, drawable: u32) !u32 {
     const gc = core.xcb.xcb_generate_id(conn);
     const cookie = core.xcb.xcb_create_gc_checked(conn, gc, drawable, 0, null);
@@ -166,7 +158,6 @@ pub const DrawContext = struct {
     /// Actual pixel depth of the offscreen pixmap: 32 for ARGB, screen root_depth otherwise.
     depth: u8 = 24,
 
-    /// All drawing targets the off-screen pixmap; call blit() to copy to the window atomically.
     pub fn initWithVisual(
         allocator: std.mem.Allocator,
         conn: *core.xcb.xcb_connection_t,
@@ -541,8 +532,6 @@ fn createPangoLayout(ctx: *c.cairo_t, dpi: f32) !*c.PangoLayout {
     return layout;
 }
 
-/// Searches every screen's allowed depths for `visual_id`, returning the first
-/// matching visual.
 fn findVisualById(conn: *core.xcb.xcb_connection_t, visual_id: u32) ?*core.xcb.xcb_visualtype_t {
     var si = core.xcb.xcb_setup_roots_iterator(core.xcb.xcb_get_setup(conn));
     while (si.rem > 0) : (core.xcb.xcb_screen_next(&si)) {

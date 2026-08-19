@@ -54,22 +54,18 @@ fn onPollWakeup() void {
     prompt.blinkTick();
 }
 
-/// Exposes prompt's blink poll timeout for the event loop.
 pub fn promptBlinkPollTimeoutMs() i32 {
     return prompt.blinkPollTimeoutMs();
 }
 
-/// Wraps prompt.handlePromptKeypress for input.zig.
 pub fn promptHandleKeypress(event: *const xcb.xcb_key_press_event_t, matched: ?*const types.Action) bool {
     return prompt.handlePromptKeypress(event, matched);
 }
 
-/// Wraps prompt.toggle for input.zig.
 pub fn promptToggle() void {
     prompt.toggle();
 }
 
-/// Wraps carousel settings for config.zig.
 pub fn carouselSetEnabled(enabled: bool) void {
     carousel.setCarouselEnabled(enabled);
 }
@@ -82,16 +78,11 @@ pub fn carouselSetRefreshRateOverride(rate: f64) void {
     carousel.setRefreshRateOverride(rate);
 }
 
-/// Wraps carousel.notifyFocusChanged for focus.zig.
 pub fn carouselNotifyFocusChanged(win: ?u32) void {
     carousel.notifyFocusChanged(win);
 }
 
-// Public API types
-
 pub const Action = enum { toggle, hide_fullscreen, show_fullscreen };
-
-// Constants
 
 const MIN_BAR_HEIGHT: u32 = scale.BAR_MIN_HEIGHT_PX;
 const MAX_BAR_HEIGHT: u32 = 200;
@@ -104,8 +95,6 @@ const TITLE_MIN_WIDTH: u16 = 100;
 // than imported since input.zig imports this module and a back-import would cycle.
 const mouse_button_left: u8 = 1;
 const mouse_button_right: u8 = 3;
-
-// Core data structures
 
 /// Per-window title strings backed by a per-slot arena: every string in
 /// `list` is a slice into `arena`'s memory, so clearing/dropping a list is
@@ -242,8 +231,6 @@ const Bar = struct {
 
 var gBar: Bar = .{};
 
-// Sub-state types
-
 /// X11 connection and window handle; stable for the bar's lifetime.
 const WindowCtx = struct {
     conn: *xcb.xcb_connection_t,
@@ -326,8 +313,6 @@ const TitleCache = struct {
         self.window_geoms.deinit(allocator);
     }
 };
-
-// State
 
 const State = struct {
     win: WindowCtx,
@@ -513,7 +498,6 @@ const State = struct {
         };
     }
 
-    /// Paint the inter-segment gap starting at `gap_x`.
     fn paintGap(self: *State, gap_x: u16, scaled_spacing: u16) void {
         self.render.dc.fillRect(gap_x, 0, scaled_spacing, self.render.height, self.render.config.bg);
     }
@@ -1563,11 +1547,11 @@ fn handleWorkspacesRightClick(offset: u16) void {
 /// `offset` is the click position relative to the title segment's start.
 /// Resolves which window is under the click via the per-window title/geometry
 /// data `syncTitleCache` cached on the last full draw, then:
-    ///   - no window under the click -> no-op (empty title is handled by the
+///   - no window under the click -> no-op (empty title is handled by the
 ///     right-click prompt path in `handleButtonPress`, before this is called)
-    ///   - the window is minimized -> unminimizes that window
-    ///   - the window is already focused -> minimizes it
-    ///   - otherwise -> focuses it
+///   - the window is minimized -> unminimizes that window
+///   - the window is already focused -> minimizes it
+///   - otherwise -> focuses it
 fn handleTitleClick(s: *State, offset: u16) void {
     if (s.title_cache.workspace_windows.items.len == 0) return;
 

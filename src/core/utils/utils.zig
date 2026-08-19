@@ -44,7 +44,6 @@ pub fn setSignalWriteFd(fd: std.posix.fd_t) void {
     signal_write_fd = fd;
 }
 
-/// Signals the main event loop to exit cleanly.
 pub inline fn quit() void {
     running.store(false, .release);
 }
@@ -76,7 +75,6 @@ pub const Rect = struct {
     width: u16,
     height: u16,
 
-    /// Constructs a Rect from an XCB geometry reply.
     pub inline fn fromXcb(geom: *const xcb.xcb_get_geometry_reply_t) Rect {
         return .{ .x = geom.x, .y = geom.y, .width = geom.width, .height = geom.height };
     }
@@ -123,7 +121,6 @@ pub inline fn configureWindow(conn: *xcb.xcb_connection_t, win: u32, rect: Rect)
     );
 }
 
-/// Raises `win` to the top of the stacking order.
 pub inline fn raiseWindow(conn: *xcb.xcb_connection_t, win: u32) void {
     _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 }
@@ -173,7 +170,7 @@ var atom_cache: ?AtomCache = null;
 
 /// Interns all atoms in a single round-trip batch. Atom names come from
 /// `AtomCache`'s field names at comptime, so adding a field is the only
-    /// change required, no parallel array, no index-order mismatch risk.
+/// change required, no parallel array, no index-order mismatch risk.
 pub fn initAtomCache(conn: *xcb.xcb_connection_t) !void {
     const fields = std.meta.fields(AtomCache);
     var cookies: [fields.len]xcb.xcb_intern_atom_cookie_t = undefined;
@@ -308,9 +305,12 @@ pub const scaling = struct {
     pub inline fn scaleToPixels(value: anytype, reference: f32) f32 {
         return if (value.is_percentage) reference * (value.value / 100.0) else value.value;
     }
+    /// Returns v/100 for percentage values; returns `-value` for absolute values.
     pub fn scaleMasterWidth(value: anytype) f32 {
         return if (value.is_percentage) value.value / 100.0 else -value.value;
     }
+    /// Scales a border-width value. Percentage values are multiplied by half the
+    /// reference dimension, matching the two-sided inset a border represents.
     pub fn scaleBorderWidth(value: anytype, reference_dimension: u16) u16 {
         const v: f32 = if (value.is_percentage)
             (value.value / 100.0) * 0.5 * @as(f32, @floatFromInt(reference_dimension))
@@ -325,26 +325,22 @@ pub const scaling = struct {
     }
 };
 
-/// Returns the raw timespec for the given clock id (REALTIME/MONOTONIC).
-/// Uses the VDSO-accelerated clock_gettime on supported kernels.
+// Uses the VDSO-accelerated clock_gettime on supported kernels.
 inline fn clockTs(clock_id: std.os.linux.clockid_t) std.os.linux.timespec {
     var ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(clock_id, &ts);
     return ts;
 }
 
-/// Returns the current clock time in nanoseconds for the given clock id.
 pub fn clockNs(clock_id: std.os.linux.clockid_t) u64 {
     const ts = clockTs(clock_id);
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
-/// Returns the current monotonic clock time in nanoseconds.
 pub inline fn monotonicNs() u64 {
     return clockNs(.MONOTONIC);
 }
 
-/// Returns the current realtime clock time in nanoseconds since the Unix epoch.
 pub inline fn realtimeNs() u64 {
     return clockNs(.REALTIME);
 }
@@ -384,12 +380,11 @@ pub inline fn pushWindowOffscreenAndLower(conn: *xcb.xcb_connection_t, win: u32)
 /// True while the main WM thread holds the X server grab.
 pub var grab_active = std.atomic.Value(bool).init(false);
 
-/// Returns true while the main WM thread holds the X server grab.
 pub inline fn isGrabActive() bool {
     return grab_active.load(.monotonic);
 }
 
-/// Takes the X server grab. Always pair with ungrabServer()/ungrabAndFlush().
+/// Always pair with ungrabServer()/ungrabAndFlush().
 pub inline fn grabServer(conn: *xcb.xcb_connection_t) void {
     grab_active.store(true, .release);
     _ = xcb.xcb_grab_server(conn);
@@ -401,15 +396,12 @@ pub inline fn ungrabServer(conn: *xcb.xcb_connection_t) void {
     grab_active.store(false, .release);
 }
 
-/// Ungrabs the X server and flushes pending requests.
-/// Always called as a pair; defined here so every module can share one copy.
+/// Defined here so every module can share one copy.
 pub inline fn ungrabAndFlush(conn: *xcb.xcb_connection_t) void {
     ungrabServer(conn);
     _ = xcb.xcb_flush(conn);
 }
 
-/// Set a window's border pixel color with a single change-window-attributes
-/// request.
 pub inline fn setBorderPixel(conn: *xcb.xcb_connection_t, win: u32, pixel: u32) void {
     _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{pixel});
 }
@@ -536,12 +528,10 @@ pub fn BoundedList(comptime T: type, comptime capacity: usize) type {
 
         const Self = @This();
 
-        /// Mutable view over the live portion of the backing array.
         pub fn slice(self: *Self) []T {
             return self.items[0..self.len];
         }
 
-        /// Read-only view over the live portion of the backing array.
         pub fn constSlice(self: *const Self) []const T {
             return self.items[0..self.len];
         }

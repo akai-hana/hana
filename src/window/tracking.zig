@@ -1,4 +1,4 @@
-//! Core window tracking
+//! Window tracking registry.
 //! Maintains the registry of all managed windows and their workspace assignments.
 
 const std = @import("std");
@@ -17,11 +17,8 @@ const minimize = @import("minimize");
 
 pub const Tracking = struct {
     /// Hard compile-time cap on windows tracked across the whole WM (all
-    /// workspaces combined), `tiling.State.windows`, a single global
-    /// instance, not one per workspace. Not a tuneable: windows beyond the cap
+    /// workspaces combined). Not a tuneable: windows beyond the cap
     /// are silently dropped from tiling and workspace membership (error log).
-    /// Raise constants.Limits.MAX_TILED_WINDOWS and rebuild if too small; the
-    /// struct is stack-allocated, 4 bytes per slot.
     const capacity = constants.Limits.MAX_TILED_WINDOWS;
 
     // `len` is a u8, so capacity may not exceed 255. Enforced at compile time
@@ -33,20 +30,16 @@ pub const Tracking = struct {
 
     buf: [capacity]u32 = undefined,
 
-    /// Number of live entries in buf[0..len].  Never exceeds `capacity`.
     len: u8 = 0,
 
-    /// Returns true if `win` is present in the list.
     pub fn contains(self: *const Tracking, win: u32) bool {
         return std.mem.indexOfScalar(u32, self.buf[0..self.len], win) != null;
     }
 
-    /// Returns true if `win` may be safely appended or prepended. Logs an
-    /// error and returns false when the list is at capacity; the window is
-    /// NOT tracked (invisible to tiling, membership queries, focus history).
-    ///
-    /// NOTE: capacity is reachable in production (many terminals, browsers);
-    /// handled by log + graceful degradation so ReleaseFast stays safe.
+    /// Logs an error and returns false when the list is at capacity; the
+    /// window is NOT tracked (invisible to tiling, membership queries, focus
+    /// history). Capacity is reachable in production (many terminals,
+    /// browsers); handled by log + graceful degradation so ReleaseFast stays safe.
     fn prepareAdd(self: *Tracking, win: u32) bool {
         if (self.contains(win)) return false;
         if (self.len >= capacity) {
@@ -59,16 +52,17 @@ pub const Tracking = struct {
         return true;
     }
 
-    /// Append `win` to the back of the list.
-    /// No-op if `win` is already present or the list is at capacity (see prepareAdd).
+    /// Append `win` to the back of the list. No-op if `win` is already
+    /// present or the list is at capacity (see prepareAdd).
     pub fn add(self: *Tracking, win: u32) void {
         if (!self.prepareAdd(win)) return;
         self.buf[self.len] = win;
         self.len += 1;
     }
 
-    /// Prepend `win` to the front of the list, shifting all existing entries right.
-    /// No-op if `win` is already present or the list is at capacity (see prepareAdd).
+    /// Prepend `win` to the front of the list, shifting all existing
+    /// entries right. No-op if `win` is already present or the list is at
+    /// capacity (see prepareAdd).
     pub fn addFront(self: *Tracking, win: u32) void {
         if (!self.prepareAdd(win)) return;
         std.mem.copyBackwards(u32, self.buf[1 .. self.len + 1], self.buf[0..self.len]);
@@ -77,12 +71,9 @@ pub const Tracking = struct {
     }
 
     /// Remove `win`, preserving the relative order of all other entries.
-    ///
     /// Use this variant when window order is semantically meaningful, e.g.
     /// tiling layouts that derive master/slave assignment from positional index.
     /// O(n) due to the left-shift of the tail.
-    ///
-    /// Returns true if `win` was found and removed, false if it was not present.
     pub fn remove(self: *Tracking, win: u32) bool {
         const i = std.mem.indexOfScalar(u32, self.buf[0..self.len], win) orelse return false;
         std.mem.copyForwards(u32, self.buf[i .. self.len - 1], self.buf[i + 1 .. self.len]);
@@ -96,15 +87,12 @@ pub const Tracking = struct {
     }
 };
 
-// Global tracking state
-
 pub const Entry = struct {
     win: u32,
     mask: u64,
 };
 
-// Per-workspace focus history (MRU)
-//
+// Per-workspace focus history (MRU).
 // Records, per workspace, the order windows lost focus on it, so a caller
 // resolving "what should regain focus now" (minimize fallback, in particular)
 // answers "whichever window was actually focused right before this one", not
@@ -139,7 +127,7 @@ pub fn pushFocusMru(ws_idx: u8, win: u32) void {
 
 /// Pop the most recently defocused window on workspace `ws_idx` that
 /// satisfies `visible`. Entries popped along the way that do NOT satisfy
-/// `visible` are discarded rather than left in place, they're stale
+/// `visible` are discarded rather than left in place. They are stale
 /// (minimized, destroyed, or moved off this workspace) and, having already
 /// failed the check once, would only fail it again later. Returns null once
 /// the stack is exhausted with nothing eligible.
@@ -157,7 +145,7 @@ pub fn popFocusMru(ws_idx: u8, visible: *const fn (u32) bool) ?u32 {
 
 /// Purge `win` from every workspace's focus history. Called on final
 /// untracking (removeWindow) so a destroyed window's ID can never surface
-/// from a stale entry, X11 recycles window IDs, and an unpurged entry could
+/// from a stale entry. X11 recycles window IDs, and an unpurged entry could
 /// otherwise be mistaken for a live, unrelated window that later reuses the
 /// same ID.
 fn removeFromFocusMruAll(win: u32) void {
@@ -171,19 +159,20 @@ fn clearFocusMru() void {
 }
 
 var g_windows: std.ArrayListUnmanaged(Entry) = .empty;
-/// win -> index into g_windows.items, giving the ID-lookup functions below
-/// (getWindowWorkspaceMask, isManaged, setWindowMask, removeWindow) O(1)
-/// average instead of an O(n) scan. Unlike the bounded per-workspace tiling
-/// list (Tracking above), g_windows is genuinely unbounded, it holds every
-/// managed window, tiled and floating, so its scan cost grows with real
-/// usage. Same window-ID index pattern as layouts.CacheMap.
+// win -> index into g_windows.items, giving the ID-lookup functions below
+// (getWindowWorkspaceMask, isManaged, setWindowMask, removeWindow) O(1)
+// average instead of an O(n) scan. Unlike the bounded per-workspace tiling
+// list (Tracking above), g_windows is genuinely unbounded: it holds every
+// managed window, tiled and floating, so its scan cost grows with real
+// usage. Same window-ID index pattern as layouts.CacheMap.
 var g_index: std.AutoHashMapUnmanaged(u32, usize) = .empty;
 var g_alloc: std.mem.Allocator = undefined;
 var g_initialized: bool = false;
 var g_current: u8 = 0;
 var g_workspace_count: usize = 1;
 
-/// Initialises the global window-tracking list. Must be called once at startup before any windows are managed.
+/// Initializes the global window-tracking list. Must be called once at
+/// startup before any windows are managed.
 pub fn init(allocator: std.mem.Allocator) void {
     g_alloc = allocator;
     g_initialized = true;
@@ -211,7 +200,7 @@ pub fn deinit() void {
 }
 
 /// Called by workspaces.init: tells tracking how many workspaces exist.
-/// count must not exceed 64; the workspace bitmask (u64) cannot represent more.
+/// Count must not exceed 64; the workspace bitmask (u64) cannot represent more.
 pub fn setWorkspaceCount(count: usize) void {
     std.debug.assert(count <= 64);
     g_workspace_count = count;
@@ -296,7 +285,6 @@ pub fn setWindowMask(win: u32, mask: u64) void {
 
 // Query predicates
 
-/// Returns the workspace bitmask for `win`, or null if not tracked.
 pub inline fn getWindowWorkspaceMask(win: u32) ?u64 {
     const idx = g_index.get(win) orelse return null;
     return g_windows.items[idx].mask;
@@ -346,7 +334,6 @@ pub const WorkspaceIter = struct {
     }
 };
 
-/// Iterate entries on workspace `bit` (via `WorkspaceIter`), skipping `skip`.
 pub fn onWorkspace(bit: u64, skip: u32) WorkspaceIter {
     return .{ .entries = allWindows(), .bit = bit, .skip = skip };
 }
@@ -364,9 +351,6 @@ fn currentWorkspaceIterBit() ?u64 {
     return ~@as(u64, 0);
 }
 
-/// Iterate windows on the current workspace, skipping `skip`. Uses the
-/// shared `WorkspaceIter` with a workspace-mask filter when workspaces
-/// are enabled, otherwise the global window list (all-ones bit = no filter).
 pub fn windowsOnCurrentWorkspace(skip: u32) WorkspaceIter {
     const bit = currentWorkspaceIterBit() orelse
         return .{ .entries = &.{}, .skip = skip, .bit = ~@as(u64, 0) };
@@ -402,11 +386,6 @@ pub fn prefetchAndSaveGeometry(
     }
 }
 
-/// Like `prefetchAndSaveGeometry`, but scoped to "the current workspace"
-/// using the same enabled/disabled semantics as `windowsOnCurrentWorkspace`
-/// (falls back to every window when workspaces are disabled). No-op when no
-/// current workspace is set yet. Shared by callers that only ever care about
-/// the visible workspace, so they don't need to pass a `skip_ws`.
 pub fn prefetchAndSaveGeometryOnCurrentWorkspace(
     predicate: *const fn (u32) bool,
     skip_win: u32,
@@ -415,7 +394,6 @@ pub fn prefetchAndSaveGeometryOnCurrentWorkspace(
     prefetchAndSaveGeometry(bit, predicate, skip_win, 255);
 }
 
-/// Count of windows that have ws_idx set in their mask.
 pub fn countWindowsOnWorkspace(ws_idx: u8) usize {
     const bit = workspaceBit(ws_idx);
     var n: usize = 0;

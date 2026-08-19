@@ -1,5 +1,5 @@
-//! Carousel title extension
-//! Adds a scrolling effect to window titles that don't fit the title bar segment.
+//! Carousel title scrolling module.
+//! Scrolls window titles that overflow the title bar segment.
 
 const std = @import("std");
 const utils = @import("utils");
@@ -18,14 +18,12 @@ pub const default_scroll_speed: u8 = 250;
 /// pre-rendered pixmap.
 pub const carousel_gap_px: u16 = 60;
 
-// Public geometry type
-
-/// Segment geometry passed to carousel draw functions.
 pub const SegmentGeometry = struct {
-    seg_x: u16, // Full segment bounds
-    seg_w: u16, // (clip + fill region)
-    text_x: u16, // inset text area
-    avail_w: u16, // (used for overflow check and static/ellipsis fallback drawing)
+    seg_x: u16,
+    seg_w: u16,
+    text_x: u16,
+    /// Used for overflow check and static/ellipsis fallback drawing.
+    avail_w: u16,
 };
 
 /// Horizontal inset between the text area and the segment bounds.
@@ -110,19 +108,14 @@ pub fn setCarouselEnabled(enabled: bool) void {
     render.is_enabled.store(enabled, .release);
 }
 
-/// Returns true when the carousel feature is currently enabled.
 pub fn isCarouselEnabled() bool {
     return render.is_enabled.load(.monotonic);
 }
 
-/// Set the scroll speed in pixels per second.
-/// Values <= 0 are clamped to default_scroll_speed.
 pub fn setScrollSpeed(px_per_s: f64) void {
     scroll_config.speed.store(if (px_per_s > 0.0) px_per_s else default_scroll_speed, .monotonic);
 }
 
-/// Override the refresh rate used for the wake interval.
-/// Pass 0 (the default) to use the monitor's auto-detected rate.
 pub fn setRefreshRateOverride(hz: f64) void {
     scroll_config.rate_override.store(if (hz > 0.0) hz else 0.0, .monotonic);
 }
@@ -188,16 +181,10 @@ fn deinitSlot(slot: *?CarouselEntry) void {
     }
 }
 
-/// Free the single-window carousel pixmap.
-/// Caller must either hold draw_mutex or call after the carousel thread has
-/// stopped (see deinitCarousel).
 pub fn deinitSingleCarousel() void {
     deinitSlot(&render.single);
 }
 
-/// Free the segmented carousel pixmap.
-/// Caller must either hold draw_mutex or call after the carousel thread has
-/// stopped (see deinitCarousel).
 pub fn deinitSegmentedCarousel() void {
     deinitSlot(&render.seg);
     focus_signal.seg_window.store(0, .release);
@@ -237,7 +224,6 @@ var carousel_thread: utils.CondThread = .{};
 /// starts scrolling within one refresh of activation despite the long sleep.
 const idle_interval_ns: u64 = 250 * std.time.ns_per_ms;
 
-/// Spawns the dedicated carousel-tick thread. Safe to call after stopThread().
 pub fn startThread() void {
     carousel_thread.start(runCarouselThread, .{&carousel_thread}) catch |e| {
         debug.err("Carousel thread spawn failed: {s}", .{@errorName(e)});
@@ -493,8 +479,6 @@ fn commitCarouselFrame(
 ) !bool {
     const cycle_w: u16 = frame.text_w + carousel_gap_px;
 
-    // Determine whether a full pixmap rebuild is needed (geometry/identity/
-    // focus changed) vs. an in-place colour update vs. no action.
     const geom_stale = frame.force_rebuild or if (slot.*) |*e| entryStale(e, frame.window, frame.title_invalidated, cycle_w, frame.geom) else true;
 
     if (geom_stale) {
@@ -581,7 +565,6 @@ fn buildCarouselEntry(
 fn advanceCarouselOffset(e: *CarouselEntry, now_ns: u64) u16 {
     std.debug.assert(e.cycle_w > 0);
     const delta_ns = @as(f64, @floatFromInt(now_ns -| e.last_ns));
-    // Accumulate exact sub-pixel advance for this tick plus any carry.
     const delta_px = delta_ns * scroll_config.speed.load(.monotonic) / 1_000_000_000.0 + e.frac_acc;
     const int_px = @floor(delta_px);
     e.frac_acc = delta_px - int_px; // carry remainder to next tick

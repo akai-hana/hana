@@ -1,10 +1,11 @@
-//! Fallback configuration
-//! Auto-detects a suitable terminal and font when no user config is provided.
+//! Fallback configuration.
+//! Provides a terminal auto-detection heuristic and an embedded TOML
+//! default used when no user config is present.
 
 const std = @import("std");
 const debug = @import("debug");
 
-// Checked in preference order.
+// Ordered by preference so the first match wins.
 const TERMINALS = [_][]const u8{
     "ghostty",
     "alacritty",
@@ -23,8 +24,8 @@ const TERMINALS = [_][]const u8{
     "terminator",
 };
 
-/// Returns the first available terminal from TERMINALS, or "xterm".
-/// Pure PATH scan; does not allocate; returns a static string slice.
+/// Returns the first available terminal from the preference list, falling back
+/// to "xterm" when nothing else is found.
 pub fn detectTerminal() []const u8 {
     for (TERMINALS) |cmd| {
         if (isCommandAvailable(cmd)) {
@@ -36,7 +37,6 @@ pub fn detectTerminal() []const u8 {
     return "xterm";
 }
 
-/// Checks whether command exists in a common bin directory or $PATH.
 fn isCommandAvailable(command: []const u8) bool {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
 
@@ -61,7 +61,7 @@ fn isCommandAvailable(command: []const u8) bool {
 // std.posix.access was removed in this Zig version, so faccessat is called
 // as a raw syscall. It checks existence and executability in one syscall;
 // openFileAbsolute checks readability only, so a non-executable file named
-// like a terminal isn't reported "available" and fails later with EACCES.
+// like a terminal is not reported "available" and fails later with EACCES.
 inline fn checkPath(buf: []u8, dir: []const u8, command: []const u8) bool {
     const full_path = std.fmt.bufPrintZ(buf, "{s}/{s}", .{ dir, command }) catch return false;
     const rc: isize = @bitCast(std.os.linux.faccessat(std.os.linux.AT.FDCWD, full_path, std.posix.X_OK, 0));
@@ -69,9 +69,10 @@ inline fn checkPath(buf: []u8, dir: []const u8, command: []const u8) bool {
 }
 
 /// Returns the fallback TOML embedded in the binary, or null when
-/// config/fallback.toml was absent at build time. The `fallback_toml` module
-/// (injected by build.zig's injectShared) always exists; an empty `content`
-/// slice is the only "missing" signal.
+/// config/fallback.toml was absent at build time.
+///
+/// The `fallback_toml` module (injected by build.zig's injectShared) always
+/// exists; an empty `content` slice is the only "missing" signal.
 pub inline fn getFallbackToml() ?[]const u8 {
     const content = @import("fallback_toml").content;
     return if (content.len == 0) null else content;

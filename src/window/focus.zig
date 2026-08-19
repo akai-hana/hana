@@ -1,5 +1,5 @@
-//! Focus management
-//! Handles setting, clearing, and tracking the currently focused window.
+//! Focus management module.
+//! Manages setting, clearing, and tracking the currently focused window.
 
 const std = @import("std");
 
@@ -38,9 +38,9 @@ const State = struct {
     // store the cookies, draining them from the event loop on the next
     // iteration to keep hot paths non-blocking.
     //
-// confirm_cookie/confirm_win: non-compliant-client focus confirmation.
-// pointer_cookie: pending pointer-position query from beginPointerSync().
-// tiling_op_cookie: "has the server caught up" round trip from
+    // confirm_cookie/confirm_win: non-compliant-client focus confirmation.
+    // pointer_cookie: pending pointer-position query from beginPointerSync().
+    // tiling_op_cookie: "has the server caught up" round trip from
     //   beginTilingOpSettle() (see its doc comment).
     // pre_protocols_cookie: WM_PROTOCOLS query fired at the START of setFocus
     //   so the server processes it in parallel with focus bookkeeping; by the
@@ -54,8 +54,6 @@ const State = struct {
 };
 
 var state: State = .{};
-
-// Lifecycle
 
 pub fn init() void {
     // Reset every field so a deinit()+init() cycle starts from a clean slate.
@@ -79,11 +77,10 @@ pub fn deinit() void {
     state = .{};
 }
 
-// Public accessors
-
 pub inline fn getFocused() ?u32 {
     return state.focused_window;
 }
+
 pub inline fn getSuppressReason() core.FocusSuppressReason {
     return state.suppress_reason;
 }
@@ -98,6 +95,7 @@ pub inline fn getSuppressReason() core.FocusSuppressReason {
 pub inline fn shouldSuppressEnterNotify() bool {
     return state.suppress_reason == .tiling_operation;
 }
+
 pub inline fn getLastEventTime() u32 {
     return state.last_event_time;
 }
@@ -124,7 +122,7 @@ pub inline fn setLastEventTime(t: u32) void {
 /// Sets X input focus to `win`, always with CurrentTime (0), see
 /// "Timestamp handling" above.
 inline fn focusNow(conn: *xcb.xcb_connection_t, win: u32) void {
-    _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0); // CurrentTime
+    _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0);
 }
 
 /// Direct write to suppress_reason, for cases where suppression must be
@@ -168,8 +166,6 @@ fn grabButtons(win: u32, focused: bool) void {
 pub fn initWindowGrabs(win: u32) void {
     grabButtons(win, false);
 }
-
-// Focus logic
 
 pub const Reason = enum {
     /// Direct click on an unfocused window.
@@ -261,9 +257,9 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
     state.pre_protocols_cookie = null;
     if (flags.send_wm_take_focus) {
         if (pre_cookie) |ck|
-            window.sendWMTakeFocusWithCookie(conn, win, 0, ck) // CurrentTime
+            window.sendWMTakeFocusWithCookie(conn, win, 0, ck)
         else
-            window.sendWMTakeFocus(conn, win, 0); // CurrentTime
+            window.sendWMTakeFocus(conn, win, 0);
     } else if (pre_cookie) |ck| {
         xcb.xcb_discard_reply(conn, ck.sequence);
     }
@@ -286,8 +282,8 @@ const isInvalidFocusTarget = window.isInvalidWindow;
 
 /// True if `win` currently has map_state == Viewable. Guards destroy/unmap
 /// races on paths that can't guarantee the window is still alive.
-/// pub: the unmanageWindow destroy path re-runs this pre-grab to keep the
-/// grab body free of blocking reply waits.
+/// Public because the unmanageWindow destroy path re-runs this pre-grab to
+/// keep the grab body free of blocking reply waits.
 pub fn isWindowMapped(conn: *xcb.xcb_connection_t, win: u32) bool {
     const reply = xcb.xcb_get_window_attributes_reply(
         conn,
@@ -363,7 +359,7 @@ pub fn setFocusWithModel(win: u32, reason: Reason, input_model: window.InputMode
     commitFocusTransition(old, win, .{
         .set_input_focus = input_model != .globally_active,
         .raise = shouldRaise(reason, win),
-        .send_wm_take_focus = true, // no_input already returned early above
+        .send_wm_take_focus = true,
         .arm_confirm = reason == .pointer_sync,
         .schedule_bar = true,
         .new_suppress = suppressionFor(reason, state.suppress_reason),
@@ -411,11 +407,10 @@ pub fn drainPendingConfirm() void {
     std.log.debug("focus: confirm retry for 0x{x}: focus={} (expected > 1), retrying once", .{ win, c.*.focus });
 
     focusNow(conn, win);
-    window.sendWMTakeFocus(conn, win, 0); // CurrentTime
+    window.sendWMTakeFocus(conn, win, 0);
 }
 
 /// Clear the paired confirm cookie and window together.
-/// Invariant: these two fields are always set/cleared as a unit.
 inline fn clearConfirmState() void {
     state.confirm_cookie = null;
     state.confirm_win = null;
@@ -450,7 +445,7 @@ fn sendFocusProtocol(win: u32) void {
     // Without this, a globally_active window that has stolen focus would leave
     // _NET_ACTIVE_WINDOW pointing at the thief even after we re-assert `win`.
     advertiseActiveWindow(win);
-    window.sendWMTakeFocus(conn, win, 0); // CurrentTime
+    window.sendWMTakeFocus(conn, win, 0);
 }
 
 /// DWM's focusin: translated exactly. No mode/detail/managed filtering.
@@ -538,8 +533,6 @@ pub fn focusOrClear(target: ?u32, model: ?window.InputModel, reason: Reason) voi
     clearFocus();
 }
 
-
-
 /// Pre-grab focus resolution: bundles a window target with its input
 /// model, resolved before `xcb_grab_server` so the grab body stays
 /// fire-and-forget. Use with `focusOrClear` to apply in one call.
@@ -547,8 +540,6 @@ pub const FocusContext = struct {
     target: ?u32,
     model: ?window.InputModel,
 
-    /// Resolve the input model for `target`. Pass the target from any
-    /// resolution strategy (MRU, pointer, findBestAvailable, etc.).
     pub fn resolve(target: ?u32) FocusContext {
         return .{
             .target = target,
@@ -556,12 +547,13 @@ pub const FocusContext = struct {
         };
     }
 
-    /// Apply this focus context: focus the target (with its model) or clear.
     pub fn apply(self: FocusContext, reason: Reason) void {
         focusOrClear(self.target, self.model, reason);
     }
 };
 
+/// Write `_NET_ACTIVE_WINDOW` to the root window so EWMH clients stay in sync.
+/// No-ops when the atom was not resolved at init time.
 inline fn advertiseActiveWindow(win: u32) void {
     if (state.net_active_window == xcb.XCB_ATOM_NONE) return;
     const cs = core.getState();
@@ -659,9 +651,9 @@ pub fn drainTilingOpSettle() void {
     const cookie = state.tiling_op_cookie orelse return;
     state.tiling_op_cookie = null;
     const cs = core.getState();
-// The reply's content is unused; only its arrival signals that the server
-// has processed everything queued before it; but it must be consumed to
-    // drain the XCB queue.
+    // The reply's content is unused; only its arrival signals that the server
+    // has processed everything queued before it. It must be consumed to drain
+    // the XCB queue.
     const reply = xcb.xcb_get_input_focus_reply(cs.conn, cookie, null) orelse return;
     std.c.free(reply);
     if (state.suppress_reason == .tiling_operation) state.suppress_reason = .none;
@@ -738,7 +730,6 @@ pub fn focusPrev() void {
 
 /// Shared implementation for moving the focused window through the cycle.
 /// Swaps it with the neighbour in the given direction.
-/// Only has an effect when tiling is active and at least two windows are visible.
 fn moveWindowCycle(comptime forward: bool) void {
     const len = collectVisibleWindows();
     if (len < 2) return;

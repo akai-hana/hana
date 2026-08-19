@@ -1,5 +1,5 @@
-//! hana's main loop
-//! Entry point to and orchestrator of all hana's subsystems.
+//! Main entry point for hana.
+//! Sets up all subsystems and hands off to the event loop.
 
 const std = @import("std");
 
@@ -17,7 +17,6 @@ const window = @import("window");
 const plugins = @import("plugins");
 const build_options = @import("build_options");
 
-/// hana's startup sequence and event-loop entry point.
 pub fn main() !void {
     const x = try connectToX();
     defer xcb.xcb_disconnect(x.conn);
@@ -40,6 +39,7 @@ pub fn main() !void {
     // core.init() copies loaded_config by value and becomes the canonical
     // owner; must run before any core.getState() call.
     core.init(x.conn, x.screen, x.root, alloc, loaded_config);
+
     // Config.deinit tears the keybind_resolver down internally, before
     // freeing the keybindings whose Actions it points into; so a single
     // defer on the config suffices (see KeybindResolver in types.zig).
@@ -54,7 +54,6 @@ pub fn main() !void {
     try window.init(alloc);
     defer window.deinit();
 
-    // Initialize plugins (bar, tiling, drag, floating)
     plugins.initAll();
     defer plugins.deinitAll();
 
@@ -65,16 +64,12 @@ pub fn main() !void {
     debug.info("Shutting down gracefully...", .{});
 }
 
-/// X server connection context returned by connectToX.
 const X = struct {
     conn: *xcb.xcb_connection_t,
     screen: *xcb.xcb_screen_t,
     root: core.WindowId,
 };
 
-/// Opens an X server connection, fetches screen 0, and registers hana as the WM.
-/// Fails if the display is unavailable, the screen cannot be retrieved,
-/// or another WM is already running.
 fn connectToX() !X {
     const conn = xcb.xcb_connect(null, null) orelse return error.X11ConnectionFailed;
 

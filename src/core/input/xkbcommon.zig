@@ -61,10 +61,10 @@ pub const XkbState = struct {
         xkb.xkb_context_unref(self.context);
     }
 
-/// Rebuilds the keymap, state, and keysym table after a server-side mapping
-/// change (setxkbmap/xmodmap -> XCB_MAPPING_NOTIFY). Dispatch resolves keysyms
-/// from the table, so it must track the new mapping or bindings silently stop
-/// matching; on failure the old mapping is kept.
+    /// Rebuilds the keymap, state, and keysym table after a server-side mapping
+    /// change (setxkbmap/xmodmap -> XCB_MAPPING_NOTIFY). Dispatch resolves keysyms
+    /// from the table, so it must track the new mapping or bindings silently stop
+    /// matching; on failure the old mapping is kept.
     pub fn rebuild(self: *XkbState, xcb_conn: *anyopaque) void {
         const device_id = xkb.xkb_x11_get_core_keyboard_device_id(@ptrCast(xcb_conn));
         if (device_id == -1) return;
@@ -78,8 +78,6 @@ pub const XkbState = struct {
             return;
         };
 
-        // Build the table before freeing anything; failure above already
-        // returned, so the swap below cannot fail.
         const new_table = buildKeysymTable(km);
         xkb.xkb_state_unref(self.state);
         xkb.xkb_keymap_unref(self.keymap);
@@ -88,19 +86,18 @@ pub const XkbState = struct {
         self.keysym_by_keycode = new_table;
     }
 
-    /// Convert an X11 keycode to a keysym for keybinding dispatch.
-    /// Uses the level-0 (lock-free) table so results are unaffected by
-    /// NumLock / CapsLock / ScrollLock state.
+    /// Returns the level-0 keysym for `keycode`, unaffected by lock modifiers
+    /// (NumLock, CapsLock, ScrollLock). The flat table is indexed by raw keycode.
     pub inline fn keycodeToKeysym(self: *const XkbState, keycode: u8) u32 {
         return self.keysym_by_keycode[keycode];
     }
 
-/// Reverse-look up a keysym to its keycode (config parsing only). Scans the
-/// flat table (248 entries, all in L1 cache).
-///
-/// The table holds level-0 symbols, so a Shift-only keysym, e.g. `@` on a
-/// US layout, resolves to null; callers should warn, since such a binding
-/// cannot be grabbed.
+    /// Reverse-look up a keysym to its keycode (config parsing only). Scans the
+    /// flat table (248 entries, all in L1 cache).
+    ///
+    /// The table holds level-0 symbols, so a Shift-only keysym, e.g. `@` on a
+    /// US layout, resolves to null; callers should warn, since such a binding
+    /// cannot be grabbed.
     pub inline fn keysymToKeycode(self: *const XkbState, keysym: u32) ?u8 {
         for (8..256) |kc| {
             if (self.keysym_by_keycode[kc] == keysym) return @intCast(kc);
@@ -153,7 +150,6 @@ inline fn retryDelay(attempt: u8) void {
     while (true) {
         const rc = std.os.linux.nanosleep(&req, &rem);
         if (std.posix.errno(rc) != .INTR) break;
-        // Signal interrupted the sleep; resume for the remaining time.
         req = rem;
     }
 }

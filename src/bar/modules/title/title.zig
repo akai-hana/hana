@@ -19,8 +19,6 @@ const carousel = @import("carousel");
 const build_options = @import("build_options");
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
 
-// Module constants
-
 /// Fixed left indent applied inside every title cell, independent of
 /// `scaledSegmentPadding`.  Provides visual breathing room between the
 /// segment edge and the title text.
@@ -42,16 +40,13 @@ const max_batch_windows: usize = constants.Limits.MAX_TILED_WINDOWS;
 /// windows: position sorting places it last, and drawing is skipped.
 pub const offscreen_rect: utils.Rect = .{ .x = std.math.maxInt(i16), .y = std.math.maxInt(i16), .width = 0, .height = 0 };
 
-// Atom cache
-
 const Atoms = struct {
     /// null until successfully resolved, to avoid XCB_ATOM_NONE's sentinel (0).
     net_wm_name: ?u32 = null,
     utf8_string: ?u32 = null,
     is_initialized: bool = false,
 
-    /// Resolves and caches the X11 atoms needed for title fetching.
-    /// Subsequent calls are a no-op.
+    /// Subsequent calls are a no-op after the first successful resolution.
     fn ensureResolved(self: *Atoms) void {
         if (self.is_initialized) return;
         self.is_initialized = true;
@@ -67,8 +62,6 @@ const Atoms = struct {
 
 var atoms: Atoms = .{};
 
-// Internal types
-
 const WindowInfo = struct {
     window: u32,
     x: i16,
@@ -76,8 +69,6 @@ const WindowInfo = struct {
     title: []const u8,
     minimized: bool,
 };
-
-// Public input types
 
 /// Stable per-call rendering context: geometry, draw state, connection, and
 /// (on the `draw()` path) the bar slot's title cache.
@@ -133,8 +124,6 @@ pub const TitleSnapshot = struct {
     geoms: []const utils.Rect = &.{},
 };
 
-// Title width cache
-
 /// Bounded cache of measured title text widths, indexed by window ID.
 ///
 /// `drawSegmentedTitles` used to re-measure every visible segment on every
@@ -186,8 +175,6 @@ const TitleWidthCache = struct {
 };
 
 var title_width_cache: TitleWidthCache = .{};
-
-// Private helpers
 
 /// Extract a UTF-8 string from an XCB get_property reply and dupe it into
 /// `allocator`. Returns null when the reply carries no bytes. Shared by
@@ -258,8 +245,6 @@ fn drawInner(
     return ctx.start_x + ctx.width;
 }
 
-// Public API: draw entry points
-
 /// Draw the title segment.
 ///
 /// Updates `ctx.cached_title`/`ctx.cached_title_window` so `drawCached()` has
@@ -284,7 +269,7 @@ pub fn draw(
 ///     the bar slot's cached buffer contents).
 ///   - never updates the title cache: `ctx.cached_title`/`cached_title_window`
 ///     must be left null (`draw()` keeps the cache current).
-    ///   - always passes `title_invalidated = false`; it only re-renders existing
+///   - always passes `title_invalidated = false`; it only re-renders existing
 ///     state.
 ///   - passes `minimized_title = ""` (the minimized title isn't cached by the
 ///     bar slot; the full `draw()` path handles it).
@@ -295,8 +280,6 @@ pub fn drawCached(
 ) !u16 {
     return drawInner(ctx, snapshot, allocator, false);
 }
-
-// Public API: click hit-testing
 
 /// A window resolved from a click inside the title segment, along with
 /// whether it was minimized at the time of the click.
@@ -336,9 +319,6 @@ pub fn hitTest(
     if (ctx.width == 0) return null;
     const win_count = @min(windows.len, max_visible_windows);
 
-    // Declared here (not inside gatherAndSortWindowInfos) so they stay alive
-    // in this frame for the entire time `window_infos` is read below -- see
-    // the comment on gatherAndSortWindowInfos.
     var window_info_buf: [max_visible_windows]WindowInfo = undefined;
     var owned_titles: [max_visible_windows]?[]const u8 = undefined;
     const sorted = (try gatherAndSortWindowInfos(ctx, snapshot, allocator, windows, win_count, &window_info_buf, &owned_titles)) orelse return null;
@@ -353,8 +333,6 @@ pub fn hitTest(
     const info = window_infos[idx];
     return .{ .window = info.window, .minimized = info.minimized };
 }
-
-// Public API: title pre-fetch (main thread only)
 
 /// Fetch the title of `win` into `buf`, reusing its existing capacity.
 ///
@@ -432,8 +410,6 @@ const WindowDataBatch = struct {
     utf_type: u32,
 
     /// Per-window request bookkeeping, indexed parallel to the window list.
-    /// Left `undefined` rather than zero-filled: every slot read is
-    /// unconditionally written by the phases below.
     net_wm_cookies: [max_batch_windows]xcb.xcb_get_property_cookie_t = undefined,
     fallback_cookies: [max_batch_windows]xcb.xcb_get_property_cookie_t = undefined,
     needs_fallback: [max_batch_windows]bool = undefined,
@@ -451,7 +427,7 @@ const WindowDataBatch = struct {
         };
     }
 
-    /// Phase 1: fire every request up front.
+    /// Fire every request up front.
     fn fire(
         self: *WindowDataBatch,
         windows: []const u32,
@@ -485,10 +461,10 @@ const WindowDataBatch = struct {
         }
     }
 
-    /// Phases 2+3: collect the fired `_NET_WM_NAME` replies, then fire and
-    /// collect `WM_NAME` fallbacks for windows whose `_NET_WM_NAME` came up
-    /// empty. Writes each window's title (or null) into `owned_titles[i]`;
-    /// the duped strings are allocated from `self.allocator` and owned by the
+    /// Collect the fired `_NET_WM_NAME` replies, then fire and collect
+    /// `WM_NAME` fallbacks for windows whose `_NET_WM_NAME` came up empty.
+    /// Writes each window's title (or null) into `owned_titles[i]`; the
+    /// duped strings are allocated from `self.allocator` and owned by the
     /// caller, which frees them once done reading.
     fn fetchTitles(
         self: *WindowDataBatch,
@@ -496,7 +472,7 @@ const WindowDataBatch = struct {
         focused_idx: ?usize,
         owned_titles: []?[]const u8,
     ) void {
-        // Phase 2: collect _NET_WM_NAME replies; queue WM_NAME fallbacks.
+        // Collect _NET_WM_NAME replies; queue WM_NAME fallbacks.
         for (windows, 0..) |win, i| {
             owned_titles[i] = null;
             self.needs_fallback[i] = false;
@@ -509,7 +485,7 @@ const WindowDataBatch = struct {
             }
         }
 
-        // Phase 3: collect WM_NAME fallback replies.
+        // Collect WM_NAME fallback replies.
         for (windows, 0..) |_, i| {
             if (focused_idx == i or !self.needs_fallback[i]) continue;
             owned_titles[i] = collectPropertyReply(self.conn, self.fallback_cookies[i], self.allocator);
@@ -597,8 +573,6 @@ fn collectPropertyReply(
     return extractPropertyString(r, allocator) catch null;
 }
 
-// Empty workspace fast path
-
 /// If `count` is zero: tears down the carousel, fills the segment background,
 /// and returns the segment's end x so the caller can return immediately.
 /// Returns null when there are windows present and rendering should proceed.
@@ -611,8 +585,6 @@ inline fn emptyWorkspace(ctx: TitleRenderContext, count: usize) ?u16 {
     ctx.dc.fillRect(ctx.start_x, 0, ctx.width, ctx.height, ctx.config.bg);
     return ctx.start_x + ctx.width;
 }
-
-// Single-window rendering
 
 /// Shared rendering logic for both `draw()` and `drawCached()`.
 ///
@@ -635,8 +607,6 @@ fn drawSingleWindow(
 
     const single_win = snapshot.current_ws_wins[0];
     const is_minimized = snapshot.minimized_set.contains(single_win);
-    // `workspace_has_focus` is true when any window on this workspace is focused,
-    // meaning the segment gets the accent colour rather than plain bg.
     const workspace_has_focus = snapshot.focused_window != null;
 
     const accent = if (is_minimized)
@@ -692,8 +662,6 @@ fn drawSingleWindow(
         title_invalidated,
     );
 }
-
-// Split-view segmented titles
 
 /// Pixel-perfect tiling: segment i of `count` spans [i*W/count, (i+1)*W/count).
 /// Returns a zero width when the final division collapses the segment away.

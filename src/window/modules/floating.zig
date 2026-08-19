@@ -1,5 +1,5 @@
-//! Floating window management
-//! Introduces floating layout and manages placement, dragging, and per-corner resizing of floating windows.
+//! Floating window subsystem.
+//! Manages placement, dragging, and per-corner resizing of floating windows.
 
 const std = @import("std");
 
@@ -20,8 +20,6 @@ const fullscreen = @import("fullscreen");
 // Geometry cookies are all issued before any reply is awaited; one round-trip
 // per batch instead of one per window. 64 covers a typical workspace.
 const BATCH = 64;
-
-// Layout
 
 /// Centre any window still at the X default origin (0, 0); windows the user
 /// has already moved are left untouched. Centring uses the work area (screen
@@ -86,8 +84,6 @@ pub fn tileWithOffset(
     }
 }
 
-// Drag and resize
-
 pub const DragMode = enum { move, resize };
 
 /// Corner closest to the cursor at drag-start; the opposite corner is the
@@ -118,7 +114,7 @@ pub const DragState = struct {
     work_area: WorkArea = .{ .left = 0, .right = 0, .top = 0, .bottom = 0 },
 };
 
-/// snap_distance from config, resolved to pixels (0 = disabled).
+/// Snap distance from config, resolved to pixels (0 = disabled).
 /// Percentages are relative to screen width.
 fn snapDistance() i32 {
     const cs = core.getState();
@@ -158,20 +154,16 @@ inline fn cornerAxes(corner: ResizeCorner) CornerAxes {
     };
 }
 
-/// Snap a window origin toward `near` or `far` when within `snap` pixels.
 inline fn snapAxis(pos: i32, dim: i32, near: i32, far: i32, snap: i32) i32 {
     if (@abs(pos - near) < snap) return near;
     if (@abs((pos + dim) - far) < snap) return far - dim;
     return pos;
 }
 
-/// Snap a single edge toward `boundary` when within `snap` pixels of it.
 inline fn snapEdge(edge: i32, boundary: i32, snap: i32) i32 {
     if (snap > 0 and @abs(edge - boundary) < snap) return boundary;
     return edge;
 }
-
-// Module state
 
 const State = struct {
     drag: DragState = .{},

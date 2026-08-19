@@ -1,24 +1,19 @@
-//! Signal self-pipe and dispatch
-//! Installs async-signal-safe handlers that write the signal number to a
-//! pipe; the main event loop (events.zig) polls the read end and calls
-//! drainAndDispatch to route each byte. SIGHUP and SIGCHLD are handled here,
-//! SIGTERM/SIGINT flip utils' running flag to end the main loop.
+//! Signal self-pipe and dispatch.
+//! Routes POSIX signals through a self-pipe so the event loop can dispatch them safely.
 
 const std = @import("std");
 
 const utils = @import("utils");
 const input = @import("input");
 
-/// End indices of the self-pipe: signal handlers write to PIPE_WRITE; the
-/// event loop polls PIPE_READ.
+// End indices of the self-pipe: signal handlers write to PIPE_WRITE; the
+// event loop polls PIPE_READ.
 const PIPE_READ = 0;
 const PIPE_WRITE = 1;
 
-// Self-pipe for portable signal delivery.
-// Signal handlers write to [PIPE_WRITE]; the event loop polls [PIPE_READ].
 var signal_pipe: [2]std.posix.fd_t = .{ -1, -1 };
 
-/// Async-signal-safe handler: writes the signal number as a byte to the pipe.
+// Async-signal-safe handler: writes the signal number as a byte to the pipe.
 fn signalHandler(signo: std.posix.SIG) callconv(.c) void {
     const byte: u8 = @intCast(@intFromEnum(signo));
     _ = std.os.linux.write(signal_pipe[PIPE_WRITE], &[_]u8{byte}, 1);
@@ -40,7 +35,7 @@ pub fn setup() !void {
         std.posix.sigaction(sig, &sa, null);
 }
 
-/// Closes both ends of the signal pipe.
+// Closes both ends of the signal pipe.
 pub fn deinit() void {
     utils.setSignalWriteFd(-1);
     for (&signal_pipe) |*fd| {
@@ -55,7 +50,7 @@ pub fn readFd() std.posix.fd_t {
     return signal_pipe[PIPE_READ];
 }
 
-/// Dispatches a single signal byte to the appropriate handler.
+// Dispatches a single signal byte to the appropriate handler.
 inline fn dispatchSignal(byte: u8) void {
     switch (@as(std.posix.SIG, @enumFromInt(byte))) {
         .HUP => utils.reload(),
@@ -71,7 +66,8 @@ inline fn dispatchSignal(byte: u8) void {
     }
 }
 
-const SIGNAL_DRAIN_BUF = 16; // drain a burst in one syscall rather than one per byte
+// Drain a burst in one syscall rather than one per byte.
+const SIGNAL_DRAIN_BUF = 16;
 
 /// Drains the non-blocking signal pipe and dispatches each signal.
 ///

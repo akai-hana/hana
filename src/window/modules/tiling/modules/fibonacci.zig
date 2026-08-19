@@ -7,7 +7,7 @@ const layouts = @import("layouts");
 const tiling = @import("tiling");
 const State = tiling.State;
 
-/// Counter-clockwise spiral direction for the next window split.
+// Counter-clockwise spiral direction for the next window split.
 const SpiralDirection = enum(u2) {
     right, // Split vertically:   window on left,   remainder on right.
     down, // Split horizontally: window on top,    remainder below.
@@ -62,7 +62,6 @@ pub fn tileWithOffset(
             return;
         }
 
-        // Last window takes the entire remaining area.
         if (i == windows.len - 1) {
             const rect = utils.Rect{
                 .x = @intCast(cur.x),
@@ -79,7 +78,7 @@ pub fn tileWithOffset(
     }
 }
 
-/// Mutable cursor tracking the remaining screen area as windows are placed.
+// Mutable cursor tracking the remaining screen area as windows are placed.
 const Cursor = struct {
     x: i32,
     y: i32,
@@ -87,7 +86,6 @@ const Cursor = struct {
     h: u16,
 };
 
-/// Place `win` in its split half and advance the remaining area cursor.
 inline fn splitAndAdvance(
     ctx: *const layouts.LayoutCtx,
     win: u32,

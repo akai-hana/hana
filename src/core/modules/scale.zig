@@ -1,4 +1,4 @@
-//! DPI detection and scaling utilities
+//! DPI detection and scaling utilities.
 //! Detects display DPI and scales bar dimensions for consistent appearance across resolutions.
 
 const std = @import("std");
@@ -13,7 +13,7 @@ const utils = @import("utils");
 
 const BASELINE_DPI = constants.BASELINE_DPI;
 
-// Font size percentages are relative to 1080 p height, not the screen's own
+// Font size percentages are relative to 1080p height, not the screen's own
 // resolution, so font sizing degrades more gracefully on smaller screens.
 const FONT_BASELINE_HEIGHT: f32 = 1080.0;
 
@@ -28,7 +28,7 @@ pub const BAR_MIN_HEIGHT_PX: u16 = 20;
 const MIN_REASONABLE_DPI: f32 = 50.0;
 const MAX_REASONABLE_DPI: f32 = 300.0;
 
-/// Maximum long-words to request for the RESOURCE_MANAGER property (16 KB).
+/// Maximum number of u32 words to request for the RESOURCE_MANAGER property (16 KB).
 const RESOURCE_MANAGER_MAX_LEN: u32 = 4096;
 
 /// Reads the Xft.dpi value from the X RESOURCE_MANAGER property, if present.

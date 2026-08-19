@@ -1,6 +1,5 @@
-//! Central hub for process-wide XCB state and shared types.
-//! core.init() must be called from main before any other module calls
-//! core.getState().
+//! Process-wide XCB state and shared types.
+//! Must call core.init() before any module accesses core.getState().
 
 const std = @import("std");
 
@@ -36,7 +35,7 @@ pub const WindowGeometry = struct {
     border_width: u16,
 };
 
-/// Focus suppression reason for context-aware behavior.
+/// Why keyboard focus is temporarily withheld from a window.
 pub const FocusSuppressReason = enum {
     none,
     window_spawn,
@@ -58,7 +57,7 @@ pub const State = struct {
 
 var state: ?State = null;
 
-/// Pointer to the live core state. Panics if called before init().
+/// Panics if called before init().
 pub inline fn getState() *State {
     if (state) |*s| return s;
     @panic("core: getState() called before init()");

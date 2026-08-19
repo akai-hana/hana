@@ -14,14 +14,14 @@ const fullscreen = @import("fullscreen");
 const bar = if (build.has_bar) @import("bar") else null;
 const tiling = if (build.has_tiling) @import("tiling") else null;
 
-/// Per-window minimize record.
+// Per-window minimize record.
 const MinimizedEntry = struct {
     saved_fs: ?core.WindowGeometry, // non-null iff the window was fullscreen when minimized
     workspace_idx: u8, // single workspace only; multi-workspace tagging is handled upstream
     tiling_index: ?usize, // workspace-filtered slot at minimize time to reinsert at original position
 };
 
-/// One slot in the fixed minimize buffer.
+// One slot in the fixed minimize buffer.
 const MinimizedRecord = struct {
     id: u32,
     entry: MinimizedEntry,
@@ -42,8 +42,6 @@ else
 // directly off this; which is why removal uses orderedRemove, not swapRemove.
 var g_minimized: utils.BoundedList(MinimizedRecord, MAX_MINIMIZED) = .{};
 
-// Lifecycle
-
 pub fn init() void {
     g_minimized.clear();
 }
@@ -53,14 +51,13 @@ pub fn deinit() void {
     init();
 }
 
-/// Returns the index into g_minimized for the given window, or null.
 fn findInBuf(win: u32) ?usize {
     return g_minimized.indexOfById(win);
 }
 
-/// Removal that preserves the relative order of the remaining entries (see
-/// g_minimized's doc comment above). Returns true if the window was found
-/// and removed.
+// Removal that preserves the relative order of the remaining entries (see
+// g_minimized's doc comment above). Returns true if the window was found
+// and removed.
 fn removeFromBuf(win: u32) bool {
     if (findInBuf(win)) |i| {
         g_minimized.orderedRemove(i);
@@ -69,7 +66,6 @@ fn removeFromBuf(win: u32) bool {
     return false;
 }
 
-/// Returns true when `win` is currently minimized.
 pub fn isMinimized(win: u32) bool {
     return findInBuf(win) != null;
 }
@@ -89,7 +85,7 @@ pub fn minimizeWindow() void {
         return;
     }
 
-    // -- Side effects begin here; buffer slot is guaranteed -------------------
+    // Side effects begin here; buffer slot is guaranteed.
 
     // Tear down fullscreen state if needed, saving geometry for later restore.
     var saved_fs: ?core.WindowGeometry = null;
@@ -145,8 +141,8 @@ pub fn minimizeWindow() void {
     if (build.has_bar) bar.commitInsideGrab();
 }
 
-/// Restore a window that has already been removed from g_minimized.
-/// Precondition: caller must remove the record before calling; asserted below.
+// Restore a window that has already been removed from g_minimized.
+// Precondition: caller must remove the record before calling; asserted below.
 fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?usize) void {
     std.debug.assert(!isMinimized(win));
 
@@ -206,8 +202,8 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
 
 pub const RestoreOrder = enum { lifo, fifo };
 
-/// Remove the minimized record at `idx` and restore the window.
-/// Precondition: `idx` is a valid index into g_minimized.
+// Remove the minimized record at `idx` and restore the window.
+// Precondition: `idx` is a valid index into g_minimized.
 fn unminimizeAtIndex(idx: usize) void {
     const rec = g_minimized.items[idx];
     const win = rec.id;
@@ -273,10 +269,10 @@ fn partitionByFullscreen(snapshot: []const MinimizedRecord) Partitioned {
     return result;
 }
 
-/// Restore a batch of plain (non-fullscreen) minimized windows back into the
-/// tiling layout, sorted by original tiling index so lower-index slots are
-/// inserted first. Caller must already hold the server grab and have resolved
-/// the focus input model.
+// Restore a batch of plain (non-fullscreen) minimized windows back into the
+// tiling layout, sorted by original tiling index so lower-index slots are
+// inserted first. Caller must already hold the server grab and have resolved
+// the focus input model.
 fn restorePlainWindowsTiling(plain_wins: []MinimizedRecord, focus_target: u32, focus_model: window.InputModel) void {
     // Re-sort by tiling_index ascending (nulls last) before inserting.
     // Inserting at index i shifts every slot > i by 1, so lower-index

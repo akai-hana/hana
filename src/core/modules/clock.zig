@@ -1,23 +1,5 @@
-//! Clock segment
-//! Displays the current time on the status bar. A background thread aligns
-//! to the next whole-second boundary, wakes once a second to format the time
-//! string, and flags the main WM thread to redraw the segment. Pango/layout
-//! work always runs on the main thread (bar.updateClock -> drawClockOnly); the
-//! clock thread never touches the DrawContext.
-//!
-//! Thread lifecycle
-//! ----------------
-//! startThread(allocator, format); call from bar.init() after the bar window
-//! exists; dupes `format`. stopThread(allocator); call before teardown;
-//! signals the condition variable the thread sleeps on so it exits at once.
-//! The next startThread() re-aligns from scratch, so reloads never phase-drift.
-//!
-//! Cross-thread wakeup
-//! -------------------
-//! The main loop polls with deadline clock.nextTickWaitMs() (ms to the next
-//! boundary plus a grace period) so it wakes shortly after each tick and
-//! drains clock_dirty via bar.updateClock(); it also drains after every XCB
-//! event batch so a busy loop still repaints the clock in time.
+//! Clock segment.
+//! Background thread that formats the time each second and signals the main thread to redraw.
 
 const std = @import("std");
 const types = @import("types");
@@ -45,9 +27,8 @@ const DRAIN_GRACE_MS: i64 = 10;
 /// again after this many ms instead of sleeping to the next boundary.
 const RETRY_MS: i64 = 25;
 
-/// Cached formatted time, keyed by the epoch second it was formatted for.
-/// Guarded by `cache_mutex` so the clock thread (publishCurrentTime) and the
-/// main thread (draw, lazy fallback) can share it without racing.
+/// Guarded by `cache_mutex`: the clock thread publishes via
+/// publishCurrentTime; the main thread reads via draw or the lazy fallback.
 var cache_mutex: utils.Mutex = .{};
 var last_formatted_time: [64]u8 = undefined;
 var last_formatted_len: usize = 0;
@@ -64,6 +45,9 @@ var clock_thread: utils.CondThread = .{};
 /// written by the main thread while the thread is not running.
 var clock_format_owned: []const u8 = "";
 
+/// Spawns the clock thread. Call from bar.init() after the bar window exists.
+/// Dupes `format`; the original need not outlive this call. The clock thread
+/// never touches the DrawContext; all Pango/layout work runs on the main thread.
 pub fn startThread(allocator: std.mem.Allocator, format: []const u8) void {
     const owned = allocator.dupe(u8, format) catch |e| {
         debug.err("Clock format dupe failed: {s}", .{@errorName(e)});
@@ -79,6 +63,9 @@ pub fn startThread(allocator: std.mem.Allocator, format: []const u8) void {
     debug.info("Clock thread started", .{});
 }
 
+/// Signals the clock thread to exit and frees the duped format string.
+/// Call before teardown; the next startThread() re-aligns from scratch
+/// so reloads never phase-drift.
 pub fn stopThread(allocator: std.mem.Allocator) void {
     clock_thread.stop();
     if (clock_format_owned.len > 0) {
@@ -108,8 +95,6 @@ fn runClockThread(t: *utils.CondThread) void {
     // iteration's overhead (sub-millisecond) - it resets every second
     // instead of only at reload.
     while (sleepUntilNextSecond(t)) {
-        // Pango-free: format the time string into the shared cache and flag
-        // the main thread to redraw the segment. No DrawContext access here.
         publishCurrentTime();
     }
 }
@@ -152,8 +137,8 @@ fn getOrFormatTime(sec: i64, fmt: []const u8) ![]const u8 {
     return str;
 }
 
-/// Formats the current wall-clock time into the shared cache (no Pango, no
-/// draw_mutex) and publishes it for the main thread to draw.
+/// Formats the current wall-clock second into the shared cache and signals
+/// the main thread to redraw.
 fn publishCurrentTime() void {
     const sec = currentEpochSeconds();
     cache_mutex.lock();
@@ -176,8 +161,8 @@ fn publishCurrentTime() void {
 
 // Cross-thread handshake
 
-/// Returns true and clears the flag when the clock thread has published a new
-/// formatted second for the main thread to draw.
+/// Consumes the dirty flag set by the clock thread.
+/// Returns true if the main thread should redraw the clock segment.
 pub fn consumeClockDirty() bool {
     return clock_dirty.swap(false, .acq_rel);
 }
@@ -197,7 +182,8 @@ pub fn nextTickWaitMs() i64 {
 
 // Drawing
 
-/// Draws the current time string on the bar. Returns the x position after the segment.
+/// Draws the current time on the bar segment at `start_x`.
+/// Acquires `cache_mutex` internally; callers must not hold it.
 pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, start_x: u16) !u16 {
     // The cache lock covers rendering: the clock thread may be formatting the
     // next second concurrently, so drawSegment must not read a torn string.
@@ -227,7 +213,6 @@ fn formatTime(buf: []u8, sec: i64, fmt: []const u8) ![]const u8 {
         c.gmtime_r(&raw_sec, &tm_buf);
     if (tm_ptr == null) return error.TimeFailed;
 
-    // Build a null-terminated copy of the format string on the stack.
     var fmt_z: [128]u8 = undefined;
     if (fmt.len >= fmt_z.len) return error.FormatTooLong;
     @memcpy(fmt_z[0..fmt.len], fmt);

@@ -1,4 +1,4 @@
-//! X event dispatch and main event loop
+//! X event dispatch and main event loop.
 //! Handles X events, OS signals, and config reload, driving the WM's main loop.
 
 const std = @import("std");
@@ -21,23 +21,20 @@ const refresh_rate = @import("refresh_rate");
 const signals = @import("signals");
 const build_options = @import("build_options");
 
-// Indices into the poll fd array.
 const FD_XCB = 0;
 const FD_SIGNAL = 1;
 
-/// Maximum events dispatched per XCB batch before returning to poll, so the
-/// signal pipe and timer paths get fair scheduling against a chatty client.
+// Maximum events dispatched per XCB batch before returning to poll, so the
+// signal pipe and timer paths get fair scheduling against a chatty client.
 const MAX_EVENTS_PER_BATCH: usize = 128;
-
-// Dispatch table
 
 const EventHandler = *const fn (event: *anyopaque) void;
 
-/// Casts a `fn(*T) void` event handler to the generic `EventHandler` pointer
-/// type via @ptrCast. Safe only because every registered handler takes a
-/// single pointer argument and returns void, matching EventHandler's shape
-/// exactly; the check below enforces that at comptime so a handler with the
-/// wrong signature fails to build instead of miscompiling through the cast.
+// Casts a `fn(*T) void` event handler to the generic `EventHandler` pointer
+// type via @ptrCast. Safe only because every registered handler takes a
+// single pointer argument and returns void, matching EventHandler's shape
+// exactly; the check below enforces that at comptime so a handler with the
+// wrong signature fails to build instead of miscompiling through the cast.
 inline fn asHandler(comptime f: anytype) EventHandler {
     const info = @typeInfo(@TypeOf(f)).@"fn";
     if (info.params.len != 1)
@@ -53,7 +50,6 @@ inline fn eventCast(comptime T: type, event: *anyopaque) T {
     return @ptrCast(@alignCast(event));
 }
 
-/// Fans out expose events to all plugins that handle them.
 fn dispatchExpose(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_expose_event_t, event);
     inline for (plugins.list[0..plugins.count]) |p| {
@@ -61,7 +57,6 @@ fn dispatchExpose(event: *anyopaque) void {
     }
 }
 
-/// Fans out PropertyNotify to plugins and window.
 fn handlePropertyNotify(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_property_notify_event_t, event);
     inline for (plugins.list[0..plugins.count]) |p| {
@@ -70,30 +65,30 @@ fn handlePropertyNotify(event: *anyopaque) void {
     window.handlePropertyNotify(e);
 }
 
-/// Routes ConfigureNotify to the fullscreen deferred-bar-hide/show logic.
+// Routes ConfigureNotify to the fullscreen deferred-bar-hide/show logic.
 fn handleConfigureNotify(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_configure_notify_event_t, event);
     fullscreen.notifyConfigureIfPending(e.window, e.width, e.height);
 }
 
-/// Notifies fullscreen of the destroyed window before delegating to window.zig.
-/// This clears any pending deferred bar-show for a window that exits fullscreen
-/// and is then destroyed before it can send a ConfigureNotify.
+// Notifies fullscreen of the destroyed window before delegating to window.zig.
+// This clears any pending deferred bar-show for a window that exits fullscreen
+// and is then destroyed before it can send a ConfigureNotify.
 fn handleDestroyNotify(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_destroy_notify_event_t, event);
     fullscreen.onWindowGone(e.window);
     window.handleDestroyNotify(e);
 }
 
-/// Adapts input.handleMappingNotify to the EventHandler shape. The keymap
-/// rebuild it triggers doesn't consult any MappingNotify fields, so the
-/// event pointer is discarded.
+// Adapts input.handleMappingNotify to the EventHandler shape. The keymap
+// rebuild it triggers doesn't consult any MappingNotify fields, so the
+// event pointer is discarded.
 fn handleMappingNotify(event: *anyopaque) void {
     _ = event;
     input.handleMappingNotify();
 }
 
-/// O(1) dispatch via a comptime-built table indexed by XCB event type (low 7 bits).
+// O(1) dispatch via a comptime-built table indexed by XCB event type (low 7 bits).
 const dispatch_table = blk: {
     var table = [_]?EventHandler{null} ** constants.Limits.EVENT_DISPATCH_TABLE;
 
@@ -154,12 +149,8 @@ fn dispatch(event_type: u8, event: *anyopaque) void {
     if (dispatch_table[idx]) |handler| handler(event);
 }
 
-// Keybindings
-
 const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };
 
-/// Fills `cookies` with one grab request per (keybinding x lock modifier) pair.
-/// Returns the number of entries written.
 fn fillGrabCookies(cookies: []CookieEntry) usize {
     var n: usize = 0;
     const cs = core.getState();
@@ -192,7 +183,6 @@ fn fillGrabCookies(cookies: []CookieEntry) usize {
     return n;
 }
 
-/// Checks each cookie for an XCB error. Returns the number of failures.
 fn checkGrabCookies(cookies: []const CookieEntry) usize {
     var failed: usize = 0;
     const conn = core.getState().conn;
@@ -206,8 +196,9 @@ fn checkGrabCookies(cookies: []const CookieEntry) usize {
     return failed;
 }
 
-/// Ungrabs all keys, then re-grabs every configured keybinding across all lock modifier combinations.
-/// Fires all grab cookies before reading any reply to reduce round-trips.
+/// Ungrabs all keys, then re-grabs every configured keybinding across all
+/// lock modifier combinations. Fires all grab cookies before reading any
+/// reply to reduce round-trips.
 pub fn grabKeybindings() void {
     const cs = core.getState();
     _ = xcb.xcb_ungrab_key(cs.conn, xcb.XCB_GRAB_ANY, cs.root, xcb.XCB_MOD_MASK_ANY);
@@ -221,24 +212,22 @@ pub fn grabKeybindings() void {
     _ = xcb.xcb_flush(cs.conn);
 }
 
-// Config reload
-
-/// Loads and validates a new config, then applies it atomically. On failure
-/// the old config remains active.
-///
-/// Ordering is load-bearing:
-///   1. Keybind resolution and DPI scaling run pre-swap on `new_config`.
-///   2. The swap precedes the subsystem reloads (reloadBorders / reloadConfig /
-///      bar.reload) so they rebuild from the NEW config. (The old ordering kept
-///      stale settings, then old_config.deinit() freed string slices the new bar
-///      had shallow-copied; a use-after-free on the next draw.)
-///   3. grabKeybindings() runs post-swap because fillGrabCookies() reads the
-///      live config.
-///   4. `committed` flips the errdefer: pre-swap failure frees new_config;
-///      post-swap failure keeps it and frees the displaced old_config. (Every
-///      post-swap call is void today, so this is latent-but-safe.)
-///   5. applyCarouselSettings() runs post-swap so a rejected reload never leaks
-///      staged carousel settings.
+// Loads and validates a new config, then applies it atomically. On failure
+// the old config remains active.
+//
+// Ordering is load-bearing:
+//   1. Keybind resolution and DPI scaling run pre-swap on `new_config`.
+//   2. The swap precedes the subsystem reloads (reloadBorders / reloadConfig /
+//      bar.reload) so they rebuild from the NEW config. (The old ordering kept
+//      stale settings, then old_config.deinit() freed string slices the new bar
+//      had shallow-copied; a use-after-free on the next draw.)
+//   3. grabKeybindings() runs post-swap because fillGrabCookies() reads the
+//      live config.
+//   4. `committed` flips the errdefer: pre-swap failure frees new_config;
+//      post-swap failure keeps it and frees the displaced old_config. (Every
+//      post-swap call is void today, so this is latent-but-safe.)
+//   5. applyCarouselSettings() runs post-swap so a rejected reload never leaks
+//      staged carousel settings.
 fn handleConfigReload() !void {
     debug.info("Reload requested", .{});
     const cs = core.getState();
@@ -279,9 +268,7 @@ fn handleConfigReload() !void {
     debug.info("Reload complete", .{});
 }
 
-// Event loop
-
-/// Drains pending XCB events for this batch, then runs post-batch housekeeping.
+// Drains pending XCB events for this batch, then runs post-batch housekeeping.
 fn handleXcbEvents() void {
     const conn = core.getState().conn;
 
@@ -303,7 +290,6 @@ fn handleXcbEvents() void {
     // spawn queue entry.
     input.drainPendingSpawns();
 
-    // Post-batch housekeeping: fan out to all plugins
     inline for (plugins.list[0..plugins.count]) |p| {
         if (p.post_batch) |f| f() catch |err| debug.err("Plugin post_batch failed: {}", .{err});
     }
@@ -329,7 +315,6 @@ pub fn run() !void {
     };
 
     while (utils.running.load(.acquire)) {
-        // Compute poll timeout from plugins that have a poll_timeout_ms hook
         var poll_timeout_ms: i32 = @intCast(clock.nextTickWaitMs());
         var cursor_is_blinking = false;
         inline for (plugins.list[0..plugins.count]) |p| {
@@ -377,7 +362,6 @@ pub fn run() !void {
                 handleConfigReload() catch |err| debug.err("Reload failed: {}", .{err});
         }
 
-        // End-of-iteration fan-out
         inline for (plugins.list[0..plugins.count]) |p| {
             if (p.iteration_end) |f| _ = f();
         }

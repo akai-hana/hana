@@ -1,5 +1,5 @@
-//! Workspace management
-//! Handles workspace creation, window assignment, and switching between workspaces.
+//! Workspace state and switching logic.
+//! Manages workspace creation, tag operations, focus restoration, and workspace switching.
 
 const std = @import("std");
 
@@ -29,12 +29,11 @@ pub const Workspace = struct {
     layout: TilingLayout,
     /// Per-workspace layout-variant override from config; null = global default.
     variants: ?types.LayoutVariantOverride = null,
-    /// Per-workspace master-width override (master-stack layout); null = global default.
+    /// Master-width override for master-stack layout; null = global default.
     master_width: ?f32 = null,
-    /// Per-workspace master-count override (master-stack layout); null = global default.
+    /// Master-count override for master-stack layout; null = global default.
     master_count: ?u8 = null,
-    /// Per-workspace stack top/bottom balance override (master-stack layout,
-    /// mod+n/mod+o); null = even split (0).
+    /// Master-stack top/bottom balance override (mod+n/mod+o); null = even split (0).
     stack_balance: ?f32 = null,
     /// Window focused here before the user last left; restored on re-entry
     /// when the cursor isn't hovering a window.
@@ -146,7 +145,6 @@ pub fn applyWorkspaceOverrides(
             };
     }
 
-    // Per-workspace master count overrides from [tiling.layouts.master-stack.counts].
     var master_count_lookup: [MAX_WS]?u8 = .{null} ** MAX_WS;
     for (cfg_tiling.workspace_master_count_overrides.items) |o| {
         if (o.workspace_idx < MAX_WS)
@@ -236,14 +234,13 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
     }
 
     const mask = tracking.getWindowWorkspaceMask(win) orelse {
-        try tracking.registerWindow(win, target_ws); // new window: register in tracking
+        try tracking.registerWindow(win, target_ws);
         return;
     };
 
     const target_bit = tracking.workspaceBit(target_ws);
     if (mask == target_bit) return;
 
-    // new_mask is always non-zero: target_bit is always set.
     const new_mask = (mask & ~tracking.workspaceBit(s.current)) | target_bit;
     // Relocate the fullscreen record BEFORE the mask change: setWindowMask's
     // pruneForWorkspaceMask would otherwise drop it (win is no longer tagged
@@ -265,8 +262,6 @@ pub fn moveWindowTo(win: u32, target_ws: u8) !void {
     // No flush: the window has never been mapped, so evictWindow's offscreen
     // configure has no visible effect; the event loop flushes at end-of-batch.
 }
-
-// Tag operations
 
 /// Low-level: set a window's workspace bitmask and clear last_focused on
 /// workspaces it just left. Does not touch screen visibility or tiling.
@@ -291,8 +286,6 @@ inline fn retileRedrawAndFlush() void {
     if (cs.config.tiling.enabled) if (build_options.has_tiling) tiling.retileCurrentWorkspace();
     if (build_options.has_bar) bar.commitInsideGrab();
 }
-
-
 
 /// Remove tag `target_ws` from `win`; the last remaining tag is protected.
 fn tagRemove(s: *State, win: u32, target_ws: u8, target_bit: u64, current_ws: u8) void {
@@ -377,8 +370,6 @@ pub fn tagToggle(win: u32, target_ws: u8, protect_current: bool) void {
         if (build_options.has_bar) bar.scheduleRedraw();
     }
 }
-
-// Workspace switch
 
 pub fn switchTo(ws_id: u8) void {
     const s = getState() orelse return;
@@ -532,7 +523,7 @@ pub inline fn getCurrentWorkspaceObject() ?*Workspace {
 /// Pre-grab: save geometry for floating windows leaving the old workspace.
 /// Floating placement and drag already keep the geometry cache current, so
 /// this only issues a live xcb_get_geometry for the rare window that reaches
-    /// a switch with no cache entry yet. Must run before the grab; any
+/// a switch with no cache entry yet. Must run before the grab; any
 /// round-trip here has to complete before the atomic hide/restore begins.
 fn prefetchAndSaveWindowGeometries(ws: *const Workspace, new_ws: u8) void {
     tracking.prefetchAndSaveGeometry(tracking.workspaceBit(ws.id), &prefetchGeometryFilter, 0, new_ws);
@@ -560,7 +551,7 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
 /// Grab step 2: restore geometry and map every window on the new workspace.
 /// `pending_focus` is the not-yet-applied post-switch target; on a cache miss
 /// it's passed to the retile so focus-driven layouts (monocle) show the right
-    /// window on the first frame instead of reading focus.getFocused(), still
+/// window on the first frame instead of reading focus.getFocused(), still
 /// the old workspace's window until the real setFocus() below.
 fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8, pending_focus: ?u32) void {
     const tiling_active = (if (build_options.has_tiling) tiling.isEnabled() else false);
