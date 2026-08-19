@@ -14,10 +14,6 @@ pub const list: [MAX_PLUGINS]hooks.Plugin = blk: {
         result[n] = @import("bar").plugin;
         n += 1;
     }
-    if (build_options.has_tiling) {
-        result[n] = @import("tiling").plugin;
-        n += 1;
-    }
     if (build_options.has_floating) {
         result[n] = @import("floating").plugin;
         n += 1;

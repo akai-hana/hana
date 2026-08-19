@@ -42,17 +42,17 @@ pub const FocusSuppressReason = enum {
     tiling_operation,
 };
 
-// conn, screen, root, alloc, and config are written once during startup
-// (config is later replaced wholesale on reload; see events.zig). Bundled
-// into one optional State, rather than five `undefined` globals, so any
-// access before init() panics cleanly instead of reading undefined memory.
-// Mirrors the pattern tiling.zig uses for its own state.
+// conn, screen, root, and alloc are written once during startup.
+// config is a heap-allocated pointer swapped atomically on reload
+// (see events.zig handleConfigReload). Bundled into one optional State,
+// rather than five `undefined` globals, so any access before init()
+// panics cleanly instead of reading undefined memory.
 pub const State = struct {
     conn: *xcb.xcb_connection_t,
     screen: *xcb.xcb_screen_t,
     root: WindowId,
     alloc: std.mem.Allocator,
-    config: types.Config,
+    config: *types.Config,
 };
 
 var state: ?State = null;
@@ -65,8 +65,9 @@ pub inline fn getState() *State {
 
 /// Establishes the process-wide core state. Must be called exactly once,
 /// after the X connection is open and config is loaded, before any
-/// other module calls getState().
-pub fn init(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: WindowId, alloc: std.mem.Allocator, config: types.Config) void {
+/// other module calls getState(). Takes ownership of the config pointer;
+/// the caller must not free it.
+pub fn init(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: WindowId, alloc: std.mem.Allocator, config: *types.Config) void {
     state = .{ .conn = conn, .screen = screen, .root = root, .alloc = alloc, .config = config };
 }
 

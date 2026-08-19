@@ -15,7 +15,7 @@ const tracking = @import("tracking");
 const focus = @import("focus");
 
 const layouts = @import("layouts");
-const hooks = @import("hooks");
+
 const build_options = @import("build_options");
 const bar = if (build_options.has_bar) @import("bar") else null;
 const floating = if (build_options.has_floating) @import("floating") else null;
@@ -88,8 +88,7 @@ pub const LayoutConfig = struct {
     min_window_dim: u16,
 
     /// Runtime layout cycle: intersection of config `layouts` and disk-present
-    /// layout files. `stepLayout` walks this so layouts omitted from the
-    /// config are invisible at runtime even if their .zig file exists on disk.
+    /// layout files.
     enabled_layouts: [types.LAYOUT_TABLE.len]Layout,
     enabled_layout_count: u8,
 };
@@ -767,11 +766,7 @@ const layout_cycle: [types.LAYOUT_TABLE.len]Layout = blk: {
     break :blk arr;
 };
 
-/// Resolves a config-file layout name (canonical or alias, e.g. "master-stack",
-/// "master", "monocle") to its `Layout` tag. Driven by types.LAYOUT_TABLE, the
-/// single source of truth also used by config.zig's isKnownLayout/canonicalLayout
-/// and workspaces.zig's layout-name resolution. A linear scan over the table
-/// is plenty fast at n=6 (plus a couple aliases).
+/// Resolves a config-file layout name (canonical or alias) to its `Layout` tag.
 pub inline fn layoutFromString(name: []const u8) ?Layout {
     for (types.LAYOUT_TABLE) |entry| {
         if (std.mem.eql(u8, name, entry.name)) return entry.tag;
@@ -1213,8 +1208,7 @@ inline fn cycleEnum(v: anytype, comptime forward: bool) void {
     v.* = @enumFromInt(if (forward) (cur + 1) % len else (cur + len - 1) % len);
 }
 
-// Focused accessors for hooks.zig
-// Expose live tiling state fields directly instead of returning a pointer to a never-synced static copy.
+// Live tiling state accessors.
 
 pub inline fn isEnabled() bool {
     const s = getStateOpt() orelse return false;
@@ -1241,12 +1235,4 @@ pub fn getTiledWindows() []const u32 {
     return s.windows.items();
 }
 
-pub const plugin = hooks.Plugin{
-    .init = struct {
-        fn f() anyerror!void {
-            init();
-        }
-    }.f,
-    .deinit = deinit,
-    .reload = reloadConfig,
-};
+

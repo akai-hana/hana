@@ -9,6 +9,7 @@ const utils = @import("utils");
 const events = @import("events");
 const signals = @import("signals");
 const config = @import("config");
+const types = @import("types");
 const constants = @import("constants");
 const scale = @import("scale");
 const debug = @import("debug");
@@ -36,13 +37,18 @@ pub fn main() !void {
 
     const loaded_config = try config.load(alloc, x.screen, input.getXkbState());
 
-    // core.init() copies loaded_config by value and becomes the canonical
-    // owner; must run before any core.getState() call.
-    core.init(x.conn, x.screen, x.root, alloc, loaded_config);
+    // Heap-allocate config so core.State holds a pointer; this allows
+    // atomic pointer-swap on reload instead of by-value copy aliasing.
+    const config_ptr = try alloc.create(types.Config);
+    config_ptr.* = loaded_config;
+
+    // core.init() takes ownership of config_ptr; must run before any
+    // core.getState() call.
+    core.init(x.conn, x.screen, x.root, alloc, config_ptr);
 
     // Config.deinit tears the keybind_resolver down internally, before
     // freeing the keybindings whose Actions it points into; so a single
-    // defer on the config suffices (see KeybindResolver in types.zig).
+    // defer on the config pointer suffices (see KeybindResolver in types.zig).
     defer core.getState().config.deinit(alloc);
 
     utils.advertiseEwmhSupport(x.conn, x.screen, x.root);

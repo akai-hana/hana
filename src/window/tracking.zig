@@ -317,17 +317,16 @@ pub fn allWindows() []const Entry {
 /// `bit`, and optionally skipping a single window id (`skip` = 0 = none).
 /// When the caller wants no mask filter it passes an all-ones `bit`.
 pub const WorkspaceIter = struct {
-    entries: []const Entry,
     idx: usize = 0,
     bit: u64,
     skip: u32,
 
     pub fn next(self: *WorkspaceIter) ?Entry {
-        while (self.idx < self.entries.len) {
-            const e = self.entries[self.idx];
+        const entries = allWindows();
+        while (self.idx < entries.len) {
+            const e = entries[self.idx];
             self.idx += 1;
-            if (e.mask & self.bit == 0) continue;
-            if (e.win == self.skip) continue;
+            if (e.mask & self.bit == 0 or e.win == self.skip) continue;
             return e;
         }
         return null;
@@ -335,7 +334,7 @@ pub const WorkspaceIter = struct {
 };
 
 pub fn onWorkspace(bit: u64, skip: u32) WorkspaceIter {
-    return .{ .entries = allWindows(), .bit = bit, .skip = skip };
+    return .{ .bit = bit, .skip = skip };
 }
 
 /// Bitmask selecting "windows on the current workspace" for iteration
@@ -353,7 +352,7 @@ fn currentWorkspaceIterBit() ?u64 {
 
 pub fn windowsOnCurrentWorkspace(skip: u32) WorkspaceIter {
     const bit = currentWorkspaceIterBit() orelse
-        return .{ .entries = &.{}, .skip = skip, .bit = ~@as(u64, 0) };
+        return .{ .skip = skip, .bit = ~@as(u64, 0) };
     return onWorkspace(bit, skip);
 }
 

@@ -20,6 +20,7 @@ const fullscreen = @import("fullscreen");
 const refresh_rate = @import("refresh_rate");
 const signals = @import("signals");
 const build_options = @import("build_options");
+const tiling = if (build_options.has_tiling) @import("tiling") else null;
 
 const FD_XCB = 0;
 const FD_SIGNAL = 1;
@@ -212,58 +213,54 @@ pub fn grabKeybindings() void {
     _ = xcb.xcb_flush(cs.conn);
 }
 
-// Loads and validates a new config, then applies it atomically. On failure
-// the old config remains active.
+// Loads and validates a new config, then applies it atomically via pointer
+// swap. On failure the old config remains active.
 //
 // Ordering is load-bearing:
-//   1. Keybind resolution and DPI scaling run pre-swap on `new_config`.
-//   2. The swap precedes the subsystem reloads (reloadBorders / reloadConfig /
+//   1. Keybind resolution and DPI scaling run pre-swap on the new config.
+//   2. The swap precedes subsystem reloads (reloadBorders / reloadConfig /
 //      bar.reload) so they rebuild from the NEW config. (The old ordering kept
-//      stale settings, then old_config.deinit() freed string slices the new bar
-//      had shallow-copied; a use-after-free on the next draw.)
+//      stale settings, then freed string slices the new bar had shallow-copied;
+//      a use-after-free on the next draw.)
 //   3. grabKeybindings() runs post-swap because fillGrabCookies() reads the
 //      live config.
-//   4. `committed` flips the errdefer: pre-swap failure frees new_config;
-//      post-swap failure keeps it and frees the displaced old_config. (Every
-//      post-swap call is void today, so this is latent-but-safe.)
-//   5. applyCarouselSettings() runs post-swap so a rejected reload never leaks
-//      staged carousel settings.
+//   4. errdefer frees the heap-allocated new config if anything fails pre-swap.
+//      Post-swap all calls are infallible, so no errdefer is needed.
 fn handleConfigReload() !void {
     debug.info("Reload requested", .{});
     const cs = core.getState();
 
-    var new_config = config.loadConfigDefault(cs.alloc) catch |err| {
+    const new_config = config.loadConfigDefault(cs.alloc) catch |err| {
         debug.err("Failed to load: {}, keeping old", .{err});
         return err;
     };
-    var old_config = cs.config;
-    var committed = false;
-    errdefer {
-        if (committed) {
-            old_config.deinit(cs.alloc);
-        } else {
-            new_config.deinit(cs.alloc);
-        }
-    }
+    // Heap-allocate so the swap is a pointer exchange, not a by-value copy.
+    // errdefer frees the allocation if anything fails before the swap.
+    const new_ptr = try cs.alloc.create(@TypeOf(new_config));
+    new_ptr.* = new_config;
+    errdefer new_ptr.deinit(cs.alloc);
 
-    try config.validate(&new_config);
-    new_config.keybind_resolver.build(new_config.keybindings.items, input.getXkbState(), cs.alloc);
-    config.finalizeConfig(&new_config, cs.screen);
+    try config.validate(new_ptr);
+    new_ptr.keybind_resolver.build(new_ptr.keybindings.items, input.getXkbState(), cs.alloc);
+    config.finalizeConfig(new_ptr, cs.screen);
 
-    cs.config = new_config;
-    committed = true;
+    // Swap pointers: new config becomes live, old config is isolated.
+    const old_ptr = cs.config;
+    cs.config = new_ptr;
 
     window.reloadBorders();
     plugins.fanOut("reload", .{});
+    if (build_options.has_tiling) tiling.reloadConfig();
 
-    old_config.deinit(cs.alloc);
+    // Free the displaced old config after subsystem reloads have moved on.
+    old_ptr.deinit(cs.alloc);
 
     grabKeybindings();
 
     // Rebuild after the swap so borrowed key slices point into the new config's memory.
     window.buildRulesMap();
 
-    config.applyCarouselSettings(&new_config);
+    config.applyCarouselSettings(new_ptr);
 
     debug.info("Reload complete", .{});
 }
