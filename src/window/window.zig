@@ -165,6 +165,10 @@ pub fn flushGrabBorders() void {
     markBordersFlushed();
 }
 
+pub fn markBordersFlushed() void {
+    state.borders_flushed_this_batch = true;
+}
+
 /// Shared by restoreFloatGeom and fullscreen.restoreFloatingWindows.
 pub fn moveFloatToDefaultPos(win: u32) void {
     const conn = core.getState().conn;

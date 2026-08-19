@@ -270,7 +270,7 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
     }
 
     if (build_options.has_tiling) tiling.updateWindowFocus(old, win);
-    if (build_options.has_bar) bar.carouprevNotifyFocusChanged(win);
+    if (build_options.has_bar) bar.carouselNotifyFocusChanged(win);
     if (flags.schedule_bar) if (build_options.has_bar) bar.scheduleFocusRedraw(win);
 
     advertiseActiveWindow(win);
@@ -515,7 +515,7 @@ pub fn clearFocus() void {
     state.suppress_reason = .none;
     const cs = core.getState();
     focusNow(cs.conn, cs.root);
-    if (build_options.has_bar) bar.carouprevNotifyFocusChanged(null);
+    if (build_options.has_bar) bar.carouselNotifyFocusChanged(null);
     if (build_options.has_bar) bar.scheduleFocusRedraw(null);
     advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
 }

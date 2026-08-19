@@ -1296,7 +1296,7 @@ fn reverseFindKind(kind: u8) u8 {
     };
 }
 
-fn scanBracket(comptime forward: bool, buf: []const u8, start: usize, open: u8, close: u8) ?usize {
+fn scanBracket(forward: bool, buf: []const u8, start: usize, open: u8, close: u8) ?usize {
     const inc_ch = if (forward) open else close;
     const dec_ch = if (forward) close else open;
     var p: isize = @intCast(start);

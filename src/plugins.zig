@@ -28,7 +28,9 @@ pub const list: [MAX_PLUGINS]hooks.Plugin = blk: {
 
 pub const count: usize = count: {
     var n: usize = 0;
-    inline for (list) |p| if (p.init != null) n += 1;
+    for (list) |p| {
+        if (p.init != null) n += 1;
+    }
     break :count n;
 };
 

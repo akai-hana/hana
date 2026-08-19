@@ -208,7 +208,7 @@ fn injectShared(mod: *std.Build.Module, ctx: SharedBuildContext) void {
     mod.addImport("fallback_toml", ctx.fallback_toml);
 }
 
-fn pathExists(root: std.fs.Dir, io: anytype, rel_path: []const u8) bool {
+fn pathExists(root: std.Io.Dir, io: anytype, rel_path: []const u8) bool {
     if (root.openDir(io, rel_path, .{})) |*dir| {
         dir.close(io);
         return true;
