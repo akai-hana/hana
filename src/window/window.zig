@@ -1273,10 +1273,9 @@ pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t) void {
     if (event.child == 0) return;
     // Guard against unmanaged subwindows (e.g. embedded GTK widgets): a root
     // LeaveNotify with non-zero child doesn't guarantee a managed toplevel.
-    // This avoids a spurious workspace lookup for every non-toplevel the
-    // pointer traverses, consistent with handleEnterNotify's findManagedWindow.
-    if (!tracking.isManaged(event.child)) return;
-    maybeFocusWindow(event.child);
+    // Walk up to the managed toplevel, consistent with handleEnterNotify's
+    // findManagedWindow.
+    maybeFocusWindow(findManagedWindow(core.getState().conn, event.child, tracking.isManaged));
 }
 
 pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void {

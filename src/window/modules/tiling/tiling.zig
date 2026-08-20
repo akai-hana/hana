@@ -975,12 +975,15 @@ fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
     if (opts.for_ws != null) {
         const saved_width = s.config.master_width;
         const saved_count = s.config.master_count;
+        const saved_balance = s.config.stack_balance;
         defer {
             s.config.master_width = saved_width;
             s.config.master_count = saved_count;
+            s.config.stack_balance = saved_balance;
         }
         s.config.master_width = resolveWorkspaceOverride(f32, "master_width", s.config.master_width, wss, target_ws);
         s.config.master_count = resolveWorkspaceOverride(u8, "master_count", s.config.master_count, wss, target_ws);
+        s.config.stack_balance = resolveWorkspaceOverride(f32, "stack_balance", s.config.stack_balance, wss, target_ws);
     }
 
     invokeLayout(

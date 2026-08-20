@@ -5,6 +5,7 @@ const std = @import("std");
 const build = @import("build_options");
 
 const core = @import("core");
+const xcb = core.xcb;
 const utils = @import("utils");
 const debug = @import("debug");
 const window = @import("window");
@@ -138,7 +139,7 @@ pub fn minimizeWindow() void {
     } else if (cs.config.tiling.enabled) {
         if (build.has_tiling) tiling.retileCurrentWorkspace();
     }
-    if (build.has_bar) bar.commitInsideGrab();
+    if (build.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(cs.conn);
 }
 
 // Restore a window that has already been removed from g_minimized.
@@ -159,6 +160,8 @@ fn restoreWindowImpl(win: u32, saved_fs: ?utils.Rect, tiling_index: ?usize) void
         // its dimensions but is permanently stuck outside the tiled layout.
         if (tiling_index) |ti| if (build.has_tiling) tiling.addWindowAtFilteredIndex(win, ti);
 
+        _ = xcb.xcb_map_window(core.getState().conn, win);
+
         // enterFullscreen owns its own server grab, so we must not be inside one.
         // Use scheduleRedraw (next event-loop iteration) rather than redrawInsideGrab.
         focus.setFocus(win, .window_spawn);
@@ -175,6 +178,7 @@ fn restoreWindowImpl(win: u32, saved_fs: ?utils.Rect, tiling_index: ?usize) void
     // focus.setFocusWithModel).
     const focus_ctx = focus.FocusContext.resolve(win);
     utils.grabServer(conn);
+    _ = xcb.xcb_map_window(conn, win);
 
     if (cs.config.tiling.enabled) {
         if (tiling_index) |ti| {
@@ -198,7 +202,7 @@ fn restoreWindowImpl(win: u32, saved_fs: ?utils.Rect, tiling_index: ?usize) void
         focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
     }
 
-    if (build.has_bar) bar.commitInsideGrab();
+    if (build.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(cs.conn);
 }
 
 pub const RestoreOrder = enum { lifo, fifo };
@@ -291,6 +295,7 @@ fn restorePlainWindowsTiling(plain_wins: []MinimizedRecord, focus_target: u32, f
         }
     }.lt);
     for (plain_wins) |rec| {
+        _ = xcb.xcb_map_window(core.getState().conn, rec.id);
         if (rec.entry.tiling_index) |ti|
             if (build.has_tiling) tiling.addWindowAtFilteredIndex(rec.id, ti)
         else
@@ -342,11 +347,14 @@ pub fn unminimizeAll() void {
         if (cs.config.tiling.enabled) {
             restorePlainWindowsTiling(plain_wins, focus_target, focus_ctx.model.?);
         } else {
-            for (plain_wins) |rec| window.restoreFloatGeom(rec.id);
+            for (plain_wins) |rec| {
+                _ = xcb.xcb_map_window(conn, rec.id);
+                window.restoreFloatGeom(rec.id);
+            }
             focus.setFocusWithModel(focus_target, .window_spawn, focus_ctx.model.?);
         }
 
-        if (build.has_bar) bar.commitInsideGrab();
+        if (build.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(conn);
     }
 
     // Each fullscreen window needs its own grab (enterFullscreen owns it).

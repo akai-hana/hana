@@ -361,7 +361,7 @@ pub fn run() !void {
         }
 
         inline for (plugins.list[0..plugins.count]) |p| {
-            if (p.iteration_end) |f| _ = f();
+            if (p.iteration_end) |f| _ = f(); // return value reserved, currently unused
         }
     }
 }

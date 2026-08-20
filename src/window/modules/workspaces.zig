@@ -285,7 +285,7 @@ fn setWindowMask(s: *State, win: u32, new_mask: u64) void {
 inline fn retileRedrawAndFlush() void {
     const cs = core.getState();
     if (cs.config.tiling.enabled) if (build_options.has_tiling) tiling.retileCurrentWorkspace();
-    if (build_options.has_bar) bar.commitInsideGrab();
+    if (build_options.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(cs.conn);
 }
 
 /// Remove tag `target_ws` from `win`; the last remaining tag is protected.
@@ -434,7 +434,7 @@ fn exitAllView(s: *State) void {
     focus.focusOrClear(focus_ctx.target, focus_ctx.model, .workspace_switch);
     if (cs.config.tiling.enabled) if (build_options.has_tiling) tiling.retileCurrentWorkspace();
     if (build_options.has_bar) bar.raiseBar();
-    if (build_options.has_bar) bar.commitInsideGrab();
+    if (build_options.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(cs.conn);
 }
 
 fn enterAllView(s: *State) void {
@@ -672,5 +672,5 @@ fn executeSwitch(old_ws: u8, new_ws: core.WorkspaceId) void {
 
     focus.focusOrClear(focus_ctx.target, focus_ctx.model, .workspace_switch);
     if (build_options.has_bar) bar.raiseBar();
-    if (build_options.has_bar) bar.commitInsideGrab();
+    if (build_options.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(cs.conn);
 }
