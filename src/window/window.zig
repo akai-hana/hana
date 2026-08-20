@@ -224,13 +224,6 @@ const CacheSlot = struct {
     props: CachedProps,
 };
 
-/// Shared by init and deinit so the two paths cannot drift apart.
-/// No allocator required, the backing store is a module-level static array.
-fn setInputModelCacheReady(ready: bool) void {
-    state.?.cache_slots.clear();
-    state.?.cache_ready = ready;
-}
-
 /// Called from handleMapRequest, which fires both cookies synchronously.
 /// MapRequest is a one-time event per window, not a hot path worth pipelining.
 ///
@@ -242,9 +235,12 @@ fn populateFocusCacheFromCookies(
     protocols_cookie: xcb.xcb_get_property_cookie_t,
     hints_cookie: xcb.xcb_get_property_cookie_t,
 ) void {
-    // Resolve both atoms upfront so a failure on either can discard both
-    // cookies together along a single cleanup path.
-    const atoms = resolveProtocolAtoms() orelse {
+    const take_focus_atom = utils.getAtomCached("WM_TAKE_FOCUS") catch {
+        xcb.xcb_discard_reply(conn, protocols_cookie.sequence);
+        xcb.xcb_discard_reply(conn, hints_cookie.sequence);
+        return;
+    };
+    const wm_delete_atom = utils.getAtomCached("WM_DELETE_WINDOW") catch {
         xcb.xcb_discard_reply(conn, protocols_cookie.sequence);
         xcb.xcb_discard_reply(conn, hints_cookie.sequence);
         return;
@@ -255,21 +251,13 @@ fn populateFocusCacheFromCookies(
     const protocols_result = protocols: {
         const r = xcb.xcb_get_property_reply(conn, protocols_cookie, null) orelse break :protocols WMProtocolsProps{};
         defer std.c.free(r);
-        break :protocols protocolPropsFromReply(r, atoms.take_focus, atoms.wm_delete);
+        break :protocols protocolPropsFromReply(r, take_focus_atom, wm_delete_atom);
     };
 
     putCachedProps(win, .{
         .accepts_input = extractWMHintsInput(conn, hints_cookie),
         .wm_delete = protocols_result.wm_delete,
     });
-}
-
-/// Returns null if any atom is not cached (should not happen after initAtomCache).
-inline fn resolveProtocolAtoms() ?struct { protocols: u32, take_focus: u32, wm_delete: u32 } {
-    const protocols = utils.getAtomCached("WM_PROTOCOLS") catch return null;
-    const take_focus = utils.getAtomCached("WM_TAKE_FOCUS") catch return null;
-    const wm_delete = utils.getAtomCached("WM_DELETE_WINDOW") catch return null;
-    return .{ .protocols = protocols, .take_focus = take_focus, .wm_delete = wm_delete };
 }
 
 /// Returns null when the WM_PROTOCOLS atom is not yet interned.
@@ -281,41 +269,21 @@ fn fireWMProtocolsQuery(
     return xcb.xcb_get_property(conn, property_no_delete, win, protocols_atom, xcb.XCB_ATOM_ATOM, 0, max_property_length);
 }
 
-/// Shared WM_HINTS input-field parser used by both the cookie path and the
-/// live-query path. Accepts the already-decoded property data slice so the
-/// two callers can each handle their own reply lifetime.
-///
-/// Returns true when the input flag is unset, the field is absent, or the
-/// field is explicitly set to True, matching ICCCM §4.1.2.4 defaults.
-inline fn parseWMHintsInputFromData(hints: [*]const u32, value_len: u32) bool {
-    const input_flag_set = (hints[wm_hints_flags_field] & wm_hints_input_flag) != 0;
-    const has_input_field = value_len > @as(u32, wm_hints_input_field);
-    if (!input_flag_set or !has_input_field) return true;
-    return hints[wm_hints_input_field] != 0;
-}
-
-/// Returns true when absent (assume True per ICCCM) or explicitly True.
-fn extractWMHintsInput(
+/// Drains the WM_HINTS cookie and returns the ICCCM input flag. Returns true
+/// when absent, when the flag is unset, or when the field is explicitly True,
+/// matching ICCCM §4.1.2.4 defaults.
+inline fn extractWMHintsInput(
     conn: core.Connection,
     hints_cookie: xcb.xcb_get_property_cookie_t,
 ) bool {
     const r = xcb.xcb_get_property_reply(conn, hints_cookie, null) orelse return true;
     defer std.c.free(r);
     if (r.*.format != 32 or r.*.value_len < 1) return true;
-    return parseWMHintsInputFromData(u32Values(r), r.*.value_len);
-}
-
-/// Called on window destruction to prevent stale entries from accumulating
-/// over the session. Swap-remove keeps the live region dense.
-fn uncacheWindowFocusProps(win: u32) void {
-    if (!state.?.cache_ready) return;
-    if (state.?.cache_slots.indexOfById(win)) |i| state.?.cache_slots.swapRemove(i);
-}
-
-inline fn getCachedProps(win: u32) ?CachedProps {
-    if (!state.?.cache_ready) return null;
-    const i = state.?.cache_slots.indexOfById(win) orelse return null;
-    return state.?.cache_slots.items[i].props;
+    const hints = u32Values(r);
+    const input_flag_set = (hints[wm_hints_flags_field] & wm_hints_input_flag) != 0;
+    const has_input_field = r.*.value_len > @as(u32, wm_hints_input_field);
+    if (!input_flag_set or !has_input_field) return true;
+    return hints[wm_hints_input_field] != 0;
 }
 
 /// Silently drops the entry when the cache is full;
@@ -331,11 +299,15 @@ fn putCachedProps(win: u32, props: CachedProps) void {
     }
 }
 
-/// Used by cache-miss paths so the populate logic lives in exactly one place.
-/// Cache misses are expected to be extremely rare (every window is populated
-/// at map time), so the extra WM_PROTOCOLS round trip here is not worth
-/// optimizing away.
-fn queryAndCacheProps(conn: core.Connection, win: u32) CachedProps {
+/// Returns cached props if available, otherwise performs a live query, caches
+/// the result, and returns it. Used by cache-miss paths so the populate logic
+/// lives in exactly one place.
+fn getOrQueryCachedProps(conn: core.Connection, win: u32) CachedProps {
+    if (state.?.cache_ready) {
+        if (state.?.cache_slots.indexOfById(win)) |i| {
+            return state.?.cache_slots.items[i].props;
+        }
+    }
     const props = CachedProps{
         .accepts_input = queryWMHintsAcceptsInput(conn, win),
         .wm_delete = queryWMProtocolsProps(conn, win).wm_delete,
@@ -350,10 +322,7 @@ fn queryAndCacheProps(conn: core.Connection, win: u32) CachedProps {
 /// Focus changes are human-triggered and infrequent, so the extra round trip
 /// is not perceptible.
 pub fn getInputModel(conn: core.Connection, win: u32) InputModel {
-    const accepts_input = if (getCachedProps(win)) |props|
-        props.accepts_input
-    else
-        queryAndCacheProps(conn, win).accepts_input;
+    const accepts_input = getOrQueryCachedProps(conn, win).accepts_input;
 
     const supports_take_focus = queryWMProtocolsProps(conn, win).take_focus;
 
@@ -362,8 +331,7 @@ pub fn getInputModel(conn: core.Connection, win: u32) InputModel {
 
 /// Falls back to a live query only on a genuine cache miss (extremely rare).
 pub fn supportsWMDeleteCached(conn: core.Connection, win: u32) bool {
-    if (getCachedProps(win)) |props| return props.wm_delete;
-    return queryAndCacheProps(conn, win).wm_delete;
+    return getOrQueryCachedProps(conn, win).wm_delete;
 }
 
 /// Used by focus.zig to overlap the round-trip latency of the WM_TAKE_FOCUS
@@ -413,7 +381,11 @@ fn dispatchTakeFocus(
     time: u32,
     cookie: ?xcb.xcb_get_property_cookie_t,
 ) void {
-    const atoms = resolveProtocolAtoms() orelse {
+    const protocols_atom = utils.getAtomCached("WM_PROTOCOLS") catch {
+        if (cookie) |c| xcb.xcb_discard_reply(conn, c.sequence);
+        return;
+    };
+    const take_focus_atom = utils.getAtomCached("WM_TAKE_FOCUS") catch {
         if (cookie) |c| xcb.xcb_discard_reply(conn, c.sequence);
         return;
     };
@@ -422,7 +394,7 @@ fn dispatchTakeFocus(
     const proto_reply = xcb.xcb_get_property_reply(conn, proto_cookie, null) orelse return;
     defer std.c.free(proto_reply);
     if (proto_reply.*.format != 32 or proto_reply.*.value_len == 0) return;
-    dispatchTakeFocusMessage(conn, win, time, atoms.protocols, atoms.take_focus, u32Values(proto_reply)[0..@intCast(proto_reply.*.value_len)]);
+    dispatchTakeFocusMessage(conn, win, time, protocols_atom, take_focus_atom, u32Values(proto_reply)[0..@intCast(proto_reply.*.value_len)]);
 }
 
 /// The X server has been processing the property request since before
@@ -492,15 +464,17 @@ inline fn protocolPropsFromReply(
 }
 
 fn queryWMProtocolsProps(conn: core.Connection, win: u32) WMProtocolsProps {
-    const atoms = resolveProtocolAtoms() orelse return .{};
+    const protocols_atom = utils.getAtomCached("WM_PROTOCOLS") catch return .{};
+    const take_focus_atom = utils.getAtomCached("WM_TAKE_FOCUS") catch return .{};
+    const wm_delete_atom = utils.getAtomCached("WM_DELETE_WINDOW") catch return .{};
 
     const reply = xcb.xcb_get_property_reply(
         conn,
-        xcb.xcb_get_property(conn, property_no_delete, win, atoms.protocols, xcb.XCB_ATOM_ATOM, 0, max_property_length),
+        xcb.xcb_get_property(conn, property_no_delete, win, protocols_atom, xcb.XCB_ATOM_ATOM, 0, max_property_length),
         null,
     ) orelse return .{};
     defer std.c.free(reply);
-    return protocolPropsFromReply(reply, atoms.take_focus, atoms.wm_delete);
+    return protocolPropsFromReply(reply, take_focus_atom, wm_delete_atom);
 }
 
 /// Returns true when absent (assume True per ICCCM) or explicitly True.
@@ -619,7 +593,8 @@ pub fn init(alloc: std.mem.Allocator) !void {
     state.?.spawn_queue.ensureTotalCapacity(alloc, 16) catch |err| {
         std.log.warn("window: spawn queue pre-allocation failed ({s}); will grow on demand", .{@errorName(err)});
     };
-    setInputModelCacheReady(true);
+    state.?.cache_slots.clear();
+    state.?.cache_ready = true;
     buildRulesMap();
 }
 
@@ -640,10 +615,11 @@ pub fn deinit() void {
         state.?.rules_map.deinit(a);
     }
     // InputModel cache must be torn down before focus and tracking, mirroring
-    // the init order where setInputModelCacheReady(true) follows focus.init().
+    // the init order where the cache clear + ready=true follows focus.init().
     // focus.deinit() and tracking.deinit() may sweep managed windows and
     // must not encounter a partially-valid cache.
-    setInputModelCacheReady(false);
+    state.?.cache_slots.clear();
+    state.?.cache_ready = false;
     focus.deinit();
     tracking.deinit();
     // Reset every remaining field (spawn_cursor, child_cache,
@@ -1005,7 +981,9 @@ fn unmanageWindow(win: u32) void {
     const window_workspace = tracking.getWorkspaceForWindow(win);
     const current_ws = tracking.getCurrentWorkspace();
 
-    uncacheWindowFocusProps(win);
+    if (state.?.cache_ready) {
+        if (state.?.cache_slots.indexOfById(win)) |i| state.?.cache_slots.swapRemove(i);
+    }
 
     // Evict child-cache entries pointing at this toplevel, so a new window
     // reusing the same XID can't be mis-identified as its child on the next
@@ -1317,14 +1295,18 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
     if (event.atom == utils.getAtomOrZero("WM_PROTOCOLS")) {
         // Only WM_PROTOCOLS changed: re-query wm_delete, keep accepts_input
         // from cache to avoid a redundant WM_HINTS round-trip.
-        const existing = getCachedProps(event.window);
+        const existing: ?CachedProps = if (!state.?.cache_ready) null else blk: {
+            break :blk if (state.?.cache_slots.indexOfById(event.window)) |i| state.?.cache_slots.items[i].props else null;
+        };
         const wm_delete = queryWMProtocolsProps(conn, event.window).wm_delete;
         const accepts_input = if (existing) |p| p.accepts_input else queryWMHintsAcceptsInput(conn, event.window);
         putCachedProps(event.window, .{ .accepts_input = accepts_input, .wm_delete = wm_delete });
     } else if (event.atom == xcb.XCB_ATOM_WM_HINTS) {
         // Only WM_HINTS changed: re-query accepts_input, keep wm_delete
         // from cache to avoid a redundant WM_PROTOCOLS round-trip.
-        const existing = getCachedProps(event.window);
+        const existing: ?CachedProps = if (!state.?.cache_ready) null else blk: {
+            break :blk if (state.?.cache_slots.indexOfById(event.window)) |i| state.?.cache_slots.items[i].props else null;
+        };
         const accepts_input = queryWMHintsAcceptsInput(conn, event.window);
         const wm_delete = if (existing) |p| p.wm_delete else queryWMProtocolsProps(conn, event.window).wm_delete;
         putCachedProps(event.window, .{ .accepts_input = accepts_input, .wm_delete = wm_delete });

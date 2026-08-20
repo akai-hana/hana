@@ -30,15 +30,13 @@ const floating = if (build_options.has_floating) @import("floating") else null;
 
 // Constants
 
-const mouse_button_left: u8 = 1;
 const mouse_button_middle: u8 = 2;
-const mouse_button_right: u8 = 3;
 const mouse_button_scroll_up: u8 = 4;
 const mouse_button_scroll_down: u8 = 5;
 
 const mouse_buttons = [_]u8{
-    mouse_button_left,      mouse_button_middle,      mouse_button_right,
-    mouse_button_scroll_up, mouse_button_scroll_down,
+    constants.mouse_button_left, mouse_button_middle, constants.mouse_button_right,
+    mouse_button_scroll_up,      mouse_button_scroll_down,
 };
 
 // Named adapter functions for tiling actions that need argument forwarding.
@@ -195,7 +193,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 
     if (tryConfigMouseBind(mods, event.detail, managed_window, event.time)) return;
 
-    if (event.detail == mouse_button_left or event.detail == mouse_button_right) {
+    if (event.detail == constants.mouse_button_left or event.detail == constants.mouse_button_right) {
         if (build_options.has_floating) floating.startDrag(managed_window, event.detail, event.root_x, event.root_y);
         keepDragGrab(event.time);
         return;

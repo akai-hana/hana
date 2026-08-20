@@ -15,9 +15,15 @@ const bench = @import("bench");
 const types = @import("types");
 
 const drawing = @import("drawing");
-const carousel = @import("carousel");
 const build_options = @import("build_options");
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
+
+const SegmentGeometry = struct {
+    seg_x: u16,
+    seg_w: u16,
+    text_x: u16,
+    avail_w: u16,
+};
 
 /// Fixed left indent applied inside every title cell, independent of
 /// `scaledSegmentPadding`.  Provides visual breathing room between the
@@ -118,20 +124,19 @@ pub const TitleSnapshot = struct {
 
     /// Pre-fetched window geometry (see `batchFetchWindowInfosInto`), indexed like
     /// `titles`. Non-blocking fallback for windows the tiling cache doesn't
-    /// cover (e.g. floating), so this path, including the drawCached fast
-    /// path on the carousel thread, never issues an xcb_get_geometry
-    /// round-trip. Empty means no pre-fetched data; fall back to live.
+    /// cover (e.g. floating), so the drawCached fast path never issues an
+    /// xcb_get_geometry round-trip. Empty means no pre-fetched data; fall back
+    /// to live.
     geoms: []const utils.Rect = &.{},
 };
 
 /// Bounded cache of measured title text widths, indexed by window ID.
 ///
 /// `drawSegmentedTitles` used to re-measure every visible segment on every
-/// call, including the `drawCached()` fast path, which can run once per
-/// carousel tick; but most segments' text doesn't change between ticks, so
-/// that was wasted Pango/cairo work. Mirrors the text_w recovery
-/// `carousel.drawScrollingTitle` does for the single-window case, generalised
-/// to the N-window split view.
+/// call, including the `drawCached()` fast path; but most segments' text
+/// doesn't change between frames, so that was wasted Pango/cairo work.
+/// Mirrors the text width recovery pattern, generalised to the N-window
+/// split view.
 ///
 /// A hit requires both the window ID and the title slice's identity (pointer +
 /// length) to match what was measured; anything else falls back to a fresh
@@ -275,9 +280,8 @@ pub fn draw(
 
 /// Draw the title segment using already-cached state.
 ///
-/// Called from a fast-path redraw (focus-only or carousel tick) on the main
-/// thread (scheduleFocusRedraw) or the carousel thread, serialized by
-/// bar.zig's draw_mutex. Unlike `draw()`, this function:
+/// Called from a fast-path redraw (focus-only) on the main thread,
+/// serialized by the main event loop. Unlike `draw()`, this function:
 ///   - uses `snapshot.focused_title` as a read-only slice (the caller passes
 ///     the bar slot's cached buffer contents).
 ///   - never updates the title cache: `ctx.cached_title`/`cached_title_window`
@@ -308,8 +312,8 @@ pub const ClickTarget = struct {
 /// Handles both single-window and split-view layouts: split-view replicates
 /// the exact sort order and pixel-perfect tiling `drawSegmentedTitles` uses,
 /// so the click resolves to whichever window's title is visually under the
-/// cursor. Built from the bar's cached title state like `drawCached`/
-/// `drawTitleOnly`, this makes no blocking X11 round-trip when the cache is
+/// cursor. Built from the bar's cached title state like `drawCached`,
+/// this makes no blocking X11 round-trip when the cache is
 /// populated; a miss falls back to the same live calls `drawSegmentedTitles`
 /// would make.
 ///
@@ -593,15 +597,11 @@ fn collectPropertyReply(
     return extractPropertyString(r, allocator) catch null;
 }
 
-/// If `count` is zero: tears down the carousel, fills the segment background,
-/// and returns the segment's end x so the caller can return immediately.
+/// If `count` is zero: fills the segment background and returns the
+/// segment's end x so the caller can return immediately.
 /// Returns null when there are windows present and rendering should proceed.
 inline fn emptyWorkspace(ctx: TitleRenderContext, count: usize) ?u16 {
     if (count != 0) return null;
-    // No windows: tear down any live carousel so it doesn't keep scrolling
-    // invisibly. Runs under draw_mutex, so use the non-locking teardown;
-    // deinitCarousel() would recursively re-lock (not a recursive mutex).
-    carousel.deinitCarouselLocked();
     ctx.dc.fillRect(ctx.start_x, 0, ctx.width, ctx.height, ctx.config.bg);
     return ctx.start_x + ctx.width;
 }
@@ -617,14 +617,6 @@ fn drawSingleWindow(
     allocator: std.mem.Allocator,
     title_invalidated: bool,
 ) !void {
-    // Free the segmented carousel: the single and segmented paths are
-    // mutually exclusive. Leaving render.seg alive keeps isCarouselActive()
-    // true, so the carousel thread keeps calling drawCached every tick;
-    // drawCached passes minimized_title = "" (no cache for it), so the
-    // single-window draw would blank the minimized title. Mirrors
-    // deinitSingleCarousel() in drawSegmentedTitles.
-    carousel.deinitSegmentedCarousel();
-
     const single_win = snapshot.current_ws_wins[0];
     const is_minimized = snapshot.minimized_set.contains(single_win);
     const workspace_has_focus = snapshot.focused_window != null;
@@ -641,19 +633,13 @@ fn drawSingleWindow(
     const geom = titleTextGeom(ctx, ctx.start_x, ctx.width);
 
     if (is_minimized) {
-        // Pre-fetched on the main thread via fetchWindowTitleInto, zero X11
-        // I/O here, keeping this call free of blocking round-trips.
-        if (snapshot.minimized_title.len > 0)
-            try carousel.drawScrollingTitle(
-                ctx.dc,
-                baseline_y,
-                geom,
-                snapshot.minimized_title,
-                accent,
-                ctx.config.fg,
-                single_win,
-                false,
-            );
+        if (snapshot.minimized_title.len > 0) {
+            const text_w = ctx.dc.measureTextWidth(snapshot.minimized_title);
+            if (text_w <= geom.avail_w)
+                try ctx.dc.drawText(geom.text_x, baseline_y, snapshot.minimized_title, ctx.config.fg)
+            else
+                try ctx.dc.drawTextEllipsis(geom.text_x, baseline_y, snapshot.minimized_title, geom.avail_w, ctx.config.fg);
+        }
         return;
     }
 
@@ -671,16 +657,11 @@ fn drawSingleWindow(
     }
 
     const fg = if (workspace_has_focus) ctx.config.selected_fg else ctx.config.fg;
-    try carousel.drawScrollingTitle(
-        ctx.dc,
-        baseline_y,
-        geom,
-        snapshot.focused_title,
-        accent,
-        fg,
-        snapshot.focused_window,
-        title_invalidated,
-    );
+    const text_w = ctx.dc.measureTextWidth(snapshot.focused_title);
+    if (text_w <= geom.avail_w)
+        try ctx.dc.drawText(geom.text_x, baseline_y, snapshot.focused_title, fg)
+    else
+        try ctx.dc.drawTextEllipsis(geom.text_x, baseline_y, snapshot.focused_title, geom.avail_w, fg);
 }
 
 /// Pixel-perfect tiling: segment i of `count` spans [i*W/count, (i+1)*W/count).
@@ -706,7 +687,7 @@ inline fn accentFor(config: types.BarConfig, is_focused: bool, is_minimized: boo
 /// the text x-offset honors the segment padding plus the title lead-in, and the
 /// available width uses saturating arithmetic (guarding against a u16 wrap from
 /// extreme padding values before the saturating subtraction).
-fn titleTextGeom(ctx: TitleRenderContext, seg_x: u16, seg_w: u16) carousel.SegmentGeometry {
+fn titleTextGeom(ctx: TitleRenderContext, seg_x: u16, seg_w: u16) SegmentGeometry {
     const scaled_padding = ctx.config.scaledSegmentPadding(ctx.height);
     return .{
         .seg_x = seg_x,
@@ -716,14 +697,12 @@ fn titleTextGeom(ctx: TitleRenderContext, seg_x: u16, seg_w: u16) carousel.Segme
     };
 }
 
-/// Renders one segment's title text: scrolls it across the full segment bounds
-/// when the focused window has the carousel enabled (drawSegmentedCarousel
-/// returns false exactly when the text fits), otherwise draws it plainly or
-/// ellipsized to the available width.
+/// Renders one segment's title text: draws statically when the text fits,
+/// otherwise draws it with ellipsis truncation to the available width.
 fn drawSegmentTitle(
     ctx: TitleRenderContext,
     baseline_y: u16,
-    geom: carousel.SegmentGeometry,
+    geom: SegmentGeometry,
     text_w: u16,
     window: u32,
     title: []const u8,
@@ -732,10 +711,10 @@ fn drawSegmentTitle(
     is_focused: bool,
     title_invalidated: bool,
 ) !void {
-    if (is_focused and carousel.isCarouselEnabled()) {
-        if (try carousel.drawSegmentedCarousel(ctx.dc, baseline_y, geom, text_w, title, accent, text_fg, window, title_invalidated)) return;
-    }
-    // Text fits (or carousel disabled / not focused): ellipsis on overflow.
+    _ = window;
+    _ = accent;
+    _ = is_focused;
+    _ = title_invalidated;
     if (text_w <= geom.avail_w)
         try ctx.dc.drawText(geom.text_x, baseline_y, title, text_fg)
     else
@@ -754,18 +733,6 @@ fn drawSegmentedTitles(
     if (windows.len > max_visible_windows)
         debug.warn("Workspace has {} windows; only the first {} are rendered in split-view", .{ windows.len, max_visible_windows });
     const win_count = @min(windows.len, max_visible_windows);
-
-    // Free the single-window carousel: the single and segmented paths are
-    // mutually exclusive.  Leaving it alive would cause the carousel timer
-    // to blit the stale single-window pixmap over the correct split view.
-    carousel.deinitSingleCarousel();
-
-    // Prune the seg-carousel if its window has left the workspace so we never
-    // blit a title for a window that was closed or moved to another workspace.
-    if (carousel.getSegmentedCarouselWindow()) |tracked_win| {
-        if (std.mem.indexOfScalar(u32, windows[0..win_count], tracked_win) == null)
-            carousel.deinitSegmentedCarousel();
-    }
 
     // `window_info_buf`/`owned_titles` must outlive the loop below -- a
     // WindowInfo's `.title` may point into `owned_titles`' memory, and the

@@ -71,6 +71,10 @@ pub const property_max_length: u32 = 256;
 /// Value for the `delete` argument to xcb_get_property that leaves the property intact.
 pub const property_no_delete: u8 = 0;
 
+// Mouse button codes (X11 button numbering)
+pub const mouse_button_left: u8 = 1;
+pub const mouse_button_right: u8 = 3;
+
 // DPI / scaling
 /// Standard DPI for a 1x display. All scale factors are computed relative to this value.
 pub const baseline_dpi: f32 = 96.0;

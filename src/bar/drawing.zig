@@ -76,7 +76,6 @@ pub const FontState = struct {
 };
 
 /// Set the Cairo source color from a packed 0xRRGGBB u32 at full opacity.
-/// Shared by DrawContext.setColor and CarouselPixmap.render.
 inline fn setCairoColor(ctx: *c.cairo_t, color: u32) void {
     const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
     const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
@@ -114,8 +113,7 @@ inline fn createCheckedGC(conn: core.Connection, drawable: u32) !u32 {
 }
 
 /// Positions `layout` at `x` on `baseline` (accounting for the layout's own
-/// baseline, font fallback can shift it per-run) and renders it. Shared by the
-/// DrawContext text paths and CarouselPixmap's two copy positions.
+/// baseline, font fallback can shift it per-run) and renders it.
 inline fn showAtBaseline(ctx: *c.cairo_t, layout: *c.PangoLayout, x: u16, baseline: u16) void {
     c.cairo_move_to(ctx, @as(f64, @floatFromInt(x)), @as(f64, @floatFromInt(baseline)) - pangoToF64(c.pango_layout_get_baseline(layout)));
     c.pango_cairo_show_layout(ctx, layout);
@@ -154,10 +152,8 @@ pub const DrawContext = struct {
     /// drawTextSized can skip the set/restore pair when reusing the same sized font.
     layout_font: ?*c.PangoFontDescription = null,
 
-    /// Stored for CarouselPixmap, needed to create a Cairo surface with the same visual.
+    /// Stored for legacy callers; no longer used by any drawing path.
     visual_type: ?*core.xcb.xcb_visualtype_t = null,
-    /// DPI used when rendering into a CarouselPixmap (must match bar's Pango layout).
-    dpi: f32 = 96.0,
     /// Actual pixel depth of the offscreen pixmap: 32 for ARGB, screen root_depth otherwise.
     depth: u8 = 24,
 
@@ -217,7 +213,6 @@ pub const DrawContext = struct {
             else
                 0xFF,
             .visual_type = visual_type,
-            .dpi = dpi,
             .depth = if (is_argb) 32 else screen.*.root_depth,
         };
 
@@ -424,115 +419,6 @@ pub const MeasureContext = struct {
         self.font.deinit();
         c.g_object_unref(self.font.pango_layout);
         c.cairo_surface_destroy(self.surface);
-    }
-};
-
-/// Pre-renders a title into a wide XCB pixmap once; every carousel tick is a
-/// single xcb_copy_area with zero Pango/Cairo involvement.
-///
-/// Text A is rendered at offset `left_pad`; text B, the seamless loop's second
-/// copy, at `left_pad + cycle_w`:
-///
-///   [ bg * left_pad | text A | bg * gap | text B ]
-///    <-- left_pad --><-text_w-><-- gap --><-text_w->
-///
-/// At scroll offset O (0 <= O < cycle_w), blitFrame copies seg_w pixels from O;
-/// the pixmap is wide enough that the copy is always a single unclipped
-/// xcb_copy_area.
-///
-/// Required: pixmap_w >= cycle_w + seg_w, so [O, O + seg_w) never reads past the
-/// pixmap. If the title is wider than the segment, text B clips at the pixmap
-/// edge (the window only ever sees the first seg_w − left_pad pixels, always in
-/// bounds). Callers (carousel.zig) compute the width before calling init().
-pub const CarouselPixmap = struct {
-    conn: core.Connection,
-    pixmap: u32,
-    gc: u32,
-    surface: *c.cairo_surface_t,
-    pixmap_w: u16,
-    height: u16,
-
-    pub fn init(dc: *const DrawContext, pixmap_w: u16) !CarouselPixmap {
-        const pixmap = createXcbPixmap(dc.conn, dc.depth, dc.offscreen_pixmap, pixmap_w, dc.height);
-        errdefer _ = core.xcb.xcb_free_pixmap(dc.conn, pixmap);
-
-        const gc = try createCheckedGC(dc.conn, pixmap);
-        errdefer _ = core.xcb.xcb_free_gc(dc.conn, gc);
-
-        const vt = dc.visual_type orelse return error.NoVisualType;
-        const surface = c.cairo_xcb_surface_create(
-            dc.conn,
-            pixmap,
-            vt,
-            @intCast(pixmap_w),
-            @intCast(dc.height),
-        ) orelse return error.CairoSurfaceFailed;
-
-        return .{ .conn = dc.conn, .pixmap = pixmap, .gc = gc, .surface = surface, .pixmap_w = pixmap_w, .height = dc.height };
-    }
-
-    pub fn deinit(self: *CarouselPixmap) void {
-        _ = core.xcb.xcb_free_gc(self.conn, self.gc);
-        c.cairo_surface_destroy(self.surface);
-        _ = core.xcb.xcb_free_pixmap(self.conn, self.pixmap);
-    }
-
-    /// Called once per title change; subsequent ticks use blitFrame.
-    pub fn render(
-        self: *CarouselPixmap,
-        dc: *DrawContext,
-        text: []const u8,
-        bg: u32,
-        fg: u32,
-        baseline: u16,
-        left_pad: u16,
-        cycle_w: u16,
-    ) !void {
-        // Fill the entire pixmap with the background colour (XCB, straight-alpha).
-        const packed_bg = dc.withAlpha(bg);
-        _ = core.xcb.xcb_change_gc(self.conn, self.gc, core.xcb.XCB_GC_FOREGROUND, &[_]u32{packed_bg});
-        _ = core.xcb.xcb_poly_fill_rectangle(self.conn, self.pixmap, self.gc, 1, &core.xcb.xcb_rectangle_t{ .x = 0, .y = 0, .width = self.pixmap_w, .height = self.height });
-
-        // Render text glyphs at both copy positions via Cairo + Pango.
-        const ctx = c.cairo_create(self.surface) orelse return error.CairoFailed;
-        defer c.cairo_destroy(ctx);
-
-        const layout = try createPangoLayout(ctx, dc.dpi);
-        defer c.g_object_unref(layout);
-        c.pango_layout_set_font_description(layout, dc.font.current_font_desc);
-        c.pango_layout_set_text(layout, text.ptr, @intCast(text.len));
-
-        setCairoColor(ctx, fg);
-
-        // Copy A at left_pad, copy B one cycle_w to the right; same layout,
-        // two positions. showAtBaseline recomputes the layout baseline per call
-        // (font fallback can shift it per-run), matching the DrawContext paths.
-        for ([_]u16{ left_pad, left_pad + cycle_w }) |x| showAtBaseline(ctx, layout, x, baseline);
-
-        c.cairo_surface_flush(self.surface);
-    }
-
-    /// Single xcb_copy_area; the wide-pixmap layout guarantees source is always in bounds.
-    pub fn blitFrame(
-        self: *const CarouselPixmap,
-        dst: u32,
-        dst_gc: u32,
-        dst_x: u16,
-        offset: u16,
-        seg_w: u16,
-    ) void {
-        _ = core.xcb.xcb_copy_area(
-            self.conn,
-            self.pixmap,
-            dst,
-            dst_gc,
-            @intCast(offset),
-            0,
-            @intCast(dst_x),
-            0,
-            seg_w,
-            self.height,
-        );
     }
 };
 

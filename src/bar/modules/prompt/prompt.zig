@@ -77,10 +77,6 @@ const PromptState = struct {
     cached_caret_top: ?u16 = null,
     cached_caret_h: ?u16 = null,
 
-    // Cached pixel width of the ":" glyph used in colon-command mode.
-    // Constant for a given font; measured once, reused every blink frame.
-    cached_colon_w: ?u16 = null,
-
     hist_entries: []u8 = &.{},
     hist_count: usize = 0,
     hist_head: usize = 0,
@@ -129,7 +125,7 @@ pub fn isActive() bool {
 /// colon-command mode.
 pub fn blinkPollTimeoutMs() i32 {
     if (!g.is_active) return -1;
-    if (g.vim_state.mode == .insert or (vimModeEnabled() and vim.colonInput(&g.vim_state) != null))
+    if (g.vim_state.mode == .insert)
         return cursor_blink_ms;
     return -1;
 }
@@ -151,7 +147,7 @@ pub fn consumeRedrawRequest() bool {
 pub fn init(allocator: std.mem.Allocator, conn: core.Connection) !void {
     if (g.vim_state.buf.len != 0) return; // already initialised
     g.allocator = allocator;
-    g.vim_state = try vim.VimState.init(allocator, vim.default_max_input, vim.default_undo_max);
+    g.vim_state = try vim.VimState.init(allocator, vim.default_max_input);
     g.comp_names = try allocator.alloc(u8, (max_completion_len + 1) * max_completions);
     g.ghost_buf = try allocator.alloc(u8, max_completion_len);
     g.hist_entries = try allocator.alloc(u8, (max_history_line + 1) * max_history);
@@ -274,8 +270,6 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
     else switch (g.vim_state.mode) {
         .insert => vim.handleInsert(&g.vim_state, sym),
         .normal => vim.handleNormal(&g.vim_state, sym),
-        .visual => vim.handleVisual(&g.vim_state, sym),
-        .replace => vim.handleReplace(&g.vim_state, sym),
     };
     return finishKeyPress(action, true);
 }
@@ -970,35 +964,6 @@ fn refreshLayoutCache(
     g.layout_dirty = false;
 }
 
-fn drawColonPillContent(
-    dc: *drawing.DrawContext,
-    pill_x: u16,
-    pill_w: u16,
-    pill_h_pad: u16,
-    baseline: u16,
-    ct: []const u8,
-    white: u32,
-) !void {
-    var ppx: i32 = @as(i32, pill_x) + @as(i32, pill_h_pad);
-    const colon_w: i32 = @intCast(g.cached_colon_w orelse blk: {
-        const w = dc.measureTextWidth(":");
-        g.cached_colon_w = w;
-        break :blk w;
-    });
-    try dc.drawText(@intCast(ppx), baseline, ":", white);
-    ppx += colon_w;
-    if (ct.len > 0) {
-        try dc.drawText(@intCast(ppx), baseline, ct, white);
-        ppx += @intCast(dc.measureTextWidth(ct));
-    }
-    const caret_top = g.cached_caret_top.?;
-    const caret_h = g.cached_caret_h.?;
-    const pill_inner_end: i32 = @as(i32, pill_x) + @as(i32, pill_w) - @as(i32, pill_h_pad);
-    if (g.is_blink_visible and ppx < pill_inner_end) {
-        dc.fillRect(@intCast(ppx), caret_top, cursor_width, caret_h, white);
-    }
-}
-
 /// Right-pinned mode widget: a filled pill (accent bg, white text) with
 /// `pill_h_pad` on both sides so the text never touches the pill edge and
 /// there's a gap to the scrollable region.  In colon-command mode the label is
@@ -1044,41 +1009,10 @@ fn drawPill(
     if (show_pill and pill_fits) {
         const pill_x: u16 = text_end_x - pill_w;
         dc.fillRect(pill_x, cursor_v_pad, pill_w, height -| cursor_v_pad * 2, accent);
-
-        if (vim.colonInput(&g.vim_state)) |ct| {
-            try drawColonPillContent(dc, pill_x, pill_w, pill_h_pad, baseline, ct, white);
-        } else {
-            try dc.drawText(pill_x + pill_h_pad, baseline, mode_label, white);
-        }
+        try dc.drawText(pill_x + pill_h_pad, baseline, mode_label, white);
     }
 
     return scroll_end_x;
-}
-
-/// Visual mode: highlight `buf[sel[0]..sel[1]]` with an accent block and
-/// inverse text; everything before/after is drawn plain.
-fn drawVisualMode(
-    dc: *drawing.DrawContext,
-    height: u16,
-    baseline: u16,
-    text_left_x: u16,
-    scroll_end_x: u16,
-    ellipsis_end_x: u16,
-    px: *i32,
-    accent: u32,
-    bg: u32,
-    fg: u32,
-) !void {
-    const sel = vim.visualRange(&g.vim_state);
-    const pre_sel = g.vim_state.buf[0..sel[0]];
-    const post_sel = g.vim_state.buf[sel[1]..g.vim_state.len];
-
-    if (pre_sel.len > 0)
-        try drawSpan(dc, px, text_left_x, scroll_end_x, baseline, pre_sel, null, fg);
-
-    try drawBlockCursor(dc, px, .{ .text_left_x = text_left_x, .scroll_end_x = scroll_end_x, .baseline = baseline, .height = height, .accent = accent, .bg = bg, .fg = fg }, g.vim_state.buf, sel[0], sel[1], null, false);
-
-    try drawPostSpan(dc, px.*, text_left_x, ellipsis_end_x, baseline, post_sel, fg);
 }
 
 /// Insert mode: blinking thin caret; the caret position does not consume its
@@ -1111,9 +1045,7 @@ fn drawInsertMode(
     try drawPostSpan(dc, px.*, text_left_x, ellipsis_end_x, baseline, g.vim_state.buf[g.vim_state.cursor..g.vim_state.len], fg);
 }
 
-/// NORMAL / REPLACE: full-character block cursor.  When colon-command mode is
-/// active the cursor lives in the pill widget, so the character underneath is
-/// shown as plain text instead of being boxed.
+/// NORMAL: full-character block cursor.
 fn drawNormalMode(
     dc: *drawing.DrawContext,
     height: u16,
@@ -1125,7 +1057,6 @@ fn drawNormalMode(
     accent: u32,
     bg: u32,
     fg: u32,
-    colon_active: bool,
 ) !void {
     const pre_text = g.vim_state.buf[0..g.vim_state.cursor];
     const cur_hi = @min(g.vim_state.cursor + 1, g.vim_state.len);
@@ -1133,7 +1064,7 @@ fn drawNormalMode(
     if (pre_text.len > 0)
         try drawSpan(dc, px, text_left_x, scroll_end_x, baseline, pre_text, g.cached_pre_w, fg);
 
-    try drawBlockCursor(dc, px, .{ .text_left_x = text_left_x, .scroll_end_x = scroll_end_x, .baseline = baseline, .height = height, .accent = accent, .bg = bg, .fg = fg }, g.vim_state.buf, g.vim_state.cursor, cur_hi, g.cached_caret_w, colon_active);
+    try drawBlockCursor(dc, px, .{ .text_left_x = text_left_x, .scroll_end_x = scroll_end_x, .baseline = baseline, .height = height, .accent = accent, .bg = bg, .fg = fg }, g.vim_state.buf, g.vim_state.cursor, cur_hi, g.cached_caret_w, false);
 
     const post_text: []const u8 = if (g.vim_state.cursor < g.vim_state.len)
         g.vim_state.buf[g.vim_state.cursor + 1 .. g.vim_state.len]
@@ -1160,7 +1091,6 @@ fn drawActive(
     const bg = config.drunBg();
     const fg = config.drunFg();
     const prompt = config.drun_prompt orelse types.default_drun_prompt;
-    const vim_mode = vimModeEnabled();
 
     dc.fillRect(start_x, 0, width, height, bg);
 
@@ -1191,13 +1121,10 @@ fn drawActive(
     var px: i32 = @as(i32, text_left_x) - @as(i32, scroll_x);
     try drawSpan(dc, &px, text_left_x, scroll_end_x, baseline, prompt, prompt_w, accent);
 
-    // Mode-specific text rendering.  When colon-command mode is active the
-    // cursor lives in the pill widget, not here.
-    const colon_active = vim_mode and vim.colonInput(&g.vim_state) != null;
+    // Mode-specific text rendering.
     switch (g.vim_state.mode) {
-        .visual => try drawVisualMode(dc, height, baseline, text_left_x, scroll_end_x, ellipsis_end_x, &px, accent, bg, fg),
         .insert => try drawInsertMode(dc, baseline, text_left_x, scroll_end_x, ellipsis_end_x, &px, accent, fg),
-        else => try drawNormalMode(dc, height, baseline, text_left_x, scroll_end_x, ellipsis_end_x, &px, accent, bg, fg, colon_active),
+        else => try drawNormalMode(dc, height, baseline, text_left_x, scroll_end_x, ellipsis_end_x, &px, accent, bg, fg),
     }
 
     dc.blitAndFlush(start_x, width);
