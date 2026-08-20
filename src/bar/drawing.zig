@@ -9,7 +9,7 @@ const debug = @import("debug");
 const c = @import("render");
 
 /// Falls back to the root visual if no matching depth is found.
-pub fn findVisualByDepth(screen: *core.xcb.xcb_screen_t, depth: u8) u32 {
+pub fn findVisualByDepth(screen: core.Screen, depth: u8) u32 {
     var di = core.xcb.xcb_screen_allowed_depths_iterator(screen);
     while (di.rem > 0) : (core.xcb.xcb_depth_next(&di)) {
         if (di.data.*.depth != depth) continue;
@@ -68,8 +68,8 @@ pub const FontState = struct {
             null,
         );
         defer c.pango_font_metrics_unref(metrics);
-        const ascent: i16 = @intCast(@divTrunc(c.pango_font_metrics_get_ascent(metrics), c.PANGO_SCALE));
-        const descent: i16 = @intCast(@divTrunc(c.pango_font_metrics_get_descent(metrics), c.PANGO_SCALE));
+        const ascent: i16 = @intCast(@divTrunc(c.pango_font_metrics_get_ascent(metrics), c.pango_scale));
+        const descent: i16 = @intCast(@divTrunc(c.pango_font_metrics_get_descent(metrics), c.pango_scale));
         self.cached_metrics = .{ .ascent = ascent, .descent = descent };
         return .{ ascent, descent };
     }
@@ -85,28 +85,28 @@ inline fn setCairoColor(ctx: *c.cairo_t, color: u32) void {
 }
 
 inline fn pangoToF64(pango_units: c_int) f64 {
-    return @as(f64, @floatFromInt(pango_units)) / c.PANGO_SCALE;
+    return @as(f64, @floatFromInt(pango_units)) / c.pango_scale;
 }
 
 inline fn pxToPango(px: u16) f64 {
-    return @as(f64, @floatFromInt(px)) * c.PANGO_SCALE;
+    return @as(f64, @floatFromInt(px)) * c.pango_scale;
 }
 
 /// Checks an XCB void-cookie; frees the error and returns GCCreationFailed on failure.
-inline fn checkXcbCookie(conn: *core.xcb.xcb_connection_t, cookie: core.xcb.xcb_void_cookie_t) !void {
+inline fn checkXcbCookie(conn: core.Connection, cookie: core.xcb.xcb_void_cookie_t) !void {
     if (core.xcb.xcb_request_check(conn, cookie)) |err| {
         std.c.free(err);
         return error.GCCreationFailed;
     }
 }
 
-inline fn createXcbPixmap(conn: *core.xcb.xcb_connection_t, depth: u8, drawable: u32, w: u16, h: u16) u32 {
+inline fn createXcbPixmap(conn: core.Connection, depth: u8, drawable: u32, w: u16, h: u16) u32 {
     const pixmap = core.xcb.xcb_generate_id(conn);
     _ = core.xcb.xcb_create_pixmap(conn, depth, pixmap, drawable, w, h);
     return pixmap;
 }
 
-inline fn createCheckedGC(conn: *core.xcb.xcb_connection_t, drawable: u32) !u32 {
+inline fn createCheckedGC(conn: core.Connection, drawable: u32) !u32 {
     const gc = core.xcb.xcb_generate_id(conn);
     const cookie = core.xcb.xcb_create_gc_checked(conn, gc, drawable, 0, null);
     try checkXcbCookie(conn, cookie);
@@ -123,7 +123,7 @@ inline fn showAtBaseline(ctx: *c.cairo_t, layout: *c.PangoLayout, x: u16, baseli
 
 pub const DrawContext = struct {
     font: FontState,
-    conn: *core.xcb.xcb_connection_t,
+    conn: core.Connection,
     /// The real X window, only used as the copy destination in flush().
     window: u32,
     /// Off-screen pixmap; all drawing targets this.
@@ -163,7 +163,7 @@ pub const DrawContext = struct {
 
     pub fn initWithVisual(
         allocator: std.mem.Allocator,
-        conn: *core.xcb.xcb_connection_t,
+        conn: core.Connection,
         window: u32,
         width: u16,
         height: u16,
@@ -327,7 +327,7 @@ pub const DrawContext = struct {
     ) !void {
         self.setPangoText(text);
 
-        c.pango_layout_set_width(self.font.pango_layout, @as(i32, max_width) * c.PANGO_SCALE);
+        c.pango_layout_set_width(self.font.pango_layout, @as(i32, max_width) * c.pango_scale);
         c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.END);
         defer {
             c.pango_layout_set_width(self.font.pango_layout, -1);
@@ -445,7 +445,7 @@ pub const MeasureContext = struct {
 /// edge (the window only ever sees the first seg_w − left_pad pixels, always in
 /// bounds). Callers (carousel.zig) compute the width before calling init().
 pub const CarouselPixmap = struct {
-    conn: *core.xcb.xcb_connection_t,
+    conn: core.Connection,
     pixmap: u32,
     gc: u32,
     surface: *c.cairo_surface_t,
@@ -542,7 +542,7 @@ fn createPangoLayout(ctx: *c.cairo_t, dpi: f32) !*c.PangoLayout {
     return layout;
 }
 
-fn findVisualById(conn: *core.xcb.xcb_connection_t, visual_id: u32) ?*core.xcb.xcb_visualtype_t {
+fn findVisualById(conn: core.Connection, visual_id: u32) ?*core.xcb.xcb_visualtype_t {
     var si = core.xcb.xcb_setup_roots_iterator(core.xcb.xcb_get_setup(conn));
     while (si.rem > 0) : (core.xcb.xcb_screen_next(&si)) {
         var di = core.xcb.xcb_screen_allowed_depths_iterator(si.data);
@@ -558,8 +558,8 @@ fn findVisualById(conn: *core.xcb.xcb_connection_t, visual_id: u32) ?*core.xcb.x
 /// Returns the visual matching `visual_id` across all screens, or falls back to
 /// the first visual on `screen`. Errors if the X server has no visuals at all.
 fn resolveVisualType(
-    conn: *core.xcb.xcb_connection_t,
-    screen: *core.xcb.xcb_screen_t,
+    conn: core.Connection,
+    screen: core.Screen,
     visual_id: ?u32,
 ) !*core.xcb.xcb_visualtype_t {
     if (visual_id) |vid| {

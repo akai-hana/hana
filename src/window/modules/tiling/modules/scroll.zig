@@ -152,7 +152,7 @@ pub fn tileWithOffset(
 
         // Park off-screen windows at a sentinel position to keep the cache
         // consistent; the computed x can exceed i16 range.
-        const effective_x: i32 = if (x >= sw_i32 or right <= 0) constants.OFFSCREEN_X_POSITION else x;
+        const effective_x: i32 = if (x >= sw_i32 or right <= 0) constants.offscreen_x_position else x;
         const rect = utils.Rect{
             .x = @intCast(effective_x),
             .y = @intCast(win_y),

@@ -32,9 +32,9 @@ const max_visible_windows: usize = 128;
 
 /// Maximum windows addressed by the batch pre-fetch scratch arrays at once.
 /// `bar.captureStateIntoSlot` hands over the full workspace list, bounded by
-/// `constants.Limits.MAX_TILED_WINDOWS`, larger than `max_visible_windows`,
+/// `constants.Limits.max_tiled_windows`, larger than `max_visible_windows`,
 /// as the snapshot carries a title/geometry entry per window regardless.
-const max_batch_windows: usize = constants.Limits.MAX_TILED_WINDOWS;
+const max_batch_windows: usize = constants.Limits.max_tiled_windows;
 
 /// Off-screen sentinel geometry for minimized or otherwise unresolvable
 /// windows: position sorting places it last, and drawing is skipped.
@@ -84,7 +84,7 @@ pub const TitleRenderContext = struct {
     height: u16,
     start_x: u16,
     width: u16,
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
 
     /// Backing buffer updated by `draw()` on each full render; the bar passes
     /// its contents as `snapshot.focused_title` in subsequent `drawCached()`
@@ -356,7 +356,7 @@ pub fn hitTest(
 /// the workspace has exactly one minimized window, once for it; storing the
 /// results in `TitleSnapshot.focused_title`/`minimized_title`.
 pub fn fetchWindowTitleInto(
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     win: u32,
     buf: *std.ArrayListUnmanaged(u8),
     allocator: std.mem.Allocator,
@@ -390,7 +390,7 @@ pub fn fetchWindowTitleInto(
 /// wait when the reply is already buffered (see `bench.pollReply`). In a
 /// non-bench build this reduces to a single blocking reply call. Returns the
 /// geometry, or null when the reply can't be read.
-fn tryCollectGeometryReply(conn: *xcb.xcb_connection_t, cookie: xcb.xcb_get_geometry_cookie_t) ?utils.Rect {
+fn tryCollectGeometryReply(conn: core.Connection, cookie: xcb.xcb_get_geometry_cookie_t) ?utils.Rect {
     if (bench.pollReply(conn, cookie.sequence)) |rep| {
         const r: *xcb.xcb_get_geometry_reply_t = @ptrCast(@alignCast(rep));
         defer std.c.free(r);
@@ -424,7 +424,7 @@ fn geometryFromReply(r: *xcb.xcb_get_geometry_reply_t) utils.Rect {
 /// tiling cache covers tiled geometry with zero round-trips; minimized
 /// windows are never positioned on screen and get no geometry request.
 const WindowDataBatch = struct {
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     allocator: std.mem.Allocator,
     net_atom: ?u32,
     utf_type: u32,
@@ -437,7 +437,7 @@ const WindowDataBatch = struct {
     needs_xcb_geometry: [max_batch_windows]bool = undefined,
     tiling_geoms: [max_batch_windows]?utils.Rect = undefined,
 
-    fn init(conn: *xcb.xcb_connection_t, allocator: std.mem.Allocator) WindowDataBatch {
+    fn init(conn: core.Connection, allocator: std.mem.Allocator) WindowDataBatch {
         atoms.ensureResolved();
         return .{
             .conn = conn,
@@ -536,7 +536,7 @@ const WindowDataBatch = struct {
 /// Each title dupe is owned by `out_titles`, allocated from `title_allocator`
 /// (the caller's per-batch arena); freed in bulk via `WindowTitles.clear`.
 pub fn batchFetchWindowInfosInto(
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     wins: []const u32,
     focused_idx: ?usize,
     focused_title: []const u8,
@@ -579,7 +579,7 @@ pub fn batchFetchWindowInfosInto(
 /// string value is duped into `allocator`. In a non-bench build this reduces to
 /// a single blocking reply call.
 fn collectPropertyReply(
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     cookie: xcb.xcb_get_property_cookie_t,
     allocator: std.mem.Allocator,
 ) ?[]const u8 {

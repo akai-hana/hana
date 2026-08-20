@@ -61,7 +61,7 @@ var xkb_state: ?xkbcommon.XkbState = null;
 
 /// Initialises the XKB context, keymap, and key state
 /// from the server's current keyboard configuration.
-pub fn initXkb(conn: *xcb.xcb_connection_t) !void {
+pub fn initXkb(conn: core.Connection) !void {
     xkb_state = try xkbcommon.XkbState.init(conn);
 }
 
@@ -92,17 +92,17 @@ pub fn handleMappingNotify() void {
 // Grab setup
 
 /// Grabs mouse buttons on the root window and applies the user's cursor theme.
-pub fn setup(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: u32) void {
+pub fn setup(conn: core.Connection, screen: core.Screen, root: u32) void {
     setupGrabs(conn, root);
     XcbCursor.setupRoot(conn, screen);
 }
 
 /// Grabs Super+Button{1,2,3,4,5} (including the scroll buttons) on the root
-/// window for all LOCK_MODIFIERS combinations (NumLock, CapsLock,
+/// window for all lock_modifiers combinations (NumLock, CapsLock,
 /// ScrollLock, and their combinations).
-fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
+fn setupGrabs(conn: core.Connection, root: u32) void {
     for (mouse_buttons) |button| {
-        for (constants.LOCK_MODIFIERS) |lock| {
+        for (constants.lock_modifiers) |lock| {
             _ = xcb.xcb_grab_button(
                 conn,
                 0,
@@ -115,7 +115,7 @@ fn setupGrabs(conn: *xcb.xcb_connection_t, root: u32) void {
                 root,
                 xcb.XCB_NONE,
                 button,
-                @intCast(constants.MOD_SUPER | lock),
+                @intCast(constants.mod_super | lock),
             );
         }
     }
@@ -158,7 +158,7 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 
     const cs = core.getState();
     const clicked_window = if (event.child != 0) event.child else event.event;
-    const super_held = (event.state & constants.MOD_SUPER) != 0;
+    const super_held = (event.state & constants.mod_super) != 0;
     const mods = utils.normalizeModifiers(event.state);
 
     // The bar selects BUTTON_PRESS directly (not via the Super+Button grab),
@@ -229,7 +229,7 @@ pub fn handleMotionNotify(event: *const xcb.xcb_motion_notify_event_t) void {
 // Window operations
 
 /// Sends a WM_DELETE_WINDOW client message per ICCCM §4.1.2.7.
-fn sendWmDelete(conn: *xcb.xcb_connection_t, win: u32, protos_atom: u32, del_atom: u32) void {
+fn sendWmDelete(conn: core.Connection, win: u32, protos_atom: u32, del_atom: u32) void {
     var event = std.mem.zeroes(xcb.xcb_client_message_event_t);
     event.response_type = xcb.XCB_CLIENT_MESSAGE;
     event.format = 32;
@@ -242,7 +242,7 @@ fn sendWmDelete(conn: *xcb.xcb_connection_t, win: u32, protos_atom: u32, del_ato
 }
 
 /// Force-destroys a window unconditionally via xcb_destroy_window.
-fn forceDestroy(conn: *xcb.xcb_connection_t, win: u32) void {
+fn forceDestroy(conn: core.Connection, win: u32) void {
     _ = xcb.xcb_destroy_window(conn, win);
 }
 
@@ -400,10 +400,10 @@ fn executeSwapMaster(action: *const types.Action) void {
 /// is false, so these calls are always valid regardless of that setting.
 fn executeWorkspaceAction(action: *const types.Action) void {
     switch (action.*) {
-        .switch_workspace => |ws| workspaces.switchTo(ws),
+        .switch_workspace => |ws| workspaces.switchTo(core.WorkspaceId.fromIndex(ws)),
         .move_to_workspace => |ws| if (focus.getFocused()) |win|
-            workspaces.moveWindowTo(win, ws) catch |e| debug.warnOnErr(e, "move_to_workspace"),
-        .toggle_tag => |ws| if (focus.getFocused()) |win| workspaces.tagToggle(win, ws, true),
+            workspaces.moveWindowTo(win, core.WorkspaceId.fromIndex(ws)) catch |e| debug.warnOnErr(e, "move_to_workspace"),
+        .toggle_tag => |ws| if (focus.getFocused()) |win| workspaces.tagToggle(win, core.WorkspaceId.fromIndex(ws), true),
         .all_workspaces => workspaces.switchToAll(),
         .move_to_all_workspaces, .toggle_tag_all => if (focus.getFocused()) |win| workspaces.moveWindowToAll(win),
         else => unreachable,
@@ -430,7 +430,7 @@ fn executeMouseAction(action: *const types.Action, clicked_win: u32) void {
 // Double-fork so the grandchild re-parents to init and the WM never
 // accumulates zombies. A single O_CLOEXEC pipe carries the outcome: success
 // closes its copy automatically; otherwise the intermediate child writes
-// TAG_PID and the grandchild writes TAG_FAILED only if execvp() fails; two
+// tag_pid and the grandchild writes tag_failed only if execvp() fails; two
 // independently-scheduled writers, so messages can arrive in either order
 // (finishSpawn() handles both). EOF ends the conversation; entries resolve via
 // drainPendingSpawns() (every event batch) or reapPendingChildren() (SIGCHLD).
@@ -438,26 +438,26 @@ fn executeMouseAction(action: *const types.Action, clicked_win: u32) void {
 /// Tags for the two possible messages written onto the spawn pipe. Sent as
 /// a leading byte so the reader can tell them apart no matter which order
 /// they arrive in (see finishSpawn()).
-const TAG_PID: u8 = 0;
-const TAG_FAILED: u8 = 1;
+const tag_pid: u8 = 0;
+const tag_failed: u8 = 1;
 
-/// Byte length of a TAG_PID message: the tag plus a raw c_int.
-const PID_MSG_LEN: usize = 1 + @sizeOf(c_int);
+/// Byte length of a tag_pid message: the tag plus a raw c_int.
+const pid_msg_len: usize = 1 + @sizeOf(c_int);
 
 /// Grandchild: detaches from the session and execs the command.
-/// On execvp failure, writes a TAG_FAILED byte to pipe_write before exiting.
+/// On execvp failure, writes a tag_failed byte to pipe_write before exiting.
 /// On success this function never returns far enough to write anything;
 /// pipe_write's O_CLOEXEC copy closes itself as part of the exec.
 fn execAsGrandchild(pipe_write: c_int, cmd_z: [*:0]const u8) noreturn {
     _ = c.setsid();
     _ = c.execvp("/bin/sh", @ptrCast(&[_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z, null }));
-    const msg = [1]u8{TAG_FAILED};
+    const msg = [1]u8{tag_failed};
     _ = c.write(pipe_write, &msg, msg.len);
     std.process.exit(1);
 }
 
 /// Intermediate child: forks the grandchild, forwards its PID over the
-/// spawn pipe tagged as TAG_PID, then exits so the grandchild is
+/// spawn pipe tagged as tag_pid, then exits so the grandchild is
 /// re-parented to init.
 fn forkIntermediate(pipe_write: c_int, cmd_z: [*:0]const u8) noreturn {
     const grandchild_pid = c.fork();
@@ -473,8 +473,8 @@ fn forkIntermediate(pipe_write: c_int, cmd_z: [*:0]const u8) noreturn {
     }
 
     const gp: c_int = grandchild_pid;
-    var msg: [PID_MSG_LEN]u8 = undefined;
-    msg[0] = TAG_PID;
+    var msg: [pid_msg_len]u8 = undefined;
+    msg[0] = tag_pid;
     @memcpy(msg[1..], std.mem.asBytes(&gp));
     _ = c.write(pipe_write, &msg, msg.len);
     _ = c.close(pipe_write);
@@ -485,17 +485,17 @@ fn forkIntermediate(pipe_write: c_int, cmd_z: [*:0]const u8) noreturn {
 //
 // 16 execs within the ~100 ms before /bin/sh execs would be inhuman speed.
 
-const MAX_PENDING_SPAWNS: usize = 16;
+const max_pending_spawns: usize = 16;
 
-/// Largest possible spawn-pipe conversation: a TAG_PID message plus an
-/// optional trailing (or leading) TAG_FAILED byte.
-const SPAWN_MSG_MAX: usize = PID_MSG_LEN + 1;
+/// Largest possible spawn-pipe conversation: a tag_pid message plus an
+/// optional trailing (or leading) tag_failed byte.
+const spawn_msg_max: usize = pid_msg_len + 1;
 
 /// Lifecycle state for a single double-fork spawn.
 const PendingSpawn = struct {
     pid: c_int, // PID of intermediate child; used for targeted waitpid.
     spawn_fd: c_int, // Read end of the spawn pipe (O_NONBLOCK). -1 once done.
-    buf: [SPAWN_MSG_MAX]u8 = undefined, // Accumulates bytes until the conversation ends.
+    buf: [spawn_msg_max]u8 = undefined, // Accumulates bytes until the conversation ends.
     len: usize = 0, // Valid bytes accumulated in buf so far.
     spawn_ws: ?u8, // Target workspace for window.registerSpawn.
 };
@@ -503,7 +503,7 @@ const PendingSpawn = struct {
 // std.BoundedArray was removed in the Zig 0.16 toolchain; utils.BoundedList
 // is the shared fixed-buffer-plus-length stand-in used everywhere this shape
 // is needed.
-var g_pending: utils.BoundedList(PendingSpawn, MAX_PENDING_SPAWNS) = .{};
+var g_pending: utils.BoundedList(PendingSpawn, max_pending_spawns) = .{};
 
 /// Spawns `cmd` as a detached grandchild (double-fork). Returns immediately;
 /// lifecycle is tracked in g_pending and resolved by drainPendingSpawns() /
@@ -526,7 +526,7 @@ fn executeShellCommand(cmd: []const u8) !void {
         break :blk owned.ptr;
     };
 
-    if (g_pending.len >= MAX_PENDING_SPAWNS)
+    if (g_pending.len >= max_pending_spawns)
         debug.warn("spawn: pending table full, spawning '{s}' without workspace routing", .{cmd});
 
     const pipe_fds = utils.makePipe() catch {
@@ -609,7 +609,7 @@ pub fn drainPendingSpawns() void {
 /// registers the spawn for workspace routing.
 ///
 /// Both writes are under PIPE_BUF, so neither is torn or interleaved: a
-/// TAG_FAILED byte anywhere is a reliable failure signal in any arrival
+/// tag_failed byte anywhere is a reliable failure signal in any arrival
 /// order; an empty buffer means the second fork() never ran.
 fn finishSpawn(entry: *PendingSpawn) void {
     const data = entry.buf[0..entry.len];
@@ -620,15 +620,15 @@ fn finishSpawn(entry: *PendingSpawn) void {
     var idx: usize = 0;
     while (idx < data.len) {
         switch (data[idx]) {
-            TAG_PID => {
-                if (idx + PID_MSG_LEN > data.len) {
+            tag_pid => {
+                if (idx + pid_msg_len > data.len) {
                     failed = true;
                     break;
                 }
                 grandchild = std.mem.bytesToValue(c_int, data[idx + 1 ..][0..@sizeOf(c_int)]);
-                idx += PID_MSG_LEN;
+                idx += pid_msg_len;
             },
-            TAG_FAILED => {
+            tag_failed => {
                 failed = true;
                 idx += 1;
             },
@@ -642,7 +642,7 @@ fn finishSpawn(entry: *PendingSpawn) void {
     if (!failed) {
         if (entry.spawn_ws) |ws| {
             const pid_u32: u32 = if (grandchild > 0) @intCast(grandchild) else 0;
-            window.registerSpawn(ws, pid_u32);
+            window.registerSpawn(core.WorkspaceId.fromIndex(ws), pid_u32);
         }
     }
 }
@@ -668,8 +668,8 @@ fn dumpState() void {
     debug.info("Drag active:    {}", .{build_options.has_floating and floating.isDragging()});
 
     fullscreen.forEachFullscreen(struct {
-        fn cb(ws: u8, info: fullscreen.FullscreenInfo) void {
-            debug.info("Fullscreen on workspace {}: {x}", .{ ws, info.window });
+        fn cb(ws: core.WorkspaceId, info: fullscreen.FullscreenInfo) void {
+            debug.info("Fullscreen on workspace {}: {x}", .{ ws.index, info.window });
         }
     }.cb);
     if (!fullscreen.hasAnyFullscreen()) debug.info("Fullscreen: none", .{});
@@ -677,7 +677,7 @@ fn dumpState() void {
     if (workspaces.getState()) |ws_state| {
         debug.info("Current workspace: {}", .{ws_state.current + 1});
         for (ws_state.workspaces, 0..) |_, i|
-            debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(@intCast(i)) });
+            debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(@intCast(i))) });
     }
 
     if (build_options.has_tiling and tiling.isEnabled()) {
@@ -722,7 +722,7 @@ inline fn withTilingGrab(op: *const fn () void) void {
 /// deferring suppression-clearing via beginTilingOpSettle, since `op()`'s
 /// configure_window calls aren't sent until ungrabAndFlush), then release the
 /// server grab and flush everything atomically.
-inline fn finishTilingOp(conn: *xcb.xcb_connection_t, sync_pointer: bool) void {
+inline fn finishTilingOp(conn: core.Connection, sync_pointer: bool) void {
     window.updateFloatingWindowBorders();
     window.markBordersFlushed();
     if (build_options.has_bar) bar.redrawInsideGrab();
@@ -791,7 +791,7 @@ const XcbCursor = struct {
     const Context = opaque {};
 
     extern fn xcb_cursor_context_new(
-        conn: *xcb.xcb_connection_t,
+        conn: core.Connection,
         screen: *xcb.xcb_screen_t,
         ctx: *?*Context,
     ) c_int;
@@ -800,7 +800,7 @@ const XcbCursor = struct {
 
     /// Applies the user's cursor theme to the root window. Falls back silently
     /// if xcb-cursor is unavailable or the cursor cannot be loaded.
-    fn setupRoot(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) void {
+    fn setupRoot(conn: core.Connection, screen: core.Screen) void {
         var cursor_ctx: ?*Context = null;
         if (xcb_cursor_context_new(conn, screen, &cursor_ctx) < 0) return;
         defer xcb_cursor_context_free(cursor_ctx);

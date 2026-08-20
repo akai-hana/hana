@@ -6,23 +6,23 @@ const std = @import("std");
 const utils = @import("utils");
 const input = @import("input");
 
-// End indices of the self-pipe: signal handlers write to PIPE_WRITE; the
-// event loop polls PIPE_READ.
-const PIPE_READ = 0;
-const PIPE_WRITE = 1;
+// End indices of the self-pipe: signal handlers write to pipe_write; the
+// event loop polls pipe_read.
+const pipe_read = 0;
+const pipe_write = 1;
 
 var signal_pipe: [2]std.posix.fd_t = .{ -1, -1 };
 
 // Async-signal-safe handler: writes the signal number as a byte to the pipe.
 fn signalHandler(signo: std.posix.SIG) callconv(.c) void {
     const byte: u8 = @intCast(@intFromEnum(signo));
-    _ = std.os.linux.write(signal_pipe[PIPE_WRITE], &[_]u8{byte}, 1);
+    _ = std.os.linux.write(signal_pipe[pipe_write], &[_]u8{byte}, 1);
 }
 
 /// Creates the signal self-pipe and installs handlers for SIGHUP/SIGTERM/SIGINT/SIGCHLD.
 pub fn setup() !void {
     signal_pipe = try utils.makePipe();
-    utils.setSignalWriteFd(signal_pipe[PIPE_WRITE]);
+    utils.setSignalWriteFd(signal_pipe[pipe_write]);
 
     const sa: std.posix.Sigaction = .{
         .handler = .{ .handler = signalHandler },
@@ -47,7 +47,7 @@ pub fn deinit() void {
 
 /// Read end of the signal self-pipe, for the event loop's poll fd array.
 pub fn readFd() std.posix.fd_t {
-    return signal_pipe[PIPE_READ];
+    return signal_pipe[pipe_read];
 }
 
 // Dispatches a single signal byte to the appropriate handler.
@@ -67,7 +67,7 @@ fn dispatchSignal(byte: u8) void {
 }
 
 // Drain a burst in one syscall rather than one per byte.
-const SIGNAL_DRAIN_BUF = 16;
+const signal_drain_buf = 16;
 
 /// Drains the non-blocking signal pipe and dispatches each signal.
 ///
@@ -75,15 +75,15 @@ const SIGNAL_DRAIN_BUF = 16;
 /// a huge unsigned number an unsigned comparison would never catch. Bitcast to
 /// isize and stop on any non-positive result (error, EOF, or empty).
 pub fn drainAndDispatch(fd: std.posix.fd_t) void {
-    var buf: [SIGNAL_DRAIN_BUF]u8 = undefined;
+    var buf: [signal_drain_buf]u8 = undefined;
     while (true) {
         const rc: isize = @bitCast(std.os.linux.read(fd, &buf, buf.len));
         if (rc <= 0) break; // 0 = EOF on write-end close, negative = error/EAGAIN
         const n: usize = @intCast(rc);
         for (buf[0..n]) |byte| {
             // Wake byte written by utils.reload(): poke the event loop out of
-            // poll, but don't re-dispatch it (see utils.WAKE_BYTE).
-            if (byte == utils.WAKE_BYTE) continue;
+            // poll, but don't re-dispatch it (see utils.wake_byte).
+            if (byte == utils.wake_byte) continue;
             dispatchSignal(byte);
         }
     }

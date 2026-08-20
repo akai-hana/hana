@@ -22,16 +22,33 @@ pub const XK = enum(u32) {
     Delete = 0xffff,
 };
 
+/// Thin wrappers over raw XCB types, decoupling public APIs from the C binding.
+pub const Connection = *xcb.xcb_connection_t;
+pub const Screen = *xcb.xcb_screen_t;
+
 /// Equivalent to xcb_window_t (uint32_t).
 pub const WindowId = u32;
 
-/// Geometry snapshot used by fullscreen and minimize.
-pub const WindowGeometry = struct {
-    x: i16,
-    y: i16,
-    width: u16,
-    height: u16,
-    border_width: u16,
+/// Workspace index wrapper. Prevents confusing workspace indices with
+/// unrelated u8 values (counts, layout indices, etc.) at call sites.
+pub const WorkspaceId = struct {
+    index: u8,
+
+    pub fn fromIndex(i: u8) WorkspaceId {
+        return .{ .index = i };
+    }
+
+    pub fn toIndex(self: WorkspaceId) u8 {
+        return self.index;
+    }
+
+    pub fn eql(self: WorkspaceId, other: WorkspaceId) bool {
+        return self.index == other.index;
+    }
+
+    pub fn order(self: WorkspaceId, other: WorkspaceId) std.math.Order {
+        return std.math.order(u8, self.index, other.index);
+    }
 };
 
 /// Why keyboard focus is temporarily withheld from a window.
@@ -47,8 +64,8 @@ pub const FocusSuppressReason = enum {
 // rather than five `undefined` globals, so any access before init()
 // panics cleanly instead of reading undefined memory.
 pub const State = struct {
-    conn: *xcb.xcb_connection_t,
-    screen: *xcb.xcb_screen_t,
+    conn: Connection,
+    screen: Screen,
     root: WindowId,
     alloc: std.mem.Allocator,
     config: *types.Config,
@@ -66,13 +83,13 @@ pub inline fn getState() *State {
 /// after the X connection is open and config is loaded, before any
 /// other module calls getState(). Takes ownership of the config pointer;
 /// the caller must not free it.
-pub fn init(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: WindowId, alloc: std.mem.Allocator, config: *types.Config) void {
+pub fn init(conn: Connection, screen: Screen, root: WindowId, alloc: std.mem.Allocator, config: *types.Config) void {
     state = .{ .conn = conn, .screen = screen, .root = root, .alloc = alloc, .config = config };
 }
 
 /// Stays outside State: unlike State's fields it has a safe default
 /// (96.0 DPI, no scaling), and is set once during scale detection, never
 /// reassigned afterward.
-pub var dpi_info: std.atomic.Value(f32) = std.atomic.Value(f32).init(constants.BASELINE_DPI);
+pub var dpi_info: std.atomic.Value(f32) = std.atomic.Value(f32).init(constants.baseline_dpi);
 
 

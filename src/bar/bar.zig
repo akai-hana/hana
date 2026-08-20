@@ -84,12 +84,12 @@ pub fn carouselNotifyFocusChanged(win: ?u32) void {
 
 pub const Action = enum { toggle, hide_fullscreen, show_fullscreen };
 
-const MIN_BAR_HEIGHT: u32 = scale.BAR_MIN_HEIGHT_PX;
-const MAX_BAR_HEIGHT: u32 = 200;
-const DEFAULT_BAR_HEIGHT: u32 = 24;
-const FALLBACK_WORKSPACES_WIDTH: u16 = 270;
-const LAYOUT_WIDTH: u16 = 60;
-const TITLE_MIN_WIDTH: u16 = 100;
+const min_bar_height: u32 = scale.bar_min_height_px;
+const max_bar_height: u32 = 200;
+const default_bar_height: u32 = 24;
+const fallback_workspaces_width: u16 = 270;
+const layout_width: u16 = 60;
+const title_min_width: u16 = 100;
 
 // Mirrors input.zig's button numbering (X11 button codes); duplicated rather
 // than imported since input.zig imports this module and a back-import would cycle.
@@ -233,7 +233,7 @@ var gBar: Bar = .{};
 
 /// X11 connection and window handle; stable for the bar's lifetime.
 const WindowCtx = struct {
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     win_id: u32,
     colormap: u32,
     net_wm_name_atom: xcb.xcb_atom_t,
@@ -334,7 +334,7 @@ const State = struct {
 
     fn init(
         allocator: std.mem.Allocator,
-        conn: *xcb.xcb_connection_t,
+        conn: core.Connection,
         win_id: u32,
         colormap: u32,
         width: u16,
@@ -358,7 +358,7 @@ const State = struct {
                 .allocator = allocator,
             },
             .layout_cache = .{
-                .clock_width = dc.measureTextWidth(clock.CLOCK_MEASURE_STRING) + 2 * config.scaledSegmentPadding(height),
+                .clock_width = dc.measureTextWidth(clock.clock_measure_string) + 2 * config.scaledSegmentPadding(height),
             },
         };
         for (&s.snapshots) |*snap| snap.window_titles = WindowTitles.init(allocator);
@@ -406,9 +406,9 @@ const State = struct {
             .workspaces => if (snap.workspace_count > 0)
                 @intCast(snap.workspace_count * tags.getCachedWorkspaceWidth())
             else
-                FALLBACK_WORKSPACES_WIDTH,
-            .layout, .variants => LAYOUT_WIDTH,
-            .title => TITLE_MIN_WIDTH,
+                fallback_workspaces_width,
+            .layout, .variants => layout_width,
+            .title => title_min_width,
             .clock => self.layout_cache.clock_width,
         };
     }
@@ -435,7 +435,7 @@ const State = struct {
             .layout => try layout.draw(r.dc, r.config, r.height, x),
             .variants => try variants.draw(r.dc, r.config, r.height, x),
             .title => prompt.draw(
-                self.titleCtx(x, width orelse TITLE_MIN_WIDTH, &self.title_cache.title, &self.title_cache.title_window),
+                self.titleCtx(x, width orelse title_min_width, &self.title_cache.title, &self.title_cache.title_window),
                 makeTitleSnapshot(
                     snap.focused_window,
                     snap.focused_title.items,
@@ -570,7 +570,7 @@ const State = struct {
             switch (lay.position) {
                 .left, .center => {
                     const remaining = if (lay.position == .center)
-                        @max(TITLE_MIN_WIDTH, self.render.width -| x -| right_total -| scaled_spacing)
+                        @max(title_min_width, self.render.width -| x -| right_total -| scaled_spacing)
                     else
                         0;
                     for (lay.segments.items) |seg| {
@@ -1038,7 +1038,7 @@ fn loadBarFonts(dc: anytype) !void {
 }
 
 /// Set an EWMH atom property on the bar window.
-fn setAtomProperty(conn: *xcb.xcb_connection_t, win_id: u32, prop: u32, atom_type: u32, values: anytype) void {
+fn setAtomProperty(conn: core.Connection, win_id: u32, prop: u32, atom_type: u32, values: anytype) void {
     _ = xcb.xcb_change_property(conn, xcb.XCB_PROP_MODE_REPLACE, win_id, prop, atom_type, 32, @intCast(values.len), values.ptr);
 }
 
@@ -1061,7 +1061,7 @@ fn setWindowProperties(win_id: u32, height: u16) void {
     }
 }
 
-fn destroyBarWindow(conn: *xcb.xcb_connection_t, win_id: u32, colormap: u32) void {
+fn destroyBarWindow(conn: core.Connection, win_id: u32, colormap: u32) void {
     _ = xcb.xcb_destroy_window(conn, win_id);
     if (colormap != 0) _ = xcb.xcb_free_colormap(conn, colormap);
 }
@@ -1096,8 +1096,8 @@ fn calcBarHeightAndFontSize() !u16 {
         }
         return height;
     }
-    const m = measureFontMetrics() orelse return DEFAULT_BAR_HEIGHT;
-    return @intCast(std.math.clamp(@as(u32, @intCast(m.asc + m.desc)), MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
+    const m = measureFontMetrics() orelse return default_bar_height;
+    return @intCast(std.math.clamp(@as(u32, @intCast(m.asc + m.desc)), min_bar_height, max_bar_height));
 }
 
 fn createDrawContext(setup: BarWindowSetup, height: u16) !*drawing.DrawContext {
@@ -1123,7 +1123,7 @@ fn createDrawContext(setup: BarWindowSetup, height: u16) !*drawing.DrawContext {
 fn startBarThreads() void {
     const cs = core.getState();
     carousel.startThread();
-    clock.startThread(cs.alloc, cs.config.bar.clock_format orelse types.DEFAULT_CLOCK_FORMAT);
+    clock.startThread(cs.alloc, cs.config.bar.clock_format orelse types.default_clock_format);
 }
 
 fn stopBarThreads() void {
@@ -1173,7 +1173,7 @@ pub fn reload() void {
         deinit();
         return;
     }
-    const height = calcBarHeightAndFontSize() catch DEFAULT_BAR_HEIGHT;
+    const height = calcBarHeightAndFontSize() catch default_bar_height;
     applyReload(old, height) catch |err| {
         debug.err("Bar reload failed ({s}), keeping old bar", .{@errorName(err)});
     };
@@ -1225,7 +1225,7 @@ pub fn toggleBarSegmentAnchor() void {
         ungrabAndFlush();
         return;
     };
-    const no_fullscreen = fullscreen.getForWorkspace(current_ws) == null;
+    const no_fullscreen = fullscreen.getForWorkspace(core.WorkspaceId.fromIndex(current_ws)) == null;
     if (build_options.has_tiling and no_fullscreen)
         tiling.retileCurrentWorkspace();
     window.updateFloatingWindowBorders();
@@ -1372,7 +1372,7 @@ pub fn dismissAfterPrompt() void {
     if (!gBar.prompt_forced_visible) return;
     gBar.prompt_forced_visible = false;
     const current_ws = tracking.getCurrentWorkspace() orelse 0;
-    const is_fullscreen = fullscreen.getForWorkspace(current_ws) != null;
+    const is_fullscreen = fullscreen.getForWorkspace(core.WorkspaceId.fromIndex(current_ws)) != null;
     const should_show = !is_fullscreen and s.is_globally_visible;
     if (should_show) return; // conditions changed while the prompt was open; stay visible
     s.is_visible = false;
@@ -1385,7 +1385,7 @@ pub fn setBarState(action: Action) void {
     if (action == .toggle) s.is_globally_visible = !s.is_globally_visible;
     const current_ws = tracking.getCurrentWorkspace() orelse 0;
     const bar_forced_hidden_by_fullscreen = action != .hide_fullscreen and
-        fullscreen.getForWorkspace(current_ws) != null;
+        fullscreen.getForWorkspace(core.WorkspaceId.fromIndex(current_ws)) != null;
     const should_be_visible = !bar_forced_hidden_by_fullscreen and s.is_globally_visible and action != .hide_fullscreen;
     if (s.is_visible == should_be_visible and action != .toggle) return;
     s.is_visible = should_be_visible;
@@ -1542,7 +1542,7 @@ fn resolveWorkspaceClick(offset: u16) ?usize {
 /// `offset` is the click position relative to the workspaces segment's start.
 fn handleWorkspacesClick(offset: u16) void {
     const idx = resolveWorkspaceClick(offset) orelse return;
-    workspaces.switchTo(@intCast(idx));
+    workspaces.switchTo(core.WorkspaceId.fromIndex(@intCast(idx)));
 }
 
 /// `offset` is the click position relative to the workspaces segment's start.
@@ -1552,7 +1552,7 @@ fn handleWorkspacesClick(offset: u16) void {
 fn handleWorkspacesRightClick(offset: u16) void {
     const idx = resolveWorkspaceClick(offset) orelse return;
     const win = focus.getFocused() orelse return;
-    workspaces.moveWindowTo(win, @intCast(idx)) catch |e| debug.warnOnErr(e, "bar workspace right-click move");
+    workspaces.moveWindowTo(win, core.WorkspaceId.fromIndex(@intCast(idx))) catch |e| debug.warnOnErr(e, "bar workspace right-click move");
 }
 
 /// `offset` is the click position relative to the title segment's start.
@@ -1633,11 +1633,11 @@ fn retileAllWorkspaces(s: *State, effective_visible: bool) void {
     const ws_state = workspaces.getState() orelse return;
     for (ws_state.workspaces, 0..) |_, idx| {
         const ws_idx: u8 = @intCast(idx);
-        if (tracking.countWindowsOnWorkspace(ws_idx) == 0) continue;
-        if (fullscreen.getForWorkspace(ws_idx) != null) continue;
+        if (tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(ws_idx)) == 0) continue;
+        if (fullscreen.getForWorkspace(core.WorkspaceId.fromIndex(ws_idx)) != null) continue;
         if (!build_options.has_tiling) continue;
         if (ws_idx != ws_state.current)
-            tiling.retileInactiveWorkspace(ws_idx)
+            tiling.retileInactiveWorkspace(core.WorkspaceId.fromIndex(ws_idx))
         else
             tiling.retileCurrentWorkspace();
     }

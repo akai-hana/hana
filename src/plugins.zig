@@ -4,10 +4,10 @@
 const build_options = @import("build_options");
 const hooks = @import("hooks");
 
-const MAX_PLUGINS = 8;
+const max_plugins = 8;
 
-pub const list: [MAX_PLUGINS]hooks.Plugin = blk: {
-    var result: [MAX_PLUGINS]hooks.Plugin = .{hooks.Plugin{}} ** MAX_PLUGINS;
+pub const list: [max_plugins]hooks.Plugin = blk: {
+    var result: [max_plugins]hooks.Plugin = .{hooks.Plugin{}} ** max_plugins;
     var n: usize = 0;
 
     if (build_options.has_bar) {

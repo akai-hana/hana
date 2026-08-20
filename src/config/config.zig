@@ -95,7 +95,7 @@ fn getScalableInRange(
 }
 
 /// Validates a 1-based workspace number, warn-and-skip when outside 1..255 or
-/// exceeding `max` (the workspace count, or constants.MAX_WORKSPACES, the
+/// exceeding `max` (the workspace count, or constants.max_workspaces, the
 /// hard ceiling behind workspaces.zig's fixed-size tables) at parse time.
 fn checkWorkspaceBound(ws_1based: usize, context: []const u8, max: usize) bool {
     if (ws_1based < 1 or ws_1based > 255) {
@@ -129,7 +129,7 @@ fn initDefaultBarLayout(allocator: std.mem.Allocator, cfg: *types.Config) !void 
     }
 }
 
-const MAX_FILE_BYTES = 1024 * 1024;
+const max_file_bytes = 1024 * 1024;
 
 const default_tiling_layout = (types.TilingConfig{}).layout;
 const default_carousel_enabled = (types.BarConfig{}).carousel_enabled;
@@ -137,7 +137,7 @@ const default_scroll_speed = (types.BarConfig{}).scroll_speed;
 const default_carousel_refresh_rate = (types.BarConfig{}).carousel_refresh_rate;
 
 /// Reads `path` into a freshly allocated caller-owned slice;
-/// `error.FileTooLarge` when it exceeds `MAX_FILE_BYTES`. Allocates the full
+/// `error.FileTooLarge` when it exceeds `max_file_bytes`. Allocates the full
 /// ceiling up front and reallocs down; loading is startup/reload-only, so a
 /// stat-then-allocate dance (and its TOCTOU re-check) isn't worth it.
 fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
@@ -156,7 +156,7 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
             const n = try file.readPositionalAll(io, buf[total..], total);
             total = n;
             if (n < buf.len) break;
-            if (n > MAX_FILE_BYTES) {
+            if (n > max_file_bytes) {
                 allocator.free(buf);
                 return error.FileTooLarge;
             }
@@ -165,11 +165,11 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         }
         return allocator.realloc(buf, total) catch buf[0..total];
     };
-    if (stat.size > MAX_FILE_BYTES) return error.FileTooLarge;
+    if (stat.size > max_file_bytes) return error.FileTooLarge;
     const buf = try allocator.alloc(u8, stat.size);
     errdefer allocator.free(buf);
     const n = try file.readPositionalAll(io, buf, 0);
-    if (n > MAX_FILE_BYTES) {
+    if (n > max_file_bytes) {
         allocator.free(buf);
         return error.FileTooLarge;
     }
@@ -340,14 +340,14 @@ pub fn validate(cfg: *const types.Config) !void {
         return error.InvalidConfig;
     }
     // master_width is a ScalableValue: percentages validate as a
-    // [MIN_MASTER_WIDTH, MAX_MASTER_WIDTH] ratio; pixels only as >= 0, since
+    // [min_master_width, max_master_width] ratio; pixels only as >= 0, since
     // the screen width for a ratio isn't available here and the runtime clamps:
     // a pixel-vs-ratio check would wrongly refuse `master_width = 600`.
     const mw = cfg.tiling.master_width;
     if (mw.is_percentage) {
         const mw_ratio: f32 = utils.scaling.asRatio(mw);
-        if (mw_ratio < constants.MIN_MASTER_WIDTH or mw_ratio > constants.MAX_MASTER_WIDTH) {
-            debug.err("Invalid config: master_width {d:.0}% out of [{d:.0}%, {d:.0}%], keeping old", .{ mw_ratio * 100.0, constants.MIN_MASTER_WIDTH * 100.0, constants.MAX_MASTER_WIDTH * 100.0 });
+        if (mw_ratio < constants.min_master_width or mw_ratio > constants.max_master_width) {
+            debug.err("Invalid config: master_width {d:.0}% out of [{d:.0}%, {d:.0}%], keeping old", .{ mw_ratio * 100.0, constants.min_master_width * 100.0, constants.max_master_width * 100.0 });
             return error.InvalidConfig;
         }
     } else if (mw.value < 0.0) {
@@ -402,7 +402,7 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !types.Config {
 fn getDefaultConfig(allocator: std.mem.Allocator) !types.Config {
     var cfg: types.Config = .{};
     errdefer cfg.deinit(allocator);
-    // Canonical LAYOUT_TABLE name (the .master entry), so the default resolves
+    // Canonical layout_table name (the .master entry), so the default resolves
     // via layoutFromString in workspaces.zig and stringToEnum in tiling.zig;
     // the old "master_left" matched neither and worked only via `orelse`.
     const default_layout = try allocator.dupe(u8, "master-stack");
@@ -443,17 +443,17 @@ fn warnUnconsumedSections(doc: *parser.Document) void {
         entry.value_ptr.warnUnconsumed(entry.key_ptr.*);
 }
 
-const MOD_MAP = std.StaticStringMap(u16).initComptime(.{
-    .{ "super", constants.MOD_SUPER },
-    .{ "mod4", constants.MOD_SUPER },
-    .{ "alt", constants.MOD_ALT },
-    .{ "mod1", constants.MOD_ALT },
-    .{ "control", constants.MOD_CONTROL },
-    .{ "ctrl", constants.MOD_CONTROL },
-    .{ "shift", constants.MOD_SHIFT },
+const mod_map = std.StaticStringMap(u16).initComptime(.{
+    .{ "super", constants.mod_super },
+    .{ "mod4", constants.mod_super },
+    .{ "alt", constants.mod_alt },
+    .{ "mod1", constants.mod_alt },
+    .{ "control", constants.mod_control },
+    .{ "ctrl", constants.mod_control },
+    .{ "shift", constants.mod_shift },
 });
 
-const MOUSE_BUTTON_MAP = std.StaticStringMap(u8).initComptime(.{
+const mouse_button_map = std.StaticStringMap(u8).initComptime(.{
     .{ "button1", 1 },      .{ "left_click", 1 },   .{ "leftclick", 1 },
     .{ "button2", 2 },      .{ "middle_click", 2 }, .{ "middleclick", 2 },
     .{ "button3", 3 },      .{ "right_click", 3 },  .{ "rightclick", 3 },
@@ -464,11 +464,11 @@ const MOUSE_BUTTON_MAP = std.StaticStringMap(u8).initComptime(.{
 fn mouseButtonFromName(name: []const u8) ?u8 {
     return switch (types.lowerStringCI(16, name)) {
         .too_long => null,
-        .ok => |r| MOUSE_BUTTON_MAP.get(r.slice()),
+        .ok => |r| mouse_button_map.get(r.slice()),
     };
 }
 
-const ACTION_MAP = std.StaticStringMap(types.Action).initComptime(.{
+const action_map = std.StaticStringMap(types.Action).initComptime(.{
     .{ "close", .close_window },
     .{ "close_window", .close_window },
     .{ "kill", .close_window },
@@ -525,7 +525,7 @@ const GlobEntry = struct {
 /// Maximum number of keys a single `{...}` glob may expand to. Workspace
 /// indices only reach 256 (see tryParseWorkspace), and a larger glob could
 /// only ever produce unreachable exec fallbacks, so expansion stops there.
-const MAX_GLOB_EXPANSION: usize = 256;
+const max_glob_expansion: usize = 256;
 
 /// Wraps `key` as the single unowned GlobEntry returned when a keybind key
 /// has no `{...}` glob (or an unusable one) to expand.
@@ -566,7 +566,7 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
         }
     }
     if (count == 0) return singleGlobEntry(allocator, key_pattern);
-    if (count > MAX_GLOB_EXPANSION) count = MAX_GLOB_EXPANSION;
+    if (count > max_glob_expansion) count = max_glob_expansion;
 
     // Pass 2: allocate and fill directly.
     const entries = try allocator.alloc(GlobEntry, count);
@@ -609,12 +609,12 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
     return entries[0..idx];
 }
 
-const WORKSPACE_ACTION_BASES = std.StaticStringMap(void).initComptime(.{
+const workspace_action_bases = std.StaticStringMap(void).initComptime(.{
     .{ "workspace", {} }, .{ "move_to_workspace", {} }, .{ "toggle_tag", {} },
 });
 
 fn resolveAndParseAction(allocator: std.mem.Allocator, cmd: []const u8, ws_idx: u16, kill_placeholder: ?[]const u8) !types.Action {
-    const ws_str: ?[]u8 = if (ws_idx > 0 and WORKSPACE_ACTION_BASES.has(cmd))
+    const ws_str: ?[]u8 = if (ws_idx > 0 and workspace_action_bases.has(cmd))
         try std.fmt.allocPrint(allocator, "{s}_{d}", .{ cmd, ws_idx })
     else
         null;
@@ -749,7 +749,7 @@ fn parseBindString(str: []const u8) !BindResult {
         // back as `.too_long` instead of overflowing a fixed buffer.
         const mod: ?u16 = switch (types.lowerStringCI(16, trimmed)) {
             .too_long => null,
-            .ok => |r| MOD_MAP.get(r.slice()),
+            .ok => |r| mod_map.get(r.slice()),
         };
         if (mod) |m| {
             modifiers |= m;
@@ -774,7 +774,7 @@ fn keyNameToKeysym(name: []const u8) !u32 {
     var buf: [64]u8 = undefined;
     @memcpy(buf[0..name.len], name);
     buf[name.len] = 0;
-    const keysym = xkbcommon.xkb_keysym_from_name(@ptrCast(&buf), xkbcommon.XKB_KEYSYM_CASE_INSENSITIVE);
+    const keysym = xkbcommon.xkb_keysym_from_name(@ptrCast(&buf), xkbcommon.xkb_keysym_case_insensitive);
     return if (keysym == xkbcommon.XKB_KEY_NoSymbol) error.UnknownKeyName else keysym;
 }
 
@@ -789,7 +789,7 @@ fn tryParseWorkspace(command: []const u8, prefix: []const u8) ?u8 {
 /// of hana's built-in actions but is spelled wrong. Anything not matching one
 /// of these and not containing a shell metacharacter is treated as an ordinary
 /// exec command and left alone (e.g. "firefox", "foot", "/usr/bin/emacs").
-const ACTION_VERB_PREFIXES = [_][]const u8{
+const action_verb_prefixes = [_][]const u8{
     "toggle_", "increase_", "decrease_", "grow_", "stack_", "swap_",
     "move_", "move_to_", "focus_", "close_", "kill_", "minimize_",
     "unminimize_", "cycle_", "scroll_", "workspace_", "all_", "dump_",
@@ -804,14 +804,14 @@ fn looksLikeActionWord(cmd: []const u8) bool {
     for (cmd) |c| {
         if (!(std.ascii.isAlphanumeric(c) or c == '_')) return false;
     }
-    for (ACTION_VERB_PREFIXES) |p| {
+    for (action_verb_prefixes) |p| {
         if (std.mem.startsWith(u8, cmd, p)) return true;
     }
     return false;
 }
 
 fn parseAction(allocator: std.mem.Allocator, cmd: []const u8) !types.Action {
-    if (ACTION_MAP.get(cmd)) |a| return a;
+    if (action_map.get(cmd)) |a| return a;
     if (tryParseWorkspace(cmd, "workspace_")) |ws| return .{ .switch_workspace = ws };
     if (tryParseWorkspace(cmd, "move_to_workspace_")) |ws| return .{ .move_to_workspace = ws };
     if (tryParseWorkspace(cmd, "toggle_tag_")) |ws| return .{ .toggle_tag = ws };
@@ -824,7 +824,7 @@ fn parseAction(allocator: std.mem.Allocator, cmd: []const u8) !types.Action {
 }
 
 /// Scales font size and other DPI-dependent fields. Call once the screen is available.
-pub inline fn finalizeConfig(cfg: *types.Config, screen: *core.xcb.xcb_screen_t) void {
+pub inline fn finalizeConfig(cfg: *types.Config, screen: core.Screen) void {
     const scale_module = @import("scale");
     cfg.bar.scaled_font_size = scale_module.scaleFontSize(cfg.bar.font_size, screen);
 }
@@ -838,7 +838,7 @@ pub inline fn lookupKeybinding(mods: u16, keysym: u32) ?*const types.Action {
 }
 
 /// Canonical startup/reload entry point: load, validate, resolve keybindings, finalize.
-pub fn load(allocator: std.mem.Allocator, screen: *core.xcb.xcb_screen_t, xkb_state: *xkbcommon.XkbState) !types.Config {
+pub fn load(allocator: std.mem.Allocator, screen: core.Screen, xkb_state: *xkbcommon.XkbState) !types.Config {
     var cfg = try loadConfigDefault(allocator);
     errdefer cfg.deinit(allocator);
     try validate(&cfg);
@@ -872,10 +872,10 @@ fn parseDrag(doc: *parser.Document, cfg: *types.Config) void {
 fn parseWorkspaces(doc: *parser.Document, cfg: *types.Config) void {
     const section = doc.getSection("bar.modules.workspaces") orelse doc.getSection("workspaces") orelse return;
     cfg.workspaces.enabled = getInRange(bool, section, "enabled", cfg.workspaces.enabled, null, null);
-    // Cap at MAX_WORKSPACES: the u64 workspace bitmask and fixed-size
+    // Cap at max_workspaces: the u64 workspace bitmask and fixed-size
     // override/fullscreen tables can't represent more, and setWorkspaceCount
     // asserts the same ceiling: a larger count would assert/index OOB.
-    cfg.workspaces.count = getInRange(u8, section, "count", cfg.workspaces.count, 1, @intCast(constants.MAX_WORKSPACES));
+    cfg.workspaces.count = getInRange(u8, section, "count", cfg.workspaces.count, 1, @intCast(constants.max_workspaces));
 }
 
 /// Reads `section_name.enabled` (default true) into `field`. Used for
@@ -941,7 +941,7 @@ fn parseMasterStackCounts(allocator: std.mem.Allocator, doc: *parser.Document, c
             debug.warn("master-stack.counts: invalid workspace key '{s}', skipping", .{entry.key});
             continue;
         };
-        if (!checkWorkspaceBound(ws_1based, "master-stack.counts", constants.MAX_WORKSPACES)) continue;
+        if (!checkWorkspaceBound(ws_1based, "master-stack.counts", constants.max_workspaces)) continue;
         const count_val = entry.value.asInt() orelse {
             debug.warn("master-stack.counts: non-integer count for workspace {}, skipping", .{ws_1based});
             continue;
@@ -972,7 +972,7 @@ fn tryParseVariant(
 }
 
 fn parseTilingVariants(doc: *parser.Document, cfg: *types.Config) void {
-    inline for (types.VARIANT_LAYOUTS) |e| {
+    inline for (types.variant_layouts) |e| {
         const section_name = "tiling.layouts." ++ e.name;
         if (doc.getSection(section_name)) |ms| {
             tryParseVariant(e.variant, ms, e.name, &@field(cfg.tiling, e.field));
@@ -993,7 +993,7 @@ fn isWorkspaceList(s: []const u8) bool {
     return has_digit;
 }
 
-/// Canonicalises a layout name via types.LAYOUT_TABLE's aliases (e.g. "master"
+/// Canonicalises a layout name via types.layout_table's aliases (e.g. "master"
 /// -> "master-stack"), case-insensitively. Returns null for names that are
 /// overlong or match no entry; the caller distinguishes the two for its warning.
 fn canonicalLayout(name: []const u8) ?[]const u8 {
@@ -1001,7 +1001,7 @@ fn canonicalLayout(name: []const u8) ?[]const u8 {
         .too_long => return null,
         .ok => |r| r.slice(),
     };
-    for (types.LAYOUT_TABLE) |entry| {
+    for (types.layout_table) |entry| {
         if (std.mem.eql(u8, lowered, entry.name)) return entry.name;
         for (entry.aliases) |alias| {
             if (std.mem.eql(u8, lowered, alias)) return entry.name;
@@ -1023,7 +1023,7 @@ fn parseLayoutVariant(layout_name: []const u8, variants_str: []const u8) ?types.
         return null;
     }
     const lower_layout = lowered.ok.slice();
-    inline for (types.VARIANT_LAYOUTS) |entry| {
+    inline for (types.variant_layouts) |entry| {
         if (std.mem.eql(u8, lower_layout, entry.name)) {
             const v = std.meta.stringToEnum(entry.variant, variants_str) orelse {
                 debug.warn("Unknown {s} variants '{s}' in layouts array, ignoring", .{ entry.name, variants_str });
@@ -1052,7 +1052,7 @@ fn parseWorkspaceListInto(
             debug.warn("layouts array: invalid workspace number '{s}' for layout '{s}', skipping", .{ trimmed, layout_name });
             continue;
         };
-        if (!checkWorkspaceBound(ws_1based, "layouts array", constants.MAX_WORKSPACES)) continue;
+        if (!checkWorkspaceBound(ws_1based, "layouts array", constants.max_workspaces)) continue;
         try overrides.append(allocator, .{
             .workspace_idx = @intCast(ws_1based - 1),
             .layout_idx = layout_idx,
@@ -1128,7 +1128,7 @@ fn parseLayoutsArray(
 // Field names only, no duplicated default literal; getColor's default is
 // the already-initialised cfg.bar value (leave-alone semantics), so types.zig
 // stays the single place each default is written.
-const BAR_COLOR_FIELDS = [_][]const u8{
+const bar_color_fields = [_][]const u8{
     "bg", "fg", "selected_bg", "selected_fg", "accent_color",
 };
 
@@ -1234,7 +1234,7 @@ fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Con
     }
     cfg.bar.font_size = getScalableInRange(section, "font_size", cfg.bar.font_size, 0.0);
     cfg.bar.spacing = getScalableInRange(section, "segment_spacing", cfg.bar.spacing, 0.0);
-    inline for (BAR_COLOR_FIELDS) |field_name|
+    inline for (bar_color_fields) |field_name|
         @field(cfg.bar, field_name) = getColor(section, field_name, @field(cfg.bar, field_name));
     try assignStrKey(allocator, section, "clock_format", &cfg.bar.clock_format);
     try assignStrKey(allocator, section, "drun_prompt", &cfg.bar.drun_prompt);

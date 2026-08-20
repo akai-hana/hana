@@ -72,8 +72,8 @@ pub fn main() !void {
 }
 
 const X = struct {
-    conn: *xcb.xcb_connection_t,
-    screen: *xcb.xcb_screen_t,
+    conn: core.Connection,
+    screen: core.Screen,
     root: core.WindowId,
 };
 
@@ -93,7 +93,7 @@ fn connectToX() !X {
         conn,
         screen.*.root,
         xcb.XCB_CW_EVENT_MASK,
-        &[_]u32{constants.EventMasks.ROOT_WINDOW},
+        &[_]u32{constants.EventMasks.root_window},
     );
     if (xcb.xcb_request_check(conn, cookie)) |err| {
         debug.err("Another window manager is already running: {*}", .{err});

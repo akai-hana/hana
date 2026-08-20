@@ -53,10 +53,15 @@ pub fn cacheHints(cache: *CacheMap, win: u32, hints: SizeHints) void {
     wd.hints = hints;
 }
 
+/// Canonical signature every layout module's `tileWithOffset` must conform to.
+/// The second parameter is always `*tiling.State`, but we use `*anyopaque`
+/// here so the type alias lives in layouts.zig without a circular import.
+pub const LayoutFn = *const fn (*const LayoutCtx, *anyopaque, []const u32, u16, u16, u16) void;
+
 /// Context passed to every layout module's `tileWithOffset`. Carries the XCB
 /// connection and cache by pointer so layouts have no module-level globals.
 pub const LayoutCtx = struct {
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     /// Pointer into tiling.State.cache. Always non-null during a retile.
     cache: *CacheMap,
     /// Focused window (from focus.getFocused()), used by monocle to raise

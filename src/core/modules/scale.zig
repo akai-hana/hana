@@ -11,36 +11,36 @@ const debug = @import("debug");
 const parser = @import("parser");
 const utils = @import("utils");
 
-const BASELINE_DPI = constants.BASELINE_DPI;
+const baseline_dpi = constants.baseline_dpi;
 
 // Font size percentages are relative to 1080p height, not the screen's own
 // resolution, so font sizing degrades more gracefully on smaller screens.
-const FONT_BASELINE_HEIGHT: f32 = 1080.0;
+const font_baseline_height: f32 = 1080.0;
 
 /// Minimum bar height in pixels. Exposed so callers can validate config values
 /// before passing them to scaleBarHeight.
-pub const BAR_MIN_HEIGHT_PX: u16 = 20;
+pub const bar_min_height_px: u16 = 20;
 
 /// Reasonable-DPI band applied to both the geometry-derived and Xft.dpi paths.
 /// Values outside this range (or non-finite) are rejected as misconfiguration
 /// rather than being fed straight into Pango, where 0/negative/NaN DPI would
 /// produce divide-by-zero or garbage font metrics.
-const MIN_REASONABLE_DPI: f32 = 50.0;
-const MAX_REASONABLE_DPI: f32 = 300.0;
+const min_reasonable_dpi: f32 = 50.0;
+const max_reasonable_dpi: f32 = 300.0;
 
 /// Maximum number of u32 words to request for the RESOURCE_MANAGER property (4 KB).
 /// Xft.dpi is almost always near the start; a smaller fetch is faster and
 /// sufficient for the common case.
-const RESOURCE_MANAGER_MAX_LEN: u32 = 1024;
+const resource_manager_max_len: u32 = 1024;
 
 /// Reads the Xft.dpi value from the X RESOURCE_MANAGER property, if present.
 /// Returns null when the property is absent, empty, or does not contain an Xft.dpi entry.
-fn readXftDpi(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) ?f32 {
+fn readXftDpi(conn: core.Connection, screen: core.Screen) ?f32 {
     // Resolve the atom from the shared cache; a property request with atom 0
     // just comes back empty, so a cache miss reads as "no Xft.dpi".
     const atom = utils.getAtomCached("RESOURCE_MANAGER") catch 0;
 
-    const prop_cookie = xcb.xcb_get_property(conn, 0, screen.*.root, atom, xcb.XCB_ATOM_STRING, 0, RESOURCE_MANAGER_MAX_LEN);
+    const prop_cookie = xcb.xcb_get_property(conn, 0, screen.*.root, atom, xcb.XCB_ATOM_STRING, 0, resource_manager_max_len);
     const prop_reply = xcb.xcb_get_property_reply(conn, prop_cookie, null) orelse return null;
     defer std.c.free(prop_reply);
 
@@ -53,7 +53,7 @@ fn readXftDpi(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) ?f32 {
     const resource_str = @as([*]const u8, @ptrCast(value_ptr))[0..@intCast(value_len)];
 
     return parseXftDpi(resource_str) orelse blk: {
-        // Xft.dpi was not in the first RESOURCE_MANAGER_MAX_LEN bytes;
+        // Xft.dpi was not in the first resource_manager_max_len bytes;
         // retry with a larger fetch.
         const big_cookie = xcb.xcb_get_property(conn, 0, screen.*.root, atom, xcb.XCB_ATOM_STRING, 0, 4096);
         const big_reply = xcb.xcb_get_property_reply(conn, big_cookie, null) orelse return null;
@@ -80,15 +80,15 @@ fn parseXftDpi(resource_str: []const u8) ?f32 {
 }
 
 /// Computes DPI from the screen's physical dimensions reported by X.
-/// Returns BASELINE_DPI if the screen reports 0mm dimensions (e.g. virtual displays).
-fn calcDpiFromGeometry(screen: *xcb.xcb_screen_t) f32 {
+/// Returns baseline_dpi if the screen reports 0mm dimensions (e.g. virtual displays).
+fn calcDpiFromGeometry(screen: core.Screen) f32 {
     const width_px: f32 = @floatFromInt(screen.width_in_pixels);
     const height_px: f32 = @floatFromInt(screen.height_in_pixels);
     const width_mm: f32 = @floatFromInt(screen.width_in_millimeters);
     const height_mm: f32 = @floatFromInt(screen.height_in_millimeters);
     if (width_mm == 0 or height_mm == 0) {
         debug.warn("Display reports 0mm dimensions, using baseline DPI", .{});
-        return BASELINE_DPI;
+        return baseline_dpi;
     }
     const dpi_x = (width_px / width_mm) * 25.4;
     const dpi_y = (height_px / height_mm) * 25.4;
@@ -97,9 +97,9 @@ fn calcDpiFromGeometry(screen: *xcb.xcb_screen_t) f32 {
     return avg_dpi;
 }
 
-/// Detect DPI: Xft.dpi from X resources -> geometry calculation -> BASELINE_DPI (96).
+/// Detect DPI: Xft.dpi from X resources -> geometry calculation -> baseline_dpi (96).
 /// Called once at startup; core.dpi_info holds the result for the process lifetime.
-pub fn detectDpi(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) f32 {
+pub fn detectDpi(conn: core.Connection, screen: core.Screen) f32 {
     if (readXftDpi(conn, screen)) |xft_dpi| {
         if (isReasonableDpi(xft_dpi)) {
             debug.info("Using DPI from X resources (Xft.dpi): {d:.1}", .{xft_dpi});
@@ -111,28 +111,28 @@ pub fn detectDpi(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) f32 {
     const geometry_dpi = calcDpiFromGeometry(screen);
     if (!isReasonableDpi(geometry_dpi)) {
         debug.warn("Calculated DPI {d:.1} seems unreasonable, using baseline DPI", .{geometry_dpi});
-        return BASELINE_DPI;
+        return baseline_dpi;
     }
     debug.info("Using geometry-calculated DPI: {d:.1}", .{geometry_dpi});
     return geometry_dpi;
 }
 
 fn isReasonableDpi(dpi: f32) bool {
-    return std.math.isFinite(dpi) and dpi >= MIN_REASONABLE_DPI and dpi <= MAX_REASONABLE_DPI;
+    return std.math.isFinite(dpi) and dpi >= min_reasonable_dpi and dpi <= max_reasonable_dpi;
 }
 
 /// Scales a font size value against the screen height, clamped to a minimum of 1px.
-/// Percentage values are relative to FONT_BASELINE_HEIGHT (1080px) rather than the
+/// Percentage values are relative to font_baseline_height (1080px) rather than the
 /// screen baseline, so font sizes degrade more gracefully on smaller screens.
-pub fn scaleFontSize(value: parser.ScalableValue, screen: *xcb.xcb_screen_t) u16 {
+pub fn scaleFontSize(value: parser.ScalableValue, screen: core.Screen) u16 {
     const screen_height: f32 = @floatFromInt(screen.height_in_pixels);
-    const raw = if (value.is_percentage) value.value * (screen_height / FONT_BASELINE_HEIGHT) else value.value;
+    const raw = if (value.is_percentage) value.value * (screen_height / font_baseline_height) else value.value;
     return utils.scaling.roundToU16(raw, 1.0);
 }
 
-/// Converts a scalable bar height value to pixels, clamped to BAR_MIN_HEIGHT_PX.
+/// Converts a scalable bar height value to pixels, clamped to bar_min_height_px.
 pub fn scaleBarHeight(value: parser.ScalableValue, screen_height: u16) u16 {
     const screen_height_f: f32 = @floatFromInt(screen_height);
     const scaled_px: f32 = utils.scaling.scaleToPixels(value, screen_height_f);
-    return @max(BAR_MIN_HEIGHT_PX, utils.scaling.roundToU16(scaled_px, 0.0));
+    return @max(bar_min_height_px, utils.scaling.roundToU16(scaled_px, 0.0));
 }

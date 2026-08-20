@@ -50,8 +50,8 @@ pub const PangoContext = opaque {};
 pub const PangoFontDescription = opaque {};
 pub const PangoFontMetrics = opaque {};
 
-/// Divide Pango units by PANGO_SCALE to get pixels.
-pub const PANGO_SCALE: c_int = 1024;
+/// Divide Pango units by pango_scale to get pixels.
+pub const pango_scale: c_int = 1024;
 
 pub const PangoEllipsizeMode = enum(c_int) {
     NONE = 0,

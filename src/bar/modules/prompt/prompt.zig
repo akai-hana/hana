@@ -148,7 +148,7 @@ pub fn consumeRedrawRequest() bool {
 
 /// Initialises all prompt state: vim engine, key-symbol table, completions,
 /// and history buffers.  No-op if already initialised (idempotent).
-pub fn init(allocator: std.mem.Allocator, conn: *xcb.xcb_connection_t) !void {
+pub fn init(allocator: std.mem.Allocator, conn: core.Connection) !void {
     if (g.vim_state.buf.len != 0) return; // already initialised
     g.allocator = allocator;
     g.vim_state = try vim.VimState.init(allocator, vim.default_max_input, vim.default_undo_max);
@@ -1159,7 +1159,7 @@ fn drawActive(
     const accent = config.drunPromptColor();
     const bg = config.drunBg();
     const fg = config.drunFg();
-    const prompt = config.drun_prompt orelse types.DEFAULT_DRUN_PROMPT;
+    const prompt = config.drun_prompt orelse types.default_drun_prompt;
     const vim_mode = vimModeEnabled();
 
     dc.fillRect(start_x, 0, width, height, bg);

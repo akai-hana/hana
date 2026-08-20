@@ -15,8 +15,8 @@ const default_hz: f64 = 60.0;
 /// The carousel's wake interval is 1e9/rate; a value outside this band would
 /// either spin the wake loop (huge rates) or starve the scroll (tiny rates),
 /// so such readings are rejected rather than fed into the interval math.
-const MIN_SANE_HZ: f64 = 10.0;
-const MAX_SANE_HZ: f64 = 1000.0;
+const min_sane_hz: f64 = 10.0;
+const max_sane_hz: f64 = 1000.0;
 
 /// A single mode switch emits a burst of RandR notify events (screen + CRTC
 /// + output change) that all describe the same configuration; the debounce
@@ -44,7 +44,7 @@ var last_redetect_ns: u64 = 0;
 /// events so later monitor re-configurations re-detect. Idempotent; safe to
 /// call from the main thread on every draw; the actual setup runs once and
 /// subsequent calls return immediately.
-pub fn ensureRefreshRateDetected(conn: *xcb.xcb_connection_t) void {
+pub fn ensureRefreshRateDetected(conn: core.Connection) void {
     if (detection_initialized) return;
     detection_initialized = true;
     const root = core.getState().root;
@@ -65,14 +65,14 @@ pub fn getDetectedRateHz() f64 {
 /// Called by the event loop on any RandR extension event (screen change, CRTC
 /// change, output change). Re-detects the active refresh rate so the carousel
 /// cadence tracks monitor re-configuration. Main thread only.
-pub fn handleRandrNotifyEvent(conn: *xcb.xcb_connection_t) void {
+pub fn handleRandrNotifyEvent(conn: core.Connection) void {
     const now = utils.monotonicNs();
     if (now -| last_redetect_ns < min_redetect_interval_ns) return;
     last_redetect_ns = now;
     detectRefreshRate(conn, core.getState().root);
 }
 
-fn setupRandr(conn: *xcb.xcb_connection_t, root: xcb.xcb_window_t) bool {
+fn setupRandr(conn: core.Connection, root: xcb.xcb_window_t) bool {
     const name = "RANDR";
     const ext_cookie = xcb.xcb_query_extension(conn, @intCast(name.len), name.ptr);
     const ext = xcb.xcb_query_extension_reply(conn, ext_cookie, null) orelse return false;
@@ -83,7 +83,7 @@ fn setupRandr(conn: *xcb.xcb_connection_t, root: xcb.xcb_window_t) bool {
     return true;
 }
 
-fn detectRefreshRate(conn: *xcb.xcb_connection_t, root: xcb.xcb_window_t) void {
+fn detectRefreshRate(conn: core.Connection, root: xcb.xcb_window_t) void {
     const res_cookie = xcb.xcb_randr_get_screen_resources_current(conn, root);
     const res = xcb.xcb_randr_get_screen_resources_current_reply(conn, res_cookie, null) orelse return;
     defer std.c.free(res);
@@ -94,7 +94,7 @@ fn detectRefreshRate(conn: *xcb.xcb_connection_t, root: xcb.xcb_window_t) void {
 /// Returns the refresh rate from the mode active on the screen's primary
 /// output, falling back to other outputs if the primary has no active mode.
 fn refreshRateFromOutputs(
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     root: xcb.xcb_window_t,
     res: *xcb.xcb_randr_get_screen_resources_current_reply_t,
 ) ?f64 {
@@ -130,7 +130,7 @@ fn findModeRate(modes: anytype, mode_id: anytype) ?f64 {
 /// Queries the output and its CRTC for the currently-active mode, then
 /// resolves the mode's refresh rate from the mode table.
 fn refreshRateFromOutput(
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     output: xcb.xcb_randr_output_t,
     res: *const xcb.xcb_randr_get_screen_resources_current_reply_t,
 ) ?f64 {
@@ -152,7 +152,7 @@ fn refreshRateFromOutput(
 }
 
 fn publishDetectedRate(rate: f64) void {
-    if (std.math.isFinite(rate) and rate >= MIN_SANE_HZ and rate <= MAX_SANE_HZ) {
+    if (std.math.isFinite(rate) and rate >= min_sane_hz and rate <= max_sane_hz) {
         detected_rate_hz.store(rate, .monotonic);
         debug.info("Detected monitor refresh rate: {d:.2} Hz", .{rate});
     } else {
@@ -160,7 +160,7 @@ fn publishDetectedRate(rate: f64) void {
     }
 }
 
-fn subscribeRandrNotify(conn: *xcb.xcb_connection_t, root: xcb.xcb_window_t) void {
+fn subscribeRandrNotify(conn: core.Connection, root: xcb.xcb_window_t) void {
     _ = xcb.xcb_randr_select_input(
         conn,
         root,

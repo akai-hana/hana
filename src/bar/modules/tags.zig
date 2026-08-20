@@ -5,9 +5,9 @@ const types = @import("types");
 const drawing = @import("drawing");
 const tracking = @import("tracking");
 
-// Sized to WORKSPACE_LABELS, the largest label source.
-// Every workspace index is bounded by tracking.getWorkspaceCount() (<= MAX_WORKSPACES), so no fallback path.
-var label_widths: [tracking.WORKSPACE_LABELS.len]u16 = [_]u16{0} ** tracking.WORKSPACE_LABELS.len;
+// Sized to workspace_labels, the largest label source.
+// Every workspace index is bounded by tracking.getWorkspaceCount() (<= max_workspaces), so no fallback path.
+var label_widths: [tracking.workspace_labels.len]u16 = [_]u16{0} ** tracking.workspace_labels.len;
 var ws_width: u16 = 0;
 var cache_valid: bool = false;
 // Cached horizontal offset of the indicator glyph within a workspace cell.
@@ -19,7 +19,7 @@ var cached_ind_y: u16 = 0;
 // Returns the display label for workspace `i`, falling back through icons, labels, and "?".
 inline fn getLabel(i: usize, config: types.BarConfig) []const u8 {
     if (i < config.workspace_icons.items.len) return config.workspace_icons.items[i];
-    if (i < tracking.WORKSPACE_LABELS.len) return tracking.WORKSPACE_LABELS[i];
+    if (i < tracking.workspace_labels.len) return tracking.workspace_labels[i];
     return "?";
 }
 
@@ -120,9 +120,9 @@ pub fn draw(
 
         if (has_windows) {
             const glyph = if (is_current)
-                config.indicator_focused orelse types.DEFAULT_INDICATOR_FOCUSED
+                config.indicator_focused orelse types.default_indicator_focused
             else
-                config.indicator_unfocused orelse types.DEFAULT_INDICATOR_UNFOCUSED;
+                config.indicator_unfocused orelse types.default_indicator_unfocused;
             const color = config.indicator_color orelse fg;
             // Use the pre-cached intra-cell offset; avoids per-workspace float arithmetic.
             try dc.drawTextSized(x + cached_ind_x_off, cached_ind_y, glyph, ind_size, color);

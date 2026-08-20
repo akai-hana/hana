@@ -22,12 +22,12 @@ const signals = @import("signals");
 const build_options = @import("build_options");
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
 
-const FD_XCB = 0;
-const FD_SIGNAL = 1;
+const fd_xcb = 0;
+const fd_signal = 1;
 
 // Maximum events dispatched per XCB batch before returning to poll, so the
 // signal pipe and timer paths get fair scheduling against a chatty client.
-const MAX_EVENTS_PER_BATCH: usize = 128;
+const max_events_per_batch: usize = 128;
 
 const EventHandler = *const fn (event: *anyopaque) void;
 
@@ -91,7 +91,7 @@ fn handleMappingNotify(event: *anyopaque) void {
 
 // O(1) dispatch via a comptime-built table indexed by XCB event type (low 7 bits).
 const dispatch_table = blk: {
-    var table = [_]?EventHandler{null} ** constants.Limits.EVENT_DISPATCH_TABLE;
+    var table = [_]?EventHandler{null} ** constants.Limits.event_dispatch_table;
 
     table[xcb.XCB_ENTER_NOTIFY] = asHandler(window.handleEnterNotify);
     table[xcb.XCB_LEAVE_NOTIFY] = asHandler(window.handleLeaveNotify);
@@ -160,12 +160,12 @@ fn fillGrabCookies(cookies: []CookieEntry) usize {
 
         // Check once per keybinding that the full lock-modifier set fits.
         // Avoids a per-lock branch and prevents partial grabs if the buffer is nearly full.
-        if (n + constants.LOCK_MODIFIERS.len > cookies.len) {
-            debug.warn("Too many keybindings. Increase MAX_KEYBIND_COOKIES (currently {})", .{constants.Limits.MAX_KEYBIND_COOKIES});
+        if (n + constants.lock_modifiers.len > cookies.len) {
+            debug.warn("Too many keybindings. Increase MAX_KEYBIND_COOKIES (currently {})", .{constants.Limits.max_keybind_cookies});
             break;
         }
 
-        for (constants.LOCK_MODIFIERS) |lock| {
+        for (constants.lock_modifiers) |lock| {
             cookies[n] = .{
                 .cookie = xcb.xcb_grab_key_checked(
                     cs.conn,
@@ -204,7 +204,7 @@ pub fn grabKeybindings() void {
     const cs = core.getState();
     _ = xcb.xcb_ungrab_key(cs.conn, xcb.XCB_GRAB_ANY, cs.root, xcb.XCB_MOD_MASK_ANY);
 
-    var cookies: [constants.Limits.MAX_KEYBIND_COOKIES]CookieEntry = undefined;
+    var cookies: [constants.Limits.max_keybind_cookies]CookieEntry = undefined;
     const n = fillGrabCookies(&cookies);
 
     const failed = checkGrabCookies(cookies[0..n]);
@@ -274,7 +274,7 @@ fn handleXcbEvents() void {
     // timer paths (clock, cursor blink) indefinitely. Unread events stay in the
     // socket buffer and the fd stays readable, so they're handled on the next
     // poll round.
-    for (0..MAX_EVENTS_PER_BATCH) |_| {
+    for (0..max_events_per_batch) |_| {
         const event = xcb.xcb_poll_for_event(conn) orelse break;
         defer std.c.free(event);
         dispatch(@as(*u8, @ptrCast(event)).*, event);
@@ -343,13 +343,13 @@ pub fn run() !void {
                 }
                 _ = xcb.xcb_flush(cs.conn);
             }
-        } else if ((fds[FD_XCB].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0) {
+        } else if ((fds[fd_xcb].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0) {
             debug.err("X11 connection error, shutting down", .{});
             break;
         } else {
-            if ((fds[FD_XCB].revents & std.posix.POLL.IN) != 0) handleXcbEvents();
+            if ((fds[fd_xcb].revents & std.posix.POLL.IN) != 0) handleXcbEvents();
 
-            if ((fds[FD_SIGNAL].revents & std.posix.POLL.IN) != 0)
+            if ((fds[fd_signal].revents & std.posix.POLL.IN) != 0)
                 signals.drainAndDispatch(signal_fd);
 
             // The reload flag is also set directly by the reload_config keybinding

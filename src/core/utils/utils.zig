@@ -9,9 +9,9 @@ const constants = @import("constants");
 const debug = @import("debug");
 const bench = @import("bench");
 
-const max_property_length = constants.PROPERTY_MAX_LENGTH;
+const max_property_length = constants.property_max_length;
 /// Passed as the `delete` argument to xcb_get_property; 0 means do not consume the property.
-const property_no_delete = constants.PROPERTY_NO_DELETE;
+const property_no_delete = constants.property_no_delete;
 
 // Process lifecycle signals
 //
@@ -36,7 +36,7 @@ var signal_write_fd: std.posix.fd_t = -1;
 /// be a real signal number: `signals.drainAndDispatch` dispatches every byte
 /// it reads, and re-dispatching the wake byte as SIGHUP would make the drain
 /// loop call `reload()` again; writing another wake byte and spinning forever.
-pub const WAKE_BYTE: u8 = 0xff;
+pub const wake_byte: u8 = 0xff;
 
 /// Registers the write end of the signal self-pipe so `reload()` can wake the
 /// event loop. Pass -1 to unregister (teardown).
@@ -57,7 +57,7 @@ pub inline fn quit() void {
 pub inline fn reload() void {
     if (!should_reload.swap(true, .acq_rel)) {
         if (signal_write_fd >= 0)
-            _ = std.os.linux.write(signal_write_fd, &[_]u8{WAKE_BYTE}, 1);
+            _ = std.os.linux.write(signal_write_fd, &[_]u8{wake_byte}, 1);
     }
 }
 
@@ -75,13 +75,14 @@ pub const Rect = struct {
     y: i16,
     width: u16,
     height: u16,
+    border_width: u16 = 0,
 
     pub inline fn fromXcb(geom: *const xcb.xcb_get_geometry_reply_t) Rect {
-        return .{ .x = geom.x, .y = geom.y, .width = geom.width, .height = geom.height };
+        return .{ .x = geom.x, .y = geom.y, .width = geom.width, .height = geom.height, .border_width = geom.border_width };
     }
 
     pub inline fn eql(self: Rect, other: Rect) bool {
-        return self.x == other.x and self.y == other.y and self.width == other.width and self.height == other.height;
+        return self.x == other.x and self.y == other.y and self.width == other.width and self.height == other.height and self.border_width == other.border_width;
     }
 };
 
@@ -90,7 +91,7 @@ pub const Rect = struct {
 /// every call site that live-fetches geometry and must not cache that
 /// parking spot as if it were the window's real, restorable position.
 pub inline fn isOffscreenGeomReply(r: *const xcb.xcb_get_geometry_reply_t) bool {
-    return r.x < constants.OFFSCREEN_SENTINEL_MIN or r.y < constants.OFFSCREEN_SENTINEL_MIN;
+    return r.x < constants.offscreen_sentinel_min or r.y < constants.offscreen_sentinel_min;
 }
 
 /// Gap and border widths applied around a tiled window.
@@ -112,7 +113,7 @@ pub inline fn toXcbCoord(v: i16) u32 {
 
 /// Moves and resizes `win` without touching border_width.
 /// Use `window.configureWindowGeom` when border_width must change atomically.
-pub inline fn configureWindow(conn: *xcb.xcb_connection_t, win: u32, rect: Rect) void {
+pub inline fn configureWindow(conn: core.Connection, win: u32, rect: Rect) void {
     _ = xcb.xcb_configure_window(
         conn,
         win,
@@ -122,14 +123,14 @@ pub inline fn configureWindow(conn: *xcb.xcb_connection_t, win: u32, rect: Rect)
     );
 }
 
-pub inline fn raiseWindow(conn: *xcb.xcb_connection_t, win: u32) void {
+pub inline fn raiseWindow(conn: core.Connection, win: u32) void {
     _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_STACK_MODE, &[_]u32{xcb.XCB_STACK_MODE_ABOVE});
 }
 
 /// Strips lock-key and pointer-button bits from a raw event modifier state,
 /// leaving only the modifier bits the WM uses for keybinding matching.
 pub inline fn normalizeModifiers(state: u16) u16 {
-    return state & constants.MOD_MASK_BINDING;
+    return state & constants.mod_mask_binding;
 }
 
 // Atom cache
@@ -172,7 +173,7 @@ var atom_cache: ?AtomCache = null;
 /// Interns all atoms in a single round-trip batch. Atom names come from
 /// `AtomCache`'s field names at comptime, so adding a field is the only
 /// change required, no parallel array, no index-order mismatch risk.
-pub fn initAtomCache(conn: *xcb.xcb_connection_t) !void {
+pub fn initAtomCache(conn: core.Connection) !void {
     const fields = std.meta.fields(AtomCache);
     var cookies: [fields.len]xcb.xcb_intern_atom_cookie_t = undefined;
 
@@ -246,7 +247,7 @@ const supported_atoms = [_][]const u8{
 ///
 /// Must run once at startup, after initAtomCache() and before any client can
 /// map a window.
-pub fn advertiseEwmhSupport(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: u32) void {
+pub fn advertiseEwmhSupport(conn: core.Connection, screen: core.Screen, root: u32) void {
     const supporting_wm_check = getAtomCached("_NET_SUPPORTING_WM_CHECK") catch return;
     const net_wm_name = getAtomCached("_NET_WM_NAME") catch return;
     const utf8_string = getAtomCached("UTF8_STRING") catch return;
@@ -348,20 +349,20 @@ pub inline fn realtimeNs() u64 {
 
 // XCB grab helpers
 
-pub inline fn pushWindowOffscreen(conn: *xcb.xcb_connection_t, win: u32) void {
-    _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.OFFSCREEN_X_POSITION))});
+pub inline fn pushWindowOffscreen(conn: core.Connection, win: u32) void {
+    _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_X, &[_]u32{@bitCast(@as(i32, constants.offscreen_x_position))});
 }
 
 /// Like `pushWindowOffscreen`, but also drops `win` to the bottom of the
 /// global stacking order in the same request. Use this for any window whose
 /// hidden state must be defended even if something upstream raised it.
-pub inline fn pushWindowOffscreenAndLower(conn: *xcb.xcb_connection_t, win: u32) void {
+pub inline fn pushWindowOffscreenAndLower(conn: core.Connection, win: u32) void {
     _ = xcb.xcb_configure_window(
         conn,
         win,
         xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_STACK_MODE,
         &[_]u32{
-            @bitCast(@as(i32, constants.OFFSCREEN_X_POSITION)),
+            @bitCast(@as(i32, constants.offscreen_x_position)),
             xcb.XCB_STACK_MODE_BELOW,
         },
     );
@@ -386,24 +387,24 @@ pub inline fn isGrabActive() bool {
 }
 
 /// Always pair with ungrabServer()/ungrabAndFlush().
-pub inline fn grabServer(conn: *xcb.xcb_connection_t) void {
+pub inline fn grabServer(conn: core.Connection) void {
     grab_active.store(true, .release);
     _ = xcb.xcb_grab_server(conn);
 }
 
 /// Releases the X server grab without flushing pending requests.
-pub inline fn ungrabServer(conn: *xcb.xcb_connection_t) void {
+pub inline fn ungrabServer(conn: core.Connection) void {
     _ = xcb.xcb_ungrab_server(conn);
     grab_active.store(false, .release);
 }
 
 /// Defined here so every module can share one copy.
-pub inline fn ungrabAndFlush(conn: *xcb.xcb_connection_t) void {
+pub inline fn ungrabAndFlush(conn: core.Connection) void {
     ungrabServer(conn);
     _ = xcb.xcb_flush(conn);
 }
 
-pub inline fn setBorderPixel(conn: *xcb.xcb_connection_t, win: u32, pixel: u32) void {
+pub inline fn setBorderPixel(conn: core.Connection, win: u32, pixel: u32) void {
     _ = xcb.xcb_change_window_attributes(conn, win, xcb.XCB_CW_BORDER_PIXEL, &[_]u32{pixel});
 }
 
@@ -602,7 +603,7 @@ pub fn BoundedList(comptime T: type, comptime capacity: usize) type {
 /// not 8-bit encoded, the reply's type doesn't match the requested
 /// `atom_type`, or the value exceeds the buffer length.
 pub fn fetchPropertyToBuffer(
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     window: u32,
     atom: u32,
     atom_type: u32,
@@ -629,7 +630,7 @@ pub fn fetchPropertyToBuffer(
 /// wait when the reply is already buffered (see `bench.pollReply`). In a
 /// non-bench build this reduces to a single blocking reply call.
 fn pollPropertyReply(
-    conn: *xcb.xcb_connection_t,
+    conn: core.Connection,
     cookie: xcb.xcb_get_property_cookie_t,
 ) ?*xcb.xcb_get_property_reply_t {
     if (bench.pollReply(conn, cookie.sequence)) |rep|

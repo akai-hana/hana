@@ -19,7 +19,7 @@ const fullscreen = @import("fullscreen");
 
 // Geometry cookies are all issued before any reply is awaited; one round-trip
 // per batch instead of one per window. 64 covers a typical workspace.
-const BATCH = 64;
+const batch = 64;
 
 /// Centre any window still at the X default origin (0, 0); windows the user
 /// has already moved are left untouched. Centring uses the work area (screen
@@ -45,15 +45,15 @@ pub fn tileWithOffset(
 
     var base: usize = 0;
     while (base < windows.len) {
-        const end = @min(base + BATCH, windows.len);
-        const batch = windows[base..end];
+        const end = @min(base + batch, windows.len);
+        const slice = windows[base..end];
 
         // Issue geometry requests for every window not already placed;
         // replies are collected below; only the first reply pays for a round-trip.
-        var cookies: [BATCH]xcb.xcb_get_geometry_cookie_t = undefined;
-        var pending: [BATCH]usize = undefined;
+        var cookies: [batch]xcb.xcb_get_geometry_cookie_t = undefined;
+        var pending: [batch]usize = undefined;
         var pending_len: usize = 0;
-        for (batch, 0..) |win, i| {
+        for (slice, 0..) |win, i| {
             const already_placed = if (ctx.cache.getPtr(win)) |wd| wd.hasValidRect() else false;
             if (already_placed) continue;
             cookies[i] = xcb.xcb_get_geometry(cs.conn, win);
@@ -62,7 +62,7 @@ pub fn tileWithOffset(
         }
         if (pending_len > 0) {
             for (pending[0..pending_len]) |i| {
-                const win = batch[i];
+                const win = slice[i];
                 const reply = xcb.xcb_get_geometry_reply(cs.conn, cookies[i], null) orelse continue;
                 defer std.c.free(reply);
 

@@ -6,7 +6,7 @@ const std = @import("std");
 const debug = @import("debug");
 
 // Ordered by preference so the first match wins.
-const TERMINALS = [_][]const u8{
+const terminals = [_][]const u8{
     "ghostty",
     "alacritty",
     "kitty",
@@ -27,7 +27,7 @@ const TERMINALS = [_][]const u8{
 /// Returns the first available terminal from the preference list, falling back
 /// to "xterm" when nothing else is found.
 pub fn detectTerminal() []const u8 {
-    for (TERMINALS) |cmd| {
+    for (terminals) |cmd| {
         if (isCommandAvailable(cmd)) {
             debug.info("Detected terminal: {s}", .{cmd});
             return cmd;
@@ -37,7 +37,7 @@ pub fn detectTerminal() []const u8 {
     return "xterm";
 }
 
-const COMMON_PATHS = std.StaticStringMap(void).initComptime(.{
+const common_paths = std.StaticStringMap(void).initComptime(.{
     .{ "/usr/bin", {} },
     .{ "/usr/local/bin", {} },
     .{ "/bin", {} },
@@ -46,8 +46,8 @@ const COMMON_PATHS = std.StaticStringMap(void).initComptime(.{
 fn isCommandAvailable(command: []const u8) bool {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
 
-    const common_paths = [_][]const u8{ "/usr/bin", "/usr/local/bin", "/bin" };
-    inline for (common_paths) |path| {
+    const common_dirs = [_][]const u8{ "/usr/bin", "/usr/local/bin", "/bin" };
+    inline for (common_dirs) |path| {
         if (checkPath(&buf, path, command)) return true;
     }
 
@@ -55,7 +55,7 @@ fn isCommandAvailable(command: []const u8) bool {
     var it = std.mem.splitScalar(u8, path_env, ':');
     while (it.next()) |dir| {
         if (dir.len == 0) continue;
-        if (!COMMON_PATHS.has(dir) and checkPath(&buf, dir, command)) return true;
+        if (!common_paths.has(dir) and checkPath(&buf, dir, command)) return true;
     }
 
     return false;

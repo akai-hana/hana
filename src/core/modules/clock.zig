@@ -15,17 +15,17 @@ const ns_per_s = std.time.ns_per_s;
 /// Wider than the default "%Y-%m-%d %H:%M:%S" format (19 chars) so that
 /// typical user extensions (e.g. a day-of-week prefix) still fit without
 /// the segment changing width mid-session.
-pub const CLOCK_MEASURE_STRING: []const u8 = "0000-00-00 00:00:00";
+pub const clock_measure_string: []const u8 = "0000-00-00 00:00:00";
 
 /// Wake the main loop this many ms after a whole-second boundary. Must be
 /// large enough for the clock thread to have formatted the new second by the
 /// time the main thread drains it.
-const DRAIN_GRACE_MS: i64 = 10;
+const drain_grace_ms: i64 = 10;
 
 /// When the main thread wakes within the grace window but the dirty flag is
 /// not set yet (the clock thread was descheduled past the boundary), poll
 /// again after this many ms instead of sleeping to the next boundary.
-const RETRY_MS: i64 = 25;
+const retry_ms: i64 = 25;
 
 /// Guarded by `cache_mutex`: the clock thread publishes via
 /// publishCurrentTime; the main thread reads via draw or the lazy fallback.
@@ -195,9 +195,9 @@ pub fn consumeClockDirty() bool {
 pub fn nextTickWaitMs() i64 {
     const now_ms = realtimeMs();
     const m = @mod(now_ms, 1000);
-    if (m <= DRAIN_GRACE_MS and !clock_dirty.load(.acquire)) return RETRY_MS;
+    if (m <= drain_grace_ms and !clock_dirty.load(.acquire)) return retry_ms;
     const to_boundary = 1000 - m;
-    return to_boundary + DRAIN_GRACE_MS;
+    return to_boundary + drain_grace_ms;
 }
 
 // Drawing
@@ -210,7 +210,7 @@ pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, star
     const sec = currentEpochSeconds();
     cache_mutex.lock();
     defer cache_mutex.unlock();
-    const str = try getOrFormatTime(sec, config.clock_format orelse types.DEFAULT_CLOCK_FORMAT);
+    const str = try getOrFormatTime(sec, config.clock_format orelse types.default_clock_format);
     return dc.drawSegment(start_x, height, str, config.scaledSegmentPadding(height), config.bg, config.fg);
 }
 

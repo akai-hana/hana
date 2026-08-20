@@ -604,7 +604,7 @@ const Parser = struct {
 
         // Bare colors require an explicit '#' or '0x' prefix: the old
         // hex-only sniffing parsed all-a-f identifiers ("dead", "cafe") as
-        // `.color` instead of `.string`, breaking asString()/ACTION_MAP
+        // `.color` instead of `.string`, breaking asString()/action_map
         // lookups for layout/variant/segment names. A leading '#' marks the
         // token as a color, not a comment; if it does not form a valid color
         // the line is invalid: the same outcome as a bare '#' after '='

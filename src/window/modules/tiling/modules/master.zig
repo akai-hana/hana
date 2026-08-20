@@ -99,7 +99,7 @@ fn tileColumn(
     const count: u16 = @intCast(windows.len);
     const avail = calcAvailableHeight(h, count, m, min_dim);
 
-    var heights_buf: [constants.Limits.MAX_TILED_WINDOWS]u16 = undefined;
+    var heights_buf: [constants.Limits.max_tiled_windows]u16 = undefined;
     const heights = heights_buf[0..windows.len];
     const used = distributeStackHeightsWeighted(ctx, windows, avail, boost, min_dim, heights);
 
@@ -236,7 +236,7 @@ inline fn bitSet(bits: []u8, i: usize) void {
 fn distributeStackHeightsWeighted(ctx: *const layouts.LayoutCtx, windows: []const u32, avail: u16, boost: StackBoost, min_dim: u16, out: []u16) u32 {
     const n: u16 = @intCast(windows.len);
 
-    var capped_buf: [constants.Limits.MAX_TILED_WINDOWS / 8]u8 = undefined;
+    var capped_buf: [constants.Limits.max_tiled_windows / 8]u8 = undefined;
     const capped = capped_buf[0 .. (windows.len + 7) / 8];
 
     const cap = findCappedWindows(ctx, windows, avail, boost, min_dim, out, capped);
