@@ -441,12 +441,13 @@ fn enterAllView(s: *State) void {
     const cs = core.getState();
     utils.grabServer(cs.conn);
 
+    const cur_bit = tracking.workspaceBit(s.current);
     for (tracking.allWindows()) |entry| {
-        if (tracking.isWindowOnWorkspace(entry.win, core.WorkspaceId.fromIndex(s.current))) continue;
+        if (entry.mask & cur_bit != 0) continue;
         if (minimize.isMinimized(entry.win)) continue;
         const win = entry.win;
         const mask = entry.mask;
-        setWindowMask(s, win, mask | tracking.workspaceBit(s.current));
+        setWindowMask(s, win, mask | cur_bit);
         s.all_view_temp_wins.append(s.allocator, win) catch {
             setWindowMask(s, win, mask);
             continue;

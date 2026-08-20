@@ -664,8 +664,8 @@ fn captureMinimizedSet(snap: *BarSnapshot, allocator: std.mem.Allocator) !void {
 
 /// Capture the workspace-derived state: count, current workspace, all-view
 /// mode, per-workspace occupancy, and the current workspace's window list.
-/// Single-pass: builds workspace_has_windows and collects current-workspace
-/// windows in one iteration over all tracked windows.
+/// OR-accumulates all window masks in a single pass, then derives per-workspace
+/// occupancy from the combined bitmask in O(workspace_count).
 fn captureWorkspaceState(snap: *BarSnapshot, allocator: std.mem.Allocator) !void {
     const ws_state = workspaces.getState() orelse return;
     snap.workspace_count = @intCast(ws_state.workspaces.len);
@@ -678,14 +678,14 @@ fn captureWorkspaceState(snap: *BarSnapshot, allocator: std.mem.Allocator) !void
         tracking.workspaceBit(ws_state.current)
     else
         0;
+    var combined_mask: u64 = 0;
     for (tracking.allWindows()) |entry| {
-        for (ws_state.workspaces, 0..) |_, i| {
-            if (entry.mask & tracking.workspaceBit(@as(u8, @intCast(i))) != 0) {
-                snap.workspace_has_windows.items[i] = true;
-            }
-        }
+        combined_mask |= entry.mask;
         if (cur_bit != 0 and entry.mask & cur_bit != 0)
             try snap.title_data.workspace_windows.append(allocator, entry.win);
+    }
+    for (0..snap.workspace_count) |i| {
+        snap.workspace_has_windows.items[i] = combined_mask & tracking.workspaceBit(@as(u8, @intCast(i))) != 0;
     }
 }
 
@@ -785,7 +785,7 @@ fn captureStateIntoSlot(s: *State, snap: *BarSnapshot, prev: *BarSnapshot, force
 
     if (bench.enabled) bench.reportTitleCapture(
         utils.monotonicNs() -| capture_start_ns,
-        snap.current_workspace_windows.items.len,
+        snap.title_data.workspace_windows.items.len,
     );
 }
 
