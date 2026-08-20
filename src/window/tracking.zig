@@ -81,6 +81,17 @@ pub const Tracking = struct {
         return true;
     }
 
+    /// Remove `win` without preserving order: O(1) after the O(n) index
+    /// scan. The last entry is moved into the removed slot. Use this variant
+    /// when window order is not semantically meaningful (workspace membership
+    /// bookkeeping, cleanup paths).
+    pub fn removeUnordered(self: *Tracking, win: u32) bool {
+        const i = std.mem.indexOfScalar(u32, self.buf[0..self.len], win) orelse return false;
+        self.len -= 1;
+        self.buf[i] = self.buf[self.len];
+        return true;
+    }
+
     /// Returns a slice of the live entries in insertion order.
     pub fn items(self: *const Tracking) []const u32 {
         return self.buf[0..self.len];
@@ -149,7 +160,7 @@ pub fn popFocusMru(ws_idx: u8, visible: *const fn (u32) bool) ?u32 {
 /// otherwise be mistaken for a live, unrelated window that later reuses the
 /// same ID.
 fn removeFromFocusMruAll(win: u32) void {
-    for (&g_focus_mru) |*list| {
+    for (g_focus_mru[0..g_workspace_count]) |*list| {
         if (list.indexOfScalar(win)) |i| list.orderedRemove(i);
     }
 }
@@ -249,21 +260,15 @@ pub fn removeWindow(win: u32) void {
     const i = g_index.get(win) orelse return;
     removeFromFocusMruAll(win);
     _ = g_windows.swapRemove(i);
-    _ = g_index.remove(win);
     // swapRemove moved the previously-last entry into slot i (unless i was
-    // last), repoint that window's index if so.
+    // last), repoint that window's index in place to avoid a put+alloc.
     if (i < g_windows.items.len) {
         const moved_win = g_windows.items[i].win;
-        g_index.put(g_alloc, moved_win, i) catch {
-            // The map just shrank by one (g_index.remove above), so this put
-            // should not need new bucket capacity; handled defensively anyway.
-            std.log.err(
-                "tracking: failed to reindex window 0x{x} after swap-remove; " ++
-                    "it may be unreachable by ID lookup until removed and re-registered",
-                .{moved_win},
-            );
-        };
+        if (g_index.getPtr(moved_win)) |ptr| {
+            ptr.* = i;
+        }
     }
+    _ = g_index.remove(win);
 }
 
 /// Update the workspace bitmask for `win` (tag and move operations).
@@ -372,16 +377,38 @@ pub fn prefetchAndSaveGeometry(
 ) void {
     const window = @import("window");
     const conn = core.getState().conn;
-    var it = onWorkspace(ws_bit, skip_win);
-    while (it.next()) |entry| {
-        const win = entry.win;
-        if (skip_ws < 64 and isWindowOnWorkspace(win, skip_ws)) continue;
-        if (!predicate(win)) continue;
-        if ((if (build_options.has_tiling) tiling.getWindowGeom(win) else null) != null) continue;
-        const reply = core.xcb.xcb_get_geometry_reply(conn, core.xcb.xcb_get_geometry(conn, win), null) orelse continue;
+
+    // Phase 1: fire ALL geometry requests, collecting cookies in a bounded
+    // stack buffer. This pipelines the round trips: the server processes
+    // each request while we fire the next, converting N serial round trips
+    // into ~1.
+    var wins: [Tracking.capacity]u32 = undefined;
+    var cookies: [Tracking.capacity]core.xcb.xcb_get_geometry_cookie_t = undefined;
+    var count: usize = 0;
+
+    {
+        var it = onWorkspace(ws_bit, skip_win);
+        while (it.next()) |entry| {
+            const win = entry.win;
+            if (skip_ws < 64 and isWindowOnWorkspace(win, skip_ws)) continue;
+            if (!predicate(win)) continue;
+            if ((if (build_options.has_tiling) tiling.getWindowGeom(win) else null) != null) continue;
+            if (count >= Tracking.capacity) break;
+            wins[count] = win;
+            // xcb_get_geometry returns an xcb_get_geometry_cookie_t.
+            cookies[count] = core.xcb.xcb_get_geometry(conn, win);
+            count += 1;
+        }
+    }
+
+    // Phase 2: drain all replies. By the time we get here the server has
+    // had time to process all pipelined requests, so most replies are
+    // already in the XCB receive buffer.
+    for (0..count) |i| {
+        const reply = core.xcb.xcb_get_geometry_reply(conn, cookies[i], null) orelse continue;
         defer std.c.free(reply);
         if (utils.isOffscreenGeomReply(reply)) continue;
-        window.saveWindowGeom(win, utils.Rect.fromXcb(reply));
+        window.saveWindowGeom(wins[i], utils.Rect.fromXcb(reply));
     }
 }
 

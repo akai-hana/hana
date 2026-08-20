@@ -45,6 +45,10 @@ var clock_thread: utils.CondThread = .{};
 /// written by the main thread while the thread is not running.
 var clock_format_owned: []const u8 = "";
 
+/// Null-terminated copy of the format string, built once at thread start.
+/// Passed directly to strftime, avoiding a stack-buffer copy on every tick.
+var clock_format_z: [:0]const u8 = "";
+
 /// Spawns the clock thread. Call from bar.init() after the bar window exists.
 /// Dupes `format`; the original need not outlive this call. The clock thread
 /// never touches the DrawContext; all Pango/layout work runs on the main thread.
@@ -54,7 +58,18 @@ pub fn startThread(allocator: std.mem.Allocator, format: []const u8) void {
         return;
     };
     clock_format_owned = owned;
+
+    const owned_z = allocator.dupeZ(u8, format) catch |e| {
+        debug.err("Clock format null-terminated dupe failed: {s}", .{@errorName(e)});
+        allocator.free(owned);
+        clock_format_owned = "";
+        return;
+    };
+    clock_format_z = owned_z;
+
     clock_thread.start(runClockThread, .{&clock_thread}) catch |e| {
+        allocator.free(owned_z);
+        clock_format_z = "";
         allocator.free(owned);
         clock_format_owned = "";
         debug.err("Clock thread spawn failed: {s}", .{@errorName(e)});
@@ -68,6 +83,10 @@ pub fn startThread(allocator: std.mem.Allocator, format: []const u8) void {
 /// so reloads never phase-drift.
 pub fn stopThread(allocator: std.mem.Allocator) void {
     clock_thread.stop();
+    if (clock_format_z.len > 0) {
+        allocator.free(clock_format_z);
+        clock_format_z = "";
+    }
     if (clock_format_owned.len > 0) {
         allocator.free(clock_format_owned);
         clock_format_owned = "";
@@ -154,7 +173,9 @@ fn publishCurrentTime() void {
         clock_dirty.store(true, .release);
         return;
     }
-    _ = getOrFormatTime(sec, clock_format_owned) catch return;
+    const str = formatTimeZ(&last_formatted_time, sec, clock_format_z) catch return;
+    last_formatted_len = str.len;
+    last_formatted_sec = sec;
     clock_dirty.store(true, .release);
 }
 
@@ -218,6 +239,20 @@ fn formatTime(buf: []u8, sec: i64, fmt: []const u8) ![]const u8 {
     fmt_z[fmt.len] = 0;
 
     const n = c.strftime(buf.ptr, buf.len, &fmt_z, tm_ptr);
+    if (n == 0) return error.StrftimeFailed;
+    return buf[0..n];
+}
+
+/// Like `formatTime` but accepts a pre null-terminated format string,
+/// skipping the stack-buffer copy. Used by the clock thread's hot path.
+fn formatTimeZ(buf: []u8, sec: i64, fmt: [:0]const u8) ![]const u8 {
+    var raw_sec: c.time_t = @intCast(sec);
+    var tm_buf: c.struct_tm = undefined;
+    const tm_ptr = c.localtime_r(&raw_sec, &tm_buf) orelse
+        c.gmtime_r(&raw_sec, &tm_buf);
+    if (tm_ptr == null) return error.TimeFailed;
+
+    const n = c.strftime(buf.ptr, buf.len, fmt.ptr, tm_ptr);
     if (n == 0) return error.StrftimeFailed;
     return buf[0..n];
 }

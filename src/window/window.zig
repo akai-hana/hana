@@ -771,15 +771,26 @@ fn findSpawnQueueWorkspace(
 fn resolveTargetWorkspace(win: u32, current_ws: u8) u8 {
     const cs = core.getState();
 
+    // Pipeline: fire both property requests before draining either reply.
+    // The server processes them in parallel while we check conditions below.
+    var c_wm_class: ?xcb.xcb_get_property_cookie_t = null;
     if (cs.config.workspaces.rules.items.len > 0 and utils.getAtomOrZero("WM_CLASS") != 0) {
-        const c_wm_class = xcb.xcb_get_property(cs.conn, PROPERTY_NO_DELETE, win, utils.getAtomOrZero("WM_CLASS"), xcb.XCB_ATOM_STRING, 0, constants.PROPERTY_MAX_LENGTH);
-        if (findWorkspaceRuleByClass(c_wm_class)) |target|
+        c_wm_class = xcb.xcb_get_property(cs.conn, PROPERTY_NO_DELETE, win, utils.getAtomOrZero("WM_CLASS"), xcb.XCB_ATOM_STRING, 0, constants.PROPERTY_MAX_LENGTH);
+    }
+
+    var c_net_wm_pid: ?xcb.xcb_get_property_cookie_t = null;
+    if (state.spawn_queue.items.len > 0) {
+        c_net_wm_pid = xcb.xcb_get_property(cs.conn, PROPERTY_NO_DELETE, win, utils.getAtomOrZero("_NET_WM_PID"), xcb.XCB_ATOM_CARDINAL, 0, 1);
+    }
+
+    // Drain replies: WM_CLASS first, then _NET_WM_PID.
+    if (c_wm_class) |cookie| {
+        if (findWorkspaceRuleByClass(cookie)) |target|
             return clampToValidWorkspace(target, current_ws);
     }
 
-    if (state.spawn_queue.items.len > 0) {
-        const c_net_wm_pid = xcb.xcb_get_property(cs.conn, PROPERTY_NO_DELETE, win, utils.getAtomOrZero("_NET_WM_PID"), xcb.XCB_ATOM_CARDINAL, 0, 1);
-        if (findSpawnQueueWorkspace(c_net_wm_pid)) |spawn_ws|
+    if (c_net_wm_pid) |cookie| {
+        if (findSpawnQueueWorkspace(cookie)) |spawn_ws|
             return clampToValidWorkspace(spawn_ws, current_ws);
     }
 
@@ -1305,10 +1316,21 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
         return;
     }
 
-    if (event.atom != utils.getAtomOrZero("WM_PROTOCOLS") and event.atom != xcb.XCB_ATOM_WM_HINTS) return;
-    // Re-query and cache the updated focus properties, else the CacheSlot
-    // stays stale until the window is destroyed.
-    _ = queryAndCacheProps(conn, event.window);
+    if (event.atom == utils.getAtomOrZero("WM_PROTOCOLS")) {
+        // Only WM_PROTOCOLS changed: re-query wm_delete, keep accepts_input
+        // from cache to avoid a redundant WM_HINTS round-trip.
+        const existing = getCachedProps(event.window);
+        const wm_delete = queryWMProtocolsProps(conn, event.window).wm_delete;
+        const accepts_input = if (existing) |p| p.accepts_input else queryWMHintsAcceptsInput(conn, event.window);
+        putCachedProps(event.window, .{ .accepts_input = accepts_input, .wm_delete = wm_delete });
+    } else if (event.atom == xcb.XCB_ATOM_WM_HINTS) {
+        // Only WM_HINTS changed: re-query accepts_input, keep wm_delete
+        // from cache to avoid a redundant WM_PROTOCOLS round-trip.
+        const existing = getCachedProps(event.window);
+        const accepts_input = queryWMHintsAcceptsInput(conn, event.window);
+        const wm_delete = if (existing) |p| p.wm_delete else queryWMProtocolsProps(conn, event.window).wm_delete;
+        putCachedProps(event.window, .{ .accepts_input = accepts_input, .wm_delete = wm_delete });
+    }
 }
 
 inline fn clampToU16(v: u32) u16 {
@@ -1404,8 +1426,9 @@ pub inline fn getBorderWidth() u16 {
 }
 
 inline fn borderColor(win: u32) u32 {
+    const cs = core.getState();
     if (fullscreen.isFullscreen(win)) return 0;
-    const cfg = &core.getState().config.tiling;
+    const cfg = &cs.config.tiling;
     return if (focus.getFocused() == win) cfg.border_focused else cfg.border_unfocused;
 }
 
@@ -1431,7 +1454,8 @@ pub fn applyBorder(win: u32) void {
 fn sweepWorkspaceBorders(comptime skip_tiled: bool) void {
     const cur = tracking.getCurrentWorkspace() orelse return;
     const cur_bit = tracking.workspaceBit(cur);
-    const conn = core.getState().conn;
+    const cs = core.getState();
+    const conn = cs.conn;
     for (tracking.allWindows()) |entry| {
         const win = entry.win;
         if (entry.mask & cur_bit == 0) continue;
@@ -1475,7 +1499,8 @@ pub fn updateWorkspaceBordersIfNeeded() void {
 pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
     if (event.format != 32) return;
 
-    if (utils.getAtomOrZero("_NET_WM_STATE") == 0 or event.type != utils.getAtomOrZero("_NET_WM_STATE")) return;
+    const net_wm_state = utils.getAtomOrZero("_NET_WM_STATE");
+    if (net_wm_state == 0 or event.type != net_wm_state) return;
 
     const fs_atom = utils.getAtomOrZero("_NET_WM_STATE_FULLSCREEN");
     if (fs_atom == 0) return;

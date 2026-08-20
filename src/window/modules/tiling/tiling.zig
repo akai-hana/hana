@@ -740,10 +740,11 @@ pub fn updateWindowFocus(old_focused: ?u32, new_focused: ?u32) void {
         }
     }
 
+    const conn = core.getState().conn;
     for ([2]?u32{ old_focused, new_focused }) |opt| {
         const win = opt orelse continue;
         if (!s.windows.contains(win)) continue;
-        _ = updateBorderColor(s, core.getState().conn, win, s.borderColor(win), true);
+        _ = updateBorderColor(s, conn, win, s.borderColor(win), true);
     }
 }
 
@@ -946,6 +947,7 @@ pub const RetileOpts = struct {
 /// Single implementation underlying every public retile entry point.
 fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
     const s = getState();
+    const cs = core.getState();
 
     const current_ws_opt = tracking.getCurrentWorkspace();
     const target_ws: u8 = opts.for_ws orelse
@@ -958,7 +960,7 @@ fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
 
     var deferred: ?utils.Rect = null;
     var ctx: layouts.LayoutCtx = .{
-        .conn = core.getState().conn,
+        .conn = cs.conn,
         .cache = &s.geom.cache,
         .focused_win = focus.getFocused(),
         .deferred = &deferred,
@@ -976,19 +978,19 @@ fn retileImpl(screen: utils.Rect, opts: RetileOpts) void {
     // workspace, s.config already holds the authoritative values (kept in
     // sync by applyWorkspaceLayout/adjustMasterWidth/adjustMasterCount), so
     // re-resolving here would be redundant at best.
-    const saved_width = s.config.master_width;
-    const saved_count = s.config.master_count;
     if (opts.for_ws != null) {
+        const saved_width = s.config.master_width;
+        const saved_count = s.config.master_count;
+        defer {
+            s.config.master_width = saved_width;
+            s.config.master_count = saved_count;
+        }
         s.config.master_width = resolveWorkspaceOverride(f32, "master_width", s.config.master_width, wss, target_ws);
         s.config.master_count = resolveWorkspaceOverride(u8, "master_count", s.config.master_count, wss, target_ws);
     }
-    defer {
-        s.config.master_width = saved_width;
-        s.config.master_count = saved_count;
-    }
 
     invokeLayout(
-        selectLayout(s, wss, target_ws, core.getState().config.tiling.global_layout),
+        selectLayout(s, wss, target_ws, cs.config.tiling.global_layout),
         &ctx,
         s,
         ws_windows,
@@ -1019,8 +1021,9 @@ fn updateBorderColor(s: *State, conn: *xcb.xcb_connection_t, win: u32, color: u3
 
 // Refresh border colors for all `ws_windows`, deduped via the cache.
 inline fn updateBorders(s: *State, ws_windows: []const u32) void {
+    const conn = core.getState().conn;
     for (ws_windows) |win| {
-        _ = updateBorderColor(s, core.getState().conn, win, s.borderColor(win), true);
+        _ = updateBorderColor(s, conn, win, s.borderColor(win), true);
     }
 }
 
@@ -1134,23 +1137,38 @@ inline fn globalIndexOf(s: *State, win: u32) ?usize {
 
 fn findFocusMasterPos(s: *State) ?FocusMasterPos {
     const focused = focus.getFocused() orelse return null;
-    if (!s.windows.contains(focused) or !tracking.isOnCurrentWorkspace(focused)) return null;
+    if (!tracking.isOnCurrentWorkspace(focused)) return null;
 
-    // Build the per-workspace filtered list exactly as retile does, so that
-    // ws_wins[0] is the true layout master regardless of s.windows.buf
-    // insertion order across workspaces.
-    const ws_wins = collectWorkspaceWindows(s, null);
-    if (ws_wins.len < 2) return null; // need at least two windows for a meaningful swap
+    // Single pass: build the per-workspace filtered list AND find the
+    // global/filtered indices simultaneously, avoiding a separate
+    // collectWorkspaceWindows call + second linear scan.
+    var n: usize = 0;
+    var fp_global: ?usize = null;
+    var mp_global: ?usize = null;
+    var next_global: ?usize = null;
+    var fp_filtered: ?usize = null;
 
-    // ws_wins is a subset of the full list and the focused window is in it
-    // (guarded above), so all three global lookups succeed; the `orelse`
-    // guards against a window closing mid-operation.
+    for (s.windows.items(), 0..) |w, global_idx| {
+        if (!tracking.isOnCurrentWorkspace(w)) continue;
+        s.geom.scratch_wins[n] = w;
+        if (w == focused) {
+            fp_global = global_idx;
+            fp_filtered = n;
+        }
+        if (n == 0) mp_global = global_idx;
+        if (n == 1) next_global = global_idx;
+        n += 1;
+        if (fp_global != null and mp_global != null and next_global != null) break;
+    }
+
+    if (n < 2) return null; // need at least two windows for a meaningful swap
+
     return .{
-        .fp_global = globalIndexOf(s, focused) orelse return null,
-        .mp_global = globalIndexOf(s, ws_wins[0]) orelse return null,
-        .next_global = globalIndexOf(s, ws_wins[1]) orelse return null,
-        .fp_filtered = std.mem.indexOfScalar(u32, ws_wins, focused) orelse return null,
-        .ws_wins = ws_wins,
+        .fp_global = fp_global orelse return null,
+        .mp_global = mp_global orelse return null,
+        .next_global = next_global orelse return null,
+        .fp_filtered = fp_filtered orelse return null,
+        .ws_wins = s.geom.scratch_wins[0..n],
     };
 }
 

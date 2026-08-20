@@ -513,9 +513,18 @@ fn executeShellCommand(cmd: []const u8) !void {
     // [exec, switch_workspace] where a later action mutates g_current.
     const spawn_ws = tracking.getCurrentWorkspace();
 
-    const alloc = core.getState().alloc;
-    const cmd_z = try alloc.dupeZ(u8, cmd);
-    defer alloc.free(cmd_z);
+    var cmd_buf: [256]u8 = undefined;
+    var heap_cmd_z: ?[:0]const u8 = null;
+    defer if (heap_cmd_z) |h| core.getState().alloc.free(h);
+    const cmd_z: [*:0]const u8 = if (cmd.len < cmd_buf.len) blk: {
+        @memcpy(cmd_buf[0..cmd.len], cmd);
+        cmd_buf[cmd.len] = 0;
+        break :blk @ptrCast(&cmd_buf[0]);
+    } else blk: {
+        const owned = try core.getState().alloc.dupeZ(u8, cmd);
+        heap_cmd_z = owned;
+        break :blk owned.ptr;
+    };
 
     if (g_pending.len >= MAX_PENDING_SPAWNS)
         debug.warn("spawn: pending table full, spawning '{s}' without workspace routing", .{cmd});
@@ -535,7 +544,7 @@ fn executeShellCommand(cmd: []const u8) !void {
 
     if (pid == 0) {
         _ = c.close(pipe_fds[0]);
-        forkIntermediate(pipe_fds[1], cmd_z.ptr);
+        forkIntermediate(pipe_fds[1], cmd_z);
     }
 
     // Parent: close the write end so our read end eventually sees EOF.
@@ -562,6 +571,7 @@ fn executeShellCommand(cmd: []const u8) !void {
 /// SIGCHLD), until EOF or a full buffer; a full buffer already holds both
 /// possible messages, so EOF needn't be awaited. finishSpawn() classifies.
 pub fn drainPendingSpawns() void {
+    if (g_pending.len == 0) return;
     var i: usize = 0;
     while (i < g_pending.len) {
         const entry = &g_pending.slice()[i];

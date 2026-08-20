@@ -28,8 +28,10 @@ pub const BAR_MIN_HEIGHT_PX: u16 = 20;
 const MIN_REASONABLE_DPI: f32 = 50.0;
 const MAX_REASONABLE_DPI: f32 = 300.0;
 
-/// Maximum number of u32 words to request for the RESOURCE_MANAGER property (16 KB).
-const RESOURCE_MANAGER_MAX_LEN: u32 = 4096;
+/// Maximum number of u32 words to request for the RESOURCE_MANAGER property (4 KB).
+/// Xft.dpi is almost always near the start; a smaller fetch is faster and
+/// sufficient for the common case.
+const RESOURCE_MANAGER_MAX_LEN: u32 = 1024;
 
 /// Reads the Xft.dpi value from the X RESOURCE_MANAGER property, if present.
 /// Returns null when the property is absent, empty, or does not contain an Xft.dpi entry.
@@ -50,20 +52,31 @@ fn readXftDpi(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t) ?f32 {
     const value_ptr = xcb.xcb_get_property_value(prop_reply);
     const resource_str = @as([*]const u8, @ptrCast(value_ptr))[0..@intCast(value_len)];
 
-    // Format: "Xft.dpi:\t96" or "Xft.dpi: 96".
-    // Slice off the prefix and trim whitespace, avoiding the split-on-delimiter
-    // trap where ":\t" would yield an empty token before the value.
+    return parseXftDpi(resource_str) orelse blk: {
+        // Xft.dpi was not in the first RESOURCE_MANAGER_MAX_LEN bytes;
+        // retry with a larger fetch.
+        const big_cookie = xcb.xcb_get_property(conn, 0, screen.*.root, atom, xcb.XCB_ATOM_STRING, 0, 4096);
+        const big_reply = xcb.xcb_get_property_reply(conn, big_cookie, null) orelse return null;
+        defer std.c.free(big_reply);
+        if (big_reply.*.format != 8 or big_reply.*.type != xcb.XCB_ATOM_STRING) return null;
+        const big_len = xcb.xcb_get_property_value_length(big_reply);
+        if (big_len == 0) return null;
+        const big_ptr = xcb.xcb_get_property_value(big_reply);
+        const big_str = @as([*]const u8, @ptrCast(big_ptr))[0..@intCast(big_len)];
+        break :blk parseXftDpi(big_str);
+    };
+}
+
+/// Finds and parses the Xft.dpi value within a raw RESOURCE_MANAGER string.
+fn parseXftDpi(resource_str: []const u8) ?f32 {
     const prefix = "Xft.dpi:";
-    var lines = std.mem.splitScalar(u8, resource_str, '\n');
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (std.mem.startsWith(u8, trimmed, prefix)) {
-            const rest = std.mem.trim(u8, trimmed[prefix.len..], " \t");
-            const dpi = std.fmt.parseFloat(f32, rest) catch continue;
-            return dpi;
-        }
-    }
-    return null;
+    const idx = std.mem.indexOf(u8, resource_str, prefix) orelse return null;
+    const rest_raw = resource_str[idx + prefix.len ..];
+    const rest = std.mem.trim(u8, rest_raw, " \t");
+    // The value ends at the next newline or end of string.
+    const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+    const value = std.mem.trim(u8, rest[0..end], " \t\r");
+    return std.fmt.parseFloat(f32, value) catch null;
 }
 
 /// Computes DPI from the screen's physical dimensions reported by X.

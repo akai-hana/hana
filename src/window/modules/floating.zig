@@ -291,12 +291,12 @@ fn computeResizeRect(drag: DragState, dx: i16, dy: i16, wa: WorkArea) utils.Rect
 /// Applies pointer motion to the active drag. No-op if no drag is active.
 pub fn updateDrag(x: i16, y: i16) void {
     if (!g_state.drag.active) return;
+    const conn = core.getState().conn;
     const drag = &g_state.drag;
 
     const was_pending_float = g_state.pending_float;
     if (g_state.pending_float) {
         g_state.pending_float = false;
-        const conn = core.getState().conn;
         utils.grabServer(conn);
         if (build_options.has_tiling) tiling.removeWindow(drag.window);
         if (build_options.has_tiling) tiling.retileCurrentWorkspace();
@@ -312,7 +312,6 @@ pub fn updateDrag(x: i16, y: i16) void {
         .resize => computeResizeRect(drag.*, dx, dy, wa),
     };
     drag.last_rect = rect;
-    const conn = core.getState().conn;
     utils.configureWindow(conn, drag.window, rect);
     _ = xcb.xcb_flush(conn);
 }

@@ -84,6 +84,8 @@ pub const MouseBind = struct {
 /// deinit tears it down before freeing the Actions its entries point into.
 pub const KeybindResolver = struct {
     map: std.AutoHashMapUnmanaged(u64, *const Action) = .empty,
+    /// Conflict-detection set reused across rebuilds to avoid alloc churn on config reload.
+    seen: std.AutoHashMapUnmanaged(u64, usize) = .empty,
 
     inline fn dispatchKey(modifiers: u16, keysym: u32) u64 {
         return (@as(u64, modifiers) << 32) | keysym;
@@ -111,13 +113,13 @@ pub const KeybindResolver = struct {
     /// connection.
     pub fn rebuildDispatchMap(self: *KeybindResolver, keybindings: []Keybind, allocator: std.mem.Allocator) void {
         self.map.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
         for (keybindings, 0..) |*kb, i| {
             const key = dispatchKey(kb.modifiers, kb.keysym);
-            if (self.map.get(key)) |_| {
-                const first_idx = for (keybindings[0..i], 0..) |other, j| {
-                    if (dispatchKey(other.modifiers, other.keysym) == key) break j;
-                } else unreachable;
+            if (self.seen.get(key)) |first_idx| {
                 debug.warn("Keybinding conflict: #{} and #{} share mods=0x{x:0>4} keysym=0x{x}, second wins", .{ first_idx + 1, i + 1, kb.modifiers, kb.keysym });
+            } else {
+                self.seen.put(allocator, key, i) catch {};
             }
             self.map.put(allocator, key, &kb.action) catch |e| debug.warnOnErr(e, "keybind map build");
         }
@@ -134,6 +136,8 @@ pub const KeybindResolver = struct {
     pub fn deinit(self: *KeybindResolver, allocator: std.mem.Allocator) void {
         self.map.deinit(allocator);
         self.map = .empty;
+        self.seen.deinit(allocator);
+        self.seen = .empty;
     }
 };
 

@@ -505,8 +505,6 @@ const State = struct {
     fn drawRightSegments(self: *State, snap: *const BarSnapshot, segments: []const types.BarSegment) void {
         const scaled_spacing = self.render.config.scaledSpacing(self.render.height);
         var right_x = self.render.width;
-        // pending_gap: the segment to the right drew, so the gap between it
-        // and the current segment was reserved.
         var pending_gap = false;
         var i = segments.len;
         while (i > 0) {
@@ -517,6 +515,11 @@ const State = struct {
 
             if (segments[i] == .clock) self.layout_cache.clock_x = right_x;
             self.recordClickBounds(segments[i], right_x, seg_w);
+
+            if (shouldSkipSegment(snap, segments[i])) {
+                pending_gap = false;
+                continue;
+            }
 
             const drew = self.drawSegmentSafe(snap, segments[i], right_x, null) != right_x;
             if (drew) {
@@ -697,6 +700,11 @@ const State = struct {
 /// Builds a replacement list and swaps it into `dst` only on success, so a
 /// failed allocation leaves the cache showing stale data rather than empty.
 fn swapAlloc(comptime T: type, dst: *std.ArrayListUnmanaged(T), alloc: std.mem.Allocator, src: []const T) void {
+    if (dst.capacity >= src.len) {
+        dst.items.len = 0;
+        dst.appendSlice(alloc, src) catch return;
+        return;
+    }
     var replacement: std.ArrayListUnmanaged(T) = .empty;
     if (replacement.appendSlice(alloc, src)) {
         dst.deinit(alloc);
@@ -750,21 +758,28 @@ fn captureMinimizedSet(snap: *BarSnapshot, allocator: std.mem.Allocator) !void {
 
 /// Capture the workspace-derived state: count, current workspace, all-view
 /// mode, per-workspace occupancy, and the current workspace's window list.
+/// Single-pass: builds workspace_has_windows and collects current-workspace
+/// windows in one iteration over all tracked windows.
 fn captureWorkspaceState(snap: *BarSnapshot, allocator: std.mem.Allocator) !void {
     const ws_state = workspaces.getState() orelse return;
     snap.workspace_count = @intCast(ws_state.workspaces.len);
     snap.current_workspace = ws_state.current;
     snap.is_all_view_active = ws_state.all_view_temp_wins.items.len > 0;
     try snap.workspace_has_windows.resize(allocator, snap.workspace_count);
-    for (ws_state.workspaces, 0..) |_, i|
-        snap.workspace_has_windows.items[i] = tracking.countWindowsOnWorkspace(@intCast(i)) > 0;
+    @memset(snap.workspace_has_windows.items, false);
     snap.current_workspace_windows.clearRetainingCapacity();
-    if (ws_state.current < ws_state.workspaces.len) {
-        const cur_bit = tracking.workspaceBit(ws_state.current);
-        for (tracking.allWindows()) |entry| {
-            if (entry.mask & cur_bit != 0)
-                try snap.current_workspace_windows.append(allocator, entry.win);
+    const cur_bit: u64 = if (ws_state.current < ws_state.workspaces.len)
+        tracking.workspaceBit(ws_state.current)
+    else
+        0;
+    for (tracking.allWindows()) |entry| {
+        for (ws_state.workspaces, 0..) |_, i| {
+            if (entry.mask & tracking.workspaceBit(@as(u8, @intCast(i))) != 0) {
+                snap.workspace_has_windows.items[i] = true;
+            }
         }
+        if (cur_bit != 0 and entry.mask & cur_bit != 0)
+            try snap.current_workspace_windows.append(allocator, entry.win);
     }
 }
 
@@ -781,7 +796,7 @@ fn captureFocusedTitle(s: *State, snap: *BarSnapshot, prev: *BarSnapshot) void {
         if (snap.focused_window != prev.focused_window or snap.is_title_invalidated) {
             title.fetchWindowTitleInto(core.getState().conn, fw, &snap.focused_title, s.render.allocator) catch {};
         } else {
-            snap.focused_title.appendSlice(s.render.allocator, prev.focused_title.items) catch {};
+            std.mem.swap(std.ArrayListUnmanaged(u8), &snap.focused_title, &prev.focused_title);
         }
     }
 }
@@ -1052,7 +1067,7 @@ fn destroyBarWindow(conn: *xcb.xcb_connection_t, win_id: u32, colormap: u32) voi
 }
 
 fn measureFontMetrics() ?struct { asc: i32, desc: i32 } {
-    var mc = drawing.MeasureContext.init(core.getState().alloc, core.dpi_info) catch return null;
+    var mc = drawing.MeasureContext.init(core.getState().alloc, core.dpi_info.load(.acquire)) catch return null;
     defer mc.deinit();
     loadBarFonts(&mc) catch return null;
     const asc, const desc = mc.font.getMetrics();
@@ -1094,7 +1109,7 @@ fn createDrawContext(setup: BarWindowSetup, height: u16) !*drawing.DrawContext {
         cs.screen.width_in_pixels,
         height,
         setup.visual_id,
-        core.dpi_info,
+        core.dpi_info.load(.acquire),
         setup.has_argb,
         cs.config.bar.transparency,
     );

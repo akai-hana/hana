@@ -150,6 +150,9 @@ pub const DrawContext = struct {
     // indicator-glyph draw when the requested size matches the previous call.
     sized_font_desc: ?*c.PangoFontDescription = null,
     sized_font_px: u16 = 0,
+    /// Tracks the font description currently set on the Pango layout so
+    /// drawTextSized can skip the set/restore pair when reusing the same sized font.
+    layout_font: ?*c.PangoFontDescription = null,
 
     /// Stored for CarouselPixmap, needed to create a Cairo surface with the same visual.
     visual_type: ?*core.xcb.xcb_visualtype_t = null,
@@ -287,8 +290,15 @@ pub const DrawContext = struct {
         }
         const sized = self.sized_font_desc.?;
 
-        c.pango_layout_set_font_description(self.font.pango_layout, sized);
-        defer c.pango_layout_set_font_description(self.font.pango_layout, desc);
+        const already_set = self.layout_font == sized;
+        if (!already_set) {
+            c.pango_layout_set_font_description(self.font.pango_layout, sized);
+            self.layout_font = sized;
+        }
+        defer if (!already_set) {
+            c.pango_layout_set_font_description(self.font.pango_layout, desc);
+            self.layout_font = desc;
+        };
 
         self.setPangoText(text);
 

@@ -37,6 +37,12 @@ pub fn detectTerminal() []const u8 {
     return "xterm";
 }
 
+const COMMON_PATHS = std.StaticStringMap(void).initComptime(.{
+    .{ "/usr/bin", {} },
+    .{ "/usr/local/bin", {} },
+    .{ "/bin", {} },
+});
+
 fn isCommandAvailable(command: []const u8) bool {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
 
@@ -49,10 +55,7 @@ fn isCommandAvailable(command: []const u8) bool {
     var it = std.mem.splitScalar(u8, path_env, ':');
     while (it.next()) |dir| {
         if (dir.len == 0) continue;
-        const already_checked = inline for (common_paths) |c| {
-            if (std.mem.eql(u8, dir, c)) break true;
-        } else false;
-        if (!already_checked and checkPath(&buf, dir, command)) return true;
+        if (!COMMON_PATHS.has(dir) and checkPath(&buf, dir, command)) return true;
     }
 
     return false;

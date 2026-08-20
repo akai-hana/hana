@@ -55,9 +55,10 @@ pub inline fn quit() void {
 /// also polls the flag itself every iteration, so a lost byte only delays the
 /// reload by one poll timeout at worst.
 pub inline fn reload() void {
-    should_reload.store(true, .release);
-    if (signal_write_fd >= 0)
-        _ = std.os.linux.write(signal_write_fd, &[_]u8{WAKE_BYTE}, 1);
+    if (!should_reload.swap(true, .acq_rel)) {
+        if (signal_write_fd >= 0)
+            _ = std.os.linux.write(signal_write_fd, &[_]u8{WAKE_BYTE}, 1);
+    }
 }
 
 /// Atomically consumes the reload flag.
@@ -596,18 +597,16 @@ pub fn BoundedList(comptime T: type, comptime capacity: usize) type {
     };
 }
 
-/// Fetches an 8-bit X11 window property into a caller-supplied reuse buffer.
-/// Returns a slice into `buffer.items`, or null if the property is absent,
-/// empty, or not 8-bit encoded, or the reply's type doesn't match the
-/// requested `atom_type`. The buffer is cleared before each use, so the
-/// caller can allocate it once and pass it across repeated calls.
+/// Fetches an 8-bit X11 window property into the caller-supplied `buffer`.
+/// Returns a slice into `buffer`, or null if the property is absent, empty,
+/// not 8-bit encoded, the reply's type doesn't match the requested
+/// `atom_type`, or the value exceeds the buffer length.
 pub fn fetchPropertyToBuffer(
     conn: *xcb.xcb_connection_t,
     window: u32,
     atom: u32,
     atom_type: u32,
-    buffer: *std.ArrayListUnmanaged(u8),
-    allocator: std.mem.Allocator,
+    buffer: []u8,
 ) !?[]const u8 {
     const reply = pollPropertyReply(
         conn,
@@ -619,10 +618,11 @@ pub fn fetchPropertyToBuffer(
     if (r.value_len == max_property_length)
         debug.warn("Property atom {x} on window {x} exceeds the {}-byte fetch cap; value truncated", .{ atom, window, max_property_length });
 
-    buffer.clearRetainingCapacity();
+    const len: usize = @intCast(r.value_len);
+    if (len > buffer.len) return null;
     const value_ptr: [*]const u8 = @ptrCast(xcb.xcb_get_property_value(reply));
-    try buffer.appendSlice(allocator, value_ptr[0..@intCast(r.value_len)]);
-    return buffer.items;
+    @memcpy(buffer[0..len], value_ptr[0..len]);
+    return buffer[0..len];
 }
 
 /// Collect the reply for a fired `xcb_get_property` request without a blocking

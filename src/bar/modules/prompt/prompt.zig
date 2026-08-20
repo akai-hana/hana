@@ -77,8 +77,13 @@ const PromptState = struct {
     cached_caret_top: ?u16 = null,
     cached_caret_h: ?u16 = null,
 
+    // Cached pixel width of the ":" glyph used in colon-command mode.
+    // Constant for a given font; measured once, reused every blink frame.
+    cached_colon_w: ?u16 = null,
+
     hist_entries: []u8 = &.{},
     hist_count: usize = 0,
+    hist_head: usize = 0,
     is_hist_loaded: bool = false,
 
     // Set by key handlers, `activate`, and `deactivate` to notify the bar
@@ -95,6 +100,8 @@ const PromptState = struct {
     cached_caret_w: u16 = 0,
     cached_scroll_x: u16 = 0,
     cached_height: u16 = 0,
+    cached_pre_cursor: usize = 0,
+    cached_pre_len: usize = 0,
     layout_dirty: bool = true,
 };
 
@@ -491,7 +498,7 @@ fn compName(i: usize) []const u8 {
 }
 
 fn histEntry(i: usize) []const u8 {
-    const slot = i * (max_history_line + 1);
+    const slot = ((g.hist_head + i) % max_history) * (max_history_line + 1);
     return std.mem.sliceTo(g.hist_entries[slot .. slot + max_history_line + 1], 0);
 }
 
@@ -520,6 +527,7 @@ fn updateGhost() void {
     while (hi < g.hist_count) : (hi += 1) {
         const entry = histEntry(hi);
         if (entry.len == 0) continue;
+        if (entry[0] != prefix[0]) continue;
 
         const cmd_end = std.mem.indexOfScalar(u8, entry, ' ') orelse entry.len;
         const cmd_tok = entry[0..cmd_end];
@@ -549,15 +557,10 @@ fn updateGhost() void {
 fn histPrepend(cmd: []const u8) void {
     if (cmd.len == 0 or cmd.len > max_history_line) return;
 
-    const keep = @min(g.hist_count, max_history - 1);
-    var i: usize = keep;
-    while (i > 0) : (i -= 1) {
-        const src = (i - 1) * (max_history_line + 1);
-        const dst = i * (max_history_line + 1);
-        @memcpy(g.hist_entries[dst .. dst + max_history_line + 1], g.hist_entries[src .. src + max_history_line + 1]);
-    }
-    @memcpy(g.hist_entries[0..cmd.len], cmd);
-    g.hist_entries[cmd.len] = 0;
+    g.hist_head = if (g.hist_head == 0) max_history - 1 else g.hist_head - 1;
+    const slot = g.hist_head * (max_history_line + 1);
+    @memcpy(g.hist_entries[slot .. slot + cmd.len], cmd);
+    g.hist_entries[slot + cmd.len] = 0;
     if (g.hist_count < max_history) g.hist_count += 1;
 }
 
@@ -744,6 +747,18 @@ fn textOffsetAtPx(dc: *drawing.DrawContext, text: []const u8, target_px: u16) us
 /// Fast path: returns the full slice when the text already fits.
 fn textPrefixFit(dc: *drawing.DrawContext, text: []const u8, max_px: u16) []const u8 {
     if (dc.measureTextWidth(text) <= max_px) return text;
+    return textPrefixFitBinary(dc, text, max_px);
+}
+
+/// Like textPrefixFit but skips the initial full-text measurement when the
+/// caller already measured the width (`known_w`). Avoids one redundant Pango
+/// round-trip on the common overflow path in `drawSpan`.
+inline fn textPrefixFitKnownW(dc: *drawing.DrawContext, text: []const u8, max_px: u16, known_w: u16) []const u8 {
+    if (known_w <= max_px) return text;
+    return textPrefixFitBinary(dc, text, max_px);
+}
+
+fn textPrefixFitBinary(dc: *drawing.DrawContext, text: []const u8, max_px: u16) []const u8 {
     var lo: usize = 0;
     var hi: usize = text.len;
     while (lo < hi) {
@@ -794,10 +809,10 @@ inline fn drawSpan(
     const available: u16 = @intCast(se - @as(i32, draw_x));
 
     // Clip the visible suffix to the available width on the right.  When no
-    // left clip occurred, `w` is already the full width, so reuse it instead
-    // of letting textPrefixFit re-measure the same slice on its fast path.
+    // left clip occurred, `w` is already the full width, so pass it to
+    // textPrefixFitKnownW to avoid a redundant full-text Pango measurement.
     const visible = if (start == 0)
-        (if (w <= available) text else textPrefixFit(dc, text, available))
+        (if (w <= available) text else textPrefixFitKnownW(dc, text, available, w))
     else
         textPrefixFit(dc, text[start..], available);
     if (visible.len > 0)
@@ -914,7 +929,14 @@ fn refreshLayoutCache(
 ) void {
     if (!g.layout_dirty and height == g.cached_height) return;
 
-    g.cached_pre_w = dc.measureTextWidth(pre_cur_text);
+    if (g.layout_dirty) {
+        // Full remeasure on dirty flag (keypress changed text/cursor/mode).
+        g.cached_pre_w = dc.measureTextWidth(pre_cur_text);
+        g.cached_pre_cursor = pre_cur_text.len;
+        g.cached_pre_len = pre_cur_text.len;
+    }
+    // When !layout_dirty: only height changed; text and cursor are unchanged,
+    // so cached_pre_w / cached_pre_cursor / cached_pre_len remain valid.
     g.cached_caret_w = if (g.vim_state.mode == .insert)
         cursor_width
     else
@@ -958,7 +980,11 @@ fn drawColonPillContent(
     white: u32,
 ) !void {
     var ppx: i32 = @as(i32, pill_x) + @as(i32, pill_h_pad);
-    const colon_w: i32 = @intCast(dc.measureTextWidth(":"));
+    const colon_w: i32 = @intCast(g.cached_colon_w orelse blk: {
+        const w = dc.measureTextWidth(":");
+        g.cached_colon_w = w;
+        break :blk w;
+    });
     try dc.drawText(@intCast(ppx), baseline, ":", white);
     ppx += colon_w;
     if (ct.len > 0) {

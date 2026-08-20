@@ -6,7 +6,7 @@ const build = @import("build_options");
 
 // Extracts the bare filename without ".zig" extension so the module tag is
 // short enough for log lines like "[module] message".
-fn moduleFromSrc(src: std.builtin.SourceLocation) []const u8 {
+inline fn moduleFromSrc(src: std.builtin.SourceLocation) []const u8 {
     const basename = std.fs.path.basename(src.file);
     return if (std.mem.endsWith(u8, basename, ".zig"))
         basename[0 .. basename.len - 4]

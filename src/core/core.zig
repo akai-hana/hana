@@ -4,7 +4,6 @@
 const std = @import("std");
 
 const types = @import("types");
-const utils = @import("utils");
 const constants = @import("constants");
 
 // Centralized here to avoid repeated @cImport translation across compilation units.
@@ -74,15 +73,6 @@ pub fn init(conn: *xcb.xcb_connection_t, screen: *xcb.xcb_screen_t, root: Window
 /// Stays outside State: unlike State's fields it has a safe default
 /// (96.0 DPI, no scaling), and is set once during scale detection, never
 /// reassigned afterward.
-pub var dpi_info: f32 = constants.BASELINE_DPI;
+pub var dpi_info: std.atomic.Value(f32) = std.atomic.Value(f32).init(constants.BASELINE_DPI);
 
-/// Full-screen rect when no bar is present. Used as fallback by tiling,
-/// floating, and drag when the bar module is absent.
-pub fn fullScreenRect() utils.Rect {
-    return .{
-        .x = 0,
-        .y = 0,
-        .width = @intCast(getState().screen.width_in_pixels),
-        .height = @intCast(getState().screen.height_in_pixels),
-    };
-}
+

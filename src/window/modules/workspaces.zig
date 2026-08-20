@@ -540,13 +540,14 @@ fn prefetchGeometryFilter(win: u32) bool {
 fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
     const conn = core.getState().conn;
     const bit = tracking.workspaceBit(ws.id);
+    const tiling_on = build_options.has_tiling and tiling.isEnabled();
     var it = tracking.onWorkspace(bit, 0);
     while (it.next()) |entry| {
         const win = entry.win;
         if (tracking.isWindowOnWorkspace(win, new_ws)) continue;
 
         utils.pushWindowOffscreen(conn, win);
-            if (build_options.has_tiling and tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
+        if (tiling_on and tiling.isWindowActiveTiled(win)) tiling.invalidateGeomCache(win);
     }
 }
 
@@ -557,20 +558,31 @@ fn hideWorkspaceWindows(ws: *const Workspace, new_ws: u8) void {
 /// the old workspace's window until the real setFocus() below.
 fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8, pending_focus: ?u32) void {
     const tiling_active = build_options.has_tiling and tiling.isEnabled();
+    const cs = core.getState();
+    const conn = cs.conn;
+    const bit_map = tracking.workspaceBit(ws.id);
 
     if (tiling_active) {
-        if (!core.getState().config.tiling.global_layout and build_options.has_tiling) tiling.applyWorkspaceLayout(@ptrCast(ws));
+        if (!cs.config.tiling.global_layout and build_options.has_tiling) tiling.applyWorkspaceLayout(@ptrCast(ws));
 
         // On success only windows shared with old_ws need invalidation; on
         // failure invalidate everything tiled for a full retile.
         const restore_ok = build_options.has_tiling and tiling.restoreWorkspaceGeom();
-        const bit = tracking.workspaceBit(ws.id);
-        var it = tracking.onWorkspace(bit, 0);
+        var it = tracking.onWorkspace(bit_map, 0);
         while (it.next()) |entry| {
             const win = entry.win;
-            if (build_options.has_tiling and !tiling.isWindowTiled(win)) continue;
-            if (restore_ok and !tracking.isWindowOnWorkspace(win, old_ws)) continue;
-            if (build_options.has_tiling) tiling.invalidateGeomCache(win);
+            // Invalidate tiled windows that need it (first pass).
+            if (build_options.has_tiling and tiling.isWindowTiled(win)) {
+                if (restore_ok and !tracking.isWindowOnWorkspace(win, old_ws)) continue;
+                tiling.invalidateGeomCache(win);
+            }
+            // Map ALL windows, and restore geometry for non-tiled ones.
+            _ = xcb.xcb_map_window(conn, win);
+            if (!minimize.isMinimized(win) and !tracking.isWindowOnWorkspace(win, old_ws) and
+                !(build_options.has_tiling and tiling.isWindowActiveTiled(win)))
+            {
+                window.restoreFloatGeom(win);
+            }
         }
         if (!restore_ok) {
             if (pending_focus) |pf| {
@@ -579,24 +591,21 @@ fn restoreWorkspaceWindows(ws: *const Workspace, old_ws: u8, pending_focus: ?u32
                 if (build_options.has_tiling) tiling.retileCurrentWorkspace();
             }
         }
-    } else if (build_options.has_tiling and tiling.isFloatingLayout()) {
-        // Tiling is off, but a window's cache may have been zeroed the last
-        // time it was left while tiling was still active. Try a fast cache
-        // restore; fall back to a silent retile that recomputes positions
-        // without changing the active layout.
-        if (build_options.has_tiling and !tiling.restoreWorkspaceGeom()) tiling.retileForRestore();
-    }
-
-    const bit_map = tracking.workspaceBit(ws.id);
-    const conn = core.getState().conn;
-    var it = tracking.onWorkspace(bit_map, 0);
-    while (it.next()) |entry| {
-        const win = entry.win;
-        _ = xcb.xcb_map_window(conn, win);
-        if (!(build_options.has_tiling and tiling.isWindowActiveTiled(win)) and !minimize.isMinimized(win) and
-            !tracking.isWindowOnWorkspace(win, old_ws))
-        {
-            window.restoreFloatGeom(win);
+    } else {
+        // Tiling disabled: just map + restore geometry.
+        if (build_options.has_tiling and tiling.isFloatingLayout()) {
+            // Tiling is off, but a window's cache may have been zeroed the last
+            // time it was left while tiling was still active. Try a fast cache
+            // restore; fall back to a silent retile that recomputes positions
+            // without changing the active layout.
+            if (!tiling.restoreWorkspaceGeom()) tiling.retileForRestore();
+        }
+        var it = tracking.onWorkspace(bit_map, 0);
+        while (it.next()) |entry| {
+            const win = entry.win;
+            _ = xcb.xcb_map_window(conn, win);
+            if (!minimize.isMinimized(win) and !tracking.isWindowOnWorkspace(win, old_ws))
+                window.restoreFloatGeom(win);
         }
     }
 }
@@ -625,13 +634,17 @@ fn executeSwitch(old_ws: u8, new_ws: u8) void {
     focus.cancelPointerSync(); // discard any stale beginPointerSync cookie
     s.workspaces[old_ws].last_focused = focus.getFocused();
 
+    const cs = core.getState();
+
+    // Fire the pointer query early so it's in flight while geometry prefetch
+    // drains its pipelined replies, overlapping two round trips into ~1.
+    const ptr_cookie = xcb.xcb_query_pointer(cs.conn, cs.root);
+
     // Pre-grab: drain every xcb_*_reply call so the grab body is
     // fire-and-forget (no implicit flush points for the compositor to catch
     // a partial hide/restore).
     prefetchAndSaveWindowGeometries(&s.workspaces[old_ws], new_ws);
 
-    const cs = core.getState();
-    const ptr_cookie = xcb.xcb_query_pointer(cs.conn, cs.root);
     const ptr_reply = xcb.xcb_query_pointer_reply(cs.conn, ptr_cookie, null);
     defer if (ptr_reply) |r| std.c.free(r);
 

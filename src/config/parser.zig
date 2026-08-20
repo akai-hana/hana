@@ -106,9 +106,9 @@ pub const Section = struct {
 
     pub fn init(allocator: std.mem.Allocator) Section {
         var map = std.StringHashMap(Value).init(allocator);
-        map.ensureTotalCapacity(16) catch {};
+        map.ensureTotalCapacity(4) catch {};
         var consumed = std.StringHashMap(void).init(allocator);
-        consumed.ensureTotalCapacity(16) catch {};
+        consumed.ensureTotalCapacity(4) catch {};
         return .{ .pairs = map, .consumed = consumed };
     }
 
@@ -471,7 +471,7 @@ const Parser = struct {
 
     fn parseString(self: *Parser) ParseError![]const u8 {
         const quote = self.consume().?;
-        var result = std.ArrayList(u8).initCapacity(self.allocator, 64) catch return ParseError.OutOfMemory;
+        var result = std.ArrayList(u8).initCapacity(self.allocator, 32) catch return ParseError.OutOfMemory;
         errdefer result.deinit(self.allocator);
         while (self.peek()) |c| {
             if (c == quote) {

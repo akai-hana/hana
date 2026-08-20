@@ -167,7 +167,8 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
         return;
     }
 
-    const conn = core.getState().conn;
+    const cs = core.getState();
+    const conn = cs.conn;
     // Resolve the input model BEFORE the grab: setFocus's blocking WM_PROTOCOLS
     // reply wait inside the grab would implicitly flush the queued retile
     // configure_window batch to the compositor mid-grab (see
@@ -175,7 +176,7 @@ fn restoreWindowImpl(win: u32, saved_fs: ?core.WindowGeometry, tiling_index: ?us
     const focus_ctx = focus.FocusContext.resolve(win);
     utils.grabServer(conn);
 
-    if (core.getState().config.tiling.enabled) {
+    if (cs.config.tiling.enabled) {
         if (tiling_index) |ti| {
             // Restore at the original layout slot so a former master returns to
             // master rather than being appended to the stack end.
@@ -332,12 +333,13 @@ pub fn unminimizeAll() void {
         // captured before the tiling-index sort below reorders the array.
         const focus_target = plain_wins[plain_wins.len - 1].id;
 
-        const conn = core.getState().conn;
+        const cs = core.getState();
+        const conn = cs.conn;
         // Resolve the input model BEFORE the grab; see restoreWindowImpl.
         const focus_ctx = focus.FocusContext.resolve(focus_target);
         utils.grabServer(conn);
 
-        if (core.getState().config.tiling.enabled) {
+        if (cs.config.tiling.enabled) {
             restorePlainWindowsTiling(plain_wins, focus_target, focus_ctx.model.?);
         } else {
             for (plain_wins) |rec| window.restoreFloatGeom(rec.id);

@@ -25,32 +25,39 @@ pub fn tileWithOffset(
     const cell_w = (screen_w -| (grid.cols + 1) *| m.gap) / grid.cols;
     const cell_h = (screen_h -| (grid.rows + 1) *| m.gap) / grid.rows;
     const win_h = layouts.shrinkClamped(cell_h, bm, state.config.min_window_dim);
+    const win_w = layouts.shrinkClamped(cell_w, bm, state.config.min_window_dim);
 
     // In relaxed mode a partial last row shares the full screen width
     // rather than a narrower grid-column width, so fewer columns means
     // less wasted horizontal space. Gated on .relaxed so the division
     // is skipped entirely on the default .rigid path.
     const last_row_count = n % grid.cols;
-    const partial_cell_w: u16 = if (state.config.layout_variants.grid == .relaxed and last_row_count != 0) blk: {
+    const partial_win_w: u16 = if (state.config.layout_variants.grid == .relaxed and last_row_count != 0) blk: {
         const count: u16 = @intCast(last_row_count);
-        break :blk (screen_w -| (count + 1) * m.gap) / count;
-    } else cell_w;
+        const partial_cell_w = (screen_w -| (count + 1) * m.gap) / count;
+        break :blk layouts.shrinkClamped(partial_cell_w, bm, state.config.min_window_dim);
+    } else win_w;
 
     // emitOrDefer honors ctx.defer_win; see LayoutCtx.defer_win.
-    for (windows, 0..) |win, idx| {
-        const col: u16 = @intCast(idx % grid.cols);
-        const row: u16 = @intCast(idx / grid.cols);
+    var col: u16 = 0;
+    var row: u16 = 0;
+    for (windows) |win| {
 
         const is_partial_row = last_row_count != 0 and row == grid.rows - 1;
-        const effective_cell_w: u16 = if (is_partial_row) partial_cell_w else cell_w;
 
         const rect = utils.Rect{
-            .x = @intCast(m.gap +| col *| (effective_cell_w + m.gap)),
+            .x = @intCast(m.gap +| col *| (cell_w + m.gap)),
             .y = @intCast(y_offset +| m.gap +| row *| (cell_h + m.gap)),
-            .width = layouts.shrinkClamped(effective_cell_w, bm, state.config.min_window_dim),
+            .width = if (is_partial_row) partial_win_w else win_w,
             .height = win_h,
         };
         layouts.emitOrDefer(ctx, win, rect);
+
+        col += 1;
+        if (col == grid.cols) {
+            col = 0;
+            row += 1;
+        }
     }
 }
 

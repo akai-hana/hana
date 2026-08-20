@@ -138,11 +138,29 @@ pub const TitleSnapshot = struct {
 /// measurement, so a stale entry costs an extra measurement, never a wrong
 /// width.
 const TitleWidthCache = struct {
+    const max_inline_title: usize = 64;
+
     const Entry = struct {
         window: u32,
-        title_ptr: [*]const u8,
         title_len: usize,
+        title_buf: [max_inline_title]u8 = undefined,
         width: u16,
+
+        fn matches(self: Entry, window: u32, title: []const u8) bool {
+            if (self.window != window) return false;
+            if (self.title_len != title.len) return false;
+            if (self.title_len <= max_inline_title)
+                return std.mem.eql(u8, self.title_buf[0..self.title_len], title);
+            return false;
+        }
+
+        fn store(self: *Entry, window: u32, title: []const u8, width: u16) void {
+            self.window = window;
+            self.title_len = title.len;
+            const n = @min(title.len, max_inline_title);
+            @memcpy(self.title_buf[0..n], title[0..n]);
+            self.width = width;
+        }
     };
 
     /// Direct storage, not a hash map: bounded by `max_visible_windows` and
@@ -154,22 +172,21 @@ const TitleWidthCache = struct {
     fn widthFor(self: *TitleWidthCache, dc: *drawing.DrawContext, window: u32, title: []const u8) u16 {
         var free_slot: ?usize = null;
         for (&self.entries, 0..) |*slot, i| {
-            if (slot.*) |e| {
+            if (slot.*) |*e| {
+                if (e.matches(window, title)) return e.width;
                 if (e.window == window) {
-                    if (e.title_ptr == title.ptr and e.title_len == title.len) return e.width;
                     const w = dc.measureTextWidth(title);
-                    slot.* = .{ .window = window, .title_ptr = title.ptr, .title_len = title.len, .width = w };
+                    e.store(window, title, w);
                     return w;
                 }
             } else if (free_slot == null) {
                 free_slot = i;
             }
         }
-        // No entry for this window: measure and store in a free slot, or
-        // evict slot 0 if full (only when `max_visible_windows` are visible;
-        // more misses, still correct).
         const w = dc.measureTextWidth(title);
-        self.entries[free_slot orelse 0] = .{ .window = window, .title_ptr = title.ptr, .title_len = title.len, .width = w };
+        const idx = free_slot orelse 0;
+        self.entries[idx] = .{ .window = 0, .title_len = 0, .width = 0 };
+        self.entries[idx].?.store(window, title, w);
         return w;
     }
 };
@@ -346,20 +363,27 @@ pub fn fetchWindowTitleInto(
 ) !void {
     atoms.ensureResolved();
     const utf_type = atoms.utf8AtomType();
+    var stack_buf: [1024]u8 = undefined;
 
     if (atoms.net_wm_name) |na| {
-        if (utils.fetchPropertyToBuffer(conn, win, na, utf_type, buf, allocator) catch null) |t| {
-            if (t.len > 0) return;
+        if (utils.fetchPropertyToBuffer(conn, win, na, utf_type, &stack_buf) catch null) |t| {
+            if (t.len > 0) {
+                buf.clearRetainingCapacity();
+                try buf.appendSlice(allocator, t);
+                return;
+            }
         }
     }
-    _ = utils.fetchPropertyToBuffer(
+    if (utils.fetchPropertyToBuffer(
         conn,
         win,
         xcb.XCB_ATOM_WM_NAME,
         xcb.XCB_ATOM_STRING,
-        buf,
-        allocator,
-    ) catch {};
+        &stack_buf,
+    ) catch null) |t| {
+        buf.clearRetainingCapacity();
+        try buf.appendSlice(allocator, t);
+    }
 }
 
 /// Collect the reply for a fired `xcb_get_geometry` request without a blocking

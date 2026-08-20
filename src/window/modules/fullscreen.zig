@@ -305,10 +305,11 @@ fn enterFullscreenCommit(win: u32, ws: u8, geom: core.WindowGeometry) void {
     });
 
     // Push every other window offscreen; workspace dispatch is through the shared iterator.
+    const conn = core.getState().conn;
     var it = tracking.windowsOnCurrentWorkspace(win);
     while (it.next()) |entry| {
         const w = entry.win;
-        utils.pushWindowOffscreen(core.getState().conn, w);
+        utils.pushWindowOffscreen(conn, w);
         // Only invalidate tiled windows; floating windows' cache entries
         // hold the geometry we need to restore on exit.
         if (build_options.has_tiling and tiling.isWindowTiled(w)) tiling.invalidateGeomCache(w);

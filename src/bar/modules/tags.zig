@@ -36,7 +36,8 @@ pub fn getCachedWorkspaceWidth() u16 {
 // Rebuilds the label-width and geometry cache if stale.
 fn ensureCache(dc: *drawing.DrawContext, config: types.BarConfig, height: u16) void {
     if (cache_valid) return;
-    for (&label_widths, 0..) |*w, i| w.* = dc.measureTextWidth(getLabel(i, config));
+    const count = @min(tracking.getWorkspaceCount(), label_widths.len);
+    for (label_widths[0..count], 0..) |*w, i| w.* = dc.measureTextWidth(getLabel(i, config));
     ws_width = config.scaledWorkspaceWidth(height);
     cache_valid = true;
 

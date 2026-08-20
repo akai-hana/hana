@@ -58,9 +58,9 @@ fn getInRange(
     return value;
 }
 
-/// Resolves a color from a section key, accepting `#RRGGBB`, `0xRRGGBB`, or an integer.
-fn getColor(section: *parser.Section, key: []const u8, default: u32) u32 {
-    const value = section.get(key) orelse return default;
+/// Resolves a color from a pre-fetched Value, accepting `#RRGGBB`, `0xRRGGBB`, or an integer.
+/// Split from `getColor` so callers that already have the Value avoid a redundant hashmap lookup.
+fn getColorFromValue(key: []const u8, value: parser.Value, default: u32) u32 {
     if (value.asColor()) |c| return c;
     if (value.asString()) |s| return parser.parseColor(s) catch {
         debug.warn("Invalid color for {s}: '{s}'", .{ key, s });
@@ -68,6 +68,12 @@ fn getColor(section: *parser.Section, key: []const u8, default: u32) u32 {
     };
     if (value.asInt()) |i| if (i >= 0 and i <= 0xFFFFFF) return @intCast(i);
     return default;
+}
+
+/// Resolves a color from a section key, accepting `#RRGGBB`, `0xRRGGBB`, or an integer.
+fn getColor(section: *parser.Section, key: []const u8, default: u32) u32 {
+    const value = section.get(key) orelse return default;
+    return getColorFromValue(key, value, default);
 }
 
 /// Like getInRange, but for ScalableValue fields. Only enforces a lower bound
@@ -141,14 +147,33 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         return err;
     };
     defer file.close(io);
-    const buf = try allocator.alloc(u8, MAX_FILE_BYTES + 1);
+    const stat = file.stat(io) catch {
+        // stat failed: fall back to a smaller initial buffer with growth.
+        var buf = try allocator.alloc(u8, 64 * 1024);
+        errdefer allocator.free(buf);
+        var total: usize = 0;
+        while (true) {
+            const n = try file.readPositionalAll(io, buf[total..], total);
+            total = n;
+            if (n < buf.len) break;
+            if (n > MAX_FILE_BYTES) {
+                allocator.free(buf);
+                return error.FileTooLarge;
+            }
+            const new_buf = try allocator.realloc(buf, buf.len * 2);
+            buf = new_buf;
+        }
+        return allocator.realloc(buf, total) catch buf[0..total];
+    };
+    if (stat.size > MAX_FILE_BYTES) return error.FileTooLarge;
+    const buf = try allocator.alloc(u8, stat.size);
     errdefer allocator.free(buf);
     const n = try file.readPositionalAll(io, buf, 0);
     if (n > MAX_FILE_BYTES) {
         allocator.free(buf);
         return error.FileTooLarge;
     }
-    return allocator.realloc(buf, n) catch buf[0..n];
+    return if (n == buf.len) buf else (allocator.realloc(buf, n) catch buf[0..n]);
 }
 
 /// Reads and parses the .toml at `path`, returning null for an empty file.
@@ -281,8 +306,7 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
 
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     _ = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse return error.CurrentWorkingDirectoryUnlinked;
-    const cwd = try allocator.dupe(u8, std.mem.sliceTo(&cwd_buf, 0));
-    defer allocator.free(cwd);
+    const cwd = std.mem.sliceTo(&cwd_buf, 0);
     const local_dir = try std.fs.path.join(allocator, &.{ cwd, "config" });
     defer allocator.free(local_dir);
 
@@ -384,9 +408,9 @@ fn getDefaultConfig(allocator: std.mem.Allocator) !types.Config {
     const default_layout = try allocator.dupe(u8, "master-stack");
     try cfg.tiling.layouts.append(allocator, default_layout);
     cfg.tiling.layout = cfg.tiling.layouts.items[0];
-    for (0..9) |i| {
-        const icon = try std.fmt.allocPrint(allocator, "{}", .{i + 1});
-        try cfg.bar.workspace_icons.append(allocator, icon);
+    const default_icons = [_][]const u8{ "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+    for (default_icons) |icon| {
+        try cfg.bar.workspace_icons.append(allocator, try allocator.dupe(u8, icon));
     }
     try initDefaultBarLayout(allocator, &cfg);
     return cfg;
@@ -524,20 +548,38 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
     const prefix = key_pattern[0..lbrace];
     const suffix = key_pattern[rbrace + 1 ..];
     const inner = key_pattern[lbrace + 1 .. rbrace];
-    var keys: std.ArrayList([]const u8) = .empty;
+    // Pass 1: count the total number of expanded keys.
+    var count: usize = 0;
+    {
+        var it = std.mem.splitScalar(u8, inner, ',');
+        while (it.next()) |token| {
+            const t = std.mem.trim(u8, token, " \t");
+            if (t.len == 0) continue;
+            if (t.len == 3 and t[1] == '-') {
+                const ch = t[0];
+                const end = t[2];
+                if (ch > end) continue;
+                count += @intCast(end - ch + 1);
+            } else {
+                count += 1;
+            }
+        }
+    }
+    if (count == 0) return singleGlobEntry(allocator, key_pattern);
+    if (count > MAX_GLOB_EXPANSION) count = MAX_GLOB_EXPANSION;
+
+    // Pass 2: allocate and fill directly.
+    const entries = try allocator.alloc(GlobEntry, count);
     errdefer {
-        for (keys.items) |k| allocator.free(k);
-        keys.deinit(allocator);
+        for (entries) |e| if (e.owned) allocator.free(e.key);
+        allocator.free(entries);
     }
 
+    var idx: usize = 0;
     var it = std.mem.splitScalar(u8, inner, ',');
     outer: while (it.next()) |token| {
         const t = std.mem.trim(u8, token, " \t");
         if (t.len == 0) continue;
-        if (keys.items.len >= MAX_GLOB_EXPANSION) {
-            debug.warn("Keybind glob '{s}': expansion exceeds {} keys, truncating", .{ key_pattern, MAX_GLOB_EXPANSION });
-            break :outer;
-        }
         if (t.len == 3 and t[1] == '-') {
             var ch = t[0];
             const end = t[2];
@@ -546,23 +588,25 @@ fn expandGlobKeys(allocator: std.mem.Allocator, key_pattern: []const u8) ![]Glob
                 continue;
             }
             while (ch <= end) : (ch += 1) {
-                try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, ch, suffix }));
+                if (idx >= count) break :outer;
+                entries[idx] = .{
+                    .key = try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, ch, suffix }),
+                    .ws_idx = @intCast(idx + 1),
+                    .owned = true,
+                };
+                idx += 1;
             }
         } else {
-            try keys.append(allocator, try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ prefix, t, suffix }));
+            if (idx >= count) break :outer;
+            entries[idx] = .{
+                .key = try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ prefix, t, suffix }),
+                .ws_idx = @intCast(idx + 1),
+                .owned = true,
+            };
+            idx += 1;
         }
     }
-
-    if (keys.items.len == 0) {
-        keys.deinit(allocator);
-        return singleGlobEntry(allocator, key_pattern);
-    }
-
-    const entries = try allocator.alloc(GlobEntry, keys.items.len);
-    for (keys.items, 0..) |k, i|
-        entries[i] = .{ .key = k, .ws_idx = @intCast(i + 1), .owned = true };
-    keys.deinit(allocator);
-    return entries;
+    return entries[0..idx];
 }
 
 const WORKSPACE_ACTION_BASES = std.StaticStringMap(void).initComptime(.{
@@ -598,6 +642,11 @@ fn actionFromValue(
 ) !?types.Action {
     return switch (value) {
         .array => |arr| {
+            if (arr.items.len == 0) return null;
+            if (arr.items.len == 1) {
+                const cmd = arr.items[0].asString() orelse return null;
+                return try resolveAndParseAction(allocator, cmd, ws_idx, kill);
+            }
             var acts: std.ArrayList(types.Action) = .empty;
             errdefer {
                 for (acts.items) |*a| a.deinit(allocator);
@@ -1210,8 +1259,8 @@ fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Con
     if (focused_val) |v| try assignStr(allocator, &cfg.bar.indicator_focused, v);
     if (unfocused_val) |v| try assignStr(allocator, &cfg.bar.indicator_unfocused, v);
 
-    if (section.get("indicator_color")) |_| // null = inherit workspace fg
-        cfg.bar.indicator_color = getColor(section, "indicator_color", cfg.bar.fg);
+    if (section.get("indicator_color")) |value|
+        cfg.bar.indicator_color = getColorFromValue("indicator_color", value, cfg.bar.fg);
     cfg.bar.transparency = getRatio(section, "transparency", cfg.bar.transparency);
     try parseWorkspaceIcons(allocator, section, cfg);
     try parseBarLayout(allocator, doc, cfg);
@@ -1231,16 +1280,23 @@ fn parseWorkspaceIcons(allocator: std.mem.Allocator, section: *parser.Section, c
             if (item.asString()) |s| {
                 try cfg.bar.workspace_icons.append(allocator, try allocator.dupe(u8, s));
             } else if (item.asInt()) |n| {
-                try cfg.bar.workspace_icons.append(allocator, try std.fmt.allocPrint(allocator, "{}", .{n}));
+                var num_buf: [20]u8 = undefined;
+                const s = std.fmt.bufPrint(&num_buf, "{}", .{n}) catch continue;
+                try cfg.bar.workspace_icons.append(allocator, try allocator.dupe(u8, s));
             }
         }
     } else if (section.getString("icons")) |str| {
-        for (str) |ch|
-            try cfg.bar.workspace_icons.append(allocator, try std.fmt.allocPrint(allocator, "{c}", .{ch}));
+        var ch_buf: [1]u8 = undefined;
+        for (str) |ch| {
+            ch_buf[0] = ch;
+            try cfg.bar.workspace_icons.append(allocator, try allocator.dupe(u8, &ch_buf));
+        }
     }
 
     while (cfg.bar.workspace_icons.items.len < cfg.workspaces.count) {
-        try cfg.bar.workspace_icons.append(allocator, try std.fmt.allocPrint(allocator, "{}", .{cfg.bar.workspace_icons.items.len + 1}));
+        var num_buf: [3]u8 = undefined;
+        const s = std.fmt.bufPrint(&num_buf, "{}", .{cfg.bar.workspace_icons.items.len + 1}) catch break;
+        try cfg.bar.workspace_icons.append(allocator, try allocator.dupe(u8, s));
     }
 }
 

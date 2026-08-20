@@ -16,7 +16,6 @@ const debug = @import("debug");
 const input = @import("input");
 const window = @import("window");
 const plugins = @import("plugins");
-const build_options = @import("build_options");
 
 pub fn main() !void {
     const x = try connectToX();
@@ -29,7 +28,7 @@ pub fn main() !void {
     // first or Xft.dpi would never be read.
     try utils.initAtomCache(x.conn);
 
-    core.dpi_info = scale.detectDpi(x.conn, x.screen);
+    core.dpi_info.store(scale.detectDpi(x.conn, x.screen), .release);
 
     input.setup(x.conn, x.screen, x.root);
     try input.initXkb(x.conn);
@@ -40,6 +39,7 @@ pub fn main() !void {
     // Heap-allocate config so core.State holds a pointer; this allows
     // atomic pointer-swap on reload instead of by-value copy aliasing.
     const config_ptr = try alloc.create(types.Config);
+    errdefer alloc.destroy(config_ptr);
     config_ptr.* = loaded_config;
 
     // core.init() takes ownership of config_ptr; must run before any
@@ -49,7 +49,8 @@ pub fn main() !void {
     // Config.deinit tears the keybind_resolver down internally, before
     // freeing the keybindings whose Actions it points into; so a single
     // defer on the config pointer suffices (see KeybindResolver in types.zig).
-    defer core.getState().config.deinit(alloc);
+    const initial_config = core.getState().config;
+    defer initial_config.deinit(alloc);
 
     utils.advertiseEwmhSupport(x.conn, x.screen, x.root);
 
