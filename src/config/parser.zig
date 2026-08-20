@@ -383,7 +383,7 @@ const Parser = struct {
     content: []const u8,
     pos: usize,
     line: usize,
-    // Current nested-array depth, checked against MAX_ARRAY_DEPTH so a
+    // Current nested-array depth, checked against max_array_depth so a
     // pathologically deep literal (`[[[[[...]]]]]`) can't exhaust the stack.
     // Config is locally authored and trusted, so this is a defensive
     // backstop, not a response to observed input.
@@ -499,13 +499,13 @@ const Parser = struct {
     }
 
     // Maximum nested-array depth accepted by parseArray (see array_depth doc comment).
-    const MAX_ARRAY_DEPTH = 16;
+    const max_array_depth = 16;
 
     fn parseArray(self: *Parser) ParseError!std.ArrayList(Value) {
         self.array_depth += 1;
         defer self.array_depth -= 1;
-        if (self.array_depth > MAX_ARRAY_DEPTH) {
-            debug.warn("Array nesting too deep (> {}) at line {}, treating as invalid", .{ MAX_ARRAY_DEPTH, self.line });
+        if (self.array_depth > max_array_depth) {
+            debug.warn("Array nesting too deep (> {}) at line {}, treating as invalid", .{ max_array_depth, self.line });
             return ParseError.InvalidValue;
         }
 
@@ -533,7 +533,7 @@ const Parser = struct {
         return array;
     }
 
-    const BOOLEAN_KEYWORDS = std.StaticStringMap(bool).initComptime(.{
+    const boolean_keywords = std.StaticStringMap(bool).initComptime(.{
         .{ "true", true }, .{ "false", false },
     });
 
@@ -585,7 +585,7 @@ const Parser = struct {
     // token can take is handled here: boolean, percentage, decimal, color,
     // integer, with the unrecognised-token string fallback last.
     fn parseBareTokenValue(self: *Parser, raw: []const u8) ParseError!Value {
-        if (BOOLEAN_KEYWORDS.get(raw)) |b| return .{ .boolean = b };
+        if (boolean_keywords.get(raw)) |b| return .{ .boolean = b };
 
         if (raw.len > 1 and raw[raw.len - 1] == '%') {
             const f = std.fmt.parseFloat(f32, raw[0 .. raw.len - 1]) catch return ParseError.InvalidValue;

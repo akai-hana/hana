@@ -8,14 +8,14 @@ const xcb = core.xcb;
 pub const XK = core.XK;
 
 // Switch arms need integer constants to match against raw xcb_keysym_t values.
-const XK_BackSpace = @intFromEnum(XK.BackSpace);
-const XK_Return = @intFromEnum(XK.Return);
-const XK_Escape = @intFromEnum(XK.Escape);
-const XK_Delete = @intFromEnum(XK.Delete);
-const XK_Left = @intFromEnum(XK.Left);
-const XK_Right = @intFromEnum(XK.Right);
-const XK_Home = @intFromEnum(XK.Home);
-const XK_End = @intFromEnum(XK.End);
+const xk_back_space = @intFromEnum(XK.BackSpace);
+const xk_return = @intFromEnum(XK.Return);
+const xk_escape = @intFromEnum(XK.Escape);
+const xk_delete = @intFromEnum(XK.Delete);
+const xk_left = @intFromEnum(XK.Left);
+const xk_right = @intFromEnum(XK.Right);
+const xk_home = @intFromEnum(XK.Home);
+const xk_end = @intFromEnum(XK.End);
 
 pub const default_max_input: usize = 512;
 pub const default_undo_max: usize = 32;
@@ -340,7 +340,7 @@ inline fn exitToNormal(vs: *VimState) void {
 
 pub fn handleInsert(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     switch (sym) {
-        XK_Escape => {
+        xk_escape => {
             // Finalise dot record insert text.
             if (vs.is_recording_insert) {
                 vs.is_recording_insert = false;
@@ -358,7 +358,7 @@ pub fn handleInsert(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 /// Minimal insert handler used when vim mode is disabled (vim_mode = false).
 pub fn handleInsertBasic(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     switch (sym) {
-        XK_Escape => return .deactivate,
+        xk_escape => return .deactivate,
         else => return insertKey(vs, sym),
     }
 }
@@ -368,18 +368,18 @@ pub fn handleInsertBasic(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 /// handled by the callers above, which differ only in what it means.
 fn insertKey(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     switch (sym) {
-        XK_Return => return .spawn,
+        xk_return => return .spawn,
 
-        XK_BackSpace => deleteBefore(vs),
-        XK_Delete => deleteAfter(vs),
-        XK_Left => if (vs.cursor > 0) {
+        xk_back_space => deleteBefore(vs),
+        xk_delete => deleteAfter(vs),
+        xk_left => if (vs.cursor > 0) {
             vs.cursor -= 1;
         },
-        XK_Right => if (vs.cursor < vs.len) {
+        xk_right => if (vs.cursor < vs.len) {
             vs.cursor += 1;
         },
-        XK_Home => vs.cursor = 0,
-        XK_End => vs.cursor = vs.len,
+        xk_home => vs.cursor = 0,
+        xk_end => vs.cursor = vs.len,
 
         else => if (isPrintableAscii(sym)) {
             const ch: u8 = @truncate(sym);
@@ -419,11 +419,11 @@ fn handleReplaceCharPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 /// silently discarded. Call only when vs.pending.awaiting == .colon_cmd.
 fn handleColonCmdPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     switch (sym) {
-        XK_Escape => {
+        xk_escape => {
             resetPendingCmd(vs);
             return .none;
         },
-        XK_BackSpace => {
+        xk_back_space => {
             if (vs.pending.colon_len > 0) {
                 vs.pending.colon_len -= 1;
             } else {
@@ -431,7 +431,7 @@ fn handleColonCmdPending(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
             }
             return .none;
         },
-        XK_Return => {
+        xk_return => {
             // Read the command from pending storage before resetPendingCmd
             // zeroes it; resolve the action first, reset, then return it.
             const cmd = vs.pending.colon_buf[0..vs.pending.colon_len];
@@ -515,13 +515,13 @@ fn handleOperatorArm(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 /// Always leaves pending state reset before returning.
 fn execNormalKey(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) Action {
     switch (sym) {
-        XK_Escape => {
+        xk_escape => {
             const act: Action = if (vs.pending.op == 0 and vs.pending.count == 0) .deactivate else .none;
             resetPendingCmd(vs);
             return act;
         },
 
-        XK_Return => {
+        xk_return => {
             resetPendingCmd(vs);
             return .spawn;
         },
@@ -675,9 +675,9 @@ pub fn handleVisual(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     const sel = visualRange(vs);
 
     switch (sym) {
-        XK_Escape, 'v' => exitVisual(vs),
+        xk_escape, 'v' => exitVisual(vs),
 
-        XK_Return => {
+        xk_return => {
             resetPendingCmd(vs);
             return .spawn;
         },
@@ -710,13 +710,13 @@ pub fn handleVisual(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
 
 pub fn handleReplace(vs: *VimState, sym: xcb.xcb_keysym_t) Action {
     switch (sym) {
-        XK_Escape => {
+        xk_escape => {
             exitToNormal(vs);
         },
 
-        XK_Return => return .spawn,
+        xk_return => return .spawn,
 
-        XK_BackSpace => {
+        xk_back_space => {
             if (vs.cursor <= vs.replace_origin_cursor) return .none;
             vs.cursor -= 1;
             if (vs.cursor < vs.replace_origin_len) {
@@ -789,8 +789,8 @@ fn resolveGPrefixPos(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) ?usize {
     return switch (sym) {
         'e' => motionWordEndBackward(vs, false, cnt),
         'E' => motionWordEndBackward(vs, true, cnt),
-        'g', '0', XK_Home => @as(usize, 0),
-        '$', XK_End => vs.len,
+        'g', '0', xk_home => @as(usize, 0),
+        '$', xk_end => vs.len,
         else => null,
     };
 }
@@ -895,17 +895,17 @@ fn resolvePendingGPrefix(vs: *VimState, sym: xcb.xcb_keysym_t) ?MotionKeyResult 
 
 fn resolveSimpleMotion(vs: *VimState, sym: xcb.xcb_keysym_t, cnt: u32) ?MotionResult {
     return switch (sym) {
-        'h', XK_Left => MotionResult{ .pos = vs.cursor -| @as(usize, cnt) },
-        'l', XK_Right => MotionResult{ .pos = @min(vs.cursor + @as(usize, cnt), vs.len) },
+        'h', xk_left => MotionResult{ .pos = vs.cursor -| @as(usize, cnt) },
+        'l', xk_right => MotionResult{ .pos = @min(vs.cursor + @as(usize, cnt), vs.len) },
         'w' => MotionResult{ .pos = motionWordNext(vs, false, cnt) },
         'W' => MotionResult{ .pos = motionWordNext(vs, true, cnt) },
         'b' => MotionResult{ .pos = motionWordPrev(vs, false, cnt) },
         'B' => MotionResult{ .pos = motionWordPrev(vs, true, cnt) },
         'e' => MotionResult{ .pos = motionWordEnd(vs, false, cnt), .inclusive = true },
         'E' => MotionResult{ .pos = motionWordEnd(vs, true, cnt), .inclusive = true },
-        '0', XK_Home => MotionResult{ .pos = 0 },
+        '0', xk_home => MotionResult{ .pos = 0 },
         '^' => MotionResult{ .pos = firstNonBlank(vs) },
-        '$', XK_End => MotionResult{ .pos = vs.len },
+        '$', xk_end => MotionResult{ .pos = vs.len },
         else => null,
     };
 }

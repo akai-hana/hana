@@ -31,7 +31,7 @@ const wm_hints_input_field: usize = 1;
 const wm_hints_long_length: u32 = 9; // flags + 8 fields
 const wm_normal_hints_long_length: u32 = 18; // flags + 17 fields (up to base_size/win_gravity)
 
-const MAX_PROPERTY_LENGTH = constants.property_max_length;
+const max_property_length = constants.property_max_length;
 const property_no_delete = constants.property_no_delete;
 
 const max_window_tree_depth = constants.max_window_tree_depth;
@@ -278,7 +278,7 @@ fn fireWMProtocolsQuery(
     win: u32,
 ) ?xcb.xcb_get_property_cookie_t {
     const protocols_atom = utils.getAtomCached("WM_PROTOCOLS") catch return null;
-    return xcb.xcb_get_property(conn, property_no_delete, win, protocols_atom, xcb.XCB_ATOM_ATOM, 0, MAX_PROPERTY_LENGTH);
+    return xcb.xcb_get_property(conn, property_no_delete, win, protocols_atom, xcb.XCB_ATOM_ATOM, 0, max_property_length);
 }
 
 /// Shared WM_HINTS input-field parser used by both the cookie path and the
@@ -496,7 +496,7 @@ fn queryWMProtocolsProps(conn: core.Connection, win: u32) WMProtocolsProps {
 
     const reply = xcb.xcb_get_property_reply(
         conn,
-        xcb.xcb_get_property(conn, property_no_delete, win, atoms.protocols, xcb.XCB_ATOM_ATOM, 0, MAX_PROPERTY_LENGTH),
+        xcb.xcb_get_property(conn, property_no_delete, win, atoms.protocols, xcb.XCB_ATOM_ATOM, 0, max_property_length),
         null,
     ) orelse return .{};
     defer std.c.free(reply);
@@ -955,7 +955,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t) void {
     // WM_PROTOCOLS is interned at startup; the atom-0 fallback keeps the
     // dual-cookie discard in populateFocusCacheFromCookies symmetric if not.
     const protocols_cookie = fireWMProtocolsQuery(conn, win) orelse
-        xcb.xcb_get_property(conn, property_no_delete, win, 0, xcb.XCB_ATOM_ATOM, 0, MAX_PROPERTY_LENGTH);
+        xcb.xcb_get_property(conn, property_no_delete, win, 0, xcb.XCB_ATOM_ATOM, 0, max_property_length);
     const hints_cookie = xcb.xcb_get_property(
         conn,
         property_no_delete,

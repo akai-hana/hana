@@ -161,7 +161,7 @@ fn fillGrabCookies(cookies: []CookieEntry) usize {
         // Check once per keybinding that the full lock-modifier set fits.
         // Avoids a per-lock branch and prevents partial grabs if the buffer is nearly full.
         if (n + constants.lock_modifiers.len > cookies.len) {
-            debug.warn("Too many keybindings. Increase MAX_KEYBIND_COOKIES (currently {})", .{constants.Limits.max_keybind_cookies});
+            debug.warn("Too many keybindings. Increase max_keybind_cookies (currently {})", .{constants.Limits.max_keybind_cookies});
             break;
         }
 

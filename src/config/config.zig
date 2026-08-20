@@ -1188,23 +1188,23 @@ fn assignStrKey(a: std.mem.Allocator, section: *parser.Section, key: []const u8,
 
 fn parseBarColors(doc: *parser.Document, cfg: *types.Config) !void {
     const colors = doc.getSection("bar.colors");
-    const ACCENT_FIELDS = [_]struct { field: []const u8, key: []const u8, fallback: []const u8 }{
+    const accent_fields = [_]struct { field: []const u8, key: []const u8, fallback: []const u8 }{
         .{ .field = "title_accent_color", .key = "title", .fallback = "accent_color" },
         .{ .field = "title_unfocused_accent", .key = "title_unfocused", .fallback = "bg" },
         .{ .field = "title_minimized_accent", .key = "title_minimized", .fallback = "accent_color" },
     };
-    inline for (ACCENT_FIELDS) |f|
+    inline for (accent_fields) |f|
         @field(cfg.bar, f.field) = if (colors) |c|
             getColor(c, f.key, @field(cfg.bar, f.fallback))
         else
             @field(cfg.bar, f.fallback);
     if (colors) |c| {
-        const DRUN_COLOR_FIELDS = [_]struct { key: []const u8, fallback: []const u8 }{
+        const drun_color_fields = [_]struct { key: []const u8, fallback: []const u8 }{
             .{ .key = "drun_bg", .fallback = "bg" },
             .{ .key = "drun_fg", .fallback = "fg" },
             .{ .key = "drun_prompt_color", .fallback = "accent_color" },
         };
-        inline for (DRUN_COLOR_FIELDS) |f|
+        inline for (drun_color_fields) |f|
             @field(cfg.bar, f.key) = getColor(c, f.key, @field(cfg.bar, f.fallback));
     }
 }

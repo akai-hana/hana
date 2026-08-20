@@ -230,7 +230,7 @@ fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) bool {
     // Only process XCB_KEY_PRESS events: press and release events share the
     // same struct layout, so the loop sometimes casts a release and dispatches
     // it here.  Without this guard the Escape release is a trap: handleInsert
-    // switches to .normal on press, then handleNormal sees XK_Escape with a
+    // switches to .normal on press, then handleNormal sees xk_escape with a
     // clean pending and deactivates; and the prompt is gone before the next
     // editing key arrives.
     //

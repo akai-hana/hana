@@ -134,20 +134,20 @@ pub fn applyWorkspaceOverrides(
     cfg_tiling: *const types.TilingConfig,
     default_layout: TilingLayout,
 ) void {
-    const MAX_WS = constants.max_workspaces;
+    const max_ws = constants.max_workspaces;
 
-    var override_lookup: [MAX_WS]?OverrideLookup = .{null} ** MAX_WS;
+    var override_lookup: [max_ws]?OverrideLookup = .{null} ** max_ws;
     for (cfg_tiling.workspace_layout_overrides.items) |o| {
-        if (o.workspace_idx < MAX_WS)
+        if (o.workspace_idx < max_ws)
             override_lookup[o.workspace_idx] = .{
                 .layout_idx = o.layout_idx,
                 .variant = o.variant,
             };
     }
 
-    var master_count_lookup: [MAX_WS]?u8 = .{null} ** MAX_WS;
+    var master_count_lookup: [max_ws]?u8 = .{null} ** max_ws;
     for (cfg_tiling.workspace_master_count_overrides.items) |o| {
-        if (o.workspace_idx < MAX_WS)
+        if (o.workspace_idx < max_ws)
             master_count_lookup[o.workspace_idx] = o.count;
     }
 
@@ -156,7 +156,7 @@ pub fn applyWorkspaceOverrides(
 
         var ws_layout = default_layout;
         var ws_variant: ?types.LayoutVariantOverride = null;
-        if (id < MAX_WS) {
+        if (id < max_ws) {
             if (override_lookup[id]) |o| {
                 if (o.layout_idx < cfg_tiling.layouts.items.len) {
                     const raw = if (build_options.has_tiling) tiling.layoutFromString(cfg_tiling.layouts.items[o.layout_idx]) else null;
@@ -170,7 +170,7 @@ pub fn applyWorkspaceOverrides(
         ws.variants = ws_variant;
         ws.master_width = null;
         ws.stack_balance = null;
-        ws.master_count = if (id < MAX_WS) master_count_lookup[id] else null;
+        ws.master_count = if (id < max_ws) master_count_lookup[id] else null;
     }
 }
 

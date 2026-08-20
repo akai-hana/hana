@@ -12,7 +12,7 @@ pub const xkb = @cImport({
 });
 
 // Re-exports for callers that don't want to reach through `xkb.*`.
-pub const xkb_keysym_case_insensitive = xkb.xkb_keysym_case_insensitive;
+pub const xkb_keysym_case_insensitive = xkb.XKB_KEYSYM_CASE_INSENSITIVE;
 pub const XKB_KEY_NoSymbol: u32 = xkb.XKB_KEY_NoSymbol;
 pub const xkb_keysym_from_name = xkb.xkb_keysym_from_name;
 const xkb_context = xkb.struct_xkb_context;
