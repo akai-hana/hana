@@ -183,8 +183,21 @@ fn restoreWindowImpl(win: u32, saved_fs: ?utils.Rect, tiling_index: ?usize) void
             // focus_override so monocle (which picks its visible window from
             // the layout context) treats the restored window as focused on the
             // first retile — same convention as mapWindowToScreen.
-            if (build.has_tiling) tiling.addWindowAtFilteredIndex(win, ti);
-            if (build.has_tiling) tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = win });
+            if (build.has_tiling) {
+                tiling.addWindowAtFilteredIndex(win, ti);
+                // Invalidate geom cache for ALL tiled windows on this workspace
+                // so the retile repositions every window from scratch. Without
+                // this the restored window moves from offscreen to its tile
+                // position but other windows keep stale cached rects; the
+                // compositor may not recomposite the scene because only one
+                // configure_window changed. Workspace-switch (which works)
+                // invalidates every tiled window's cache before retile.
+                var it = tracking.windowsOnCurrentWorkspace(0);
+                while (it.next()) |entry| {
+                    if (tiling.isWindowTiled(entry.win)) tiling.invalidateGeomCache(entry.win);
+                }
+                tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = win });
+            }
         }
     }
 
@@ -220,6 +233,11 @@ fn restoreWindowImpl(win: u32, saved_fs: ?utils.Rect, tiling_index: ?usize) void
     }
 
     focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
+    // raiseBar forces the compositor to recomposite the full scene,
+    // matching workspace-switch which also calls raiseBar inside its
+    // grab before commit. Without this the compositor may skip
+    // compositing the restored window that just moved from offscreen.
+    if (build.has_bar) bar.raiseBar();
 
     if (build.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(cs.conn);
 }
