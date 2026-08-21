@@ -1060,16 +1060,18 @@ inline fn updateBorders(s: *State, ws_windows: []const u32) void {
     }
 }
 
-/// Sends the border-pixel change for `win` only if `color` differs from the
-/// cached value. Returns true when `win` had a cache entry (a tiled or
-/// previously-retiled window), the caller should treat that as "handled".
-/// Returns false when there is no cache entry (a pure floating window that
-/// was never retiled), so the caller should fall back to an unconditional
-/// send. Used by window.zig's border-sweep functions.
+/// Sends the border-pixel change for `win` unless the cache already shows
+/// that exact color as applied, and RECORDS the color either way. The
+/// recording is load-bearing, not just an optimization: values forced
+/// outside this function (fullscreen's pixel 0) must end up in the cache,
+/// or the next real color change dedups against a stale value and is
+/// silently skipped -- the un-fullscreen "lost borders" bug. Returns false
+/// only when tiling state is unavailable (compiled out / not initialized);
+/// callers then fall back to an unconditional send.
 pub fn sendBorderColorIfChanged(win: u32, color: u32) bool {
     const s = getStateOpt() orelse return false;
     const conn = core.getState().conn;
-    return updateBorderColor(s, conn, win, color, false);
+    return updateBorderColor(s, conn, win, color, true);
 }
 
 // Window list helpers

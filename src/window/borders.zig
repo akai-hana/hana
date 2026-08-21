@@ -43,15 +43,15 @@ pub inline fn applyWidth(conn: core.Connection, win: u32) void {
 
 /// Applies both border width and color to `win`. Color goes through the
 /// layout-cache dedup so repeated sweeps don't spam ChangeWindowAttributes;
-/// windows without a cache entry (floating, tiling compiled out) fall back
-/// to the unconditional send. Fullscreen windows bypass the dedup entirely:
-/// their forced-zero color must never be skipped, or it could alias the
-/// zero-initialized `border` field of an entry that has never been colored.
+/// that dedup always records the sent/verified color, keeping the cache
+/// truthful across forced values applied outside it (fullscreen's pixel 0)
+/// so the next real color change is never stale-skipped. When tiling state
+/// is unavailable, the send is unconditional.
 pub inline fn apply(conn: core.Connection, win: u32) void {
     applyWidth(conn, win);
     const c = color(win);
     if (build_options.has_tiling) {
-        if (c != 0 and tiling.sendBorderColorIfChanged(win, c)) return;
+        if (tiling.sendBorderColorIfChanged(win, c)) return;
     }
     utils.setBorderPixel(conn, win, c);
 }

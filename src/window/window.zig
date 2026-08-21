@@ -133,6 +133,9 @@ pub fn restoreFloatGeom(win: u32) void {
 /// Moves, resizes, and sets border_width atomically,
 /// preventing a one-frame flash on fullscreen enter/exit or workspace switch.
 pub fn configureWindowGeom(conn: core.Connection, win: u32, geom: utils.Rect) void {
+    // Raw BORDER_WIDTH send bypassing borders.applyWidth; keep the dedup
+    // cache truthful about what the server now holds.
+    if (build_options.has_tiling) _ = tiling.cacheBorderWidth(win, geom.border_width);
     _ = xcb.xcb_configure_window(
         conn,
         win,
@@ -1286,6 +1289,11 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
     }
     _ = xcb.xcb_configure_window(core.getState().conn, win, mask, &values);
 
+    // A client-initiated border-width change bypasses borders.applyWidth;
+    // record it so later dedups compare against what the server now has.
+    if (build_options.has_tiling and mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0)
+        _ = tiling.cacheBorderWidth(win, event.border_width);
+
     // Record the granted geometry so a later restoreFloatGeom/minimize-restore
     // replays what the client actually has instead of snapping back to a stale
     // pre-request rect. Fields the request didn't mention keep their cached
@@ -1514,8 +1522,8 @@ fn sweepWorkspaceBorders(comptime skip_tiled: bool) void {
             if (tilingActive() and build_options.has_tiling and tiling.isWindowTiled(win)) continue;
             // Same CacheMap dedup as the tiled sweep: floating windows with a
             // cache entry skip the XCB call when their color is unchanged;
-            // uncached ones fall through to the unconditional send.
-            if (build_options.has_tiling and color != 0 and tiling.sendBorderColorIfChanged(win, color)) continue;
+            // uncached ones get an entry created and colored in one step.
+            if (build_options.has_tiling and tiling.sendBorderColorIfChanged(win, color)) continue;
         } else {
             // Dedup via the tiling CacheMap: skip the XCB call when unchanged.
             if (build_options.has_tiling and tiling.sendBorderColorIfChanged(win, color)) continue;
