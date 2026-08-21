@@ -185,17 +185,10 @@ fn restoreWindowImpl(win: u32, saved_fs: ?utils.Rect, tiling_index: ?usize) void
             // first retile — same convention as mapWindowToScreen.
             if (build.has_tiling) {
                 tiling.addWindowAtFilteredIndex(win, ti);
-                // Invalidate geom cache for ALL tiled windows on this workspace
-                // so the retile repositions every window from scratch. Without
-                // this the restored window moves from offscreen to its tile
-                // position but other windows keep stale cached rects; the
-                // compositor may not recomposite the scene because only one
-                // configure_window changed. Workspace-switch (which works)
-                // invalidates every tiled window's cache before retile.
-                var it = tracking.windowsOnCurrentWorkspace(0);
-                while (it.next()) |entry| {
-                    if (tiling.isWindowTiled(entry.win)) tiling.invalidateGeomCache(entry.win);
-                }
+                // No blanket geom-cache invalidation here: the retile's cache
+                // diff configures only windows whose rect actually changed
+                // (same as mapWindowToScreen), and raiseBar below forces the
+                // compositor to recomposite the scene.
                 tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = win });
             }
         }
@@ -325,9 +318,7 @@ fn preparePlainWindowsRestore(plain_wins: []MinimizedRecord) void {
     }.lt);
     for (plain_wins) |rec| {
         if (rec.entry.tiling_index) |ti|
-            if (build.has_tiling) tiling.addWindowAtFilteredIndex(rec.id, ti)
-        else
-            window.restoreFloatGeom(rec.id);
+            if (build.has_tiling) tiling.addWindowAtFilteredIndex(rec.id, ti) else window.restoreFloatGeom(rec.id);
     }
 }
 

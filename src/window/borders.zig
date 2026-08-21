@@ -32,15 +32,26 @@ pub inline fn width() u16 {
     );
 }
 
-/// Applies the configured border width to `win`.
+/// Applies the configured border width to `win`, skipping the configure
+/// when the cache shows that exact width is already applied.
 pub inline fn applyWidth(conn: core.Connection, win: u32) void {
     const w = width();
-    if (w > 0)
-        _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{w});
+    if (w == 0) return;
+    if (build_options.has_tiling and tiling.cacheBorderWidth(win, w)) return;
+    _ = xcb.xcb_configure_window(conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{w});
 }
 
-/// Applies both border width and color to `win` atomically.
+/// Applies both border width and color to `win`. Color goes through the
+/// layout-cache dedup so repeated sweeps don't spam ChangeWindowAttributes;
+/// windows without a cache entry (floating, tiling compiled out) fall back
+/// to the unconditional send. Fullscreen windows bypass the dedup entirely:
+/// their forced-zero color must never be skipped, or it could alias the
+/// zero-initialized `border` field of an entry that has never been colored.
 pub inline fn apply(conn: core.Connection, win: u32) void {
     applyWidth(conn, win);
-    utils.setBorderPixel(conn, win, color(win));
+    const c = color(win);
+    if (build_options.has_tiling) {
+        if (c != 0 and tiling.sendBorderColorIfChanged(win, c)) return;
+    }
+    utils.setBorderPixel(conn, win, c);
 }
