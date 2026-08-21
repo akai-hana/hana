@@ -172,35 +172,54 @@ fn restoreWindowImpl(win: u32, saved_fs: ?utils.Rect, tiling_index: ?usize) void
 
     const cs = core.getState();
     const conn = cs.conn;
-    // Resolve the input model BEFORE the grab: setFocus's blocking WM_PROTOCOLS
-    // reply wait inside the grab would implicitly flush the queued retile
-    // configure_window batch to the compositor mid-grab (see
-    // focus.setFocusWithModel).
-    const focus_ctx = focus.FocusContext.resolve(win);
-    utils.grabServer(conn);
-    _ = xcb.xcb_map_window(conn, win);
 
+    // Mirror mapWindowToScreen: add + retile OUTSIDE the grab so the
+    // blocking input-model resolve below flushes the configure_window
+    // batch atomically before the grab applies border width, map, and focus.
     if (cs.config.tiling.enabled) {
         if (tiling_index) |ti| {
             // Restore at the original layout slot so a former master returns to
-            // master rather than being appended to the stack end.
+            // master rather than being appended to the stack end. Pass
+            // focus_override so monocle (which picks its visible window from
+            // the layout context) treats the restored window as focused on the
+            // first retile — same convention as mapWindowToScreen.
             if (build.has_tiling) tiling.addWindowAtFilteredIndex(win, ti);
-            // Move focus BEFORE the retile: layouts that pick their visible window
-            // from focus.getFocused() at retile time (monocle) would otherwise
-            // retile against the still-focused old window with no follow-up retile
-            // once focus lands on `win`.
-            focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
-            if (build.has_tiling) tiling.retileCurrentWorkspace();
-        } else {
+            if (build.has_tiling) tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = win });
+        }
+    }
+
+    // Resolve the input model AFTER the retile but BEFORE the grab: the
+    // blocking WM_PROTOCOLS reply wait implicitly flushes the retile's
+    // configure_window batch (same hazard as mapWindowToScreen).
+    const focus_ctx = focus.FocusContext.resolve(win);
+    utils.grabServer(conn);
+
+    // -- Inside the grab: atomic border, map, focus -------------------------
+    if (cs.config.tiling.enabled) {
+        if (tiling_index != null) {
+            // Apply border width atomically with the map/focus, matching
+            // mapWindowToScreen's grab body. configureWithHints sends
+            // X/Y/W/H but not BORDER_WIDTH; the X server retains the
+            // value between configures, but a client may have changed it
+            // while offscreen and untiled (handleConfigureRequest honours
+            // non-tiled clients). Re-apply to guarantee consistency.
+            window.applyBorder(win);
+        }
+    }
+
+    _ = xcb.xcb_map_window(conn, win);
+
+    if (cs.config.tiling.enabled) {
+        if (tiling_index == null) {
             // Window was floating when minimized (not in the tiling pool);
             // restore its floating geometry instead of adding it to tiling.
             window.restoreFloatGeom(win);
-            focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
         }
     } else {
         window.restoreFloatGeom(win);
-        focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
     }
+
+    focus.setFocusWithModel(win, .window_spawn, focus_ctx.model.?);
 
     if (build.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(cs.conn);
 }
@@ -274,19 +293,11 @@ fn partitionByFullscreen(snapshot: []const MinimizedRecord) Partitioned {
     return result;
 }
 
-// Restore a batch of plain (non-fullscreen) minimized windows back into the
-// tiling layout, sorted by original tiling index so lower-index slots are
-// inserted first. Caller must already hold the server grab and have resolved
-// the focus input model.
-fn restorePlainWindowsTiling(plain_wins: []MinimizedRecord, focus_target: u32, focus_model: window.InputModel) void {
-    // Re-sort by tiling_index ascending (nulls last) before inserting.
-    // Inserting at index i shifts every slot > i by 1, so lower-index
-    // windows must go first to avoid displacing higher-index targets.
-    //
-    // Example ([X, A, B, Z], A at ti=1, B at ti=2, minimized to [X, Z]):
-    //   insert A@1 -> [X, A, Z]
-    //   insert B@2 -> [X, A, B, Z]  <- correct
-    //   (reversed order would mis-place A at index 2)
+/// Re-sort by tiling_index ascending (nulls last) and re-insert each window
+/// into the tiling pool (or restore floating geometry). Must be called
+/// OUTSIDE the server grab so the retile's configure_window batch can be
+/// flushed by the subsequent blocking input-model resolve.
+fn preparePlainWindowsRestore(plain_wins: []MinimizedRecord) void {
     std.sort.pdq(MinimizedRecord, plain_wins, {}, struct {
         fn lt(_: void, a: MinimizedRecord, b: MinimizedRecord) bool {
             if (a.entry.tiling_index == null) return false; // nulls last
@@ -295,16 +306,11 @@ fn restorePlainWindowsTiling(plain_wins: []MinimizedRecord, focus_target: u32, f
         }
     }.lt);
     for (plain_wins) |rec| {
-        _ = xcb.xcb_map_window(core.getState().conn, rec.id);
         if (rec.entry.tiling_index) |ti|
             if (build.has_tiling) tiling.addWindowAtFilteredIndex(rec.id, ti)
         else
             window.restoreFloatGeom(rec.id);
     }
-    // Focus must move to focus_target BEFORE the retile; see the
-    // matching comment in restoreWindowImpl.
-    focus.setFocusWithModel(focus_target, .window_spawn, focus_model);
-    if (build.has_tiling) tiling.retileCurrentWorkspace();
 }
 
 pub fn unminimizeAll() void {
@@ -340,19 +346,29 @@ pub fn unminimizeAll() void {
 
         const cs = core.getState();
         const conn = cs.conn;
-        // Resolve the input model BEFORE the grab; see restoreWindowImpl.
+
+        // Mirror mapWindowToScreen: add + retile OUTSIDE the grab so the
+        // blocking input-model resolve flushes configure_window atomically.
+        if (cs.config.tiling.enabled) {
+            preparePlainWindowsRestore(plain_wins);
+            if (build.has_tiling) tiling.retileCurrentWorkspaceWithOpts(.{ .focus_override = focus_target });
+        }
+
         const focus_ctx = focus.FocusContext.resolve(focus_target);
         utils.grabServer(conn);
 
         if (cs.config.tiling.enabled) {
-            restorePlainWindowsTiling(plain_wins, focus_target, focus_ctx.model.?);
+            for (plain_wins) |rec| {
+                window.applyBorder(rec.id);
+                _ = xcb.xcb_map_window(conn, rec.id);
+            }
         } else {
             for (plain_wins) |rec| {
                 _ = xcb.xcb_map_window(conn, rec.id);
                 window.restoreFloatGeom(rec.id);
             }
-            focus.setFocusWithModel(focus_target, .window_spawn, focus_ctx.model.?);
         }
+        focus.setFocusWithModel(focus_target, .window_spawn, focus_ctx.model.?);
 
         if (build.has_bar) bar.commitInsideGrab() else utils.ungrabAndFlush(conn);
     }
