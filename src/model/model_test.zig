@@ -209,6 +209,9 @@ test "T05: minimize/restore floating preserves rect" {
     try testing.expect(back.mode == .base);
     try testing.expect(back.mode.base == .floating);
     try testing.expect(r.eql(back.mode.base.floating));
+    // Fix P2-7: floating-prev restore must NOT join any tiled_order (a
+    // phantom member would shift every other window's layout slot).
+    for (&m.ws) |*s| try testing.expect(model.findInOrder(&s.tiled_order, 7) == null);
 }
 
 // T06: toggleFullscreen round trips; fullscreen_saved preserved through
@@ -663,4 +666,38 @@ test "T18: identical operation sequences produce identical models" {
     seq.run(&c);
     model.setFocus(&c, 2);
     try testing.expect(!eqModel(&a, &c));
+}
+
+test "T31: minimize seq stamps drive LIFO/FIFO restore candidates" {
+    var m = makeModel();
+    defer deinitModel(&m);
+    model.register(&m, 10, 0); // ws 0
+    model.register(&m, 11, 0);
+    model.register(&m, 12, 1); // ws 1: must never win on ws 0
+    try model.minimize(&m, 10); // seq 0 (oldest)
+    try model.minimize(&m, 11); // seq 1 (newest)
+    try testing.expectEqual(@as(u32, 2), m.next_seq);
+
+    try testing.expectEqual(@as(?model.WindowId, 10), model.restoreCandidate(&m, 0, .fifo));
+    try testing.expectEqual(@as(?model.WindowId, 11), model.restoreCandidate(&m, 0, .lifo));
+    // Cross-workspace isolation.
+    try testing.expectEqual(@as(?model.WindowId, null), model.restoreCandidate(&m, 1, .fifo));
+
+    // Re-minimize 10: newest seq flips the LIFO answer; FIFO unchanged.
+    model.restore(&m, 10);
+    try model.minimize(&m, 10); // seq 2
+    try testing.expectEqual(@as(?model.WindowId, 10), model.restoreCandidate(&m, 0, .lifo));
+    try testing.expectEqual(@as(?model.WindowId, 11), model.restoreCandidate(&m, 0, .fifo));
+    try assertSingleMembership(&m);
+}
+
+test "T32: latestMinimizedBase skips fullscreen-prev and other workspaces" {
+    var m = makeModel();
+    defer deinitModel(&m);
+    model.register(&m, 20, 0);
+    model.register(&m, 21, 0);
+    _ = model.toggleFullscreen(&m, 21);
+    try model.minimize(&m, 20); // plain base, older
+    try model.minimize(&m, 21); // fullscreen-prev, newer — excluded from BC09 focus
+    try testing.expectEqual(@as(?model.WindowId, 20), model.latestMinimizedBase(&m, 0));
 }

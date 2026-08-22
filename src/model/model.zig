@@ -133,6 +133,11 @@ fn removeValue(list: *Order, win: WindowId) void {
     if (findInOrder(list, win)) |i| _ = list.orderedRemove(i);
 }
 
+/// Public remove-by-value for facades (tracking focus-MRU purge paths).
+pub fn removeValuePub(list: *Order, win: WindowId) void {
+    removeValue(list, win);
+}
+
 /// The workspace whose tiled_order holds win (single-membership invariant).
 pub fn findHome(m: *const Model, win: WindowId) ?WSId {
     for (&m.ws, 0..) |*s, i| {
@@ -174,7 +179,16 @@ pub fn register(m: *Model, win: WindowId, hint_ws: ?WSId) void {
     }) catch return;
     m.ws[target].tiled_order.append(m.gpa, win) catch {
         _ = m.store.remove(win);
+        return;
     };
+    // Master fifo variant (train g): a new window takes the master slot and
+    // the previous master drops to the stack head. Legacy enforced this in
+    // its spawn placement; the model path does it here so every caller gets
+    // it for free.
+    const p = &m.ws[target].params;
+    if (p.kind == .master and p.variant_idx == 1 and m.ws[target].tiled_order.items.len > 1) {
+        reorderTiled(m, win, 0);
+    }
 }
 
 pub fn unregister(m: *Model, win: WindowId) void {
@@ -213,14 +227,19 @@ pub fn restore(m: *Model, win: WindowId) void {
     const e = m.store.getPtr(win) orelse return;
     if (e.mode != .minimized) return;
     const mm = e.mode.minimized;
-    const h: WSId = lowestBit(e.mask); // follows tag-moves made while hidden (BC12)
-    const list = &m.ws[h].tiled_order;
-    list.append(m.gpa, win) catch return;
-    if (mm.slot) |s| {
-        const last = list.items.len - 1;
-        if (s < last) {
-            _ = list.orderedRemove(last);
-            list.insert(m.gpa, s, win) catch {};
+    // Only tiled-prev windows re-enter a home list (fix P2-7): floating-prev
+    // restores to its saved rect directly; appending it would create a
+    // phantom layout member that shifts every other window's slot.
+    if (mm.prev == .base and mm.prev.base == .tiled) {
+        const h: WSId = lowestBit(e.mask); // follows tag-moves made while hidden (BC12)
+        const list = &m.ws[h].tiled_order;
+        list.append(m.gpa, win) catch return;
+        if (mm.slot) |s| {
+            const last = list.items.len - 1;
+            if (s < last) {
+                _ = list.orderedRemove(last);
+                list.insert(m.gpa, s, win) catch {};
+            }
         }
     }
     e.mode = switch (mm.prev) {
@@ -259,6 +278,24 @@ pub fn restoreCandidate(m: *const Model, ws: WSId, order: RestoreOrder) ?WindowI
 }
 
 pub const RestoreOrder = enum { lifo, fifo };
+
+/// Most recently minimized PLAIN window on `ws` (BC09 focus target: legacy
+/// focuses plain_wins[last]; fullscreen-prev windows are excluded).
+pub fn latestMinimizedBase(m: *const Model, ws: WSId) ?WindowId {
+    var best: ?WindowId = null;
+    var best_seq: u32 = 0;
+    for (0..m.store.count()) |i| {
+        const it = m.store.at(i);
+        if (it.val.mode != .minimized) continue;
+        if (it.val.mask & bit(ws) == 0) continue;
+        if (it.val.mode.minimized.prev != .base) continue;
+        if (best == null or it.val.mode.minimized.seq > best_seq) {
+            best = it.key;
+            best_seq = it.val.mode.minimized.seq;
+        }
+    }
+    return best;
+}
 
 pub fn restoreAllOnWs(m: *Model, ws: WSId) void {
     var wins: [MAX_MINIMIZED]WindowId = undefined;
@@ -313,6 +350,21 @@ pub fn moveWindowToWs(m: *Model, win: WindowId, ws: WSId) void {
         e.mask = bit(ws); // BC12: record follows the move
         return;
     }
+    // Fullscreen record follows the move (legacy transferFullscreenRecord);
+    // destination occupied ⇒ drop this one rather than clobber the resident.
+    if (e.mode == .fullscreen and e.mode.fullscreen.ws != ws) {
+        var occupied = false;
+        for (0..m.store.count()) |i| {
+            const it = m.store.at(i);
+            if (it.key == win) continue;
+            if (it.val.mode == .fullscreen and it.val.mode.fullscreen.ws == ws) occupied = true;
+        }
+        if (occupied) {
+            e.mode = .{ .base = e.mode.fullscreen.base };
+        } else {
+            e.mode.fullscreen.ws = ws;
+        }
+    }
     e.mask = bit(ws);
     if (findHome(m, win)) |h| {
         if (h != ws) {
@@ -320,6 +372,36 @@ pub fn moveWindowToWs(m: *Model, win: WindowId, ws: WSId) void {
             m.ws[ws].tiled_order.append(m.gpa, win) catch {};
         }
     }
+}
+
+/// Remove tag `ws`; the last remaining tag is protected (returns false).
+/// Fullscreen-on-removed-ws transfers to the lowest remaining bit, or drops
+/// when that destination is occupied (legacy transferFullscreenRecord).
+pub fn tagRemove(m: *Model, win: WindowId, ws: WSId) bool {
+    const e = m.store.getPtr(win) orelse return false;
+    if (@popCount(e.mask) <= 1) return false;
+    e.mask &= ~bit(ws);
+    if (e.mode == .fullscreen and e.mode.fullscreen.ws == ws) {
+        const dest = lowestBit(e.mask);
+        var occupied = false;
+        for (0..m.store.count()) |i| {
+            const it = m.store.at(i);
+            if (it.key == win) continue;
+            if (it.val.mode == .fullscreen and it.val.mode.fullscreen.ws == dest) occupied = true;
+        }
+        if (occupied) {
+            e.mode = .{ .base = e.mode.fullscreen.base };
+        } else {
+            e.mode.fullscreen.ws = dest;
+        }
+    }
+    return true;
+}
+
+pub fn tagAdd(m: *Model, win: WindowId, ws: WSId, protect_current: bool) void {
+    const e = m.store.getPtr(win) orelse return;
+    e.mask |= bit(ws);
+    if (protect_current) e.mask |= bit(m.current);
 }
 
 pub fn pinToggle(m: *Model, win: WindowId) void {
@@ -357,6 +439,16 @@ pub fn cycleLayout(m: *Model, dir: i32) void {
     if (next < 0) next += n;
     p.kind = @enumFromInt(@as(u3, @intCast(next)));
     p.variant_idx = 0;
+}
+
+/// Variant count per layout kind (caller-side variant resolution, §7.4
+/// step 3): master lifo/fifo, monocle gapless/gaps, grid rigid/relaxed;
+/// the rest have exactly one.
+pub fn variantCount(kind: LayoutKind) u8 {
+    return switch (kind) {
+        .master, .monocle, .grid => 2,
+        else => 1,
+    };
 }
 
 pub fn adjustMasterWidth(m: *Model, delta: f32) void {
@@ -425,6 +517,11 @@ pub fn setFocus(m: *Model, win: WindowId) void {
     if (m.ws[m.current].params.kind == .scroll) {
         m.ws[m.current].params.scroll_prev = win; // decision C-D2
     }
+}
+
+/// Model-side focus drop (minimize/close with no eligible successor).
+pub fn clearFocus(m: *Model) void {
+    m.focused = null;
 }
 
 pub fn visibleOn(m: *const Model, win: WindowId, ws: WSId) bool {

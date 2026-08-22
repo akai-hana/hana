@@ -26,7 +26,7 @@ info: [debug]   WS3: 0 windows
 info: [debug]   WS4: 0 windows
 info: [debug] Tiling enabled: true
 info: [debug] Tiling layout:  master
-info: [debug] Tiled windows:  3
+info: [debug] Tiled windows:  2
 info: [debug] ================================
 info: [debug] [KEY] keycode=24 state=0x40 mods=0x40 keysym=0x71
 info: [debug] [KEY] action=dump_state
@@ -43,7 +43,7 @@ info: [debug]   WS3: 0 windows
 info: [debug]   WS4: 0 windows
 info: [debug] Tiling enabled: true
 info: [debug] Tiling layout:  master
-info: [debug] Tiled windows:  3
+info: [debug] Tiled windows:  2
 info: [debug] ================================
 info: [debug] Shutting down gracefully...
 info: [debug] Clock thread stopped

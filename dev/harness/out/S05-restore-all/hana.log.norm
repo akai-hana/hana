@@ -12,19 +12,14 @@ info: [debug] [KEY] keycode=28 state=0x40 mods=0x40 keysym=0x74
 info: [debug] [KEY] action=minimize_window
 info: [debug] [KEY] keycode=28 state=0x40 mods=0x40 keysym=0x74
 info: [debug] [KEY] action=minimize_window
-info: [debug] [ENTER] win=W02 mode=0 detail=0 root_x=640 root_y=400
-info: [debug] [MAYBE_FOCUS] W02 -> setFocus(.mouse_enter)
 info: [debug] [KEY] keycode=28 state=0x40 mods=0x40 keysym=0x74
 info: [debug] [KEY] action=minimize_window
-info: [debug] [ENTER] win=0x3a0 mode=0 detail=2 root_x=640 root_y=400
-info: [debug] [KEY] keycode=133 state=0x0 mods=0x0 keysym=0xffeb
-info: [debug] [KEY] no binding
 info: [debug] [KEY] keycode=24 state=0x40 mods=0x40 keysym=0x71
 info: [debug] [KEY] action=dump_state
 info: [debug] ========== STATE DUMP ==========
-info: [debug] Focused:        null
+info: [debug] Focused:        W03
 info: [debug] Total windows:  3
-info: [debug] Suppress focus: none
+info: [debug] Suppress focus: window_spawn
 info: [debug] Drag active:    false
 info: [debug] Fullscreen: none
 info: [debug] Current workspace: 1
@@ -34,14 +29,8 @@ info: [debug]   WS3: 0 windows
 info: [debug]   WS4: 0 windows
 info: [debug] Tiling enabled: true
 info: [debug] Tiling layout:  master
-info: [debug] Tiled windows:  0
+info: [debug] Tiled windows:  2
 info: [debug] ================================
-info: [debug] [KEY] keycode=133 state=0x0 mods=0x0 keysym=0xffeb
-info: [debug] [KEY] no binding
-info: [debug] [KEY] keycode=50 state=0x40 mods=0x40 keysym=0xffe1
-info: [debug] [KEY] no binding
-info: [debug] [KEY] keycode=64 state=0x41 mods=0x41 keysym=0xffe9
-info: [debug] [KEY] no binding
 info: [debug] [KEY] keycode=28 state=0x49 mods=0x49 keysym=0x74
 info: [debug] [KEY] action=unminimize_all
 info: [debug] [KEY] keycode=24 state=0x40 mods=0x40 keysym=0x71

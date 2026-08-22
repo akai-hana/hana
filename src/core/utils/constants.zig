@@ -156,8 +156,8 @@ pub const Limits = struct {
     pub const max_keybind_cookies = 1024;
 
     /// Maximum tiled windows across the whole WM (all workspaces combined),
-    /// not per workspace; see tracking.Tracking, which this backs.
-    /// tracking.Tracking.len is a u8 (max 255), so this must stay <= 255
-    /// unless that field is widened too.
+    /// not per workspace. Buffers sized from this are indexed by usize/u16,
+    /// so raising it only costs memory; keep it a compile-time bound so
+    /// stack buffers stay stack buffers.
     pub const max_tiled_windows = 200;
 };

@@ -92,3 +92,15 @@ client_bw() {
 focused_from_dump() {
 	awk '/STATE DUMP/{found=NR} found && /Focused:/ && NR>found {print $2; exit}' "$HW_LOG"
 }
+
+# Send a _NET_WM_STATE fullscreen ClientMessage as a real client would
+# (exercises the WM's client-message path, fix P0-3). Cached in .cache/.
+ewmh_fs() {
+	_win="$1"; _action="$2"
+	_tool="$HARNESS_ROOT/.cache/ewmhfs"
+	if [ ! -x "$_tool" ]; then
+		mkdir -p "$HARNESS_ROOT/.cache"
+		cc -O2 -o "$_tool" "$HARNESS_ROOT/tools/ewmhfs.c" -lX11 || return 1
+	fi
+	DISPLAY="$HW_DISPLAY" "$_tool" "$_win" "$_action"
+}

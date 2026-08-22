@@ -20,7 +20,12 @@ pub const XcbSink = struct {
     conn: core.Connection,
 
     pub fn sink(self: *XcbSink) sync.Sink {
-        return .{ .ptr = self, .vt = &.{ .geom = geomShim, .border_width = borderWidthShim, .border_pixel = borderPixelShim, .park = parkShim, .stack_only = stackOnlyShim, .flush = flushShim, .grab_server = grabShim, .ungrab_and_flush = ungrabAndFlushShim } };
+        return .{ .ptr = self, .vt = &.{ .map = mapShim, .geom = geomShim, .border_width = borderWidthShim, .border_pixel = borderPixelShim, .park = parkShim, .stack_only = stackOnlyShim, .flush = flushShim, .grab_server = grabShim, .ungrab_and_flush = ungrabAndFlushShim } };
+    }
+
+    fn mapShim(ptr: *anyopaque, win: u32) void {
+        const self: *XcbSink = @ptrCast(@alignCast(ptr));
+        _ = xcb.xcb_map_window(self.conn, win);
     }
 
     /// Configure X|Y|W|H, merging a stack mode into the SAME request when

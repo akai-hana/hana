@@ -142,6 +142,14 @@ run_one() {
 
 	grep -h "bench:" "$out/hana.log.norm" >"$out/bench.txt" 2>/dev/null || : >"$out/bench.txt"
 
+	# Signal log (harness hardening): the WM-internal-truth subset of
+	# hana's log — warnings/errors (dropped requests, BadWindow probes),
+	# state dumps (registry counts, focus) and hover-focus decisions.
+	# Included in golden diffs so state divergence can't hide behind tree
+	# snapshots while noisy debug lines stay out of the comparison.
+	grep -E "error:|warning:|STATE DUMP|Focused:|Total windows|WS[0-9]+: |MAYBE_FOCUS|Suppress focus" \
+		"$out/hana.log.norm" >"$out/hana.log.sig" 2>/dev/null || : >"$out/hana.log.sig"
+
 	if [ "$rc" -ne 0 ]; then
 		echo "FAIL $sc (scenario body rc=$rc)"
 		failures="$failures $sc"
@@ -167,7 +175,7 @@ run_one() {
 	if [ "$GOLDEN" = "1" ]; then
 		gold="$HARNESS_ROOT/golden/$sc"
 		rm -rf "$gold"; mkdir -p "$gold"
-		find "$out" -maxdepth 1 \( -name '*.norm' -o -name 'bench.txt' \) -exec cp {} "$gold/" \;
+		find "$out" -maxdepth 1 \( -name '*.norm' -o -name 'bench.txt' -o -name 'hana.log.sig' \) -exec cp {} "$gold/" \;
 		echo "GOLDEN $sc captured -> ${gold#$REPO_ROOT/}"
 	fi
 

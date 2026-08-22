@@ -29,6 +29,7 @@ fn stdWa() utils.Rect {
 }
 
 const Op = union(enum) {
+    map: model.WindowId,
     geom: struct { win: model.WindowId, rect: utils.Rect, stack: ?sync.Stack },
     bw: struct { win: model.WindowId, w: u16 },
     pixel: struct { win: model.WindowId, p: u32 },
@@ -48,6 +49,10 @@ const Recorder = struct {
     }
 
     // -- Sink vtable shims ------------------------------------------------
+    fn mapShim(ptr: *anyopaque, win: model.WindowId) void {
+        const self: *Recorder = @ptrCast(@alignCast(ptr));
+        self.ops.append(testing.allocator, .{ .map = win }) catch unreachable;
+    }
     fn geomShim(ptr: *anyopaque, win: model.WindowId, rect: utils.Rect, stack: ?sync.Stack) void {
         const self: *Recorder = @ptrCast(@alignCast(ptr));
         self.ops.append(testing.allocator, .{ .geom = .{ .win = win, .rect = rect, .stack = stack } }) catch unreachable;
@@ -73,7 +78,7 @@ const Recorder = struct {
     fn ungrabShim(_: *anyopaque) void {}
 
     fn sink(self: *Recorder) sync.Sink {
-        return .{ .ptr = self, .vt = &.{ .geom = geomShim, .border_width = bwShim, .border_pixel = pixelShim, .park = parkShim, .stack_only = stackShim, .flush = flushShim, .grab_server = grabShim, .ungrab_and_flush = ungrabShim } };
+        return .{ .ptr = self, .vt = &.{ .map = mapShim, .geom = geomShim, .border_width = bwShim, .border_pixel = pixelShim, .park = parkShim, .stack_only = stackShim, .flush = flushShim, .grab_server = grabShim, .ungrab_and_flush = ungrabShim } };
     }
     // ---------------------------------------------------------------------
 
@@ -109,6 +114,12 @@ const Recorder = struct {
         try testing.expect(op == .bw);
         try testing.expectEqual(win, op.bw.win);
         try testing.expectEqual(w, op.bw.w);
+    }
+
+    fn expectMap(self: *const Recorder, i: usize, win: model.WindowId) !void {
+        const op = self.ops.items[i];
+        try testing.expect(op == .map);
+        try testing.expectEqual(win, op.map);
     }
 
     fn expectPark(self: *const Recorder, i: usize, win: model.WindowId) !void {
@@ -167,10 +178,13 @@ test "spawn: first-sight full sequence pixel -> bw -> geom(+ABOVE winner); idemp
     fx.reconcile(.{});
 
     // Master layout single window on 800x600 with gap 8 / border 2.
-    try fx.rec.expectLen(3);
-    try fx.rec.expectPixel(0, 101, focused_pixel);
-    try fx.rec.expectBw(1, 101, cfg_bw);
-    try fx.rec.expectGeom(2, 101, 8, 8, 780, 580, .above);
+    // First sight also maps (mapped=false until proven; harmless no-op when
+    // the window is already mapped server-side).
+    try fx.rec.expectLen(4);
+    try fx.rec.expectMap(0, 101);
+    try fx.rec.expectPixel(1, 101, focused_pixel);
+    try fx.rec.expectBw(2, 101, cfg_bw);
+    try fx.rec.expectGeom(3, 101, 8, 8, 780, 580, .above);
 
     // Unchanged state => zero deltas on the next batch (step 6 diff-only).
     fx.rec.clear();
@@ -277,4 +291,43 @@ test "minimize parks; restore replays original slot geometry" {
     try fx.rec.expectPixel(1, 402, unfocused_pixel);
     try fx.rec.expectBw(2, 402, cfg_bw);
     try fx.rec.expectGeom(3, 402, 404, 8, 384, 580, null);
+}
+
+// -- Workspace switch (train c wire shape) -----------------------------------
+
+test "workspace switch: leavers park once, arrivers map + place; return trip diffs" {
+    var fx: Fixture = undefined;
+    fx.init(stdScreen(), stdWa());
+    defer fx.deinit();
+
+    model.register(&fx.m, 501, 0); // stays here
+    model.register(&fx.m, 502, 1); // arrives with the switch
+    model.setFocus(&fx.m, 501);
+    fx.reconcile(.{}); // baseline: only 501 visible
+    fx.rec.clear();
+
+    fx.m.current = 1;
+    fx.reconcile(.{ .force_restack = true });
+
+    // 501 leaves: ONE merged park request. 502 arrives: map -> pixel -> bw ->
+    // geom(+ABOVE winner). Store-seq order puts 501 first.
+    // 502 is the only non-parked desire => fallback winner => ABOVE merged;
+    // its pixel uses color_of(m.focused=501) => unfocused.
+    try fx.rec.expectLen(5);
+    try fx.rec.expectPark(0, 501);
+    try fx.rec.expectMap(1, 502);
+    try fx.rec.expectPixel(2, 502, unfocused_pixel);
+    try fx.rec.expectBw(3, 502, cfg_bw);
+    try fx.rec.expectGeom(4, 502, 8, 8, 780, 580, .above);
+
+    // Switch back: 501 unparks with full replay (focused => ABOVE merged),
+    // 502 parks. No map either way (both already mapped).
+    fx.m.current = 0;
+    fx.rec.clear();
+    fx.reconcile(.{});
+    try fx.rec.expectLen(4);
+    try fx.rec.expectPixel(0, 501, focused_pixel);
+    try fx.rec.expectBw(1, 501, cfg_bw);
+    try fx.rec.expectGeom(2, 501, 8, 8, 780, 580, .above);
+    try fx.rec.expectPark(3, 502);
 }

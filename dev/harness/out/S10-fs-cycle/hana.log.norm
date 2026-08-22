@@ -19,7 +19,7 @@ info: [debug] Focused:        W04
 info: [debug] Total windows:  2
 info: [debug] Suppress focus: none
 info: [debug] Drag active:    false
-info: [debug] Fullscreen on workspace 0: W04
+info: [debug] Fullscreen: none
 info: [debug] Current workspace: 1
 info: [debug]   WS1: 2 windows
 info: [debug]   WS2: 0 windows
@@ -27,7 +27,7 @@ info: [debug]   WS3: 0 windows
 info: [debug]   WS4: 0 windows
 info: [debug] Tiling enabled: true
 info: [debug] Tiling layout:  master
-info: [debug] Tiled windows:  2
+info: [debug] Tiled windows:  1
 info: [debug] ================================
 info: [debug] [KEY] keycode=41 state=0x40 mods=0x40 keysym=0x66
 info: [debug] [KEY] action=toggle_fullscreen

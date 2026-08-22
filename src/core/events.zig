@@ -20,6 +20,7 @@ const fullscreen = @import("fullscreen");
 const refresh_rate = @import("refresh_rate");
 const signals = @import("signals");
 const pipeline = @import("pipeline");
+const actions = @import("actions");
 const build_options = @import("build_options");
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
 
@@ -251,11 +252,11 @@ fn handleConfigReload() !void {
     cs.config = new_ptr;
 
     plugins.fanOut("reload", .{});
-    if (build_options.has_tiling) tiling.reloadConfig();
-    // Borders sweep AFTER tiling.reloadConfig: that call rebuilds the layout
-    // cache from scratch, and sweeping first would send every border twice --
-    // once here, once again from the retile against the fresh cache. Sweeping
-    // last lets borders.apply dedup against entries the retile just wrote.
+    actions.applyConfigReload(); // WP6: model path re-seeds params + reconciles
+    // Borders sweep AFTER applyConfigReload: its reconcile rebuilds geometry,
+    // and sweeping first would send every border twice -- once here, once
+    // again deduped against fresh state. Sweeping last lets borders.apply
+    // dedup against entries the reconcile just wrote.
     window.reloadBorders();
 
     // Free the displaced old config after subsystem reloads have moved on.

@@ -10,22 +10,18 @@ info: [debug] [MAYBE_FOCUS] W02 -> setFocus(.mouse_enter)
 info: [debug] [ENTER] win=0x3a0 mode=0 detail=2 root_x=640 root_y=400
 info: [debug] [KEY] keycode=39 state=0x40 mods=0x40 keysym=0x73
 info: [debug] [KEY] action=toggle_floating_window
-info: [debug] [FLOAT] W03 -> floating
-info: [debug] [ENTER] win=W02 mode=0 detail=0 root_x=640 root_y=400
-info: [debug] [MAYBE_FOCUS] W02 -> setFocus(.mouse_enter)
 info: [debug] [KEY] keycode=28 state=0x40 mods=0x40 keysym=0x74
 info: [debug] [KEY] action=minimize_window
-info: [debug] [ENTER] win=0x3a0 mode=0 detail=2 root_x=640 root_y=400
-info: [debug] [KEY] keycode=28 state=0x41 mods=0x41 keysym=0x74
-info: [debug] [KEY] action=unminimize_lifo
 info: [debug] [ENTER] win=W02 mode=0 detail=0 root_x=640 root_y=400
 info: [debug] [MAYBE_FOCUS] W02 -> setFocus(.mouse_enter)
+info: [debug] [KEY] keycode=28 state=0x41 mods=0x41 keysym=0x74
+info: [debug] [KEY] action=unminimize_lifo
 info: [debug] [KEY] keycode=24 state=0x40 mods=0x40 keysym=0x71
 info: [debug] [KEY] action=dump_state
 info: [debug] ========== STATE DUMP ==========
-info: [debug] Focused:        W04
+info: [debug] Focused:        W03
 info: [debug] Total windows:  2
-info: [debug] Suppress focus: none
+info: [debug] Suppress focus: window_spawn
 info: [debug] Drag active:    false
 info: [debug] Fullscreen: none
 info: [debug] Current workspace: 1
@@ -40,9 +36,9 @@ info: [debug] ================================
 info: [debug] [KEY] keycode=24 state=0x40 mods=0x40 keysym=0x71
 info: [debug] [KEY] action=dump_state
 info: [debug] ========== STATE DUMP ==========
-info: [debug] Focused:        W04
+info: [debug] Focused:        W03
 info: [debug] Total windows:  2
-info: [debug] Suppress focus: none
+info: [debug] Suppress focus: window_spawn
 info: [debug] Drag active:    false
 info: [debug] Fullscreen: none
 info: [debug] Current workspace: 1

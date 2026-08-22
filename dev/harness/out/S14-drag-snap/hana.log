@@ -10,7 +10,6 @@ info: [debug] [ENTER] win=0x400001 mode=0 detail=0 root_x=640 root_y=400
 info: [debug] [MAYBE_FOCUS] 0x400001 -> setFocus(.mouse_enter)
 info: [debug] [KEY] keycode=39 state=0x40 mods=0x40 keysym=0x73
 info: [debug] [KEY] action=toggle_floating_window
-info: [debug] [FLOAT] 0x400001 -> floating
 info: [debug] [ENTER] win=0x3a0 mode=1 detail=2 root_x=315 root_y=380
 info: [debug] [ENTER] win=0x400001 mode=2 detail=0 root_x=1262 root_y=410
 info: [debug] [KEY] keycode=24 state=0x40 mods=0x40 keysym=0x71

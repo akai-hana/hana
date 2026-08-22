@@ -135,7 +135,13 @@ pub fn build(b: *std.Build) !void {
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
     b.step("run", "Run hana").dependOn(&run_cmd.step);
-    b.step("check", "Type-check without installing").dependOn(&exe.step);
+    // Layer guards (REARCHITECTURE_PLAN.md §13 / WP7): `zig build check`
+    // type-checks AND enforces the sync-owned wire rules.
+    const check_step = b.step("check", "Type-check + layer guards");
+    check_step.dependOn(&exe.step);
+    const layers = b.addSystemCommand(&.{ "./scripts/check-layers.sh" });
+    layers.step.dependOn(&exe.step);
+    check_step.dependOn(&layers.step);
 }
 
 // Shared context

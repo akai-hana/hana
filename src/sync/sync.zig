@@ -31,6 +31,13 @@ pub const LastSent = struct {
     bw: u16,
     pixel: u32,
     parked: bool,
+    /// False until we have sent map_window at least once. Windows registered
+    /// while their workspace was hidden were never mapped server-side
+    /// (registerWindowOffscreen consumed their MapRequest); the first visible
+    /// reconcile must map them or they stay invisible. Defaults false so the
+    /// first sight of ANY window maps it (harmless server-side no-op when
+    /// already mapped; correctness over request budget).
+    mapped: bool = false,
 
     const parked_entry: LastSent = .{ .rect = engine.parked_rect, .bw = 0, .pixel = 0, .parked = true };
 };
@@ -43,6 +50,7 @@ pub const Sink = struct {
     vt: *const VTable,
 
     pub const VTable = struct {
+        map: *const fn (*anyopaque, model.WindowId) void,
         geom: *const fn (*anyopaque, model.WindowId, utils.Rect, ?Stack) void,
         border_width: *const fn (*anyopaque, model.WindowId, u16) void,
         border_pixel: *const fn (*anyopaque, model.WindowId, u32) void,
@@ -53,6 +61,9 @@ pub const Sink = struct {
         ungrab_and_flush: *const fn (*anyopaque) void,
     };
 
+    pub inline fn map(self: Sink, win: model.WindowId) void {
+        self.vt.map(self.ptr, win);
+    }
     pub inline fn geom(self: Sink, win: model.WindowId, rect: utils.Rect, stack: ?Stack) void {
         self.vt.geom(self.ptr, win, rect, stack);
     }
@@ -134,6 +145,14 @@ pub fn reset() void {
     st.last_sent.clearRetainingCapacity();
 }
 
+/// Drop a window's LastSent record (fix P0-4). X recycles window ids: after
+/// a destroy, a new client can appear with the same id, and a stale
+/// "mapped=true" record makes sync skip its map request — the window stays
+/// invisible forever. Called from actions.unmanage.
+pub fn forget(win: model.WindowId) void {
+    _ = st.last_sent.swapRemove(win);
+}
+
 /// Coalesced end-of-dispatch reconcile flag (§7.6 scheduling table:
 /// focus-change class). Consumed by pipeline.postDispatch in WP5.
 pub var scheduled: bool = false;
@@ -141,6 +160,13 @@ pub var scheduled: bool = false;
 pub fn schedule(_ctx: *Ctx) void {
     _ = _ctx;
     scheduled = true;
+}
+
+/// Consume-and-clear for pipeline.postDispatch (fix P1-4).
+pub fn takeScheduled() bool {
+    const s = scheduled;
+    scheduled = false;
+    return s;
 }
 
 /// Internal per-entry desire, mirroring §7.4 step 4.
@@ -248,9 +274,17 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
                     if (findPlacement(&placements, win)) |p| {
                         desired_buf[i] = .{ .rect = p.rect, .bw = ctx.cfg_bw, .pixel = ctx.color_of(win, m), .parked = !p.visible };
                     } else if (model.visibleOn(m, win, m.current)) {
-                        // Tiled on shown ws but no placement (shouldn't happen:
-                        // compute covers the filtered order). Park defensively.
-                        desired_buf[i] = .{ .rect = engine.parked_rect, .bw = 0, .pixel = 0, .parked = true };
+                        // Multi-tagged window whose home list isn't the shown
+                        // ws: legacy never hides it and no layout owns it here,
+                        // so it stays at its previous geometry (keep-last via
+                        // LastSent). Park only when we have never sent real
+                        // geometry (first sight / registered offscreen).
+                        const prev = st.last_sent.get(win) orelse LastSent.parked_entry;
+                        if (prev.parked and prev.rect.eql(engine.parked_rect)) {
+                            desired_buf[i] = .{ .rect = engine.parked_rect, .bw = 0, .pixel = 0, .parked = true };
+                        } else {
+                            desired_buf[i] = .{ .rect = prev.rect, .bw = ctx.cfg_bw, .pixel = ctx.color_of(win, m), .parked = false };
+                        }
                     } else {
                         desired_buf[i] = .{ .rect = engine.parked_rect, .bw = 0, .pixel = 0, .parked = true };
                     }
@@ -300,6 +334,13 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
 
         const unpark_transition = last.parked;
 
+        // First show after a hidden registration: map BEFORE geometry so the
+        // client exposes at its final rect and ConfigureNotify flows once.
+        if (!last.mapped) {
+            ctx.sink.map(win);
+            gop.value_ptr.mapped = true;
+        }
+
         if (unpark_transition or last.pixel != want.pixel) {
             ctx.sink.borderPixel(win, want.pixel);
             if (build_options.bench) st.bench_border += 1;
@@ -322,6 +363,7 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
             .bw = want.bw,
             .pixel = want.pixel,
             .parked = false,
+            .mapped = true, // visible desire ⇒ mapped (sent above if first show)
         };
     }
 
@@ -336,6 +378,15 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
 
 fn workArea(ctx: *const Ctx) utils.Rect {
     return ctx.workarea;
+}
+
+/// PIPELINE (train f): current on-screen geometry of `win` per LastSent, or
+/// null when never sent / parked. Floating-detach and toggle-float need the
+/// live rect as the new floating base.
+pub fn lastRectFor(win: model.WindowId) ?utils.Rect {
+    const ls = st.last_sent.get(win) orelse return null;
+    if (ls.parked) return null;
+    return ls.rect;
 }
 
 fn findPlacement(placements: *const engine.List, win: model.WindowId) ?engine.Placement {
