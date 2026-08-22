@@ -177,7 +177,9 @@ fn findCappedWindows(
 
     return .{
         .capped = capped,
-        .capped_len = windows.len,
+        // Byte length of the bitset, NOT the window count: consumers slice
+        // with this and index bits via bitIsSet(i), which reads bits[i / 8].
+        .capped_len = capped.len,
         .remaining_avail = remaining_avail,
         .remaining_weight = remaining_weight,
         .remaining_count = remaining_count,

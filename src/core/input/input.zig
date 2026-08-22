@@ -35,23 +35,47 @@ const mouse_button_scroll_up: u8 = 4;
 const mouse_button_scroll_down: u8 = 5;
 
 const mouse_buttons = [_]u8{
-    constants.mouse_button_left, mouse_button_middle, constants.mouse_button_right,
+    constants.mouse_button_left, mouse_button_middle,      constants.mouse_button_right,
     mouse_button_scroll_up,      mouse_button_scroll_down,
 };
 
 // Named adapter functions for tiling actions that need argument forwarding.
-fn tilingIncreaseMaster() void { if (build_options.has_tiling) tiling.adjustMasterWidth(0.025); }
-fn tilingDecreaseMaster() void { if (build_options.has_tiling) tiling.adjustMasterWidth(-0.025); }
-fn tilingIncreaseMasterCount() void { if (build_options.has_tiling) tiling.adjustMasterCount(1); }
-fn tilingDecreaseMasterCount() void { if (build_options.has_tiling) tiling.adjustMasterCount(-1); }
-fn tilingGrowStackTop() void { if (build_options.has_tiling) tiling.adjustStackBalance(0.5); }
-fn tilingGrowStackBottom() void { if (build_options.has_tiling) tiling.adjustStackBalance(-0.5); }
-fn tilingScrollLeft() void { if (build_options.has_tiling) tiling.stepScrollView(-1); }
-fn tilingScrollRight() void { if (build_options.has_tiling) tiling.stepScrollView(1); }
-fn tilingSnapScrollToFocused() void { if (build_options.has_tiling) tiling.snapScrollToFocused(); }
-fn tilingToggleLayout() void { if (build_options.has_tiling) tiling.toggleLayout(); }
-fn tilingToggleLayoutReverse() void { if (build_options.has_tiling) tiling.toggleLayoutReverse(); }
-fn tilingStepLayoutVariant() void { if (build_options.has_tiling) tiling.stepLayoutVariant(); }
+fn tilingIncreaseMaster() void {
+    if (build_options.has_tiling) tiling.adjustMasterWidth(0.025);
+}
+fn tilingDecreaseMaster() void {
+    if (build_options.has_tiling) tiling.adjustMasterWidth(-0.025);
+}
+fn tilingIncreaseMasterCount() void {
+    if (build_options.has_tiling) tiling.adjustMasterCount(1);
+}
+fn tilingDecreaseMasterCount() void {
+    if (build_options.has_tiling) tiling.adjustMasterCount(-1);
+}
+fn tilingGrowStackTop() void {
+    if (build_options.has_tiling) tiling.adjustStackBalance(0.5);
+}
+fn tilingGrowStackBottom() void {
+    if (build_options.has_tiling) tiling.adjustStackBalance(-0.5);
+}
+fn tilingScrollLeft() void {
+    if (build_options.has_tiling) tiling.stepScrollView(-1);
+}
+fn tilingScrollRight() void {
+    if (build_options.has_tiling) tiling.stepScrollView(1);
+}
+fn tilingSnapScrollToFocused() void {
+    if (build_options.has_tiling) tiling.snapScrollToFocused();
+}
+fn tilingToggleLayout() void {
+    if (build_options.has_tiling) tiling.toggleLayout();
+}
+fn tilingToggleLayoutReverse() void {
+    if (build_options.has_tiling) tiling.toggleLayoutReverse();
+}
+fn tilingStepLayoutVariant() void {
+    if (build_options.has_tiling) tiling.stepLayoutVariant();
+}
 
 // XKB state
 
@@ -774,13 +798,17 @@ inline fn finishGrab(time: u32, pointer_mode: c_uint) void {
 /// the click reaches the app underneath. Only safe for click paths that don't
 /// need to keep tracking the pointer afterward; NOT for drag start; use
 /// keepDragGrab. Always pass event.time, never XCB_CURRENT_TIME.
-inline fn releaseGrab(time: u32) void { finishGrab(time, xcb.XCB_ALLOW_REPLAY_POINTER); }
+inline fn releaseGrab(time: u32) void {
+    finishGrab(time, xcb.XCB_ALLOW_REPLAY_POINTER);
+}
 
 /// Un-freezes the pointer for a drag while keeping the Super+Button grab
 /// engaged: AsyncPointer resumes delivery without replaying or ending the
 /// grab, so MotionNotify/ButtonRelease keep reaching us. The grab ends on
 /// release; the keyboard grab drops immediately. Always pass event.time.
-inline fn keepDragGrab(time: u32) void { finishGrab(time, xcb.XCB_ALLOW_ASYNC_POINTER); }
+inline fn keepDragGrab(time: u32) void {
+    finishGrab(time, xcb.XCB_ALLOW_ASYNC_POINTER);
+}
 
 // XcbCursor, declared manually because xcb_cursor_load_cursor is a static
 // inline function cImport cannot bind.

@@ -42,7 +42,6 @@ pub fn tileWithOffset(
     var col: u16 = 0;
     var row: u16 = 0;
     for (windows) |win| {
-
         const is_partial_row = last_row_count != 0 and row == grid.rows - 1;
 
         const rect = utils.Rect{
