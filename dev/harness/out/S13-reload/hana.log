@@ -70,6 +70,6 @@ General protection exception (no address available)
 /home/akai/.zvm/0.16.0/lib/std/start.zig:698:59: 0x124f195 in callMain (std.zig)
     if (fn_info.params.len == 0) return wrapMain(root.main());
                                                           ^
-???:?:?: 0x71e9ec003fac in ??? (/lib/ld-musl-x86_64.so.1)
-Unwind error at address `/lib/ld-musl-x86_64.so.1:0x71e9ec003fac` (unwind info unavailable), remaining frames may be incorrect
+???:?:?: 0x73bcd91b8fac in ??? (/lib/ld-musl-x86_64.so.1)
+Unwind error at address `/lib/ld-musl-x86_64.so.1:0x73bcd91b8fac` (unwind info unavailable), remaining frames may be incorrect
 ???:?:?: 0x1441155 in ??? (/home/akai/eudaimonia/hana/zig-out/bin/hana)
