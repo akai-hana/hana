@@ -565,3 +565,688 @@ after enforcement the violation is a build failure.
 | C-D5 | Store iteration determinism: parallel `order` array, append on put, swap-remove on delete (T16). |
 | C-D6 | WSId reuses `core.WorkspaceId`; MAX_WS aliases the existing max-workspaces constant in constants.zig (reuse its exact name at import site). |
 | C-D7 | `colorFn` ports borders.color() verbatim EXCEPT fullscreen zeroing moves into sync policy (fullscreen ⇒ pixel 0 AND bw 0) so mode logic lives in one place. |
+
+## Appendix E — Reference code (transcribe verbatim)
+
+> Rules: copy as-is; fix only import paths/compile typos; comments tagged
+> `INVARIANT` must survive. Bodies below are complete Zig unless marked
+> PSEUDOCODE-BLOCK (then translate 1:1 to Zig, keeping step order).
+
+### E.1 `src/model/store.zig`
+
+```zig
+//! Bounded window store. INVARIANT(I8): a full-store put refuses BEFORE any
+//! mutation. Iteration order = insertion order (decision C-D5).
+const std = @import("std");
+
+pub fn Store(comptime K: type, comptime V: type, comptime capacity: usize) type {
+    return struct {
+        const Self = @This();
+        pub const Error = error{StoreFull};
+
+        keys: [capacity]K = undefined,
+        vals: [capacity]V = undefined,
+        /// slot indices in insertion sequence; order[i] < len for i < len.
+        order: [capacity]usize = undefined,
+        len: usize = 0,
+
+        pub fn getPtr(self: *Self, k: K) ?*V {
+            var i: usize = 0;
+            while (i < self.len) : (i += 1) {
+                if (self.keys[i] == k) return &self.vals[i];
+            }
+            return null;
+        }
+
+        pub fn get(self: *const Self, k: K) ?V {
+            var i: usize = 0;
+            while (i < self.len) : (i += 1) {
+                if (self.keys[i] == k) return self.vals[i];
+            }
+            return null;
+        }
+
+        pub fn has(self: *const Self, k: K) bool {
+            var i: usize = 0;
+            while (i < self.len) : (i += 1) {
+                if (self.keys[i] == k) return true;
+            }
+            return false;
+        }
+
+        pub fn put(self: *Self, k: K, v: V) Error!*V {
+            if (self.getPtr(k)) |slot| {
+                slot.* = v;
+                return slot;
+            }
+            if (self.len == capacity) return Error.StoreFull;
+            const s = self.len;
+            self.keys[s] = k;
+            self.vals[s] = v;
+            self.order[s] = s;
+            self.len += 1;
+            return &self.vals[s];
+        }
+
+        /// Swap-remove keeping order[] consistent: when the last live element
+        /// moves into the freed slot, its index inside order[] is rewritten.
+        pub fn remove(self: *Self, k: K) bool {
+            var i: usize = 0;
+            while (i < self.len) : (i += 1) {
+                if (self.keys[i] == k) {
+                    const last = self.len - 1;
+                    if (i != last) {
+                        var p: usize = 0;
+                        while (p <= last) : (p += 1) {
+                            if (self.order[p] == last) {
+                                self.order[p] = i;
+                                break;
+                            }
+                        }
+                        self.keys[i] = self.keys[last];
+                        self.vals[i] = self.vals[last];
+                    }
+                    self.len = last;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        pub const Item = struct { key: K, val: *const V };
+
+        /// seq must be < count(). Iterates in insertion order.
+        pub fn at(self: *const Self, seq: usize) Item {
+            const s = self.order[seq];
+            return .{ .key = self.keys[s], .val = &self.vals[s] };
+        }
+
+        pub fn count(self: *const Self) usize {
+            return self.len;
+        }
+    };
+}
+```
+
+### E.2 `src/model/model.zig` — types block
+
+```zig
+//! INVARIANT(P1): single source of truth for management state.
+//! Layer rule: imports are std + utils + constants ONLY. No xcb.
+const std = @import("std");
+const utils = @import("utils");
+const constants = @import("constants");
+
+pub const WindowId = u32;
+/// Local alias so model never imports core. Convert core.WorkspaceId via
+/// `.index` at entry points (refines decision C-D6).
+pub const WSId = u16;
+pub const Mask = u64;
+
+pub inline fn bit(ws: WSId) Mask {
+    return @as(Mask, 1) << @intCast(ws);
+}
+
+/// REUSE the exact identifier that exists in constants.zig for the max
+/// workspace count (`max_workspaces`); if named differently there, alias it
+/// here under MAX_WS without renaming the original.
+const MAX_WS = constants.max_workspaces;
+/// REUSE the exact identifier for the minimize capacity constant used by
+/// legacy minimize.zig (`max_minimized`).
+const MAX_MINIMIZED = constants.max_minimized;
+
+pub const ALL_MASK: Mask = blk: {
+    var m: Mask = 0;
+    for (0..MAX_WS) |i| m |= @as(Mask, 1) << @intCast(i);
+    break :blk m;
+};
+
+/// STRANGLER COPY: duplicate of layouts.SizeHints. Field-for-field identical;
+/// pipeline converts between the two during migration (E.7). Do NOT import
+/// layouts from here (layer rule).
+pub const SizeHints = struct {
+    // TRANSCRIBE FIELD-FOR-FIELD from `layouts.SizeHints`
+    // (src/window/modules/tiling/layouts.zig). Keep defaults identical.
+};
+
+pub const LayoutKind = enum { master, monocle, fibonacci, grid, leaf, scroll };
+
+pub const LayoutParams = struct {
+    kind: LayoutKind = .master,
+    variant_idx: u8 = 0,
+    master_width: f32 = 0.5,
+    master_count: u8 = 1,
+    stack_balance: f32 = 0,
+    scroll_prev: ?WindowId = null, // decision C-D2
+};
+
+pub const BaseMode = union(enum) {
+    /// Home workspace membership; visibility on other tagged workspaces is a
+    /// sync-time mask filter (engine stays mask-agnostic).
+    tiled: struct { home: WSId },
+    floating: utils.Rect,
+};
+
+/// Contract refinement vs §7.2 (changelog 2026-08-21): minimized stores the
+/// ENTIRE previous mode plus its tiled slot, which preserves BC08 exactly
+/// (restore pops straight back into fullscreen when that was prior).
+pub const Mode = union(enum) {
+    base: BaseMode,
+    fullscreen: struct { ws: WSId, base: BaseMode },
+    minimized: struct { prev: Mode, slot: ?usize },
+};
+
+pub const Entry = struct {
+    mask: Mask,
+    mode: Mode,
+    size_hints: SizeHints = .{},
+};
+
+pub const WsState = struct {
+    tiled_order: std.ArrayListUnmanaged(WindowId) = .{},
+    params: LayoutParams = .{},
+};
+
+pub const store_capacity = 512;
+pub const mru_capacity = 16;
+pub const StoreT = @import("store.zig").Store(WindowId, Entry, store_capacity);
+
+pub const Model = struct {
+    gpa: std.mem.Allocator,
+    store: StoreT = .{},
+    ws: [MAX_WS]WsState = [_]WsState{.{}} ** MAX_WS,
+    current: WSId = 0,
+    focused: ?WindowId = null,
+    all_view_active: bool = false,
+};
+```
+
+### E.3 `src/model/model.zig` — transitions block
+
+APPLY WHILE TRANSCRIBING (contract refinements, changelog 2026-08-21):
+1. In E.2, change `BaseMode.tiled` from `struct { home: WSId }` to bare
+   `tiled` — home is DERIVED (exactly one list contains the window; T16
+   asserts it). Delete the now-unused `homeOf` concept.
+2. In E.2, add to `WsState`: `focus_mru: std.ArrayListUnmanaged(WindowId) = .{},`.
+3. Add to E.2 types: `pub fn lowestBit(m: Mask) WSId { return @intCast(@ctz(m)); }`.
+
+```zig
+const Order = std.ArrayListUnmanaged(WindowId);
+
+pub fn findInOrder(list: *const Order, win: WindowId) ?usize {
+    for (list.items, 0..) |w, i| {
+        if (w == win) return i;
+    }
+    return null;
+}
+
+fn removeValue(list: *Order, win: WindowId) void {
+    if (findInOrder(list, win)) |i| _ = list.orderedRemove(i);
+}
+
+/// The workspace whose tiled_order holds win (single-membership invariant).
+pub fn findHome(m: *const Model, win: WindowId) ?WSId {
+    for (&m.ws, 0..) |*s, i| {
+        if (findInOrder(&s.tiled_order, win) != null) return @intCast(i);
+    }
+    return null;
+}
+
+fn baseOf(mode: Mode) BaseMode {
+    return switch (mode) {
+        .base => |b| b,
+        .fullscreen => |f| f.base,
+        .minimized => |mm| baseOf(mm.prev),
+    };
+}
+
+fn countMinimized(m: *const Model) usize {
+    var n: usize = 0;
+    for (0..m.store.count()) |i| {
+        if (m.store.at(i).val.mode == .minimized) n += 1;
+    }
+    return n;
+}
+
+fn removeFromMruAll(m: *Model, win: WindowId) void {
+    for (&m.ws) |*s| removeValue(&s.focus_mru, win);
+}
+
+pub fn register(m: *Model, win: WindowId, hint_ws: ?WSId) void {
+    if (m.store.has(win)) return;
+    const target: WSId = hint_ws orelse m.current;
+    // INVARIANT(I8): StoreFull ⇒ refuse BEFORE any mutation; roll back on OOM.
+    m.store.put(win, .{
+        .mask = bit(target),
+        .mode = .{ .base = .tiled },
+    }) catch return;
+    m.ws[target].tiled_order.append(m.gpa, win) catch {
+        _ = m.store.remove(win);
+    };
+}
+
+pub fn unregister(m: *Model, win: WindowId) void {
+    const e = m.store.getPtr(win) orelse return;
+    if (findHome(m, win)) |h| removeValue(&m.ws[h].tiled_order, win);
+    removeFromMruAll(m, win);
+    for (&m.ws) |*s| {
+        if (s.params.scroll_prev == win) s.params.scroll_prev = null;
+    }
+    if (m.focused == win) m.focused = null;
+    _ = m.store.remove(win);
+}
+
+pub const MinimizeError = error{CapacityFull};
+
+pub fn minimize(m: *Model, win: WindowId) MinimizeError!void {
+    const e = m.store.getPtr(win) orelse return;
+    if (e.mode == .minimized) return;
+    // INVARIANT(I8): capacity check BEFORE any mutation (T17).
+    if (countMinimized(m) >= MAX_MINIMIZED) return error.CapacityFull;
+    var slot: ?usize = null;
+    if (findHome(m, win)) |h| {
+        slot = findInOrder(&m.ws[h].tiled_order, win);
+        removeValue(&m.ws[h].tiled_order, win);
+    }
+    const prev = e.mode;
+    e.mode = .{ .minimized = .{ .prev = prev, .slot = slot } };
+}
+
+pub fn restore(m: *Model, win: WindowId) void {
+    const e = m.store.getPtr(win) orelse return;
+    if (e.mode != .minimized) return;
+    const mm = e.mode.minimized;
+    const h: WSId = lowestBit(e.mask); // follows tag-moves made while hidden (BC12)
+    const list = &m.ws[h].tiled_order;
+    list.append(m.gpa, win) catch return;
+    if (mm.slot) |s| {
+        const last = list.items.len - 1;
+        if (s < last) {
+            _ = list.orderedRemove(last);
+            list.insert(m.gpa, s, win) catch {};
+        }
+    }
+    e.mode = mm.prev;
+}
+
+fn slotLess(a: ?usize, b: ?usize) bool {
+    if (a == null) return false;
+    if (b == null) return true;
+    return a.? < b.?;
+}
+
+pub fn restoreAllOnWs(m: *Model, ws: WSId) void {
+    var wins: [MAX_MINIMIZED]WindowId = undefined;
+    var slots: [MAX_MINIMIZED]?usize = undefined;
+    var n: usize = 0;
+    for (0..m.store.count()) |i| {
+        const it = m.store.at(i);
+        if (it.val.mode == .minimized and it.val.mask & bit(ws) != 0) {
+            wins[n] = it.key;
+            slots[n] = it.val.mode.minimized.slot;
+            n += 1;
+        }
+    }
+    // insertion sort by slot ascending, nulls last (BC09)
+    for (1..n) |a| {
+        const w = wins[a];
+        const s = slots[a];
+        var b = a;
+        while (b > 0 and slotLess(s, slots[b - 1])) : (b -= 1) {
+            wins[b] = wins[b - 1];
+            slots[b] = slots[b - 1];
+        }
+        wins[b] = w;
+        slots[b] = s;
+    }
+    for (0..n) |i| restore(m, wins[i]);
+}
+
+pub fn toggleFullscreen(m: *Model, win: WindowId) bool {
+    const e = m.store.getPtr(win) orelse return false;
+    switch (e.mode) {
+        .base => |b| {
+            e.mode = .{ .fullscreen = .{ .ws = m.current, .base = b } };
+            return true;
+        },
+        .fullscreen => |f| {
+            e.mode = .{ .base = f.base };
+            return true;
+        },
+        .minimized => return false,
+    }
+}
+
+pub fn switchTo(m: *Model, ws: WSId) void {
+    m.current = ws;
+}
+
+pub fn moveWindowToWs(m: *Model, win: WindowId, ws: WSId) void {
+    const e = m.store.getPtr(win) orelse return;
+    if (e.mask == ALL_MASK) return; // pinned stays everywhere-visible
+    if (e.mode == .minimized) {
+        e.mask = bit(ws); // BC12: record follows the move
+        return;
+    }
+    e.mask = bit(ws);
+    if (findHome(m, win)) |h| {
+        if (h != ws) {
+            removeValue(&m.ws[h].tiled_order, win);
+            m.ws[ws].tiled_order.append(m.gpa, win) catch {};
+        }
+    }
+}
+
+pub fn pinToggle(m: *Model, win: WindowId) void {
+    const e = m.store.getPtr(win) orelse return;
+    e.mask = if (e.mask == ALL_MASK) bit(m.current) else ALL_MASK;
+}
+
+pub fn allViewToggle(m: *Model) bool {
+    m.all_view_active = !m.all_view_active;
+    return m.all_view_active;
+}
+
+pub fn reorderTiled(m: *Model, win: WindowId, idx_in: usize) void {
+    const h = findHome(m, win) orelse return;
+    const list = &m.ws[h].tiled_order;
+    const from = findInOrder(list, win) orelse return;
+    const idx = @min(idx_in, list.items.len - 1);
+    _ = list.orderedRemove(from);
+    list.insert(m.gpa, idx, win) catch {};
+}
+
+pub fn swapMaster(m: *Model) void {
+    const list = &m.ws[m.current].tiled_order;
+    if (list.items.len < 2) return;
+    const tmp = list.items[0];
+    list.items[0] = list.items[1];
+    list.items[1] = tmp;
+}
+
+pub fn cycleLayout(m: *Model, dir: i32) void {
+    const p = &m.ws[m.current].params;
+    const n: i32 = @typeInfo(LayoutKind).@"enum".fields.len;
+    const cur: i32 = @intCast(@intFromEnum(p.kind));
+    var next = @mod(cur + dir, n);
+    if (next < 0) next += n;
+    p.kind = @enumFromInt(@as(u3, @intCast(next)));
+    p.variant_idx = 0;
+}
+
+pub fn adjustMasterWidth(m: *Model, delta: f32) void {
+    const p = &m.ws[m.current].params;
+    p.master_width = std.math.clamp(p.master_width + delta, 0.05, 0.95);
+}
+
+pub fn setFloatingRect(m: *Model, win: WindowId, r: utils.Rect) void {
+    const e = m.store.getPtr(win) orelse return;
+    switch (e.mode) {
+        .base => |*bm| switch (bm.*) {
+            .floating => |*fr| fr.* = r,
+            .tiled => {},
+        },
+        else => {},
+    }
+}
+
+pub const ConfigureReq = struct {
+    x: ?i16 = null,
+    y: ?i16 = null,
+    width: ?u16 = null,
+    height: ?u16 = null,
+    border_width: ?u16 = null,
+};
+
+pub const HonorDecision = enum { geometry_applied, border_only, ignored };
+
+pub fn honorConfigureRequest(m: *Model, win: WindowId, req: ConfigureReq) HonorDecision {
+    const e = m.store.getPtr(win) orelse return .ignored;
+    switch (e.mode) {
+        .base => |*bm| switch (bm.*) {
+            .floating => |*r| {
+                if (req.x) |v| r.x = v;
+                if (req.y) |v| r.y = v;
+                if (req.width) |v| r.width = v;
+                if (req.height) |v| r.height = v;
+                return .geometry_applied;
+            },
+            .tiled => {
+                // Geometry denied. BW honored; recording is SYNC's job (P5/I5).
+                if (req.border_width != null) return .border_only;
+                return .ignored;
+            },
+        },
+        .fullscreen => return .ignored,
+        .minimized => return .ignored,
+    }
+}
+
+pub fn applyConfigReload(m: *Model, tpl: LayoutParams) void {
+    for (&m.ws) |*s| {
+        const keep_prev = s.params.scroll_prev;
+        s.params = tpl;
+        s.params.scroll_prev = keep_prev;
+    }
+}
+
+pub fn setFocus(m: *Model, win: WindowId) void {
+    const e = m.store.getPtr(win) orelse return;
+    m.focused = win;
+    const list = &m.ws[m.current].focus_mru;
+    removeValue(list, win);
+    list.insert(m.gpa, 0, win) catch {};
+    if (list.items.len > mru_capacity) list.shrinkRetainingCapacity(mru_capacity);
+    if (m.ws[m.current].params.kind == .scroll) {
+        m.ws[m.current].params.scroll_prev = win; // decision C-D2
+    }
+}
+
+pub fn visibleOn(m: *const Model, win: WindowId, ws: WSId) bool {
+    const e = m.store.get(win) orelse return false;
+    if (e.mode == .minimized) return false;
+    if (m.all_view_active) return true;
+    return e.mask & bit(ws) != 0;
+}
+```
+
+### E.4 `src/layout/engine.zig` (relative imports keep standalone `zig test` working)
+
+```zig
+//! INVARIANT(P2): pure. Reads model types; emits Placements. No xcb.
+const std = @import("std");
+const utils = @import("utils");
+const model = @import("../model/model.zig");
+
+pub const Placement = struct {
+    win: model.WindowId,
+    rect: utils.Rect,
+    visible: bool,
+};
+
+/// Read-only size-hint lookup over the model store.
+pub const HintsView = struct {
+    m: *const model.Model,
+    pub fn forWin(self: *const HintsView, win: model.WindowId) *const model.SizeHints {
+        return if (self.m.store.getPtr(@constCast(self.m), win)) ... // see note
+    }
+};
+```
+NOTE (fix while transcribing): getPtr needs mutable self; instead implement
+`forWin` scanning `m.store` via `at(i)` copies, returning a pointer is not
+possible on const — return BY VALUE `model.SizeHints` with default fallback:
+`pub fn forWin(...) model.SizeHints`. Algorithms take hints by value.
+
+```zig
+pub const View = struct {
+    order: []const model.WindowId,
+    params: *const model.LayoutParams,
+    workarea: utils.Rect,
+    hints: *const HintsView,
+    focused: ?model.WindowId,
+};
+
+pub const List = std.ArrayList(Placement);
+
+/// Port applyHintsToRect VERBATIM from src/window/modules/tiling/layouts.zig
+/// (WP2 step 2); signature: pub fn applyHints(r: utils.Rect, h: model.SizeHints) utils.Rect
+
+pub fn compute(kind: model.LayoutKind, v: View, out: *List) void {
+    out.clearRetainingCapacity();
+    switch (kind) {
+        .master => @import("algo_master.zig").compute(v, out),
+        .monocle => @import("algo_monocle.zig").compute(v, out),
+        .fibonacci => @import("algo_fibonacci.zig").compute(v, out),
+        .grid => @import("algo_grid.zig").compute(v, out),
+        .leaf => @import("algo_leaf.zig").compute(v, out),
+        .scroll => @import("algo_scroll.zig").compute(v, out),
+    }
+}
+```
+Each algo_*.zig: `pub fn compute(v: View, out: *List) void` implementing the
+§7.3 transform of its legacy counterpart. monocle FIRST (calibration diff).
+
+### E.5 `src/sync/sync.zig` — PSEUDOCODE-BLOCK (translate 1:1, keep step comments)
+
+```zig
+//! INVARIANT(P3): ONLY this module sends geometry/border/map/stack requests.
+//! Shims below wrap EXISTING xcb patterns — do not invent new ones:
+//!   sendGeometry(win, rect, stack_mode?) ≙ window.zig configureWindowGeom
+//!   sendBorder(win, bw, pixel)            ≙ borders.applyWidth + borders.apply
+//!   parkWindow(win)                       ≙ pushWindowOffscreenAndInvalidate
+//!   raiseTop(win)/lowerBelow(win)         ≙ restack helpers used today
+//!   flush()                               ≙ conn.flush()  (caller owns timing, I2)
+
+pub const LastSent = struct { rect: utils.Rect, bw: u16, pixel: u32, parked: bool };
+
+pub const State = struct {
+    last_sent: std.AutoArrayHashMapUnmanaged(model.WindowId, LastSent) = .{},
+    bench_cfg: usize = 0, bench_border: usize = 0, bench_park: usize = 0,
+};
+pub var st: State = .{};   // owned by compositor process; reset on reconnect
+
+pub fn reconcile(m: *const model.Model, ctx: *Ctx) void {
+    // STEP 1: wa := workArea(ctx)  (screen minus bar; reuse current helper).
+    // STEP 2: fs_win := first entry where mode==.fullscreen and
+    //         (visibleOn(m,win,shown) or mode.fullscreen.ws==shown);
+    //         if found -> queue(fs_win: screenRect, bw=0, pixel=0,
+    //             parked=false, stack=ABOVE); mark ALL other entries whose
+    //             mask touches shown-ws visibility as parked=true.
+    // STEP 3: else placements := layout.compute(kind(m.ws[shown].params),
+    //             view{ order: FILTERED slice = m.ws[shown].tiled_order items
+    //             whose entry.mask & bit(shown)!=0, params, wa, hints, focused })
+    // STEP 4: desired map over ALL store entries (at(i) iteration):
+    //           minimized                      -> parked (keep last rect)
+    //           fullscreen (not step-2 winner) -> parked
+    //           base.tiled on shown w/ placement -> {placement.rect,
+    //             cfgBW(), colorFn(win,m), parked=!placement.visible}
+    //           base.floating on shown          -> {mode rect, cfgBW(),
+    //             colorFn, parked=false}
+    //           mask lacks bit(shown) AND !all_view_active -> parked
+    // STEP 5: stacking winner = focused-or-last-visible placement;
+    //         force_restack flag (I4 hook, passed via ReconcileOpts) adds
+    //         ABOVE to bar/top handling; parked -> BELOW.
+    // STEP 6..8: per entry diff vs last_sent; queue ONLY deltas into ONE
+    //         batch array in order pixel -> bw -> geometry(+stack flags
+    //         merged); parked transitions MUST merge X-offscreen + BELOW
+    //         into a single configure_window call; create last_sent entry
+    //         on first sight; bump bench counters.
+    // STEP 9: DO NOT FLUSH HERE. Return batch to caller.
+}
+
+pub const ReconcileOpts = struct { force_restack: bool = false };
+
+pub fn reconcileUnderGrab(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
+    // I4: grab_server -> reconcile(opts) -> optional top/bar restack ->
+    // ungrabAndFlush. Zero round trips inside (BC24).
+}
+
+pub fn schedule(ctx: *Ctx) void {
+    // coalesced end-of-dispatch reconcile; invoked from pipeline.postDispatch
+}
+```
+
+### E.6 `src/actions.zig` — wrappers (one full example; others same shape)
+
+```zig
+pub fn minimize(ctx: *Ctx, win: model.WindowId) void {
+    const m = pipeline.model();
+    model.minimize(m, win) catch return; // BC26 pre-refusal (CapacityFull)
+    if (ctx.focused_window_id == win) focusFallback(m, ctx);
+    pipeline.reconcileUnderGrabNow(.{ .force_restack = true }); // BC06 atomicity
+}
+
+/// BC06 fallback: own-workspace scope only. Order: current ws focus_mru ->
+/// reversed tiled_order -> any floating on ws. First visibleOn(current) wins.
+pub fn focusFallback(m: *const model.Model, ctx: *Ctx) void {
+    // PSEUDOCODE-BLOCK: iterate candidates per stated order; skip win being
+    // minimized; call legacy take-focus dispatch on winner (protocol layer
+    // untouched until train f, R2).
+}
+```
+Remaining actions (same wrapper shape): spawn/map/close, restore, restoreAll,
+fullscreenToggle, switchTo, moveWindowToWs, pinToggle, allViewToggle,
+reorderTiled, swapMaster, cycleLayout, adjustMasterWidth, dragTick(no grab),
+configReload. Each maps 1:1 to a §7.2 transition + one sync entry per §7.6
+scheduling table.
+
+### E.7 `src/pipeline.zig`
+
+```zig
+//! Dual-path dispatch during migration. Flag OFF ⇒ byte-identical legacy.
+pub var enabled: bool = false; // init(): getenv("HANA_MODEL_PIPELINE")=="1"
+
+var instance: model.Model = undefined;
+pub fn init(gpa: std.mem.Allocator) void { instance = .{ .gpa = gpa }; }
+pub inline fn model() *model.Model { return &instance; }
+
+/// Field-by-field conversion; delete both sides in WP6.
+pub fn convertHints(src: layouts_hints.LegacySizeHints) model.SizeHints {
+    var d: model.SizeHints = .{};
+    // TRANSCRIBE: assign every field src.X -> d.X (names identical).
+    return d;
+}
+
+pub inline fn postDispatch() void {
+    if (!enabled) return;
+    sync.schedule(ctx());
+}
+pub inline fn tilingOpFinished() void { if (enabled) reconcileUnderGrabNow(.{}); }
+pub inline fn dragTick() void { if (enabled) reconcileNow(); }
+pub inline fn reconcileUnderGrabNow(o: sync.ReconcileOpts) void { /* WP5 */ }
+pub inline fn reconcileNow() void { /* WP5 */ }
+```
+
+## Appendix D — Changelog of contract refinements
+
+| Date | Change | Reason |
+|------|--------|--------|
+| 2026-08-21 | `Mode.minimized = { prev: Mode, slot: ?usize }` replaces `{base, fullscreen_saved}` | restores straight back into fullscreen (BC08 exact) |
+| 2026-08-21 | `BaseMode.tiled` payload dropped; home derived via `findHome` | avoids nested-mode writes; T16 asserts single membership |
+| 2026-08-21 | `WsState.focus_mru` added | T15 / BC06 fallback source |
+| 2026-08-21 | `lowestBit(mask)` helper added | restore destination tracks tag-moves (BC12) |
+| 2026-08-21 | `WSId = u16` local alias (refines C-D6) | model never imports core |
+| 2026-08-21 | SizeHints duplicated in model; converted in pipeline (E.7) | strangler without circular imports |
+| 2026-08-21 | all-view reduced to a flag; temp-window list deleted | BC17 emerges from visibility model |
+| 2026-08-22 | `Mode.minimized.prev` retyped to flattened `PrevMode = union(enum){ base, fullscreen }` (coordinator-approved) | by-value recursive `prev: Mode` cannot compile; depth provably ≤ 1; BC08 unchanged |
+| 2026-08-22 | `constants.max_minimized = 32` added; model aliases it (coordinator-approved) | legacy read an undefined build option (always 32); model layer rule forbids build_options |
+| 2026-08-22 | Unit tests run via `zig build test` over auto-discovered `*_test.zig` modules (coordinator-approved) | Zig 0.16 module-root rules make standalone `zig test <nested file>` impossible with named imports |
+| 2026-08-22 | `View` gains caller-resolved env: `margins`, `min_dim`, `master_on_right`, `grid_relaxed`, `monocle_gaps` (coordinator-approved) | algorithms' math needs them; layout may not import config; §7.4 step 3 keeps variant resolution caller-side |
+| 2026-08-22 | `LayoutParams` gains `scroll_offset: i32`, `scroll_prev_count: u32`; engine consumes read-only (coordinator-approved) | legacy scroll.zig mutated viewport mid-retile; P2/P3 purity; mutation duties move to actions/sync (train e/f) |
+| 2026-08-22 | Centralized hint application at engine emit confirmed behavior-preserving | legacy emitOrDefer → configureWithHints already applied hints to EVERY visible rect across all layouts; only pushWindowOffscreenAndInvalidate bypassed them |
+| 2026-08-22 | No aggregator root in src/layout/ (no layout.zig) | module stem "layout" is taken by bar segment; §7.3 file list never required one; consumers import engine/algo_* directly |
+| 2026-08-22 | algo_scroll parks off-viewport slots as visible=false; sync owns parking geometry (legacy parked at constants.offscreen_x_position with full content size) | I7 visibility model; uniform parking policy decided at WP3 |
+| 2026-08-22 | T24/T25 caught port bug: fibonacci cursor advanced BOTH axes per split; legacy advances x only for .right, y only for .down | golden-value calibration working as intended; engine now matches legacy output exactly |
+| 2026-08-22 | grid relaxed partial-row x-spacing overlap quirk preserved verbatim | BC parity: x stays column-based while partial widths widen (T23 documents it) |
+| 2026-08-22 | sync.State gains explicit gpa + init/deinit/reset; plan E.5's bare `pub var st: State = .{}` cannot allocate for AutoArrayHashMapUnmanaged puts | allocator must live somewhere; reset() keeps backing memory across reconnects |
+| 2026-08-22 | Request sending abstracted behind a Sink vtable; production XcbSink isolated so raw libxcb symbols appear ONLY in its shims | golden-sequence tests record ops instead of touching X; satisfies WP3 acceptance gate literally |
+| 2026-08-22 | Stacking rule refined: winner's ABOVE merges into its geometry request whenever geometry changes; standalone raise only under force_restack | matches legacy retile wire behavior (only promoted tops raised unconditionally); focus-only changes stay color-only per scheduling table |
+| 2026-08-22 | reconcile takes *const Model — scroll viewport snap/clamp/prev_count duties land in actions before reconcile | P3 purity; m const rules out mid-retile mutation |
+| 2026-08-22 | Fullscreen branch parks all other entries with keep-last rect | step 4 "rect irrelevant" made literal |
+| 2026-08-22 | pipeline.zig internal import aliased `model_mod`; public API stays `model()` returning *Model (coordinator-approved) | E.7 sketch declares import `model` AND fn `model()` — duplicate container member name, does not compile |
+| 2026-08-22 | env flag read via std.c.getenv (Zig 0.16 has no std.posix.getenv); bar accessors guarded by build_options.has_bar like floating/input do | platform/idiom parity |
+| 2026-08-22 | bar.getBarWindow() added beside isBarWindow/getBarHeight | pipeline Ctx needs the top window id for force_restack raise (I4 hook) |
+| 2026-08-22 | Four marked call sites live: main startup init, events dispatch tail postDispatch, input finishTilingOp tilingOpFinished, floating updateDrag dragTick | WP4 step 2; each ≤30 lines, comment `// PIPELINE:` |
+| 2026-08-22 | Flag-OFF parity argued structurally: every entry point early-returns before touching new-pipeline state; full harness run deferred to WP7 | no X server in CI environment |
+
+*END OF DOCUMENT — v2.0 prescriptive edition*

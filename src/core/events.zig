@@ -19,6 +19,7 @@ const clock = @import("clock");
 const fullscreen = @import("fullscreen");
 const refresh_rate = @import("refresh_rate");
 const signals = @import("signals");
+const pipeline = @import("pipeline");
 const build_options = @import("build_options");
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
 
@@ -148,6 +149,7 @@ fn dispatch(event_type: u8, event: *anyopaque) void {
     // memory-safety bug; cheap insurance.
     if (idx >= dispatch_table.len) return;
     if (dispatch_table[idx]) |handler| handler(event);
+    pipeline.postDispatch(); // PIPELINE:
 }
 
 const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };

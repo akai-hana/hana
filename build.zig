@@ -111,6 +111,22 @@ pub fn build(b: *std.Build) !void {
         mod.*.addIncludePath(.{ .cwd_relative = "/usr/include" });
     }
 
+    // Unit tests for the reworked architecture layers: every discovered
+    // module named *_test.zig becomes a `zig build test` run. Discovered
+    // modules are cross-wired with all others, so a test file's named imports
+    // (e.g. model, utils) resolve exactly as they do in production builds --
+    // standalone `zig test <file>` cannot resolve them (module-root escape),
+    // which is why tests go through the build system.
+    const unit_test_step = b.step("test", "Run unit tests");
+    {
+        var test_it = discovery.modules.iterator();
+        while (test_it.next()) |entry| {
+            if (!std.mem.endsWith(u8, entry.key_ptr.*, "_test")) continue;
+            const t = b.addTest(.{ .root_module = entry.value_ptr.* });
+            unit_test_step.dependOn(&b.addRunArtifact(t).step);
+        }
+    }
+
     // Artifact & steps
     const exe = b.addExecutable(.{ .name = "hana", .root_module = root_mod });
     b.installArtifact(exe);

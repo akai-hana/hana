@@ -12,6 +12,7 @@ const focus = @import("focus");
 const layouts = @import("layouts");
 
 const build_options = @import("build_options");
+const pipeline = @import("pipeline");
 const hooks = @import("hooks");
 const bar = if (build_options.has_bar) @import("bar") else null;
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
@@ -314,6 +315,7 @@ pub fn updateDrag(x: i16, y: i16) void {
     drag.last_rect = rect;
     utils.configureWindow(conn, drag.window, rect);
     _ = xcb.xcb_flush(conn);
+    pipeline.dragTick(); // PIPELINE:
 }
 
 /// Ends the active drag, saving the final geometry so workspace-switch

@@ -24,6 +24,7 @@ const minimize = @import("minimize");
 const workspaces = @import("workspaces");
 const xkbcommon = @import("xkbcommon");
 const build_options = @import("build_options");
+const pipeline = @import("pipeline");
 const bar = if (build_options.has_bar) @import("bar") else null;
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
 const floating = if (build_options.has_floating) @import("floating") else null;
@@ -759,6 +760,7 @@ inline fn finishTilingOp(conn: core.Connection, sync_pointer: bool) void {
         focus.beginTilingOpSettle();
     }
     utils.ungrabAndFlush(conn);
+    pipeline.tilingOpFinished(); // PIPELINE:
 }
 
 inline fn withTilingGrabKeepFocus(op: *const fn () void) void {

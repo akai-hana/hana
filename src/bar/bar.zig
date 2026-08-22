@@ -1145,6 +1145,9 @@ pub fn scheduleFocusRedraw(_: ?u32) void {
 pub fn isBarWindow(win: u32) bool {
     return if (gBar.state) |s| s.win.win_id == win else false;
 }
+pub fn getBarWindow() u32 {
+    return if (gBar.state) |s| s.win.win_id else 0;
+}
 pub fn getBarHeight() u16 {
     return if (gBar.state) |s| s.render.height else 0;
 }
