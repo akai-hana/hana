@@ -1342,3 +1342,30 @@ pub inline fn reconcileNow() void { /* WP5 */ }
   (raise triggers unchanged: moved/unparked/force_restack).
 - Verified: zig build clean, 39/39 tests, layer guards pass, harness
   18/18 parity with zero golden churn. Net -69 LoC (524->430 + tests +25).
+
+## Changelog 2026-08-23 (title carousel, reimplemented threadless)
+
+- The legacy carousel (thread + offscreen CarouselPixmap blit loop) had been
+  stubbed out during the Aug 20 cleanup and dropped entirely by the
+  restructure; this reinstates the feature under segments/title/ from first
+  principles.
+- carousel.zig (new): pure main-thread state machine -- elapsed-time-based
+  offset with wrap mod (text_w + gap), identity guard on (window id, title
+  hash) so focus/rename restarts the scroll. Frames requested via a poll
+  deadline (~30 fps, no refresh-rate dependency), mirroring clock.zig; motion
+  is time-based so redundant renders are harmless.
+- drawing.drawTextScrolled: single new cairo primitive (save/clip/draw two
+  positions/restore); render.zig gains the four clip externs.
+- title.zig: overflowing FOCUSED cells scroll (single-window and split view);
+  everything else keeps ellipsis truncation.
+- bar.zig: carousel deadline folded into pollTimeoutMs; title segment exempt
+  from snapshot-diff skip while scrollingActive().
+- Config: bar.carousel_enabled (default true), bar.carousel_speed_px_s
+  (default 30, range [1,1000]). No refresh-rate key: pacing is fixed-cadence.
+- Tests: src/test/carousel_test.zig (8 cases: fit/disabled/wrap/reset-on-
+  focus/rename/re-enable/poll deadline).
+- Verified: build clean, all unit suites green, layer guards pass. Full
+  18-scenario harness: failure signatures byte-identical to the pre-carousel
+  binary (scenarios never overflow titles, so the carousel stays inert);
+  the pre-existing harness/golden drift and S13 shutdown GPF reproduce
+  identically on both binaries and predate this change.
