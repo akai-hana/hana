@@ -15,6 +15,7 @@ const bench = @import("bench");
 const types = @import("types");
 
 const drawing = @import("drawing");
+const carousel = @import("carousel");
 const build_options = @import("build_options");
 const wincache = @import("wincache");
 const sync = @import("sync");
@@ -610,8 +611,44 @@ fn drawSingleWindow(
     const text_w = ctx.dc.measureTextWidth(snapshot.focused_title);
     if (text_w <= geom.avail_w)
         try ctx.dc.drawText(geom.text_x, baseline_y, snapshot.focused_title, fg)
+    else if (workspace_has_focus)
+        try drawMarqueeCell(ctx, baseline_y, geom, single_win, snapshot.focused_title, text_w, fg)
     else
         try ctx.dc.drawTextEllipsis(geom.text_x, baseline_y, snapshot.focused_title, geom.avail_w, fg);
+}
+
+/// Draws the focused window's overflowing title as a marquee cell: scrolled
+/// copies when the carousel is enabled (see carousel.zig), ellipsis
+/// truncation otherwise. Unfocused and minimized cells never scroll.
+fn drawMarqueeCell(
+    ctx: TitleRenderContext,
+    baseline_y: u16,
+    geom: SegmentGeometry,
+    win: u32,
+    txt: []const u8,
+    text_w: u16,
+    fg: u32,
+) !void {
+    const off = carousel.offsetFor(
+        win,
+        txt,
+        text_w,
+        geom.avail_w,
+        ctx.config.carousel_enabled,
+        ctx.config.carousel_speed_px_s,
+        nowMs(),
+    );
+    if (!carousel.scrollingActive()) {
+        try ctx.dc.drawTextEllipsis(geom.text_x, baseline_y, txt, geom.avail_w, fg);
+        return;
+    }
+    const x0: i32 = @as(i32, geom.text_x) - @as(i32, off);
+    const cycle: i32 = @as(i32, text_w) + carousel.gap_px;
+    try ctx.dc.drawTextScrolled(geom.text_x, geom.avail_w, baseline_y, .{ x0, x0 + cycle }, txt, fg);
+}
+
+fn nowMs() i64 {
+    return @intCast(utils.monotonicNs() / std.time.ns_per_ms);
 }
 
 /// Pixel-perfect tiling: segment i of `count` spans [i*W/count, (i+1)*W/count).
@@ -647,8 +684,9 @@ fn titleTextGeom(ctx: TitleRenderContext, seg_x: u16, seg_w: u16) SegmentGeometr
     };
 }
 
-/// Renders one segment's title text: draws statically when the text fits,
-/// otherwise draws it with ellipsis truncation to the available width.
+/// Renders one segment's title text: draws statically when the text fits;
+/// otherwise the focused window's cell scrolls (marquee, when enabled) and
+/// every other cell truncates with an ellipsis.
 fn drawSegmentTitle(
     ctx: TitleRenderContext,
     baseline_y: u16,
@@ -661,12 +699,12 @@ fn drawSegmentTitle(
     is_focused: bool,
     title_invalidated: bool,
 ) !void {
-    _ = window;
     _ = accent;
-    _ = is_focused;
     _ = title_invalidated;
     if (text_w <= geom.avail_w)
         try ctx.dc.drawText(geom.text_x, baseline_y, title, text_fg)
+    else if (is_focused)
+        try drawMarqueeCell(ctx, baseline_y, geom, window, title, text_w, text_fg)
     else
         try ctx.dc.drawTextEllipsis(geom.text_x, baseline_y, title, geom.avail_w, text_fg);
 }
