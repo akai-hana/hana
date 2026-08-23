@@ -1304,5 +1304,41 @@ pub inline fn reconcileNow() void { /* WP5 */ }
 | 2026-08-22 | S13-reload hardened: server-side border-width assertion via xwininfo (borders-after-reload.norm artifact, fails the scenario when widths != 7) | golden log comparison alone missed the stale-width regression |
 | 2026-08-22 | Bugfix, stale bar on workspace switch: WP6 workspaces.zig rewrite orphaned State.current -- actions.switchTo updated only model+tracking, so bar indicators pinned to WS1 and per-ws title lists never changed. Fixes: switchTo mirrors into new workspaces.setCurrent; bar captureWorkspaceState reads authoritative pipeline.model().current; input state_dump reads tracking.getCurrentWorkspace() | harness could not catch this: bar never initialized under Xvfb (see next row) and dumps ran only after switching back |
 | 2026-08-22 | Bugfix, bar init: offscreen pixmap created with depth=XCB_COPY_FROM_PARENT(0) in opaque mode -- CreatePixmap requires a concrete depth (BadValue code=2 major=53 at every boot); now uses screen root_depth | default config (transparency=1.0 = opaque) could never start the bar; ARGB path unaffected |
+| 2026-08-23 | Restructure: entry moved to src/main.zig; actions.zig -> window/actions.zig; window/modules -> window/behaviors; bar/modules -> bar/segments; core/modules split into core/services (clock/refresh_rate/scale) + core/utils/debug; src/test/bench.zig -> core/utils/bench.zig. Unit tests relocated to top-level tests/ (build.zig discovery walks both roots). Follow-up: pipeline.zig + plugins.zig moved under core/ -- src/ root holds only main.zig (entry). Module identity = file basename, so moves required zero import changes -- only build.zig feature-detect paths, wire_allowlist.txt, README/ARCHITECTURE path notes updated | task-tool agents returned empty results this session; executed directly |
+| 2026-08-23 | Clock re-architecture per docs/clock-plan.md: deleted the timekeeping thread and all its coordination (mutex cache, atomic dirty flag, grace/retry drain-race handling, lifecycle mgmt; clock.zig 267 -> 109 lines, moved to bar/segments/clock.zig). Replacement: pure deadline arithmetic via the existing plugin poll_timeout_ms hook + lazy main-thread strftime in draw() + rendered_sec/rendered_fmt staleness tracking (one plain var pair). events.zig no longer imports clock. Failure cadence matches legacy exactly: one attempt per boundary even when renders persistently fail -- the first cut retried per event batch, caught by harness as NoFont-count churn. Harness sig filter now excludes NoFont warnings (fontless-Xvfb-only noise; count depends on poll-wake timing). First unit tests for the module (deadline math), 37 -> 39 tests | goldens recaptured once for removed "Clock thread started/stopped" log lines; .sig files regenerated offline from stored .norm artifacts after filter change |
+| 2026-08-23 | Directory readability pass: layout/ promoted to top-level src/tiling/ domain -- tiling behavior facade joins engine/hints; six algo_*.zig -> tiling/layouts/{fibonacci,grid,leaf,master,monocle,scroll}.zig (prefix dies via dirname); sync/xcb_sink.zig -> sync/wire.zig (matches guard-script vocabulary "sync-owned wire rules"); core/hooks.zig merged into core/plugins.zig (one plugin-system file); core/services/ dissolved into core/utils/. tests/layout_test.zig -> tests/tiling_test.zig. Path updates: build.zig has_tiling detect, check-layers rule 3 scan dir, wire_allowlist.txt, README removal workflow, ARCHITECTURE.md layer map | harness normalize.sh now also drops NoFont draw warnings from .norm (same rationale as sig filter); one full golden recapture |
+| 2026-08-23 | Test centralization: all unit tests moved under src/test/ (clock/model/sync/tiling_test.zig) -- everything .zig now lives inside src/, per project convention. Layer guards centralized alongside: scripts/check-layers.sh + both allowlists -> src/test/ (script's repo-root anchor adjusted to dirname/../..; build.zig check step + ARCHITECTURE.md references updated). build.zig drops the extra tests/ discovery walk (src/ recursion covers src/test/ automatically; *_test suffix drives the test step as before). dev/harness/ intentionally stays outside src/: fixture/binary infrastructure, no .zig files | none -- binary unchanged, 18/18 parity without golden churn |
 
 *END OF DOCUMENT — v2.0 prescriptive edition*
+
+## Changelog 2026-08-23 (simplification plan, step B)
+- docs/simplification-plan.md: first-principles mechanism-vs-behavior audit;
+  seven structural deletions proposed under frozen behavior (harness parity).
+- Step B executed: src/tiling/layouts/ dissolved into engine.zig; all six
+  layout algorithms now live in one file with one emit path; alias
+  re-exports (emitView/emitHidden/emitPlacement) deleted. scroll helpers
+  (slotWidth/maxOffset) consumed via engine from actions/pipeline/tests.
+  -17 LoC net (math was already irreducible); value is structural.
+  Verified: zig build clean, 39/39 tests, layer guards pass, harness 18/18.
+
+## Changelog 2026-08-23 (step B revert)
+- Step B (layouts merged into engine.zig) reverted per user preference:
+  the per-layout split aids code differentiation. Files restored byte-exact
+  from session state; scroll consumers repointed back to @import("scroll").
+  Verified: build clean, 39/39 tests, layers pass, S13/S14/S15/S16 parity.
+
+## Changelog 2026-08-23 (simplification plan, step A)
+- sync.zig rewritten to unconditional-apply reconcile: no diff-vs-last-sent,
+  no skip decisions, no mapped-flag tracking. Every pass maps, recolors,
+  re-borders and re-geometries visible windows; parks re-sent idempotently.
+  Self-healing: client-side geometry drift is corrected on the next pass.
+- LastSent diff cache replaced by a write-only SENT LEDGER {rect, parked}
+  recording what was sent; its only readers derive behavior (all-view orphan
+  keep-last with park-surviving rect, winner raise on move/unpark/force,
+  lastRectFor detach base) -- all legacy semantics, harness-pinned.
+  First attempt lost park-surviving rect history and S08-all-view caught
+  it (orphan parked instead of resurfacing); ledger reshaped to match.
+- sync_test.zig golden sequences rewritten for full-replay wire shape
+  (raise triggers unchanged: moved/unparked/force_restack).
+- Verified: zig build clean, 39/39 tests, layer guards pass, harness
+  18/18 parity with zero golden churn. Net -69 LoC (524->430 + tests +25).

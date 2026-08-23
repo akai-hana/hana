@@ -3,22 +3,24 @@
 Authoritative spec: `REARCHITECTURE_PLAN.md` §6–§8. This file summarizes the
 shipped shape; when the two disagree, the plan wins and this file is stale.
 
-## Layers (enforced by `zig build check` → `scripts/check-layers.sh`)
+## Layers (enforced by `zig build check` → `src/test/check-layers.sh`)
 
 ```
 model  ← std + utils only, no xcb          src/model/model.zig
-layout ← model types only, pure            src/layout/{engine,algo_*}.zig
-sync   ← model + layout; ONLY writer       src/sync/sync.zig (+ xcb_sink.zig)
-actions← model transitions, zero XCB       src/actions.zig
-entry points ← actions + sync              core/, window/, bar/, input
+tiling ← model types only, pure            src/tiling/{engine,hints,layouts/*}.zig
+sync   ← model + tiling; ONLY writer       src/sync/sync.zig (+ wire.zig)
+actions← model transitions, zero XCB       src/window/actions.zig
+entry points ← actions + sync              core/, window/, bar/ (src/main.zig)
 ```
 
 - **P1** The model (`src/model/model.zig`) is the single source of truth:
   per-ws `tiled_order`, masks (multi-tag), `BaseMode` (tiled/floating rect),
   fullscreen records, minimize records with LIFO/FIFO sequence numbers,
   focus, all-view flag.
-- **P2** Only `src/sync/` sends geometry/border/map/stack requests. It diffs
-  desired-vs-`LastSent` (P4) every reconcile; parked windows sit at
+- **P2** Only `src/sync/` sends geometry/border/map/stack requests. Reconcile
+  computes the desired state for every window and applies it CONDITIONALLY
+  against the sent ledger (skip identical desires; force_restack and a
+  periodic full sweep bypass the diff); parked windows sit at
   x=-30000+BELOW (I7), never unmapped.
 - **P3/P5** Actions mutate the model only; ConfigureRequests and properties
   enter as model updates before any send derives from reconcile (I5).
@@ -40,7 +42,7 @@ X event / keybind ─► entry point (window.zig / input.zig / bar.zig / events.
                  pipeline.reconcileUnderGrabNow / reconcileNow
                        │ builds sync.Ctx from live config/bar state
                        ▼
-                    sync.reconcile  ── diff vs LastSent ──► xcb_sink
+                    sync.reconcile  ── conditional apply vs sent ledger ──► xcb_sink
 ```
 
 The layout engine (`engine.compute`) receives a frozen `View`
@@ -56,7 +58,7 @@ escape hatch covers only the remaining allowlisted infrastructure.
 
 ## Allowlists
 
-`scripts/wire_allowlist.txt` / `scripts/legacy_grab_allowlist.txt` document
+The allowlists (embedded in `src/test/check-layers.sh`) document
 every file still sending XCB outside sync (bar self-window, ConfigureRequest
 compliance, click-raise, reload BW sweep, wire primitives in utils). Shrink
 by moving the traffic behind sync, then delete the entry.
