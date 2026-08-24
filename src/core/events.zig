@@ -359,10 +359,10 @@ pub fn run() !void {
     };
 
     while (utils.running.load(.acquire)) {
-        // No built-in deadline: with no timer hooks registered the loop
-        // blocks until an X event or signal arrives. Timer sources (clock
-        // segment, prompt cursor blink) contribute deadlines exclusively
-        // through plugin.poll_timeout_ms.
+        // No built-in deadline: with no timer sources the loop blocks until
+        // an X event or signal arrives. Timer sources (clock segment, prompt
+        // cursor blink, carousel marquee) contribute deadlines exclusively
+        // through bar.pollTimeoutMs().
         var poll_timeout_ms: i32 = -1;
         var cursor_is_blinking = false;
         if (build_options.has_bar) {

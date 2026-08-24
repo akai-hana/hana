@@ -1,0 +1,4 @@
+Please, find and fix the following bugs. If possible, make new tests or edit existing tests to prevent them regressing again.
+
+1. Closing or minimizing a full-screened window doesn't bring the bar back.
+2. Having two windows on a workspace

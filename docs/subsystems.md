@@ -8,10 +8,10 @@ prompt template at docs/analyst-prompt.md (written by the orchestrator).
 ## Ground rules every agent must know
 
 - **Behavior is frozen.** The contract is `dev/harness/` (18 scenarios,
-  golden artifacts) + `src/test/` (48 tests) + `src/test/check-layers.sh`
+  golden artifacts) + `src/test/` (59 tests) + `src/test/check-layers.sh`
   (layer rules). Any proposal must name which gate would catch its
   regressions. Verification commands:
-  - `zig build && zig build test --summary all` (48/48 expected)
+  - `zig build && zig build test --summary all` (59/59 expected)
   - `bash src/test/check-layers.sh`
   - `zig build && bash dev/harness/run-scenario.sh --compare S01-spawn-tiled
     S02-close S03-min-restore S04-min-from-fs S05-restore-all S06-switch-basic
@@ -240,9 +240,8 @@ Confirmed-sound behaviors and structures called out by analysts:
 - Harness normalizer determinism, golden diff excludes, per-scenario
   config override mechanism; check-layers rules 1-4 correctly flag what
   they pattern on.
-- Unit suite green at time of pass: 48/48 across 5 binaries (model 20,
-  tiling 12, carousel 9, sync 5, clock 2). Docs claiming 39 are stale
-  (tracked as S14F3).
+- Unit suite green at time of pass: 59/59 across 7 binaries (model 20,
+  tiling 15, carousel 9, sync 5, clock 2, workspaces 3, config 5).
 
 Known inaccuracies found during consolidation (claims rejected, do not
 re-raise without new evidence): alleged duplicate `common_paths` in

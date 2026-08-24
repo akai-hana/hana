@@ -27,7 +27,8 @@ spawn() {
 # visible. Names (A, B, C, ...) let dumps and searches address instances.
 spawn_client() {
 	_name="$1"
-	spawn "$HARNESS_ROOT/.cache/xclient" --name "$_name"
+	shift
+	spawn "$HARNESS_ROOT/.cache/xclient" --name "$_name" "$@"
 	wait_named "$_name" 1
 }
 

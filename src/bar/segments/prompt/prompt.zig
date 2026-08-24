@@ -133,8 +133,8 @@ pub fn isActive() bool {
 
 /// Milliseconds until the next blink toggle, or -1 when the blink animation
 /// isn't running.  Pass this (with the clock timeout) to poll() so the loop
-/// wakes exactly when a redraw is needed.  Non-negative only in insert or
-/// colon-command mode.
+/// wakes exactly when a redraw is needed.  Non-negative only while the
+/// prompt is active in insert mode.
 pub fn blinkPollTimeoutMs() i32 {
     if (!g.is_active) return -1;
     if (g.vim_state.mode == .insert)
@@ -757,8 +757,8 @@ fn spawnCommand(cmd: []const u8) void {
     histPrepend(cmd);
     histAppendToFile(cmd);
 
-    // cmd.len <= vim.default_max_input - 1 (enforced by insertChar), so buf
-    // always has room for the null terminator.
+    // cmd.len <= vim.default_max_input - 1 (enforced by the vim buffer
+    // insert clamp), so buf always has room for the null terminator.
     var buf: [vim.default_max_input]u8 = undefined;
     @memcpy(buf[0..cmd.len], cmd);
     buf[cmd.len] = 0;
@@ -992,8 +992,8 @@ fn refreshLayoutCache(
 
 /// Right-pinned mode widget: a filled pill (accent bg, white text) with
 /// `pill_h_pad` on both sides so the text never touches the pill edge and
-/// there's a gap to the scrollable region.  In colon-command mode the label is
-/// replaced by ":typed_chars" plus a blinking block cursor.
+/// there's a gap to the scrollable region. The label is the active vim mode's
+/// label (empty in the null-vim build, which skips the pill entirely).
 ///
 /// Returns the scrollable region's right edge (the pill's left edge), or null
 /// when no room remains for text; callers return immediately.

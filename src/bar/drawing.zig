@@ -81,9 +81,9 @@ pub const FontState = struct {
 // D4: shared text-measurement cache + prefix-fitting primitives.
 //
 // One memoization story for every segment (title/tags/clock/prompt), replacing
-// four ad-hoc schemes. INVARIANT (inherited from title's TitleWidthCache
-// contract): an eviction or miss degrades to a re-measure, NEVER to a wrong
-// width; and any font load invalidates the whole cache wholesale.
+// four ad-hoc schemes. INVARIANT (the shared-cache contract): an eviction or
+// miss degrades to a re-measure, NEVER to a wrong width; and any font load
+// invalidates the whole cache wholesale.
 //
 // Keying: (pointer, len) + a 64-bit content hash. A false hit would require
 // allocator reuse at the same address with the same length AND a 2^-64 hash

@@ -104,9 +104,9 @@ pub inline fn getSuppressReason() core.FocusSuppressReason {
 ///
 /// Centralises suppression policy here so window.handleEnterNotify doesn't need
 /// to know specific Reason values. NOTE: window_spawn suppression is handled in
-/// window.zig's suppressSpawnCrossing, which needs the saved cursor position to
-/// distinguish a real move from a synthetic crossing; any reason that doesn't
-/// need coordinate disambiguation belongs here.
+/// window.zig's suppressSpawnCrossing, which inspects the crossing's own
+/// coordinates (legacy origin-parked predicate, kept verbatim); any reason
+/// that doesn't need coordinate disambiguation belongs here.
 pub inline fn shouldSuppressEnterNotify() bool {
     return state.?.suppress_reason == .tiling_operation;
 }
@@ -303,12 +303,8 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
     advertiseActiveWindow(win);
 }
 
-/// Returns true when `win` must never receive focus from any focus-granting
-/// path (setFocus). NOTE: handleFocusIn intentionally does NOT use this guard.
 /// True if `win` currently has map_state == Viewable. Guards destroy/unmap
 /// races on paths that can't guarantee the window is still alive.
-/// Public because the unmanageWindow destroy path re-runs this pre-grab to
-/// keep the grab body free of blocking reply waits.
 pub fn isWindowMapped(conn: core.Connection, win: u32) bool {
     const reply = xcb.xcb_get_window_attributes_reply(
         conn,

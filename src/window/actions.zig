@@ -14,6 +14,7 @@ const pipeline = @import("pipeline");
 const sync = @import("sync");
 const focus = @import("focus");
 const build_options = @import("build_options");
+const debug = @import("debug");
 
 pub const Ctx = struct {
     focused_window_id: ?model_mod.WindowId = null,
@@ -533,6 +534,19 @@ pub fn seedParamsFromConfig() void {
             }
         }
         s.params.kind = layoutKindFromConfig(layout);
+        // SW-10 (S13F10): a variant override that doesn't belong to the
+        // workspace's active layout is silently dropped by variantIdx — say
+        // so once per affected workspace instead of failing invisibly.
+        if (variant) |v| {
+            const applies = switch (s.params.kind) {
+                .master => v == .master,
+                .monocle => v == .monocle,
+                .grid => v == .grid,
+                else => false,
+            };
+            if (!applies)
+                debug.warn("Config: workspace {d} layout variant ignored — not a variant of the active layout", .{i});
+        }
         s.params.variant_idx = variantIdx(variant, s.params.kind);
         s.params.master_count = if (id < max_ws)
             (count_lookup[id] orelse cfg.master_count)

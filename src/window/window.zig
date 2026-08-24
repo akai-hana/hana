@@ -1289,8 +1289,25 @@ pub fn updateWorkspaceBordersIfNeeded() void {
 
 // ClientMessage: EWMH fullscreen requests from applications
 
+/// Warn-once latches for SW-10 client-message diagnostics (see
+/// handleClientMessage): pager loops would otherwise flood the log.
+var warned_active_unimplemented = false;
+var warned_state_unmanaged = false;
+
 pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
     if (event.format != 32) return;
+
+    // SW-10 diagnostics (S6F9/S6F10 family): pager-driven requests that we
+    // cannot honor are dropped silently otherwise. Both warns fire once per
+    // process — a looping pager must not flood the log.
+    const net_active = utils.getAtomOrZero("_NET_ACTIVE_WINDOW");
+    if (net_active != 0 and event.type == net_active) {
+        if (!warned_active_unimplemented) {
+            warned_active_unimplemented = true;
+            debug.warn("Ignoring _NET_ACTIVE_WINDOW request for 0x{x}: EWMH activation is not implemented", .{event.window});
+        }
+        return;
+    }
 
     const net_wm_state = utils.getAtomOrZero("_NET_WM_STATE");
     if (net_wm_state == 0 or event.type != net_wm_state) return;
@@ -1302,7 +1319,13 @@ pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
     if (prop1 != fs_atom and prop2 != fs_atom) return;
 
     const win = event.window;
-    if (!isValidManagedWindow(win)) return;
+    if (!isValidManagedWindow(win)) {
+        if (!warned_state_unmanaged) {
+            warned_state_unmanaged = true;
+            debug.warn("Ignoring _NET_WM_STATE request for unmanaged window 0x{x}", .{win});
+        }
+        return;
+    }
 
     const action = event.data.data32[0];
     const is_fs = actions.isFullscreenMode(win);

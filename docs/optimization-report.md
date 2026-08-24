@@ -405,3 +405,61 @@ printer or not at all. The dead-code mass overall (~150–180 LoC verified) is
 notably low for a codebase this age — the earlier simplification passes did
 their job; what remains is concentrated in seams (reload, teardown, feature
 flags) rather than bulk.
+
+---
+
+## DISPOSITIONS (train-e execution record)
+
+Every SAFE-WIN and NEEDS-DECISION item was executed or explicitly resolved.
+Decisions taken where items were gated on open questions:
+
+- **ND-1** boot seeding split into `actions.seedParamsFromConfig()` + main.zig
+  call after pipeline.init. No reconcile at boot. Fixed S15's documented
+  intent AND a latent shutdown GP fault via identity-guarded config deinit.
+- **ND-2/ND-3/ND-4..ND-22** implemented as specified in their sections; ND-16
+  deleted threading.zig; ND-17 deleted emitPlacement alias per SW-1 default.
+- **ND-11** RESOLVED via SW-1's first branch: the utils offscreen-park
+  helpers were deleted, leaving wire.zig's parkShim as the single source of
+  truth ("decide once" honored — no duplication remains).
+- **ND-15** DEFERRED — the report itself scopes it to train-f (OQ-5). Note:
+  `setFocus` already resolves take_focus from the same live WM_PROTOCOLS
+  reply (`getInputModelResolved`), so the path is one blocking RTT today.
+- **ND-23** DONE with sign-off: pat1 widened (unmap/destroy/circulate/
+  set_input_focus). Immediately caught a real gap — bar/win.zig's
+  destroyBarWindow — resolved by extending the existing bar-lifecycle
+  allowlist entry (same rationale, file was split out later).
+- **ND-24** 3 of 4 fixed with sign-off: HW_OUT export bug (root cause of the
+  unbound-variable noise AND missing snap-final artifacts in goldens),
+  TMPDIR-based diff paths, S17's dead `_id` block removed. Item 4 (normalize
+  hex tokenizer) EVIDENCE-REJECTED: dump_state prints window ids in DECIMAL,
+  so the decimal-eating pattern is load-bearing; restricting it broke all
+  18 legacy goldens. Ordering-dependence is neutralized by per-scenario
+  determinism.
+- **ND-25** RESOLVED — OQ-6 answered YES (build.zig actively registers the
+  fallback, so bar-without-vim is a supported build): null_vim.zig stub
+  created mirroring vim.zig's public API as a single-mode plain editor;
+  verified the combination compiles by temporarily swapping vim.zig out.
+  Prompt.zig needed no changes (2-member Mode keeps its switches exhaustive).
+- **ND-26** CONFIRMED & REMOVED — XkbState.state/.keymap had zero functional
+  readers (dispatch resolves from the flat table by design). Fields, their
+  lifecycle code, and one error branch dropped; context retained (rebuild
+  uses it). Compiler-gated verification passed.
+- **SW-9 refetch-mirror test** skipped as a unit test — snapshotNeedsRefetch
+  reaches focus.init→getAtomCached which requires live X atoms; prediction
+  parity is exercised by every harness scenario through bar.zig:773 instead.
+
+### Golden regeneration audit (post ND-24 fixes)
+Goldens were regenerated once after the harness fixes, with a preserved copy
+at /tmp/opencode/golden-old for audit:
+- 11/18 legacy scenarios: byte-identical old→new (harness fixes are
+  deterministic; no behavior drift).
+- S02: old golden recorded GHOST FOCUS (Focused: W02 after close) plus a
+  BadWindow unchecked-request warning; current behavior correctly drops to
+  null (documented unmanage policy) and emits no BadWindow.
+- S04/S10/S18: old dump format reported "Fullscreen: none" during active
+  fullscreen; current format reports real state per workspace.
+- S11: configure-request honoring now visible (500x400 kept vs old tiled
+  size) — matches scenario intent.
+- S13: old golden contained the shutdown GP-fault stack trace; new is clean.
+- S15: ND-1 seeding (previously justified in detail).
+Final state: 21/21 scenarios PASS against fresh goldens.
