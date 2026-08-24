@@ -52,8 +52,13 @@ pub fn pollTimeoutMs() i32 {
     const tick = clock.tickDeadlineMs();
     var timeout = if (blink < 0) tick else @min(blink, tick);
     // Marquee frames: the carousel asks for wakes only while actually
-    // scrolling (see carousel.pollDeadlineMs).
-    const scroll = carousel.pollDeadlineMs(monotonicMs(), core.getState().config.bar.carousel_enabled);
+    // scrolling, paced to the detected monitor refresh rate (see
+    // carousel.pollDeadlineMs).
+    const scroll = carousel.pollDeadlineMs(
+        monotonicMs(),
+        core.getState().config.bar.carousel_enabled,
+        refresh_rate.detectedHz(),
+    );
     if (scroll >= 0) timeout = @min(timeout, scroll);
     return timeout;
 }

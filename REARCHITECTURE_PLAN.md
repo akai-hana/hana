@@ -1369,3 +1369,16 @@ pub inline fn reconcileNow() void { /* WP5 */ }
   binary (scenarios never overflow titles, so the carousel stays inert);
   the pre-existing harness/golden drift and S13 shutdown GPF reproduce
   identically on both binaries and predate this change.
+
+## Changelog 2026-08-23 (carousel smoothness pass)
+
+- Marquee motion is now SUB-PIXEL: offsetFor returns a fractional offset
+  handed straight to cairo, so above-60Hz displays get per-frame movement
+  under one pixel without integer stutter.
+- Frame pacing is locked to the monitor: refresh_rate.detectedHz() (new
+  getter over the existing atomic RandR reading) feeds pollDeadlineMs;
+  wakes land every ceil(1000/hz) ms and re-detection already tracks mode
+  switches via RandR notify.
+- Scrolling cells clip against the WHOLE segment box and start flush at its
+  left edge -- no padding inset, text exits/enters exactly at the edges.
+- Default speed raised 30 -> 125 px/s (the legacy carousel's default).

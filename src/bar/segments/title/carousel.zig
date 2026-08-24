@@ -21,11 +21,12 @@ const std = @import("std");
 /// Horizontal gap between the repeating copies of a title, in pixels.
 pub const gap_px: u16 = 48;
 
-/// Frame cadence while scrolling (~30 fps): fast enough for smooth text
-/// motion, slow enough that each extra bar render stays negligible. Poll
-/// wakes are cheap, so there is deliberately no refresh-rate dependency.
-pub const frame_interval_ms: i64 = 33;
-
+/// Frame cadence follows the detected monitor refresh rate (see
+/// refresh_rate.detectedHz), so each frame advances by one display period
+/// and motion is locked to the monitor's scanout. Motion itself is
+/// sub-pixel: the fractional offset is handed straight to cairo, so at
+/// high refresh rates frames differ by less than a pixel and scrolling
+/// stays smooth instead of stuttering between integer pixels.
 var offset_px: f32 = 0;
 var last_frame_ms: i64 = 0;
 var active_win: u32 = 0;
@@ -40,7 +41,8 @@ pub fn scrollingActive() bool {
 }
 
 /// Advances the marquee by the time elapsed since the previous call and
-/// returns the integer pixel offset the text should be drawn at. Returns 0
+/// returns the SUB-PIXEL pixel offset the text should be drawn at (0 is the
+/// cell's left edge; grows unbounded only within one wrap cycle). Returns 0
 /// and deactivates when disabled or the text fits its slot.
 ///
 /// Call at most once per rendered frame for the focused cell (the split-view
@@ -54,7 +56,7 @@ pub fn offsetFor(
     enabled: bool,
     speed_px_s: u16,
     now_ms: i64,
-) u16 {
+) f32 {
     const hash = std.hash.Wyhash.hash(0, title);
     const continues = scrolling and win == active_win and hash == active_hash;
 
@@ -74,19 +76,19 @@ pub fn offsetFor(
 
     if (dt_ms > 0)
         offset_px += @as(f32, @floatFromInt(speed_px_s)) * @as(f32, @floatFromInt(dt_ms)) / 1000.0;
-    const cycle: f32 = @floatFromInt(@as(u32, text_w) + gap_px);
+    const cycle: f32 = @as(f32, @floatFromInt(text_w)) + @as(f32, @floatFromInt(gap_px));
     offset_px = @mod(offset_px, cycle);
-    // A pathological text_w can push the cycle past u16 range; the draw site
-    // clips everything anyway, so saturate instead of trapping.
-    return @intFromFloat(@min(@floor(offset_px), @as(f32, std.math.maxInt(u16))));
+    return offset_px;
 }
 
 /// Milliseconds until the next marquee frame, for the bar's poll-timeout
-/// minimum. Returns -1 when inactive (no wakeup contribution), mirroring
+/// minimum: one display period at `hz`, rounded up so wakes never land past
+/// a scanout. Returns -1 when inactive (no wakeup contribution), mirroring
 /// prompt.blinkPollTimeoutMs.
-pub fn pollDeadlineMs(now_ms: i64, enabled: bool) i32 {
+pub fn pollDeadlineMs(now_ms: i64, enabled: bool, hz: f64) i32 {
     if (!enabled or !scrolling) return -1;
-    const until_next = frame_interval_ms - (now_ms - last_frame_ms);
+    const period_ms: i64 = @intFromFloat(@ceil(1000.0 / @max(hz, 1.0)));
+    const until_next = period_ms - (now_ms - last_frame_ms);
     return @intCast(@max(1, until_next));
 }
 

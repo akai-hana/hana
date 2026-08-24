@@ -620,6 +620,10 @@ fn drawSingleWindow(
 /// Draws the focused window's overflowing title as a marquee cell: scrolled
 /// copies when the carousel is enabled (see carousel.zig), ellipsis
 /// truncation otherwise. Unfocused and minimized cells never scroll.
+///
+/// The scroll runs edge-to-edge across the WHOLE segment box (no padding
+/// indent): the clip is the cell itself, so text slides fully out of one
+/// edge while re-entering at the other.
 fn drawMarqueeCell(
     ctx: TitleRenderContext,
     baseline_y: u16,
@@ -642,9 +646,9 @@ fn drawMarqueeCell(
         try ctx.dc.drawTextEllipsis(geom.text_x, baseline_y, txt, geom.avail_w, fg);
         return;
     }
-    const x0: i32 = @as(i32, geom.text_x) - @as(i32, off);
-    const cycle: i32 = @as(i32, text_w) + carousel.gap_px;
-    try ctx.dc.drawTextScrolled(geom.text_x, geom.avail_w, baseline_y, .{ x0, x0 + cycle }, txt, fg);
+    const cycle: f32 = @as(f32, @floatFromInt(text_w)) + @as(f32, carousel.gap_px);
+    const x0: f64 = @as(f64, @floatFromInt(geom.seg_x)) - off;
+    try ctx.dc.drawTextScrolled(geom.seg_x, geom.seg_w, baseline_y, .{ x0, x0 + cycle }, txt, fg);
 }
 
 fn nowMs() i64 {

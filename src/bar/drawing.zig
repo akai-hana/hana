@@ -398,16 +398,16 @@ pub const DrawContext = struct {
     }
 
     /// Draws `text` at each x position in `x_positions`, clipped to the cell
-    /// [clip_x, clip_x + clip_w). Positions may be negative or overlap the
-    /// cell edges; the clip is what keeps translated text inside its segment.
-    /// The title marquee passes two positions one cycle apart so the copies
-    /// tile into a seamless wrap.
+    /// [clip_x, clip_x + clip_w). Positions are sub-pixel and may be negative
+    /// or overlap the cell edges; the clip is what keeps translated text
+    /// inside its segment. The title marquee passes two positions one cycle
+    /// apart so the copies tile into a seamless wrap.
     pub fn drawTextScrolled(
         self: *DrawContext,
         clip_x: u16,
         clip_w: u16,
         y: u16,
-        x_positions: [2]i32,
+        x_positions: [2]f64,
         text: []const u8,
         color: u32,
     ) !void {
@@ -419,7 +419,7 @@ pub const DrawContext = struct {
         c.cairo_clip(self.ctx);
         const baseline_shift = pangoToF64(c.pango_layout_get_baseline(self.font.pango_layout));
         for (x_positions) |x| {
-            c.cairo_move_to(self.ctx, @floatFromInt(x), @as(f64, @floatFromInt(y)) - baseline_shift);
+            c.cairo_move_to(self.ctx, x, @as(f64, @floatFromInt(y)) - baseline_shift);
             c.pango_cairo_show_layout(self.ctx, self.font.pango_layout);
         }
     }

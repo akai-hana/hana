@@ -478,7 +478,7 @@ pub const BarConfig = struct {
     /// (marquee) instead of truncating it with an ellipsis.
     carousel_enabled: bool = true,
     /// Marquee scroll speed in pixels per second.
-    carousel_speed_px_s: u16 = 30,
+    carousel_speed_px_s: u16 = 125,
 
     // drun segment colors and prompt; all nullable, falling back to bar-wide defaults.
     drun_bg: ?Color = null, // Background; falls back to bg
