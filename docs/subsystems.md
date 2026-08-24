@@ -8,10 +8,10 @@ prompt template at docs/analyst-prompt.md (written by the orchestrator).
 ## Ground rules every agent must know
 
 - **Behavior is frozen.** The contract is `dev/harness/` (18 scenarios,
-  golden artifacts) + `src/test/` (39 tests) + `src/test/check-layers.sh`
+  golden artifacts) + `src/test/` (48 tests) + `src/test/check-layers.sh`
   (layer rules). Any proposal must name which gate would catch its
   regressions. Verification commands:
-  - `zig build && zig build test --summary all` (39/39 expected)
+  - `zig build && zig build test --summary all` (48/48 expected)
   - `bash src/test/check-layers.sh`
   - `zig build && bash dev/harness/run-scenario.sh --compare S01-spawn-tiled
     S02-close S03-min-restore S04-min-from-fs S05-restore-all S06-switch-basic
@@ -185,3 +185,67 @@ are the yardsticks, changing them to make findings pass is forbidden.
 - I2 flush ownership: callers flush; sync never does.
 - §7.6 scheduling: focus-class changes coalesce via scheduled flag.
 - Plugin hook order and poll_timeout_ms min-aggregation (clock correctness).
+
+## Verified sound (analyst pass 2026-08-23)
+Fourteen read-only analyst passes (one per subsystem above) completed
+2026-08-23. Every claim below was either mechanically confirmed against the
+tree (grep/read spot-checks by the consolidator) or reported sound by the
+owning analyst with a quoted anchor. Consolidated backlog lives in
+`docs/optimization-report.md`.
+
+Contracts held by all passes:
+- P2 purity: no violations found (rule-3 grep clean; model/tiling xcb-free).
+- P3 single writer: all wire mutation confined to src/sync/ (+ allowlist);
+  raw xcb only in sync/wire.zig and core/utils/x11wire.zig helpers.
+- I2 flush ownership intact at every call site inspected.
+- No new dependencies proposed anywhere; no layout merges; no feature
+  removals proposed.
+
+Confirmed-dead symbols (zero callers outside defs/comments; deletions are
+compile-gated): `removeValuePub`; `emitPlacement` alias; `OverrideLookup`;
+`pushWindowOffscreen` + `pushWindowOffscreenAndLower` (+ parkShim
+duplication in wire.zig:66-77); `isOffscreenGeomReply` +
+`offscreen_sentinel_min`; `grab_active`/`isGrabActive` (write-only);
+`cached_pre_cursor`/`cached_pre_len` (write-only); `sync.schedule` +
+`sync.reset`; `bench_cfg`/`bench_border`/`bench_park` counters (written,
+never read even in bench builds); `drawCached`; `configureWindowGeom`;
+`getStateOpt` (focus.zig:66, window.zig:93, tracking.zig:129); tracking
+Pos helpers; `execDirectSym` return value discarded at vim.zig:229;
+`text_only` param; empty switch arm; `ws.master_width`/`ws.stack_balance`
+(write-only null resets); bar imports `fullscreen` + `workspaces` (unused);
+floating.zig unused imports; `visual_type` write-only after resolve;
+`spawn_cursor` (declared/reset-commented, read once, never written);
+core/utils/threading.zig (orphaned facade, only re-exported, never used);
+dangling `plugins` import in main.zig (registry deleted in 0778feb2).
+
+Confirmed-sound behaviors and structures called out by analysts:
+- Event loop structure (poll/deadline/batch/motion-coalescing shape),
+  signal drain ordering, spawn-pipe EOF-before-MapRequest reasoning.
+- Reconcile pipeline: single choke point, LastSent diffing, grab scoping,
+  forget-on-unmanage (P0-4), focus-tier fallback order.
+- Layout math: master/fibonacci/leaf/scroll placement arithmetic, hint
+  clamping, grid shape calc (for n>0), monocle top-window selection.
+- Model/store: slot-order iteration guarantees, BoundedList capacity
+  handling at call sites, cycleLayout wraparound math.
+- Focus machinery: confirm/derivative paths, suppression windows,
+  tiling-op settle ordering vs EnterNotify filtering.
+- Bar render path: Cairo surface lifecycle, pixmap errdefer hygiene,
+  font description frees, measure-cache keying soundness (modulo double
+  hash on miss), GC creation/free pairing on success paths.
+- Prompt/vim editing state machine incl. count resolution (product
+  overflow aside), history file append mode/permissions, collectLines
+  scanning logic itself.
+- Config parser TOML subset handling, keybind resolver teardown order,
+  fallback font/path resolution (single common_paths list exists).
+- Harness normalizer determinism, golden diff excludes, per-scenario
+  config override mechanism; check-layers rules 1-4 correctly flag what
+  they pattern on.
+- Unit suite green at time of pass: 48/48 across 5 binaries (model 20,
+  tiling 12, carousel 9, sync 5, clock 2). Docs claiming 39 are stale
+  (tracked as S14F3).
+
+Known inaccuracies found during consolidation (claims rejected, do not
+re-raise without new evidence): alleged duplicate `common_paths` in
+parser (only fallback.zig:40 exists); alleged debug asserts in
+bounded.zig (none present); `getInRange` anchor name not found in
+parser.zig; "six dead bar imports" — only two are dead.

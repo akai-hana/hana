@@ -354,3 +354,19 @@ test "T30 deterministic and non-mutating" {
     try testing.expectEqual(focus_before, fx.m.focused);
     try testing.expectEqual(store_count_before, fx.m.store.count());
 }
+
+// T31 — empty order is a supported input for every layout (ND-2): each
+// compute must emit nothing and must not trap. Grid previously divided by
+// calcGridShape(0).rows == 0 and monocle indexed order[len - 1].
+test "T31 n=0 emits nothing across all layouts" {
+    var fx: Fixture = undefined;
+    fx.init(&.{}, stdWa());
+    defer fx.deinit();
+
+    const kinds = [_]model.LayoutKind{ .master, .monocle, .fibonacci, .grid, .leaf, .scroll };
+    for (kinds) |kind| {
+        var out: List = .{};
+        engine.compute(kind, tuned(&fx), &out);
+        try testing.expectEqual(@as(usize, 0), out.len);
+    }
+}

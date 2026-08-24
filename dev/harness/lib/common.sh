@@ -104,3 +104,19 @@ ewmh_fs() {
 	fi
 	DISPLAY="$HW_DISPLAY" "$_tool" "$_win" "$_action"
 }
+
+# Send a mixed-mask ConfigureRequest (geometry [+ border width]) as a real
+# client would (exercises the WM's ConfigureRequest decision paths, ND-14).
+client_geom() {
+	_win="$1"; _x="$2"; _y="$3"; _w="$4"; _h="$5"; _bw="${6:-}"
+	_tool="$HARNESS_ROOT/.cache/setgeom"
+	if [ ! -x "$_tool" ]; then
+		mkdir -p "$HARNESS_ROOT/.cache"
+		cc -o "$_tool" "$HARNESS_ROOT/tools/setgeom.c" -lX11 || return 1
+	fi
+	if [ -n "$_bw" ]; then
+		DISPLAY="$HW_DISPLAY" "$_tool" "$_win" "$_x" "$_y" "$_w" "$_h" "$_bw"
+	else
+		DISPLAY="$HW_DISPLAY" "$_tool" "$_win" "$_x" "$_y" "$_w" "$_h"
+	fi
+}

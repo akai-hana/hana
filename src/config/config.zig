@@ -145,31 +145,28 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     };
     defer file.close(io);
     const stat = file.stat(io) catch {
-        // stat failed: fall back to a smaller initial buffer with growth.
+        // stat failed: read with growth. Single ownership throughout — the
+        // armed errdefer frees the whole buffer exactly once on every error
+        // path, and the success path hands ownership to the caller.
         var buf = try allocator.alloc(u8, 64 * 1024);
         errdefer allocator.free(buf);
         var total: usize = 0;
         while (true) {
-            const n = try file.readPositionalAll(io, buf[total..], total);
-            total = n;
-            if (n < buf.len) break;
-            if (n > max_file_bytes) {
-                allocator.free(buf);
-                return error.FileTooLarge;
+            if (total == buf.len) {
+                if (buf.len > max_file_bytes) return error.FileTooLarge;
+                buf = try allocator.realloc(buf, buf.len * 2);
             }
-            const new_buf = try allocator.realloc(buf, buf.len * 2);
-            buf = new_buf;
+            const n = try file.readPositionalAll(io, buf[total..], total);
+            if (n == 0) break; // EOF
+            total += n;
         }
+        if (total > max_file_bytes) return error.FileTooLarge;
         return allocator.realloc(buf, total) catch buf[0..total];
     };
     if (stat.size > max_file_bytes) return error.FileTooLarge;
     const buf = try allocator.alloc(u8, stat.size);
     errdefer allocator.free(buf);
     const n = try file.readPositionalAll(io, buf, 0);
-    if (n > max_file_bytes) {
-        allocator.free(buf);
-        return error.FileTooLarge;
-    }
     return if (n == buf.len) buf else (allocator.realloc(buf, n) catch buf[0..n]);
 }
 

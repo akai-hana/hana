@@ -63,10 +63,6 @@ pub inline fn getState() *State {
     @panic("focus: getState() called before init()");
 }
 
-pub inline fn getStateOpt() ?*State {
-    return if (state) |*s| s else null;
-}
-
 pub fn init() void {
     // Reset every field so a deinit()+init() cycle starts from a clean slate.
     state = .{};
