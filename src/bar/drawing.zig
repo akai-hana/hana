@@ -8,22 +8,27 @@ const debug = @import("debug");
 
 const c = @import("render");
 
-/// Falls back to the root visual if no matching depth is found.
-pub fn findVisualByDepth(screen: core.Screen, depth: u8) u32 {
+/// First visual on `screen` matching `depth`, or null when the screen has no
+/// visuals at that depth. Shared body of the two depth-scoped lookups below
+/// (bar window creation wants the id, pixmap/surface pairing wants the type).
+fn firstVisualOfDepth(screen: core.Screen, depth: u8) ?*core.xcb.xcb_visualtype_t {
     var di = core.xcb.xcb_screen_allowed_depths_iterator(screen);
     while (di.rem > 0) : (core.xcb.xcb_depth_next(&di)) {
         if (di.data.*.depth != depth) continue;
         const vi = core.xcb.xcb_depth_visuals_iterator(di.data);
-        if (vi.rem == 0) continue;
-        return vi.data.*.visual_id;
+        if (vi.rem > 0) return vi.data;
     }
-    return screen.root_visual;
+    return null;
 }
 
-// Module-level font cache shared across all DrawContext instances (measurement + render DCs).
-// Single-threaded; no synchronisation needed.
+/// Falls back to the root visual if no matching depth is found.
+pub fn findVisualByDepth(screen: core.Screen, depth: u8) u32 {
+    const vt = firstVisualOfDepth(screen, depth) orelse return screen.root_visual;
+    return vt.visual_id;
+}
 
-var font_conversion_cache: ?std.StringHashMap([]const u8) = null;
+// Module-level font state is shared across all DrawContext instances (measurement + render DCs).
+// Single-threaded; no synchronisation needed.
 
 /// Pango font string used when no fonts are configured or a named font fails to load.
 const fallbackFont = "monospace:size=10";
@@ -48,7 +53,9 @@ pub const FontState = struct {
 
     fn loadFont(self: *FontState, font_name: []const u8) !void {
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
-        const pango_name_z = try self.allocator.dupeZ(u8, try convertFontName(self.allocator, font_name));
+        const converted = try convertFontName(self.allocator, font_name);
+        defer self.allocator.free(converted);
+        const pango_name_z = try self.allocator.dupeZ(u8, converted);
         defer self.allocator.free(pango_name_z);
         self.current_font_desc = c.pango_font_description_from_string(pango_name_z.ptr);
         if (self.current_font_desc == null) {
@@ -57,8 +64,6 @@ pub const FontState = struct {
         }
         c.pango_layout_set_font_description(self.pango_layout, self.current_font_desc);
         self.cached_metrics = null;
-        // D4: any font change invalidates every memoized pixel width.
-        invalidateMeasureCache();
     }
 
     /// Returns (ascent, descent) in pixels; cached per font description, invalidated by loadFont.
@@ -78,87 +83,6 @@ pub const FontState = struct {
 };
 
 // ---------------------------------------------------------------------------
-// D4: shared text-measurement cache + prefix-fitting primitives.
-//
-// One memoization story for every segment (title/tags/clock/prompt), replacing
-// four ad-hoc schemes. INVARIANT (the shared-cache contract): an eviction or
-// miss degrades to a re-measure, NEVER to a wrong width; and any font load
-// invalidates the whole cache wholesale.
-//
-// Keying: (pointer, len) + a 64-bit content hash. A false hit would require
-// allocator reuse at the same address with the same length AND a 2^-64 hash
-// collision — treated as impossible; the font-load invalidation removes the
-// other staleness axis entirely.
-//
-// Eviction policy: direct-mapped (single slot per index, no probe chain).
-// Bounded at measure_cache_slots; a collision overwrites in place and costs
-// one Pango re-measure on the next lookup of the displaced string.
-const measure_cache_slots = 256;
-
-const MeasureEntry = struct {
-    ptr: usize = 0,
-    len: usize = 0,
-    hash: u64 = 0,
-    width: u16 = 0,
-};
-
-var measure_cache: [measure_cache_slots]MeasureEntry = @splat(.{});
-
-fn contentHash(text: []const u8) u64 {
-    return std.hash.Wyhash.hash(0, text);
-}
-
-/// Wholesale invalidation; called from FontState.loadFont/loadFonts so a
-/// font change can never serve stale widths.
-pub fn invalidateMeasureCache() void {
-    measure_cache = @splat(.{});
-}
-
-inline fn measureCacheLookup(dc: *DrawContext, text: []const u8) u16 {
-    if (text.len == 0) return 0;
-    const ptr_val = @intFromPtr(text.ptr);
-    const idx: usize = @intCast((ptr_val >> 4) % measure_cache_slots);
-    const slot = &measure_cache[idx];
-    const hash = contentHash(text); // computed once for both hit and miss
-    if (slot.ptr == ptr_val and slot.len == text.len and slot.hash == hash) {
-        return slot.width;
-    }
-    const w = dc.measureTextWidth(text);
-    slot.* = .{ .ptr = ptr_val, .len = text.len, .hash = hash, .width = w };
-    return w;
-}
-
-/// Binary search: first byte offset where `measureTextWidth(text[0..offset])
-/// >= target_px`. Returns `text.len` when the whole string is narrower.
-/// Maps a pixel scroll offset back to a character boundary (moved up from
-/// prompt.textOffsetAtPx — the single measurement/fitting implementation).
-pub fn offsetAtPx(dc: *DrawContext, text: []const u8, target_px: u16) usize {
-    var lo: usize = 0;
-    var hi: usize = text.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        if (dc.cachedTextWidth(text[0..mid]) < target_px) lo = mid + 1 else hi = mid;
-    }
-    return lo;
-}
-
-/// Return the longest prefix of `text` whose pixel width is <= `max_px`.
-/// Fast path: full slice when the text already fits (`known_w` skips the
-/// initial full-text measurement when the caller already has it — moved up
-/// from prompt.textPrefixFit/textPrefixFitKnownW).
-pub fn fitPrefix(dc: *DrawContext, text: []const u8, max_px: u16, known_w: ?u16) []const u8 {
-    const w = known_w orelse dc.cachedTextWidth(text);
-    if (w <= max_px) return text;
-    var lo: usize = 0;
-    var hi: usize = text.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo + 1) / 2; // round up to avoid infinite loop
-        if (dc.cachedTextWidth(text[0..mid]) <= max_px) lo = mid else hi = mid - 1;
-    }
-    return text[0..lo];
-}
-
-// ---------------------------------------------------------------------------
 
 /// Set the Cairo source color from a packed 0xRRGGBB u32 at full opacity.
 inline fn setCairoColor(ctx: *c.cairo_t, color: u32) void {
@@ -176,14 +100,6 @@ inline fn pxToPango(px: u16) f64 {
     return @as(f64, @floatFromInt(px)) * c.pango_scale;
 }
 
-/// Checks an XCB void-cookie; frees the error and returns GCCreationFailed on failure.
-inline fn checkXcbCookie(conn: core.Connection, cookie: core.xcb.xcb_void_cookie_t) !void {
-    if (core.xcb.xcb_request_check(conn, cookie)) |err| {
-        std.c.free(err);
-        return error.GCCreationFailed;
-    }
-}
-
 inline fn createXcbPixmap(conn: core.Connection, depth: u8, drawable: u32, w: u16, h: u16) u32 {
     const pixmap = core.xcb.xcb_generate_id(conn);
     _ = core.xcb.xcb_create_pixmap(conn, depth, pixmap, drawable, w, h);
@@ -193,15 +109,24 @@ inline fn createXcbPixmap(conn: core.Connection, depth: u8, drawable: u32, w: u1
 inline fn createCheckedGC(conn: core.Connection, drawable: u32) !u32 {
     const gc = core.xcb.xcb_generate_id(conn);
     const cookie = core.xcb.xcb_create_gc_checked(conn, gc, drawable, 0, null);
-    try checkXcbCookie(conn, cookie);
+    if (core.xcb.xcb_request_check(conn, cookie)) |err| {
+        std.c.free(err);
+        return error.GCCreationFailed;
+    }
     return gc;
 }
 
-/// Positions `layout` at `x` on `baseline` (accounting for the layout's own
-/// baseline, font fallback can shift it per-run) and renders it.
-inline fn showAtBaseline(ctx: *c.cairo_t, layout: *c.PangoLayout, x: u16, baseline: u16) void {
-    c.cairo_move_to(ctx, @as(f64, @floatFromInt(x)), @as(f64, @floatFromInt(baseline)) - pangoToF64(c.pango_layout_get_baseline(layout)));
+/// Positions `layout` at sub-pixel `x` on `baseline` (accounting for the
+/// layout's own baseline, font fallback can shift it per-run) and renders it.
+/// One body for every baseline-anchored show: the integer-x static text path
+/// (`showAtBaseline`) and drawTextScrolled's sub-pixel marquee copies.
+inline fn showLayoutAtBaseline(ctx: *c.cairo_t, layout: *c.PangoLayout, x: f64, baseline: u16) void {
+    c.cairo_move_to(ctx, x, @as(f64, @floatFromInt(baseline)) - pangoToF64(c.pango_layout_get_baseline(layout)));
     c.pango_cairo_show_layout(ctx, layout);
+}
+
+inline fn showAtBaseline(ctx: *c.cairo_t, layout: *c.PangoLayout, x: u16, baseline: u16) void {
+    showLayoutAtBaseline(ctx, layout, @floatFromInt(x), baseline);
 }
 
 pub const DrawContext = struct {
@@ -298,7 +223,7 @@ pub const DrawContext = struct {
                 @intFromFloat(@round(std.math.clamp(transparency, 0.0, 1.0) * 255.0))
             else
                 0xFF,
-            .depth = if (is_argb) 32 else screen.*.root_depth,
+            .depth = depth,
         };
 
         // Fire both GC-create requests before blocking on either reply so both
@@ -339,6 +264,15 @@ pub const DrawContext = struct {
 
     inline fn setPangoText(self: *DrawContext, text: []const u8) void {
         c.pango_layout_set_text(self.font.pango_layout, text.ptr, @intCast(text.len));
+    }
+
+    /// Colors the context and renders the layout's CURRENT text at (x, y
+    /// baseline). Shared tail of the baseline-anchored draw variants below
+    /// (`drawText`, `drawTextEllipsis`, `drawSegment`); callers own setting
+    /// the text and any layout configuration around the call.
+    inline fn paintText(self: *DrawContext, x: u16, y: u16, color: u32) void {
+        self.setColor(color);
+        showAtBaseline(self.ctx, self.font.pango_layout, x, y);
     }
 
     /// Uses XCB rather than Cairo to write straight-alpha pixels (picom expects straight-alpha;
@@ -395,9 +329,8 @@ pub const DrawContext = struct {
     }
 
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
-        self.setColor(color);
         self.setPangoText(text);
-        showAtBaseline(self.ctx, self.font.pango_layout, x, y);
+        self.paintText(x, y, color);
     }
 
     /// Draws `text` at each x position in `x_positions`, clipped to the cell
@@ -420,11 +353,8 @@ pub const DrawContext = struct {
         defer c.cairo_restore(self.ctx);
         c.cairo_rectangle(self.ctx, @floatFromInt(clip_x), 0, @floatFromInt(clip_w), @floatFromInt(self.height));
         c.cairo_clip(self.ctx);
-        const baseline_shift = pangoToF64(c.pango_layout_get_baseline(self.font.pango_layout));
-        for (x_positions) |x| {
-            c.cairo_move_to(self.ctx, x, @as(f64, @floatFromInt(y)) - baseline_shift);
-            c.pango_cairo_show_layout(self.ctx, self.font.pango_layout);
-        }
+        for (x_positions) |x|
+            showLayoutAtBaseline(self.ctx, self.font.pango_layout, x, y);
     }
 
     /// Resets Pango width/ellipsize to defaults after rendering; subsequent draws unaffected.
@@ -445,8 +375,7 @@ pub const DrawContext = struct {
             c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.NONE);
         }
 
-        self.setColor(color);
-        showAtBaseline(self.ctx, self.font.pango_layout, x, y);
+        self.paintText(x, y, color);
     }
 
     pub fn measureTextWidth(self: *DrawContext, text: []const u8) u16 {
@@ -456,43 +385,37 @@ pub const DrawContext = struct {
         return @intCast(width);
     }
 
-    /// D4: memoized variant of `measureTextWidth`. Identical result for
-    /// identical (font state, string) inputs; a cache miss or eviction costs
-    /// a re-measure, never a stale width.
-    pub inline fn cachedTextWidth(self: *DrawContext, text: []const u8) u16 {
-        return measureCacheLookup(self, text);
-    }
-
     inline fn xcbCopyArea(self: *DrawContext, src_x: u16, dst_x: u16, w: u16) void {
         _ = core.xcb.xcb_copy_area(self.conn, self.offscreen_pixmap, self.window, self.copy_gc, @intCast(src_x), 0, @intCast(dst_x), 0, w, self.height);
     }
 
-    /// cairo_surface_flush only, no xcb_copy_area, no xcb_flush.
-    /// Safe inside xcb_grab_server; pair with blitQueued() + ungrabAndFlush().
-    pub fn renderOnly(self: *DrawContext) void {
+    /// Shared blit body: cairo_surface_flush + xcb_copy_area of [x, x+w),
+    /// plus an immediate xcb_flush only for blitRegion. queueBlit must NOT
+    /// flush here: it is safe inside xcb_grab_server precisely because the
+    /// copy is sent with the caller's batch end.
+    inline fn blitImpl(self: *DrawContext, x: u16, w: u16, comptime flush: bool) void {
         c.cairo_surface_flush(self.surface);
+        if (self.copy_gc == 0) return;
+        self.xcbCopyArea(x, x, w);
+        if (flush) _ = core.xcb.xcb_flush(self.conn);
     }
 
-    /// Enqueues xcb_copy_area without flushing; safe inside xcb_grab_server.
-    /// The request is sent with all queued geometry changes when ungrabAndFlush() fires.
-    pub fn blitQueued(self: *DrawContext) void {
-        if (self.copy_gc != 0) self.xcbCopyArea(0, 0, self.width);
+    /// The bar's only two blit variants.
+    ///
+    /// queueBlit: cairo_surface_flush + one full-width xcb_copy_area ENQUEUED
+    /// but not flushed. Safe inside xcb_grab_server; the request is sent with
+    /// all queued geometry changes when ungrabAndFlush() fires. On the normal
+    /// event-loop path the loop's end-of-batch xcb_flush covers it.
+    pub fn queueBlit(self: *DrawContext) void {
+        self.blitImpl(0, self.width, false);
     }
 
-    /// Does NOT call xcb_flush: the event loop's end-of-batch flush covers event-driven
-    /// paths; timer-driven paths (clock tick, cursor blink) must flush explicitly.
-    pub fn blit(self: *DrawContext) void {
-        self.renderOnly();
-        self.blitQueued();
-    }
-
-    /// Unlike blit(), calls xcb_flush immediately. Use on timer-driven paths where
-    /// no event-loop flush is coming. Does NOT call cairo_surface_flush.
-    pub fn blitAndFlush(self: *DrawContext, x: u16, w: u16) void {
-        if (self.copy_gc != 0) {
-            self.xcbCopyArea(x, x, w);
-            _ = core.xcb.xcb_flush(self.conn);
-        }
+    /// cairo_surface_flush + region copy [x, x+w) + immediate xcb_flush.
+    /// Use on timer-driven paths where no event-loop flush is coming (clock
+    /// tick, prompt caret blink): the flush is what makes those frames land
+    /// without waiting for the next event batch.
+    pub fn blitRegion(self: *DrawContext, x: u16, w: u16) void {
+        self.blitImpl(x, w, true);
     }
 
     pub fn baselineY(self: *DrawContext, bar_height: u16) u16 {
@@ -501,7 +424,9 @@ pub const DrawContext = struct {
         return @intCast(top_pad + asc);
     }
 
-    /// Sets Pango text once for both measurement and render, avoiding a double pango_layout_set_text.
+    /// Sets Pango text once for both measurement and render (measureTextWidth
+    /// sets it; paintText renders the layout's current text), avoiding a
+    /// double pango_layout_set_text.
     pub fn drawSegment(
         self: *DrawContext,
         x: u16,
@@ -513,37 +438,86 @@ pub const DrawContext = struct {
     ) !u16 {
         const width: u16 = self.measureTextWidth(text) + padding * 2;
         self.fillRect(x, 0, width, height, bg);
-        self.setColor(fg);
-        showAtBaseline(self.ctx, self.font.pango_layout, x + padding, self.baselineY(height));
+        self.paintText(x + padding, self.baselineY(height), fg);
         return x + width;
     }
 };
 
-// MeasureContext: lightweight font measurement backed by a 1x1 Cairo image surface.
-// No XCB resources, no X round-trips. Same loadFont/loadFonts/getMetrics interface as DrawContext.
+// ---------------------------------------------------------------------------
+// One-shot font metrics probing (used by the bar height / font-size calc).
+//
+// Replaces the old MeasureContext class: instead of a long-lived measurement
+// object, each probe builds a throwaway 1x1 Cairo image surface + context +
+// Pango layout, measures, and destroys everything. Probes run once per init /
+// reload, so the setup cost is irrelevant; no XCB resources, no X round-trips.
 
-pub const MeasureContext = struct {
-    font: FontState,
-    surface: *c.cairo_surface_t,
+/// Loads `font_names` into a throwaway layout and returns its (ascent,
+/// descent) in pixels. An empty `font_names` skips loading entirely and
+/// probes the Pango default font — matching loadBarFonts' early return so
+/// both paths agree on what "unconfigured" means.
+pub fn probeFontMetrics(
+    allocator: std.mem.Allocator,
+    dpi: f32,
+    font_names: []const []const u8,
+) ?struct { ascent: i16, descent: i16 } {
+    const surface = c.cairo_image_surface_create(.ARGB32, 1, 1) orelse return null;
+    defer c.cairo_surface_destroy(surface);
+    // The cairo context exists only to obtain the Pango layout.
+    const ctx = c.cairo_create(surface) orelse return null;
+    defer c.cairo_destroy(ctx);
+    const layout = createPangoLayout(ctx, dpi) catch return null;
+    defer c.g_object_unref(layout);
 
-    pub fn init(allocator: std.mem.Allocator, dpi: f32) !MeasureContext {
-        const surface = c.cairo_image_surface_create(.ARGB32, 1, 1) orelse return error.CairoSurfaceCreateFailed;
-        errdefer c.cairo_surface_destroy(surface);
-        // The cairo context exists only to obtain the Pango layout, the
-        // layout keeps its own PangoContext/font map; so it is created and
-        // destroyed here rather than stored.
-        const ctx = c.cairo_create(surface) orelse return error.CairoCreateFailed;
-        defer c.cairo_destroy(ctx);
-        const layout = try createPangoLayout(ctx, dpi);
-        return .{ .font = .{ .allocator = allocator, .pango_layout = layout }, .surface = surface };
+    var font = FontState{ .allocator = allocator, .pango_layout = layout };
+    if (font_names.len > 0) font.loadFonts(font_names) catch return null;
+    const asc, const desc = font.getMetrics();
+    return .{ .ascent = asc, .descent = desc };
+}
+
+/// Builds size-suffixed copies of the configured font list (`{s}:size=N`,
+/// or the name unchanged when `size_override`/scaled size is 0). Borrowed
+/// entries keep the config string's pointer, which freeSizedFontList uses to
+/// free only owned copies. Shared by loadBarFonts (render DCs) and bar.zig's
+/// metric probes, which each used to carry their own copy of this loop.
+pub fn buildSizedFontList(allocator: std.mem.Allocator, size_override: ?u16) ![][]const u8 {
+    const cs = core.getState();
+    const font_size: u16 = size_override orelse cs.config.bar.scaled_font_size;
+    const fonts = cs.config.bar.fonts.items;
+    const sized = try allocator.alloc([]const u8, fonts.len);
+    errdefer allocator.free(sized);
+    for (fonts, sized) |f, *out| {
+        out.* = if (font_size > 0)
+            try std.fmt.allocPrint(allocator, "{s}:size={}", .{ f, font_size })
+        else
+            f;
     }
+    return sized;
+}
 
-    pub fn deinit(self: *MeasureContext) void {
-        self.font.deinit();
-        c.g_object_unref(self.font.pango_layout);
-        c.cairo_surface_destroy(self.surface);
+/// Frees a list returned by buildSizedFontList: entries borrowed from the
+/// live config are skipped by the same positional pointer pairing the two
+/// former private copies used.
+pub fn freeSizedFontList(allocator: std.mem.Allocator, sized: [][]const u8) void {
+    const fonts = core.getState().config.bar.fonts.items;
+    for (sized, fonts) |s, orig| {
+        if (s.ptr != orig.ptr) allocator.free(s);
     }
-};
+    allocator.free(sized);
+}
+
+/// Loads the configured fonts into `dc`. Called once per DrawContext creation
+/// (init and reload).
+pub fn loadBarFonts(dc: *DrawContext, size_override: ?u16) !void {
+    const cs = core.getState();
+    const sized = try buildSizedFontList(cs.alloc, size_override);
+    defer freeSizedFontList(cs.alloc, sized);
+    // Unconfigured fonts: keep the layout's Pango default — matching
+    // probeFontMetrics' skip so both paths agree on what "unconfigured" means
+    // (loading here would silently swap in the hardcoded fallback font).
+    if (sized.len == 0) return;
+    try dc.font.loadFonts(sized);
+    if (sized.len > 1) debug.info("Loaded {} fonts with fallback support", .{sized.len});
+}
 
 fn createPangoLayout(ctx: *c.cairo_t, dpi: f32) !*c.PangoLayout {
     const layout = c.pango_cairo_create_layout(ctx) orelse return error.PangoLayoutCreateFailed;
@@ -579,13 +553,7 @@ fn resolveVisualType(
     // surface pairs visual+drawable, so the old take-first-visual-of-any-
     // depth choice handed cairo e.g. a 24-bit visual for a 32-bit ARGB
     // pixmap — a guaranteed BadMatch at first render on multi-depth roots.
-    var di = core.xcb.xcb_screen_allowed_depths_iterator(screen);
-    while (di.rem > 0) : (core.xcb.xcb_depth_next(&di)) {
-        if (di.data.*.depth != depth) continue;
-        const vi = core.xcb.xcb_depth_visuals_iterator(di.data);
-        if (vi.rem > 0) return vi.data;
-    }
-    return error.NoVisuals;
+    return firstVisualOfDepth(screen, depth) orelse error.NoVisuals;
 }
 
 /// Returns the value of a trailing `key=value` field inside an Xft font token,
@@ -596,17 +564,14 @@ inline fn styleField(part: []const u8, comptime key: []const u8) ?[]const u8 {
 }
 
 /// Converts Xft `"FontName:size=N:weight=bold"` to Pango `"FontName Bold N"` format.
-/// Returns `xft_name` unchanged when no `:` is present. Results cached in `font_conversion_cache`.
-///
-/// ALLOCATOR CONTRACT: the same `allocator` must be passed on every call and to `deinitFontCache`.
+/// Returns a freshly allocated conversion (or an allocated copy of `xft_name`
+/// when no `:` is present). Runs once per font per reload, so the old
+/// memoization map is gone; the caller owns and frees the result.
 fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const u8 {
-    if (font_conversion_cache == null)
-        font_conversion_cache = std.StringHashMap([]const u8).init(allocator);
-    if (font_conversion_cache.?.get(xft_name)) |cached| return cached;
-    if (std.mem.indexOfScalar(u8, xft_name, ':') == null) return xft_name;
+    if (std.mem.indexOfScalar(u8, xft_name, ':') == null)
+        return allocator.dupe(u8, xft_name);
 
     var result: std.ArrayListUnmanaged(u8) = .empty;
-    try result.ensureTotalCapacity(allocator, xft_name.len);
     errdefer result.deinit(allocator);
 
     var parts = std.mem.splitScalar(u8, xft_name, ':');
@@ -641,25 +606,5 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
         try result.appendSlice(allocator, s);
     }
 
-    const converted = try result.toOwnedSlice(allocator);
-    errdefer allocator.free(converted);
-    const owned_key = try allocator.dupe(u8, xft_name);
-    errdefer allocator.free(owned_key);
-    // Propagate put failure: swallowing it would leak both owned_key and
-    // converted (the errdefers above don't fire on a swallowed error).
-    try font_conversion_cache.?.put(owned_key, converted);
-    return converted;
-}
-
-/// Call once at shutdown. Key and value are always distinct heap allocations, so both are freed unconditionally.
-pub fn deinitFontCache(allocator: std.mem.Allocator) void {
-    if (font_conversion_cache) |*cache| {
-        var iter = cache.iterator();
-        while (iter.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            allocator.free(entry.value_ptr.*);
-        }
-        cache.deinit();
-        font_conversion_cache = null;
-    }
+    return result.toOwnedSlice(allocator);
 }

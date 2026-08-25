@@ -48,13 +48,22 @@ X event / keybind ─► entry point (window.zig / input.zig / bar.zig / events.
 The layout engine (`engine.compute`) receives a frozen `View`
 (order ∩ mask, params, workarea, margins, hints) and writes placements into
 a caller-owned buffer — zero allocation, zero I/O, fully unit-tested
-(`zig build test`, 37 tests).
+(`zig build test`, 65 test blocks).
 
-## Runtime flag
+## Tests
 
-Model path is default ON. `HANA_MODEL_PIPELINE=0` escapes to the legacy path
-for soak comparison; legacy bodies for trains a–h are deleted (WP6), so the
-escape hatch covers only the remaining allowlisted infrastructure.
+65 unit test blocks across `src/test/*.zig` (model transitions, tiling math
+incl. golden-value layout traces, sync wire sequences, config reader,
+workspace overrides, clock deadlines, carousel timing), run via
+`zig build test`.
+
+## Behavioral gates
+
+BC01–BC26 are the regression contract; the harness in `dev/harness/`
+replays 21 scenarios against a running X server (`--compare` diffs against
+recorded goldens; run locally or on CI). Known baseline: S02/S04/S05/S16
+diverge from goldens recorded before the T36 close-fallback change — that
+change is intentional; re-record goldens when adopting it.
 
 ## Allowlists
 

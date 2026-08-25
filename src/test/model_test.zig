@@ -80,7 +80,6 @@ fn eqModel(a: *const Model, b: *const Model) bool {
         if (sa.params.master_width != sb.params.master_width) return false;
         if (sa.params.master_count != sb.params.master_count) return false;
         if (sa.params.stack_balance != sb.params.stack_balance) return false;
-        if (sa.params.scroll_prev != sb.params.scroll_prev) return false;
     }
     return true;
 }
@@ -399,7 +398,6 @@ test "T12: unregister cleans all references" {
     regCur(&m, 1);
     regCur(&m, 2);
     model.setFocus(&m, 1);
-    m.ws[0].params.scroll_prev = 1;
     model.minimize(&m, 2) catch unreachable;
     regCur(&m, 3);
     _ = model.toggleFullscreen(&m, 3);
@@ -410,7 +408,6 @@ test "T12: unregister cleans all references" {
     try expectOrder(&m, 0, &.{3});
     for (&m.ws) |*s| {
         try testing.expect(s.focus_mru.indexOfScalar(1) == null);
-        try testing.expect(s.params.scroll_prev != 1);
     }
     try testing.expect(m.focused != 1);
 
@@ -480,13 +477,15 @@ test "T13: ConfigureRequest honoring per mode" {
     );
 }
 
-// T14: applyConfigReload replaces layout params but preserves scroll_prev.
-test "T14: config reload rescales params, keeps scroll_prev" {
+// T14: applyConfigReload replaces layout params but preserves scroll
+// viewport runtime state.
+test "T14: config reload rescales params, keeps scroll viewport" {
     var m = makeModel();
     defer deinitModel(&m);
     regCur(&m, 1);
     m.ws[0].params = .{ .kind = .scroll, .master_width = 0.7, .master_count = 3 };
-    m.ws[0].params.scroll_prev = 1;
+    m.ws[0].params.scroll_offset = 42;
+    m.ws[0].params.scroll_prev_count = 2;
     m.ws[1].params.master_width = 0.9;
 
     const tpl: model.LayoutParams = .{ .kind = .grid, .master_width = 0.6 };
@@ -497,8 +496,8 @@ test "T14: config reload rescales params, keeps scroll_prev" {
         try testing.expectEqual(@as(f32, 0.6), s.params.master_width);
         try testing.expectEqual(@as(u8, 1), s.params.master_count);
     }
-    try testing.expectEqual(@as(?WindowId, 1), m.ws[0].params.scroll_prev);
-    try testing.expectEqual(@as(?WindowId, null), m.ws[1].params.scroll_prev);
+    try testing.expectEqual(@as(i32, 42), m.ws[0].params.scroll_offset);
+    try testing.expectEqual(@as(u32, 2), m.ws[0].params.scroll_prev_count);
 }
 
 // T15: setFocus updates focused+MRU; MRU capped (mru_capacity).
@@ -523,11 +522,6 @@ test "T15: focus MRU ordering and cap" {
     // Unknown window: focused unchanged.
     model.setFocus(&m, 999);
     try testing.expectEqual(@as(?WindowId, wins[10]), m.focused);
-
-    // C-D2: focusing while current layout is scroll updates scroll_prev.
-    m.ws[0].params.kind = .scroll;
-    model.setFocus(&m, wins[3]);
-    try testing.expectEqual(@as(?WindowId, wins[3]), m.ws[0].params.scroll_prev);
 }
 
 // T16: store remove-swap keeps iteration deterministic (+ single-membership).
@@ -754,7 +748,7 @@ test "T33b: floating-base fullscreen minimize/restore never joins a list" {
 
 // T34 (user bug report): minimizing one of two windows must fall back to the
 // PREVIOUSLY focused window. The candidate policy lives in the model layer;
-// actions.pickFallback delegates to it verbatim. Tier checks:
+// the window layer's focusFallback delegates to it. Tier checks:
 // MRU newest-first (minimized skipped even though still listed in MRU),
 // then reversed tiled_order, then floating, then null.
 test "T34: fallbackFocusCandidate tiers pick the previous focus" {
@@ -804,4 +798,70 @@ test "T35: fullscreenWsOf reports the record and null otherwise" {
     // prev) — callers must capture before dropping/removal, never after.
     try model.minimize(&m, 30);
     try testing.expectEqual(@as(?WSId, null), model.fullscreenWsOf(&m, 30));
+}
+
+// T36 (user bug report): closing the focused window must hand focus to the
+// PREVIOUSLY focused window — same BC06 fallback as minimize. The actions
+// layer captures `m.focused == win` BEFORE unregister (which would clear it)
+// and afterwards calls fallbackFocusCandidate; this pins the exact state
+// that contract relies on: the withdrawn window's MRU entries are gone
+// (unregister removes them), so the previous owner wins newest-first.
+test "T36: close-fallback candidate after unregister is the previous focus" {
+    var m = makeModel();
+    defer deinitModel(&m);
+    regCur(&m, 40);
+    regCur(&m, 41);
+    model.setFocus(&m, 40); // focused first...
+    model.setFocus(&m, 41); // ...then 41 holds focus; MRU [41, 40]
+
+    // Simulate the close path's capture point + unregister.
+    const was_focused = m.focused == 41;
+    try testing.expect(was_focused);
+    model.unregister(&m, 41);
+    try testing.expectEqual(@as(?WindowId, null), m.focused); // cleared by unregister
+
+    // The wiring must resolve the target AFTER this point via:
+    try testing.expectEqual(@as(?WindowId, 40), model.fallbackFocusCandidate(&m, 0));
+
+    // Closing the LAST window: no candidate remains -> caller clears focus
+    // (same terminal state as minimizing everything).
+    model.unregister(&m, 40);
+    try testing.expectEqual(@as(?WindowId, null), model.fallbackFocusCandidate(&m, 0));
+}
+
+// FSQ: the fullscreen state resolution moved INTO the model (from the
+// window-layer wrappers) must keep its exact semantics: mode query ignores
+// visibility, on-ws query checks the RECORD's workspace only, and occupancy
+// additionally requires visibility on the scanned ws.
+test "FSQ: model fullscreen queries (mode / on-ws / visible occupant)" {
+    var m = makeModel();
+    defer deinitModel(&m);
+
+    regCur(&m, 50);
+    try testing.expect(!model.isFullscreenMode(&m, 50));
+    try testing.expect(!model.isFullscreenOnWs(&m, 50, 0));
+    try testing.expect(!model.isFullscreenMode(&m, 999)); // unknown id
+    try testing.expect(!model.isFullscreenOnWs(&m, 999, 0)); // unknown id
+    try testing.expectEqual(@as(?WindowId, null), model.fullscreenOccupantOnWs(&m, 0));
+
+    _ = model.toggleFullscreen(&m, 50); // record targets current ws (0)
+    try testing.expect(model.isFullscreenMode(&m, 50));
+    try testing.expect(model.isFullscreenOnWs(&m, 50, 0));
+    try testing.expect(!model.isFullscreenOnWs(&m, 50, 1)); // other-ws record
+    try testing.expectEqual(@as(?WindowId, 50), model.fullscreenOccupantOnWs(&m, 0));
+
+    // A fullscreen RECORD targeting a workspace the window is not tagged to
+    // is NOT an occupant: occupancy requires visibility (sync parks such
+    // strays instead of letting them claim the slot).
+    try model.register(&m, 51, 1); // tagged to ws1 only
+    _ = model.toggleFullscreen(&m, 51); // record ws = current (0)
+    try testing.expect(model.isFullscreenMode(&m, 51));
+    try testing.expect(model.isFullscreenOnWs(&m, 51, 0));
+    try testing.expectEqual(@as(?WSId, 0), model.fullscreenWsOf(&m, 51));
+    try testing.expectEqual(@as(?WindowId, 50), model.fullscreenOccupantOnWs(&m, 0));
+
+    // Minimize-from-fullscreen parks the record inside prev (see T35).
+    try model.minimize(&m, 50);
+    try testing.expect(!model.isFullscreenMode(&m, 50));
+    try testing.expectEqual(@as(?WindowId, null), model.fullscreenOccupantOnWs(&m, 0));
 }

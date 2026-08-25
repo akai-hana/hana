@@ -48,7 +48,6 @@ pub const LayoutParams = struct {
     master_width: f32 = 0.5,
     master_count: u8 = 1,
     stack_balance: f32 = 0,
-    scroll_prev: ?WindowId = null, // decision C-D2
     /// Scroll viewport state (changelog 2026-08-22): model-owned so the
     /// layout engine stays pure. Legacy scroll.zig mutated its runtime state
     /// inside the retile; the snap-right-on-new-window and clamp duties now
@@ -178,9 +177,6 @@ pub fn unregister(m: *Model, win: WindowId) void {
     _ = m.store.getPtr(win) orelse return;
     if (findHome(m, win)) |h| removeValue(&m.ws[h].tiled_order, win);
     removeFromMruAll(m, win);
-    for (&m.ws) |*s| {
-        if (s.params.scroll_prev == win) s.params.scroll_prev = null;
-    }
     if (m.focused == win) m.focused = null;
     _ = m.store.remove(win);
 }
@@ -511,14 +507,12 @@ pub fn honorConfigureRequest(m: *Model, win: WindowId, req: ConfigureReq) HonorD
 
 pub fn applyConfigReload(m: *Model, tpl: LayoutParams) void {
     for (&m.ws) |*s| {
-        const keep_prev = s.params.scroll_prev;
         // Scroll viewport state is RUNTIME state, not config: preserving it
         // prevents a spurious snap-right (n > prev_count fires when the
         // counter resets) on an unrelated reload while scroll is active.
         const keep_offset = s.params.scroll_offset;
         const keep_prev_count = s.params.scroll_prev_count;
         s.params = tpl;
-        s.params.scroll_prev = keep_prev;
         s.params.scroll_offset = keep_offset;
         s.params.scroll_prev_count = keep_prev_count;
     }
@@ -534,9 +528,6 @@ pub fn setFocus(m: *Model, win: WindowId) void {
     if (!list.insert(0, win)) {
         list.orderedRemove(list.len - 1);
         _ = list.insert(0, win);
-    }
-    if (m.ws[m.current].params.kind == .scroll) {
-        m.ws[m.current].params.scroll_prev = win; // decision C-D2
     }
 }
 
@@ -563,8 +554,40 @@ pub fn fullscreenWsOf(m: *const Model, win: WindowId) ?WSId {
     };
 }
 
-/// BC06 minimize-fallback target policy, extracted verbatim from
-/// actions.pickFallback so tests exercise the same logic without linking the
+/// MODEL-mode fullscreen query (single source of truth; replaces the legacy
+/// fullscreen-record lookup for EWMH and client-message paths): true when
+/// `win`'s current mode is fullscreen, regardless of which workspace its
+/// record targets.
+pub fn isFullscreenMode(m: *const Model, win: WindowId) bool {
+    const e = m.store.get(win) orelse return false;
+    return e.mode == .fullscreen;
+}
+
+/// Whether `win` is fullscreen AND its record targets workspace `ws`.
+/// Unlike fullscreenOccupantOnWs this does NOT consult visibility — callers
+/// use it for pre-toggle classification and was-fullscreen captures.
+pub fn isFullscreenOnWs(m: *const Model, win: WindowId, ws: WSId) bool {
+    const e = m.store.get(win) orelse return false;
+    return e.mode == .fullscreen and e.mode.fullscreen.ws == ws;
+}
+
+/// The window occupying the visible fullscreen slot on `ws`, if any. Model
+/// guarantees at most one visible fullscreen per ws (sync parks the rest).
+/// Replaces the deleted legacy fullscreen.zig record store for bar
+/// visibility decisions and enter/exit classification.
+pub fn fullscreenOccupantOnWs(m: *const Model, ws: WSId) ?WindowId {
+    for (0..m.store.count()) |i| {
+        const it = m.store.at(i);
+        if (it.val.mode != .fullscreen) continue;
+        if (it.val.mode.fullscreen.ws != ws) continue;
+        if (!visibleOn(m, it.key, ws)) continue;
+        return it.key;
+    }
+    return null;
+}
+
+/// BC06 minimize-fallback target policy. The window layer's focusFallback
+/// delegates here, and tests exercise the same logic without linking the
 /// protocol layers. Tier order on workspace `ws`:
 ///   1. focus MRU, newest first,
 ///   2. reversed tiled_order,

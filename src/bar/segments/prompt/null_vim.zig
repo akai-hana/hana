@@ -27,7 +27,7 @@ const xk_end = @intFromEnum(XK.End);
 
 pub const default_max_input: usize = 512;
 
-pub const Action = enum { none, deactivate, spawn, spawn_keep };
+pub const Action = enum { none, deactivate, spawn };
 
 pub const Mode = enum {
     insert,

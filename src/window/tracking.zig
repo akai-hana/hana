@@ -88,7 +88,8 @@ pub fn allWindows() []const Entry {
 // Per-workspace focus MRU (facade over model.ws[ws].focus_mru)
 //
 // Order convention: index 0 = most recent (matches model.setFocus's
-// front-insert). Fallback selection reads the MRU through actions.pickFallback.
+// front-insert). Fallback selection reads the MRU through
+// model.fallbackFocusCandidate.
 // ---------------------------------------------------------------------------
 
 fn clearFocusMru() void {

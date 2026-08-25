@@ -333,7 +333,7 @@ fn handleXcbEvents() void {
     // the same poll wakeup: the spawn pipe's EOF will be readable before
     // SIGCHLD fires, so registerSpawn runs before handleMapRequest needs the
     // spawn queue entry.
-    input.drainPendingSpawns();
+    @import("spawn").drainPendingSpawns();
 
     if (build_options.has_bar) bar.updateIfDirty() catch |err| debug.err("Bar post-batch update failed: {}", .{err});
     focus.drainPendingConfirm();

@@ -118,8 +118,6 @@ pub fn getGeometry(conn: core.Connection, win: u32) ?utils.Rect {
 
 /// The four ICCCM focus delivery modes (§4.1.7), determined by the combination of
 /// WM_HINTS.input and WM_TAKE_FOCUS presence in WM_PROTOCOLS.
-/// pub: focus.setFocusWithModel takes a pre-resolved model so grab-held
-/// callers can hoist the live WM_PROTOCOLS query before the server grab.
 pub const InputModel = enum {
     no_input, // input=False, no WM_TAKE_FOCUS: window doesn't want focus
     passive, // input=True,  no WM_TAKE_FOCUS: set focus via `XSetInputFocus`
@@ -799,8 +797,7 @@ pub fn handleMapRequest(event: *const xcb.xcb_map_request_event_t) void {
     );
     parseSizeHintsIntoCache(win, normal_hints_cookie);
     populateFocusCacheFromCookies(conn, win, protocols_cookie, hints_cookie);
-    var actx: actions.Ctx = .{ .focused_window_id = focus.getFocused() };
-    actions.mapRequest(&actx, win, target_ws.index, on_current);
+    actions.mapRequest(win, target_ws.index, on_current);
 }
 
 fn unmanageWindow(win: u32) void {
@@ -823,14 +820,16 @@ fn unmanageWindow(win: u32) void {
     // with its input model queried BEFORE the grab.
     wincache.removeWindow(win);
 
-    // Capture the fullscreen record BEFORE workspaces.removeWindow drops the
-    // model entry (removeWindow → unregister): after that, actions.unmanage's
-    // store query could only ever see "not fullscreen", so closing or
-    // minimizing-away the current workspace's fullscreen occupant never
-    // restored the bar. The action layer consumes it via ctx.
+    // Capture the fullscreen record and focus ownership BEFORE
+    // workspaces.removeWindow drops the model entry (removeWindow →
+    // unregister): after that, actions.unmanage could never know that the
+    // closed window held focus (m.focused is already cleared), so closing a
+    // window left the workspace unfocused until a pointer event re-focused
+    // it. Both facts ride ctx into actions.unmanage, which runs the same
+    // BC06 fallback as minimize.
     var actx: actions.Ctx = .{
-        .focused_window_id = focus.getFocused(),
         .withdrawn_fullscreen_ws = if (pipeline.initialized) actions.fullscreenWsOf(win) else null,
+        .withdrawn_was_focused = pipeline.initialized and pipeline.model().focused == win,
     };
     workspaces.removeWindow(win);
 
@@ -850,22 +849,6 @@ pub fn handleDestroyNotify(event: *const xcb.xcb_destroy_notify_event_t) void {
     if (isValidManagedWindow(event.window)) unmanageWindow(event.window);
 }
 
-/// Post-unmanage focus target resolution: PURE, no side effects.
-///
-/// Resolves where focus should land after the focused window closes: the
-/// scroll-layout MRU prev, else the window under the pointer, else the first
-/// visible window on the current workspace. Returns null when nothing should
-/// receive focus (unmanageWindow falls back to clearFocus).
-///
-/// The caller applies the result via focus.setFocusWithModel with a
-/// pre-resolved input model, so the model's blocking WM_PROTOCOLS reply wait
-/// happens BEFORE the server grab rather than inside it.
-///
-/// `.pointer_sync` (the pointer-child case) may raise a floating window and
-/// arms the confirm/retry machinery for non-compliant clients. Accepts a
-/// pre-drained pointer reply (null if the query failed or window was not
-/// focused); the caller owns its memory, accepting the reply instead of the
-/// cookie prevents an implicit XCB output-buffer flush inside the grab.
 const geometry_mask: u16 =
     xcb.XCB_CONFIG_WINDOW_X | xcb.XCB_CONFIG_WINDOW_Y |
     xcb.XCB_CONFIG_WINDOW_WIDTH | xcb.XCB_CONFIG_WINDOW_HEIGHT |
@@ -919,7 +902,7 @@ fn resolveConfigureGeometry(win: u32) ?utils.Rect {
         return .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height, .border_width = border };
     }
 
-    if (actions.isFullscreenMode(win)) {
+    if (@import("model").isFullscreenMode(pipeline.model(), win)) {
         const screen = core.getState().screen;
         return .{
             .x = 0,
@@ -1337,7 +1320,7 @@ pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
     }
 
     const action = event.data.data32[0];
-    const is_fs = actions.isFullscreenMode(win);
+    const is_fs = @import("model").isFullscreenMode(pipeline.model(), win);
     const should_enter = switch (action) {
         1 => true, // _NET_WM_STATE_ADD
         0 => false, // _NET_WM_STATE_REMOVE
@@ -1347,8 +1330,7 @@ pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
     if (should_enter == is_fs) return;
     // PIPELINE (fix P0-3): model-path transition — the legacy enter/exit
     // fullscreen machinery bypassed (and fought) the single source of truth.
-    var actx: actions.Ctx = .{ .focused_window_id = focus.getFocused() };
-    actions.fullscreenToggleWindow(&actx, win);
+    actions.fullscreenToggleWindow(win);
 }
 
 /// Called on config reload.
