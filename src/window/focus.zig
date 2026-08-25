@@ -465,20 +465,20 @@ fn cancelPendingConfirm() void {
 /// so EWMH clients stay in sync.
 fn sendFocusProtocol(win: u32) void {
     const conn = core.getState().conn;
-    // take_focus is checked live twice here (getInputModel, then again inside
-    // sendWMTakeFocus); same "not worth entangling to save one round trip"
-    // reasoning as setFocus, just unpipelined since this path fires on focus
-    // steals, not on every event.
-    const model = window.getInputModel(conn, win);
-    if (model == .no_input) return;
-    if (model != .globally_active) {
+    // Single round trip: getInputModelResolved answers both the input model
+    // and the take_focus advertisement from one WM_PROTOCOLS query, so
+    // sendWMTakeFocusKnown can dispatch the ClientMessage without a second
+    // round trip.
+    const resolved = window.getInputModelResolved(conn, win);
+    if (resolved.model == .no_input) return;
+    if (resolved.model != .globally_active) {
         focusNow(conn, win);
     }
     // Always advertise the active window, regardless of input model.
     // Without this, a globally_active window that has stolen focus would leave
     // _NET_ACTIVE_WINDOW pointing at the thief even after we re-assert `win`.
     advertiseActiveWindow(win);
-    window.sendWMTakeFocus(conn, win, 0);
+    window.sendWMTakeFocusKnown(conn, win, 0, resolved.take_focus);
 }
 
 /// DWM's focusin: translated exactly. No mode/detail/managed filtering.

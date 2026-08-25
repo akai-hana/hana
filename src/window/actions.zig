@@ -318,6 +318,7 @@ pub fn toggleFloating(win: model_mod.WindowId) void {
             .tiled => {
                 const r = sync.lastRectFor(win) orelse return;
                 e.mode = .{ .base = .{ .floating = r } };
+                e.home_ws = null; // no longer in tiled_order
             },
             .floating => {
                 e.mode = .{ .base = .tiled };
@@ -329,6 +330,7 @@ pub fn toggleFloating(win: model_mod.WindowId) void {
                 if (model_mod.findHome(m, win) == null) {
                     const h: model_mod.WSId = model_mod.lowestBit(e.mask);
                     _ = m.ws[h].tiled_order.append(win);
+                    e.home_ws = h;
                 }
             },
         },
@@ -355,6 +357,7 @@ pub fn detachToFloating(win: model_mod.WindowId) void {
     if (e.mode != .base or e.mode.base != .tiled) return;
     const r = sync.lastRectFor(win) orelse return;
     e.mode = .{ .base = .{ .floating = r } };
+    e.home_ws = null;
     pipeline.reconcileUnderGrabNow(.{});
 }
 
