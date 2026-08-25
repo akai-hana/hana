@@ -1,6 +1,4 @@
-//! Unit tests for the model layer (WP1, test table T01-T18).
-//! Run via `zig build test` (standalone `zig test` cannot resolve named
-//! imports -- see build.zig comment on the test step).
+//! Unit tests for the model layer.
 const std = @import("std");
 const testing = std.testing;
 const model = @import("model");
@@ -14,7 +12,7 @@ const max_minimized = constants.max_minimized;
 const SmallStore = @import("store").Store(u32, u8, 2);
 
 fn makeModel() Model {
-    return .{}; // bounded lists: no allocator, no deinit (I8 totality)
+    return .{}; // bounded lists: no allocator, no deinit
 }
 
 fn deinitModel(m: *Model) void {
@@ -86,7 +84,7 @@ fn eqModel(a: *const Model, b: *const Model) bool {
 
 /// Every window whose effective base is tiled appears in EXACTLY ONE ws
 /// list; every listed id exists in the store (single-membership invariant).
-/// Floating (C-D1) and minimized windows are legitimately home-free.
+/// Floating and minimized windows are legitimately home-free.
 fn assertSingleMembership(m: *const Model) !void {
     for (0..m.store.count()) |i| {
         const it = m.store.at(i);
@@ -161,7 +159,7 @@ test "T03: minimize tiled removes from order; capacity refuses" {
     try expectOrder(&m, 0, expected[0 .. wins.len - 1]);
 
     // Fill the remaining budget, then the next minimize must be refused
-    // without mutating anything (I8; full no-mutation proof in T17).
+    // without mutating anything (full no-mutation proof in T17).
     for (wins[0 .. wins.len - 1]) |w| model.minimize(&m, w) catch unreachable;
     try testing.expectError(error.CapacityFull, model.minimize(&m, wins[wins.len - 1]));
 }
@@ -205,14 +203,12 @@ test "T05: minimize/restore floating preserves rect" {
     try testing.expect(back.mode == .base);
     try testing.expect(back.mode.base == .floating);
     try testing.expect(r.eql(back.mode.base.floating));
-    // Fix P2-7: floating-prev restore must NOT join any tiled_order (a
-    // phantom member would shift every other window's layout slot).
+    // Floating-prev restore must NOT join any tiled_order.
     for (&m.ws) |*s| try testing.expect(model.findInOrder(&s.tiled_order, 7) == null);
 }
 
-// T06: toggleFullscreen round trips; fullscreen_saved preserved through
-// minimize-from-fullscreen (BC08).
-test "T06: fullscreen toggling and BC08 minimize-from-fullscreen" {
+// T06: toggleFullscreen round trips; minimize-from-fullscreen preserved.
+test "T06: fullscreen toggling and minimize-from-fullscreen" {
     var m = makeModel();
     defer deinitModel(&m);
     // Tiled round trip.
@@ -227,7 +223,7 @@ test "T06: fullscreen toggling and BC08 minimize-from-fullscreen" {
     try testing.expect(e.mode == .base);
     try testing.expect(e.mode.base == .tiled);
 
-    // Floating base survives minimize-from-fullscreen (BC08 exact).
+    // Floating base survives minimize-from-fullscreen.
     const r: utils.Rect = .{ .x = 5, .y = 6, .width = 640, .height = 480 };
     _ = m.store.put(2, .{
         .mask = model.bit(0),
@@ -280,7 +276,7 @@ test "T07: switchTo and visibleOn" {
     try testing.expect(!model.visibleOn(&m, 999, 0));
 }
 
-// T08: moveWindowToWs retargets mask; minimized record follows (BC12).
+// T08: moveWindowToWs retargets mask; minimized record follows.
 test "T08: moveWindowToWs for tiled, minimized, and pinned" {
     var m = makeModel();
     defer deinitModel(&m);
@@ -293,7 +289,7 @@ test "T08: moveWindowToWs for tiled, minimized, and pinned" {
     try expectOrder(&m, 2, &.{1});
     try testing.expectEqual(@as(WSId, 2), model.findHome(&m, 1).?);
 
-    // Minimized: only the record moves; restore lands on the new ws (BC12).
+    // Minimized: only the record moves; restore lands on the new ws.
     model.restore(&m, 1);
     model.moveWindowToWs(&m, 1, 2);
     model.minimize(&m, 1) catch unreachable;
@@ -334,9 +330,7 @@ test "T09: pinToggle across all modes" {
     try testing.expect(m.store.get(4).?.mode == .minimized);
 }
 
-// T10: allViewToggle round trip; visibility parity with legacy enterAllView
-// (temp-window tracking deleted per changelog 2026-08-21; BC17 emerges from
-// the visibility model).
+// T10: allViewToggle round trip; visibility parity with legacy.
 test "T10: all-view flag drives visibility for every stored window" {
     var m = makeModel();
     defer deinitModel(&m);
@@ -391,7 +385,7 @@ test "T11: reorder and swapMaster" {
     try expectOrder(&small, 0, &.{7});
 }
 
-// T12: unregister cleans tiled_order/MRU/minimized/fs refs everywhere (BC11).
+// T12: unregister cleans tiled_order/MRU/minimized/fs refs everywhere.
 test "T12: unregister cleans all references" {
     var m = makeModel();
     defer deinitModel(&m);
@@ -438,7 +432,7 @@ test "T13: ConfigureRequest honoring per mode" {
     regCur(&m, 4);
     model.minimize(&m, 4) catch unreachable;
 
-    // Floating: geometry accepted and recorded in the model (P5/I5).
+    // Floating: geometry accepted and recorded in the model.
     try testing.expectEqual(
         model.HonorDecision.geometry_applied,
         model.honorConfigureRequest(&m, 2, .{ .x = 50, .y = 60, .width = 320, .height = 240 }),
@@ -525,8 +519,8 @@ test "T15: focus MRU ordering and cap" {
 }
 
 // T16: store remove-swap keeps iteration deterministic (+ single-membership).
-// Swap-remove semantics (C-D5): the tail element inherits the freed slot, so
-// it takes over the removed element's position in the iteration sequence.
+// Swap-remove semantics: the tail element inherits the freed slot, so it
+// takes over the removed element's position in the iteration sequence.
 test "T16: store iteration stays deterministic across removals" {
     var m = makeModel();
     defer deinitModel(&m);
@@ -561,7 +555,7 @@ test "T16: store iteration stays deterministic across removals" {
     try assertSingleMembership(&m);
 }
 
-// T17: INVARIANT(I8) -- no function mutates before its capacity check.
+// T17: no function mutates before its capacity check.
 test "T17: capacity refusals happen before any mutation" {
     // Raw store: full-store put refuses and leaves content untouched.
     var small: SmallStore = .{};
@@ -688,16 +682,12 @@ test "T32: latestMinimizedBase skips fullscreen-prev and other workspaces" {
     model.register(&m, 21, 0) catch unreachable;
     _ = model.toggleFullscreen(&m, 21);
     try model.minimize(&m, 20); // plain base, older
-    try model.minimize(&m, 21); // fullscreen-prev, newer — excluded from BC09 focus
+    try model.minimize(&m, 21); // fullscreen-prev, newer
     try testing.expectEqual(@as(?model.WindowId, 20), model.latestMinimizedBase(&m, 0));
 }
 
 // T33 (user bug report): fullscreen -> minimize -> restore -> un-fullscreen
-// used to strand the window base-tiled but HOME-LESS: restore() only
-// re-entered the slot for base-tiled prevs, so the fullscreen-prev window's
-// saved slot was dropped. After the later exit-fullscreen it was invisible to
-// the engine (stale geometry) and untileable via toggle_floating_window.
-// BC08 pins the correct behavior: "slot re-added THEN fullscreen re-entered".
+// used to strand the window base-tiled but HOME-LESS.
 test "T33: fullscreen-prev restore re-adds slot; exit-fullscreen retiles" {
     var m = makeModel();
     defer deinitModel(&m);
@@ -709,7 +699,7 @@ test "T33: fullscreen-prev restore re-adds slot; exit-fullscreen retiles" {
     try testing.expect(m.store.get(1).?.mode == .minimized);
     try expectOrder(&m, 0, &.{2}); // slot freed while hidden
 
-    model.restore(&m, 1); // BC08: straight back into fullscreen ...
+    model.restore(&m, 1); // straight back into fullscreen ...
     const e = m.store.get(1).?;
     try testing.expect(e.mode == .fullscreen);
     try testing.expectEqual(@as(WSId, 0), e.mode.fullscreen.ws);
@@ -726,8 +716,7 @@ test "T33: fullscreen-prev restore re-adds slot; exit-fullscreen retiles" {
     try assertSingleMembership(&m);
 }
 
-// T33b: floating-base fullscreen round trip stays home-free (C-D1 / fix
-// P2-7) — the wants_home refinement must not regress T06's exact contract.
+// T33b: floating-base fullscreen round trip stays home-free.
 test "T33b: floating-base fullscreen minimize/restore never joins a list" {
     var m = makeModel();
     defer deinitModel(&m);
@@ -801,11 +790,7 @@ test "T35: fullscreenWsOf reports the record and null otherwise" {
 }
 
 // T36 (user bug report): closing the focused window must hand focus to the
-// PREVIOUSLY focused window — same BC06 fallback as minimize. The actions
-// layer captures `m.focused == win` BEFORE unregister (which would clear it)
-// and afterwards calls fallbackFocusCandidate; this pins the exact state
-// that contract relies on: the withdrawn window's MRU entries are gone
-// (unregister removes them), so the previous owner wins newest-first.
+// PREVIOUSLY focused window.
 test "T36: close-fallback candidate after unregister is the previous focus" {
     var m = makeModel();
     defer deinitModel(&m);

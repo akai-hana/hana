@@ -237,7 +237,7 @@ pub fn value(cfg: *const types.Config, comptime path: []const u8) PathType(path)
 }
 
 // Generic readers. Bodies are verbatim ports of the pre-schema config.zig
-// interpreters -- warning wording included, goldens depend on it.
+// interpreters.
 
 /// Warn-and-return-default for an out-of-range value, shared by getInRange
 /// and getScalableInRange so the warning wording (and its boilerplate) lives once.

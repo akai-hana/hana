@@ -611,7 +611,7 @@ fn histParseLine(line: []const u8, out: []u8) usize {
     return cmd.len;
 }
 
-/// Fixed byte window read from a history file's tail (ND-7): an overgrown
+/// Fixed byte window read from a history file's tail: an overgrown
 /// file must not push its newest entries out of reach of one bounded read.
 const hist_read_window: usize = 256 * 1024 - 1;
 
@@ -624,7 +624,7 @@ fn histLoadFile(path: []const u8) void {
 
     // History semantics want the NEWEST entries, which live at the file's
     // tail. Position the read window at EOF - window so an overgrown file
-    // can't push recent entries out of the fixed read (ND-7); a partial
+    // can't push recent entries out of the fixed read; a partial
     // line at the window head is dropped below.
     const fsize: u64 = if (file.stat(io) catch null) |st| st.size else 0;
     const from_tail = fsize > hist_read_window;

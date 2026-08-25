@@ -1,12 +1,10 @@
-//! Thin action wrappers used by entry points (REARCHITECTURE_PLAN.md §7.2,
-//! Appendix E.6). One action ≙ one §7.2 transition + one sync entry per the
-//! §7.6 scheduling table. Train step a: minimize / restore / restoreAll.
+//! Thin action wrappers used by entry points. One action = one state
+//! transition + one sync entry.
 //!
-//! Division of labor while the strangler runs:
+//! Division of labor:
 //!   model.*   — state transitions (tiled_order, modes, focus bookkeeping)
 //!   sync.*    — geometry/border/stack/park requests (via pipeline slots)
-//!   legacy    — X11 focus protocol + input-model resolve stay untouched
-//!               until train f (R2); actions dispatch through window.focus.
+//!   focus     — X11 focus protocol + input-model resolve.
 
 const std = @import("std");
 const model_mod = @import("model");
@@ -26,7 +24,7 @@ pub const Ctx = struct {
     /// entry (after which no store query could recover it).
     withdrawn_fullscreen_ws: ?model_mod.WSId = null,
     /// Whether the withdrawn window held MODEL focus at withdrawal time,
-    /// captured BEFORE removal clears m.focused. Drives the BC06 close
+    /// captured BEFORE removal clears m.focused. Drives the close
     /// fallback (parity with minimize): the previous focus owner must hand
     /// over, otherwise the workspace stays unfocused until a pointer event.
     withdrawn_was_focused: bool = false,
@@ -49,7 +47,7 @@ fn retileAndNotify(restack: bool, full_redraw: bool) void {
 
 // ---------------------------------------------------------------- minimize
 
-/// BC06 atomicity: minimize + fallback-focus + retile land under one grab.
+/// Atomicity: minimize + fallback-focus + retile land under one grab.
 ///
 /// Focus policy reads MODEL truth (`m.focused`): minimizing the focused
 /// window hands focus over via focusFallback, otherwise m.focused would keep
@@ -66,7 +64,7 @@ pub fn minimize(focused: ?model_mod.WindowId) void {
     const was_focused = m.focused == win;
     const fs_ws_before = model_mod.fullscreenWsOf(m, win);
 
-    model_mod.minimize(m, win) catch return; // BC26 pre-refusal (CapacityFull)
+    model_mod.minimize(m, win) catch return; // Pre-refusal (CapacityFull)
 
     if (was_focused) focusFallback(m);
 
@@ -78,15 +76,15 @@ pub fn minimize(focused: ?model_mod.WindowId) void {
         bar.scheduleRedraw(); // minimization itself refreshes the title segment
     }
 
-    pipeline.reconcileUnderGrabNow(.{ .force_restack = true }); // BC06 atomicity
+    pipeline.reconcileUnderGrabNow(.{ .force_restack = true }); // Atomicity
 }
 
-/// BC06 fallback: own-workspace scope only. Order: current ws focus_mru ->
+/// Fallback: own-workspace scope only. Order: current ws focus_mru ->
 /// reversed tiled_order -> any floating on ws. First visibleOn(current) wins.
 /// Protocol layer untouched until train f (R2): winner goes through the
 /// legacy take-focus dispatch; null winner clears focus. Model and protocol
 /// focus are updated together so sync's color/winner pass sees one truth.
-/// (focus.clearFocus already clears the model — the A3/P1 one-store seam —
+/// (focus.clearFocus already clears the model — the one-store seam —
 /// so the null branch needs no separate model write.)
 fn focusFallback(m: *model_mod.Model) void {
     // Tier policy lives in the model layer so tests can exercise it without
@@ -113,7 +111,7 @@ pub fn restore(win: model_mod.WindowId) void {
     model_mod.setFocus(m, win);
     focus.setFocus(win, .window_spawn); // protocol untouched until train f
     pipeline.reconcileUnderGrabNow(.{ .force_restack = true });
-    // BC08 straight-back-into-fullscreen: defer the bar hide to the window's
+    // Straight-back-into-fullscreen: defer the bar hide to the window's
     // ConfigureNotify confirmation — exactly like an enter-fullscreen toggle
     // (arming the hide also clears leftover pending-show state).
     if (build_options.has_bar and !had_occupant_before and
@@ -139,10 +137,10 @@ pub fn restoreOrdered(order: model_mod.RestoreOrder) void {
     }
 }
 
-/// BC09: slot-ordered bulk restore of the current workspace. Focus target is
+/// Slot-ordered bulk restore of the current workspace. Focus target is
 /// the most recently minimized PLAIN window (legacy focuses plain_wins[last];
 /// fullscreen-prev windows replay through the same reconcile's fullscreen
-/// branch — BC08 straight-back-into-fullscreen).
+/// branch — straight-back-into-fullscreen).
 pub fn restoreAll() void {
     const m = pipeline.model();
     const ws = m.current;
@@ -185,13 +183,6 @@ fn isMinimizedOnAnyWs(m: *const model_mod.Model, win: model_mod.WindowId) bool {
 /// handle of their own and ask through here.
 pub fn isFullscreenMode(win: model_mod.WindowId) bool {
     return model_mod.isFullscreenMode(pipeline.model(), win);
-}
-
-/// Fullscreen workspace record of `win`, or null. Entry points about to drop
-/// the model entry MUST call this first and pass the result through
-/// Ctx.withdrawn_fullscreen_ws (see actions.unmanage).
-pub fn fullscreenWsOf(win: model_mod.WindowId) ?model_mod.WSId {
-    return model_mod.fullscreenWsOf(pipeline.model(), win);
 }
 
 /// Whether any window occupies the fullscreen slot on `ws` (model truth;
@@ -265,7 +256,7 @@ pub fn moveWindowTo(win: model_mod.WindowId, ws_idx: u8) void {
 }
 
 /// toggle_tag (Mod+Alt+N). Focus is left unchanged on add (multi-tag gesture);
-/// removing the CURRENT tag evicts the window and re-focuses per BC06.
+/// removing the CURRENT tag evicts the window and re-focuses.
 pub fn tagToggle(win: model_mod.WindowId, ws_idx: u8, protect_current: bool) void {
     const constants = @import("constants");
     if (ws_idx >= constants.max_workspaces) return;
@@ -393,7 +384,7 @@ pub fn adjustMasterCount(delta: i32) void {
     const m = pipeline.model();
     const p = &m.ws[m.current].params;
     const next = @as(i32, p.master_count) + delta;
-    // Upper clamp (ND-22): layouts clamp downstream per-tile, but the model
+    // Upper clamp: layouts clamp downstream per-tile, but the model
     // param itself used to drift unbounded, desyncing bar/inspect state.
     // store_capacity/4 keeps the bound proportional to the window budget.
     const max_count: i32 = @max(1, model_mod.store_capacity / 4);
@@ -456,7 +447,7 @@ pub fn scrollStep(dir: i32) void {
     pipeline.reconcileUnderGrabNow(.{});
 }
 
-/// Focus-change scroll snap (WP6 port of tiling.snapScrollToFocused): shift
+/// Focus-change scroll snap (port of tiling.snapScrollToFocused): shift
 /// the viewport minimally so the focused window's slot is fully on-screen.
 pub fn snapScrollToFocused() void {
     const algo_scroll = @import("scroll");
@@ -505,7 +496,7 @@ fn tiledCountOnCurrent(m: *const model_mod.Model) usize {
 // ------------------------------------------------- config reload (train g)
 
 /// Seeds every workspace's model params from the CURRENT config. Shared by
-/// boot-time initialization (ND-1: without this the config's tiling
+/// boot-time initialization (without this the config's tiling
 /// params/workspace overrides stay inert until the first explicit reload)
 /// and post-reload re-seeding; mirrors workspaces.applyWorkspaceOverrides
 /// semantics: per-ws layout/variant/master-count overrides, global defaults
@@ -545,7 +536,7 @@ pub fn seedParamsFromConfig() void {
             }
         }
         s.params.kind = layoutKindFromConfig(layout);
-        // SW-10 (S13F10): a variant override that doesn't belong to the
+        // A variant override that doesn't belong to the workspace's active
         // workspace's active layout is silently dropped by variantIdx — say
         // so once per affected workspace instead of failing invisibly.
         if (variant) |v| {
@@ -641,11 +632,11 @@ pub fn switchTo(ws_idx: u8) void {
         break :blk fallbackFocusOnWs(m, ws_idx);
     };
 
-    // All-view exit is a flag flip (BC17 emerges from visibility); temp-window
+    // All-view exit is a flag flip (emerges from visibility); temp-window
     // masks do not exist in the model.
     m.all_view_active = false;
 
-    // A4: model.current is the ONLY store for the current workspace; the
+    // model.current is the ONLY store for the current workspace; the
     // tracking/workspaces mirrors are deleted (read-through facades now).
     m.current = ws_idx;
 
@@ -653,7 +644,7 @@ pub fn switchTo(ws_idx: u8) void {
         model_mod.setFocus(m, t);
         focus_mod.setFocus(t, .workspace_switch);
     } else {
-        // focus.clearFocus clears the model first (A3/P1 seam) — no
+        // focus.clearFocus clears the model first (one-store seam) — no
         // separate model write needed here.
         focus_mod.clearFocus();
     }
@@ -665,7 +656,7 @@ pub fn switchTo(ws_idx: u8) void {
         bar.setBarState(if (model_mod.fullscreenOccupantOnWs(m, ws_idx) != null) .hide_fullscreen else .show_fullscreen);
     }
 
-    // force_restack raises the bar window (I4 hook) ≙ legacy raiseBar tail.
+    // force_restack raises the bar window.
     pipeline.reconcileUnderGrabNow(.{ .force_restack = true });
 }
 
@@ -699,7 +690,7 @@ pub fn mapRequest(win: model_mod.WindowId, target_ws: u8, on_current: bool) void
     const m = pipeline.model();
     if (m.store.has(win)) return; // double-manage guard parity
 
-    // I8: a defined refusal (store or home-list full) leaves the window
+    // A defined refusal (store or home-list full) leaves the window
     // unmanaged — same observable outcome as the legacy full-pool path.
     model_mod.register(m, win, if (on_current) null else target_ws) catch {
         std.log.warn("mapRequest: capacity full; window 0x{x} left unmanaged", .{win});
@@ -747,15 +738,15 @@ pub fn unmanage(ctx: *Ctx, win: model_mod.WindowId) void {
     const was_focused = ctx.withdrawn_was_focused;
 
     model_mod.unregister(m, win);
-    sync.forget(win); // X ids recycle; stale LastSent must not survive (fix P0-4)
+    sync.forget(win); // X ids recycle; stale LastSent must not survive
 
-    // BC06 close fallback (parity with minimize): when the withdrawn window
+    // Close fallback (parity with minimize): when the withdrawn window
     // held focus, hand it to the previously focused window on this ws
     // (MRU newest-first -> reversed tiled_order -> floating); with no
     // candidate left, focus clears. Runs BEFORE the reconcile so border
     // colors and the winner raise are derived from the new focus, and
     // OUTSIDE the grab like every other focusFallback call site.
-    // (Supersedes the old ND-9 stay-unfocused policy per user request:
+    // (Supersedes the old stay-unfocused policy per user request:
     // with the pointer parked away from windows, nothing re-focused the
     // workspace after a close.)
     if (was_focused) focusFallback(m);

@@ -126,15 +126,13 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) void {
     if (build_options.has_bar) if (bar.promptHandleKeypress(event, matched)) return;
 
     if (matched) |action| {
-        debug.info("[KEY] keycode={} state=0x{x} mods=0x{x} keysym=0x{x}", .{ event.detail, event.state, mods, keysym });
-        debug.info("[KEY] action={s}", .{@tagName(action.*)});
+        debug.info("[KEY] mods=0x{x} keysym=0x{x} action={s}", .{ mods, keysym, @tagName(action.*) });
         executeAction(action);
     } else if (mods == 0 and keysym >= 0xffe1 and keysym <= 0xffee) {
         // Bare modifier press (Shift/Ctrl/Alt/Super/Hyper L/R): can never
         // match a binding; staying silent keeps logs free of keystroke noise.
     } else {
-        debug.info("[KEY] keycode={} state=0x{x} mods=0x{x} keysym=0x{x}", .{ event.detail, event.state, mods, keysym });
-        debug.info("[KEY] no binding", .{});
+        debug.info("[KEY] mods=0x{x} keysym=0x{x} no binding", .{ mods, keysym });
     }
 }
 
@@ -299,10 +297,10 @@ fn executeAction(action: *const types.Action) void {
         .toggle_bar_position => if (build_options.has_bar) bar.toggleBarSegmentAnchor(),
 
         // Minimize
-        .minimize_window => actions.minimize(focusedId()), // WP6
-        .unminimize_lifo => actions.restoreOrdered(.lifo), // WP6
-        .unminimize_fifo => actions.restoreOrdered(.fifo), // WP6
-        .unminimize_all => actions.restoreAll(), // WP6
+        .minimize_window => actions.minimize(focusedId()),
+        .unminimize_lifo => actions.restoreOrdered(.lifo),
+        .unminimize_fifo => actions.restoreOrdered(.fifo),
+        .unminimize_all => actions.restoreAll(),
 
         // Workspaces, delegated to executeWorkspaceAction
         .switch_workspace,
@@ -321,11 +319,11 @@ fn executeAction(action: *const types.Action) void {
         // it is off-screen. The server grab prevents a partial retile frame.
         .focus_next_window => {
             focus.focusNext();
-            actions.snapScrollToFocused(); // PIPELINE: WP6
+            actions.snapScrollToFocused();
         },
         .focus_prev_window => {
             focus.focusPrev();
-            actions.snapScrollToFocused(); // PIPELINE: WP6
+            actions.snapScrollToFocused();
         },
     }
 }
@@ -378,11 +376,11 @@ fn executeTilingAction(action: *const types.Action) void {
 /// is false, so these calls are always valid regardless of that setting.
 fn executeWorkspaceAction(action: *const types.Action) void {
     switch (action.*) {
-        .switch_workspace => |ws| actions.switchTo(ws), // WP6
-        .move_to_workspace => |ws| if (focusedId()) |wid| actions.moveWindowTo(wid, ws), // WP6
-        .toggle_tag => |ws| if (focusedId()) |wid| actions.tagToggle(wid, ws, true), // WP6
-        .all_workspaces => actions.allViewToggle(), // WP6
-        .move_to_all_workspaces, .toggle_tag_all => if (focusedId()) |wid| actions.pinToggle(wid), // WP6
+        .switch_workspace => |ws| actions.switchTo(ws),
+        .move_to_workspace => |ws| if (focusedId()) |wid| actions.moveWindowTo(wid, ws),
+        .toggle_tag => |ws| if (focusedId()) |wid| actions.tagToggle(wid, ws, true),
+        .all_workspaces => actions.allViewToggle(),
+        .move_to_all_workspaces, .toggle_tag_all => if (focusedId()) |wid| actions.pinToggle(wid),
         else => unhandledAction("workspace"),
     }
 }
@@ -391,7 +389,7 @@ fn executeWorkspaceAction(action: *const types.Action) void {
 /// keyboard-focused one, so e.g. toggle_floating_window affects what was clicked.
 fn executeMouseAction(action: *const types.Action, clicked_win: u32) void {
     switch (action.*) {
-        .toggle_floating_window => { // WP6
+        .toggle_floating_window => {
             focus.setSuppressReason(.tiling_operation);
             actions.toggleFloating(clicked_win);
             focus.beginTilingOpSettle();
@@ -408,26 +406,8 @@ fn dumpState() void {
     debug.info("Focused:        {?x}", .{focus.getFocused()});
     debug.info("Total windows:  {}", .{tracking.windowCount()});
     debug.info("Suppress focus: {s}", .{@tagName(focus.getSuppressReason())});
-    debug.info("Drag active:    {}", .{build_options.has_floating and floating.isDragging()});
-
-    // Fullscreen truth: scan the model store (the legacy record store is gone).
-    {
-        const m = pipeline.model();
-        var any_fs = false;
-        for (0..m.store.count()) |i| {
-            const it = m.store.at(i);
-            if (it.val.mode != .fullscreen) continue;
-            any_fs = true;
-            debug.info("Fullscreen on workspace {}: {x}", .{ it.val.mode.fullscreen.ws, it.key });
-        }
-        if (!any_fs) debug.info("Fullscreen: none", .{});
-    }
 
     if (workspaces.getState()) |ws_state| {
-        // Live source (tracking is dual-written by switchTo); the legacy
-        // workspaces.State.current mirror lags when read mid-switch.
-        const cur_ws = tracking.getCurrentWorkspace() orelse 0;
-        debug.info("Current workspace: {}", .{cur_ws + 1});
         for (ws_state.workspaces, 0..) |_, i|
             debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(@intCast(i))) });
     }
@@ -435,8 +415,6 @@ fn dumpState() void {
     if (build_options.has_tiling and tiling.isEnabled()) {
         debug.info("Tiling enabled: true", .{});
         debug.info("Tiling layout:  {s}", .{@tagName(tiling.getCurrentLayout())});
-        // Count from the model (WP5 truth), not the legacy pool: the pool is
-        // no longer fed on the model spawn path, so its length would read 0.
         debug.info("Tiled windows:  {}", .{tracking.tiledCountOnCurrent()});
     }
 

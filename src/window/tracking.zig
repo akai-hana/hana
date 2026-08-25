@@ -1,7 +1,7 @@
-//! Window tracking FACADE over the model (REARCHITECTURE_PLAN.md P1: single
-//! source of truth). The registry arrays this module once owned are gone:
-//! every query reads `pipeline.model()`, so hover-focus resolution, manage
-//! guards, counts, masks and iterators see exactly what actions/sync see.
+//! Window tracking FACADE over the model — single source of truth.
+//! The registry arrays this module once owned are gone: every query reads
+//! `pipeline.model()`, so hover-focus resolution, manage guards, counts,
+//! masks and iterators see exactly what actions/sync see.
 //!
 //! Kept locally (not model state): workspace_count (config lifecycle) and
 //! `current` (also mirrored into the model by actions.switchTo; readers may
@@ -127,7 +127,7 @@ pub fn setWorkspaceCount(count: usize) void {
 /// Called by workspaces.switchTo so getCurrentWorkspace() stays correct even
 /// when code queries tracking directly. Also mirrored into the model by
 /// actions.switchTo (dual-write until tracking's storage is fully deleted).
-/// Single source of truth is `model.current` (A4): read-through facade,
+/// Single source of truth is `model.current`: read-through facade,
 /// null before pipeline.init (callers default to workspace 0).
 pub inline fn getCurrentWorkspace() ?u8 {
     if (pipeline.initialized) return @intCast(pipeline.model().current);

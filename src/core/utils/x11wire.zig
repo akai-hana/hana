@@ -51,7 +51,7 @@ pub inline fn setBorderPixel(conn: core.Connection, win: u32, pixel: u32) void {
 //
 // The grab body runs on the main WM thread; grabServer/ungrabServer bracket
 // every reconcile batch so the queued request run reaches the server
-// atomically (BC24 zero-round-trip rule).
+// atomically (zero-round-trip rule).
 
 /// Always pair with ungrabServer()/ungrabAndFlush().
 pub inline fn grabServer(conn: core.Connection) void {
@@ -175,11 +175,9 @@ const supported_atoms = [_][]const u8{
     "_NET_WM_STRUT_PARTIAL",
 };
 
-/// Known gaps between `_NET_SUPPORTED` and full behaviour (ND-19 decision:
-/// document, don't narrow — external tools key on the listed hints, and the
-/// list above is what keeps GLFW/Qt/Chromium out of their broken fallback
-/// paths; removing entries would regress those clients more than partial
-/// handling does):
+/// Known gaps between `_NET_SUPPORTED` and full behaviour: document, don't
+/// narrow — external tools key on the listed hints, and the list above is
+/// what keeps GLFW/Qt/Chromium out of their broken fallback paths.
 ///
 /// - The only client messages answered are `_NET_WM_STATE` with the
 ///   fullscreen atom (ADD/REMOVE/TOGGLE). `_NET_ACTIVE_WINDOW`,
@@ -257,12 +255,11 @@ pub fn advertiseEwmhSupport(conn: core.Connection, screen: core.Screen, root: u3
 /// `cookie.sequence` and the original cookie object flows to the blocking
 /// call unchanged.
 ///
-/// Poll semantics (absorbed from the deleted bench probe; ND-18):
-/// `xcb_poll_for_reply` consumes the cookie on BOTH success and error, so a
-/// plain "null means block" contract is unsound — blocking on a
-/// consumed-error cookie has undefined XCB semantics. An X error seen here is
-/// freed and reported as plain failure; after it, the cookie must never be
-/// touched again.
+/// Poll semantics: `xcb_poll_for_reply` consumes the cookie on BOTH success
+/// and error, so a plain "null means block" contract is unsound — blocking
+/// on a consumed-error cookie has undefined XCB semantics. An X error seen
+/// here is freed and reported as plain failure; after it, the cookie must
+/// never be touched again.
 ///
 /// `blockingReply` issues the request's blocking reply call (passing null for
 /// the error out-param, exactly like every pre-absorption call site) and

@@ -430,7 +430,7 @@ const WindowDataBatch = struct {
                 }
             }
 
-            // A5: geometry truth from model/sync; only cache-missing,
+            // Geometry truth from model/sync; only cache-missing,
             // non-minimized windows (that aren't covered by a pre-fetched
             // snapshot) get a batched get_geometry.
             self.needs_xcb_geometry[i] = false;

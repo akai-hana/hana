@@ -20,7 +20,7 @@ const bar = if (build_options.has_bar) @import("bar") else null;
 // multi-context support.
 
 const State = struct {
-    /// A3/P1: focus TRUTH is `model.focused`; this is a private protocol-side
+    /// Focus TRUTH is `model.focused`; this is a private protocol-side
     /// cache of the last window we APPLIED X input focus to (dedupe + grab
     /// bookkeeping). Not a second store — readers go through getFocused().
     last_applied: ?u32 = null,
@@ -79,7 +79,7 @@ pub fn deinit() void {
     state = .{};
 }
 
-/// Focus truth (A3/P1): reads model.focused; falls back to the protocol
+/// Focus truth: reads model.focused; falls back to the protocol
 /// cache only before pipeline.init (boot).
 pub inline fn getFocused() ?u32 {
     const pl = @import("pipeline");
@@ -290,7 +290,7 @@ fn commitFocusTransition(old: ?u32, win: u32, flags: CommitFlags) void {
         state.?.confirm_win = win;
     }
 
-    // WP6: legacy pool focus bookkeeping (updateWindowFocus) deleted — the
+    // Legacy pool focus bookkeeping (updateWindowFocus) deleted — the
     // model owns window state; nothing reads the pool anymore.
     if (flags.schedule_bar) if (build_options.has_bar) bar.scheduleFocusRedraw(win);
 
@@ -328,19 +328,7 @@ pub fn setFocus(win: u32, reason: Reason) void {
     const resolved = window.getInputModelResolved(conn, win);
     if (resolved.model == .no_input) return;
 
-    setFocusResolved(win, reason, resolved.model, resolved.take_focus);
-}
-
-/// Dispatches WM_TAKE_FOCUS from a known advertisement instead of firing the
-/// pipelined protocol cookie. Used by setFocus, which already holds the
-/// answer from its own live query.
-fn setFocusResolved(
-    win: u32,
-    reason: Reason,
-    input_model: window.InputModel,
-    take_focus: bool,
-) void {
-    focusWithModelImpl(win, reason, input_model, take_focus);
+    focusWithModelImpl(win, reason, resolved.model, resolved.take_focus);
 }
 
 fn focusWithModelImpl(
@@ -392,12 +380,12 @@ fn focusWithModelImpl(
         .new_suppress = suppressionFor(reason, state.?.suppress_reason),
     });
 
-    // PIPELINE (fix P1-4): focus transitions change the border color. Legacy
+    // PIPELINE: focus transitions change the border color. Legacy
     // swept borders here; the model path diffs colors in sync — schedule a
     // coalesced end-of-dispatch reconcile so hover/click refocuses repaint
     // borders without an action-driven retile.
     //
-    // Also mirror the transition INTO the model (fix P2-8 companion): every
+    // Also mirror the transition INTO the model: every
     // focus source — hover, click, EWMH — lands here, so m.focused and the
     // per-workspace MRU stay true single-source-of-truth state. Idempotent
     // when actions already called setFocus for this transition.
@@ -528,7 +516,7 @@ pub fn handleFocusIn(event: *const xcb.xcb_focus_in_event_t) void {
 }
 
 pub fn clearFocus() void {
-    // A3/P1: model is truth — clear it here so every clearFocus caller gets
+    // Model is truth — clear it here so every clearFocus caller gets
     // one-store semantics without a separate model call.
     {
         const pl = @import("pipeline");
@@ -674,7 +662,7 @@ inline fn appendVisible(w: u32, len: *usize) void {
 
 /// Build an ordered list of currently-visible windows for cycling.
 ///
-/// All visible windows in tracking-table order (WP6: the legacy tiling-pool
+/// All visible windows in tracking-table order (the legacy tiling-pool
 /// branch is gone — the pool list is never fed). Emits only windows that are
 /// on the current workspace and not minimized. Returns the count written into
 /// `cycle_buf`, or 0 if none.

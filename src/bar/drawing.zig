@@ -8,9 +8,7 @@ const debug = @import("debug");
 
 const c = @import("render");
 
-/// First visual on `screen` matching `depth`, or null when the screen has no
-/// visuals at that depth. Shared body of the two depth-scoped lookups below
-/// (bar window creation wants the id, pixmap/surface pairing wants the type).
+/// First visual on `screen` matching `depth`, or null.
 fn firstVisualOfDepth(screen: core.Screen, depth: u8) ?*core.xcb.xcb_visualtype_t {
     var di = core.xcb.xcb_screen_allowed_depths_iterator(screen);
     while (di.rem > 0) : (core.xcb.xcb_depth_next(&di)) {
@@ -27,9 +25,6 @@ pub fn findVisualByDepth(screen: core.Screen, depth: u8) u32 {
     return vt.visual_id;
 }
 
-// Module-level font state is shared across all DrawContext instances (measurement + render DCs).
-// Single-threaded; no synchronisation needed.
-
 /// Pango font string used when no fonts are configured or a named font fails to load.
 const fallbackFont = "monospace:size=10";
 
@@ -43,7 +38,6 @@ pub const FontState = struct {
         if (self.current_font_desc) |desc| c.pango_font_description_free(desc);
     }
 
-    /// Unified entry point shared with MeasureContext so callers need no font-count branch.
     pub fn loadFonts(self: *FontState, font_names: []const []const u8) !void {
         if (font_names.len == 0) return self.loadFont(fallbackFont);
         const font_list = try std.mem.join(self.allocator, ",", font_names);
@@ -84,7 +78,6 @@ pub const FontState = struct {
 
 // ---------------------------------------------------------------------------
 
-/// Set the Cairo source color from a packed 0xRRGGBB u32 at full opacity.
 inline fn setCairoColor(ctx: *c.cairo_t, color: u32) void {
     const r = @as(f64, @floatFromInt((color >> 16) & 0xFF)) / 255.0;
     const g = @as(f64, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
@@ -116,17 +109,11 @@ inline fn createCheckedGC(conn: core.Connection, drawable: u32) !u32 {
     return gc;
 }
 
-/// Positions `layout` at sub-pixel `x` on `baseline` (accounting for the
-/// layout's own baseline, font fallback can shift it per-run) and renders it.
-/// One body for every baseline-anchored show: the integer-x static text path
-/// (`showAtBaseline`) and drawTextScrolled's sub-pixel marquee copies.
+/// Positions `layout` at sub-pixel `x` on `baseline` and renders it.
+/// Accounts for the layout's own baseline; font fallback can shift it per-run.
 inline fn showLayoutAtBaseline(ctx: *c.cairo_t, layout: *c.PangoLayout, x: f64, baseline: u16) void {
     c.cairo_move_to(ctx, x, @as(f64, @floatFromInt(baseline)) - pangoToF64(c.pango_layout_get_baseline(layout)));
     c.pango_cairo_show_layout(ctx, layout);
-}
-
-inline fn showAtBaseline(ctx: *c.cairo_t, layout: *c.PangoLayout, x: u16, baseline: u16) void {
-    showLayoutAtBaseline(ctx, layout, @floatFromInt(x), baseline);
 }
 
 pub const DrawContext = struct {
@@ -148,7 +135,6 @@ pub const DrawContext = struct {
 
     is_argb: bool = false,
     /// Pre-computed alpha byte for XCB pixel packing: round(clamp(transparency)*255).
-    /// Computed once at init so fillRect pays zero floating-point cost per call.
     alpha_u8: u8 = 0xFF,
     last_color: ?u32 = null,
     /// Cached GC foreground: skips xcb_change_gc when the packed ARGB pixel is unchanged.
@@ -257,29 +243,23 @@ pub const DrawContext = struct {
         self.last_color = color;
     }
 
-    pub inline fn withAlpha(self: *DrawContext, color: u32) u32 {
-        if (!self.is_argb) return color;
-        return (@as(u32, self.alpha_u8) << 24) | (color & 0x00FFFFFF);
-    }
-
     inline fn setPangoText(self: *DrawContext, text: []const u8) void {
         c.pango_layout_set_text(self.font.pango_layout, text.ptr, @intCast(text.len));
     }
 
     /// Colors the context and renders the layout's CURRENT text at (x, y
-    /// baseline). Shared tail of the baseline-anchored draw variants below
-    /// (`drawText`, `drawTextEllipsis`, `drawSegment`); callers own setting
-    /// the text and any layout configuration around the call.
+    /// baseline). Shared tail of the baseline-anchored draw variants
+    /// (`drawText`, `drawTextEllipsis`, `drawSegment`).
     inline fn paintText(self: *DrawContext, x: u16, y: u16, color: u32) void {
         self.setColor(color);
-        showAtBaseline(self.ctx, self.font.pango_layout, x, y);
+        showLayoutAtBaseline(self.ctx, self.font.pango_layout, @floatFromInt(x), y);
     }
 
     /// Uses XCB rather than Cairo to write straight-alpha pixels (picom expects straight-alpha;
     /// Cairo's XRender backend writes premultiplied). `last_gc_color` skips xcb_change_gc
     /// when the color is unchanged, which is the common case for adjacent same-background segments.
     pub fn fillRect(self: *DrawContext, x: u16, y: u16, width: u16, height: u16, color: u32) void {
-        const packed_color: u32 = self.withAlpha(color);
+        const packed_color: u32 = if (self.is_argb) (@as(u32, self.alpha_u8) << 24) | (color & 0x00FFFFFF) else color;
         if (self.last_gc_color != packed_color) {
             _ = core.xcb.xcb_change_gc(self.conn, self.gc, core.xcb.XCB_GC_FOREGROUND, &[_]u32{packed_color});
             self.last_gc_color = packed_color;
@@ -329,15 +309,11 @@ pub const DrawContext = struct {
     }
 
     pub fn drawText(self: *DrawContext, x: u16, y: u16, text: []const u8, color: u32) !void {
-        self.setPangoText(text);
-        self.paintText(x, y, color);
+        try self.drawTextImpl(x, y, text, null, color);
     }
 
-    /// Draws `text` at each x position in `x_positions`, clipped to the cell
-    /// [clip_x, clip_x + clip_w). Positions are sub-pixel and may be negative
-    /// or overlap the cell edges; the clip is what keeps translated text
-    /// inside its segment. The title marquee passes two positions one cycle
-    /// apart so the copies tile into a seamless wrap.
+    /// Draws `text` at each x position in `x_positions`, clipped to [clip_x, clip_x + clip_w).
+    /// The title marquee passes two positions one cycle apart so the copies tile into a seamless wrap.
     pub fn drawTextScrolled(
         self: *DrawContext,
         clip_x: u16,
@@ -366,15 +342,21 @@ pub const DrawContext = struct {
         max_width: u16,
         color: u32,
     ) !void {
-        self.setPangoText(text);
+        try self.drawTextImpl(x, y, text, max_width, color);
+    }
 
-        c.pango_layout_set_width(self.font.pango_layout, @as(i32, max_width) * c.pango_scale);
-        c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.END);
-        defer {
+    /// Shared text rendering: set pango text, optionally ellipsize to
+    /// `max_width`, and paint at baseline.
+    inline fn drawTextImpl(self: *DrawContext, x: u16, y: u16, text: []const u8, max_width: ?u16, color: u32) !void {
+        self.setPangoText(text);
+        if (max_width) |w| {
+            c.pango_layout_set_width(self.font.pango_layout, @as(i32, w) * c.pango_scale);
+            c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.END);
+        }
+        defer if (max_width != null) {
             c.pango_layout_set_width(self.font.pango_layout, -1);
             c.pango_layout_set_ellipsize(self.font.pango_layout, c.PangoEllipsizeMode.NONE);
-        }
-
+        };
         self.paintText(x, y, color);
     }
 
@@ -385,10 +367,6 @@ pub const DrawContext = struct {
         return @intCast(width);
     }
 
-    inline fn xcbCopyArea(self: *DrawContext, src_x: u16, dst_x: u16, w: u16) void {
-        _ = core.xcb.xcb_copy_area(self.conn, self.offscreen_pixmap, self.window, self.copy_gc, @intCast(src_x), 0, @intCast(dst_x), 0, w, self.height);
-    }
-
     /// Shared blit body: cairo_surface_flush + xcb_copy_area of [x, x+w),
     /// plus an immediate xcb_flush only for blitRegion. queueBlit must NOT
     /// flush here: it is safe inside xcb_grab_server precisely because the
@@ -396,24 +374,17 @@ pub const DrawContext = struct {
     inline fn blitImpl(self: *DrawContext, x: u16, w: u16, comptime flush: bool) void {
         c.cairo_surface_flush(self.surface);
         if (self.copy_gc == 0) return;
-        self.xcbCopyArea(x, x, w);
+        _ = core.xcb.xcb_copy_area(self.conn, self.offscreen_pixmap, self.window, self.copy_gc, @intCast(x), 0, @intCast(x), 0, w, self.height);
         if (flush) _ = core.xcb.xcb_flush(self.conn);
     }
 
-    /// The bar's only two blit variants.
-    ///
-    /// queueBlit: cairo_surface_flush + one full-width xcb_copy_area ENQUEUED
-    /// but not flushed. Safe inside xcb_grab_server; the request is sent with
-    /// all queued geometry changes when ungrabAndFlush() fires. On the normal
-    /// event-loop path the loop's end-of-batch xcb_flush covers it.
+    /// Full-width xcb_copy_area enqueued but not flushed.
+    /// Safe inside xcb_grab_server; flushed by ungrabAndFlush() or the event-loop's xcb_flush.
     pub fn queueBlit(self: *DrawContext) void {
         self.blitImpl(0, self.width, false);
     }
 
-    /// cairo_surface_flush + region copy [x, x+w) + immediate xcb_flush.
-    /// Use on timer-driven paths where no event-loop flush is coming (clock
-    /// tick, prompt caret blink): the flush is what makes those frames land
-    /// without waiting for the next event batch.
+    /// Region copy with immediate xcb_flush. Used on timer-driven paths (clock tick, prompt caret blink).
     pub fn blitRegion(self: *DrawContext, x: u16, w: u16) void {
         self.blitImpl(x, w, true);
     }
@@ -424,9 +395,7 @@ pub const DrawContext = struct {
         return @intCast(top_pad + asc);
     }
 
-    /// Sets Pango text once for both measurement and render (measureTextWidth
-    /// sets it; paintText renders the layout's current text), avoiding a
-    /// double pango_layout_set_text.
+    /// Fill background, draw text at baseline, return x + width. Sets pango text once for both measure and render.
     pub fn drawSegment(
         self: *DrawContext,
         x: u16,
@@ -445,16 +414,8 @@ pub const DrawContext = struct {
 
 // ---------------------------------------------------------------------------
 // One-shot font metrics probing (used by the bar height / font-size calc).
-//
-// Replaces the old MeasureContext class: instead of a long-lived measurement
-// object, each probe builds a throwaway 1x1 Cairo image surface + context +
-// Pango layout, measures, and destroys everything. Probes run once per init /
-// reload, so the setup cost is irrelevant; no XCB resources, no X round-trips.
 
-/// Loads `font_names` into a throwaway layout and returns its (ascent,
-/// descent) in pixels. An empty `font_names` skips loading entirely and
-/// probes the Pango default font — matching loadBarFonts' early return so
-/// both paths agree on what "unconfigured" means.
+/// Loads `font_names` into a throwaway layout and returns its (ascent, descent) in pixels.
 pub fn probeFontMetrics(
     allocator: std.mem.Allocator,
     dpi: f32,
@@ -474,11 +435,8 @@ pub fn probeFontMetrics(
     return .{ .ascent = asc, .descent = desc };
 }
 
-/// Builds size-suffixed copies of the configured font list (`{s}:size=N`,
-/// or the name unchanged when `size_override`/scaled size is 0). Borrowed
-/// entries keep the config string's pointer, which freeSizedFontList uses to
-/// free only owned copies. Shared by loadBarFonts (render DCs) and bar.zig's
-/// metric probes, which each used to carry their own copy of this loop.
+/// Builds size-suffixed copies of the configured font list. Borrowed entries keep the
+/// config string's pointer, which freeSizedFontList uses to free only owned copies.
 pub fn buildSizedFontList(allocator: std.mem.Allocator, size_override: ?u16) ![][]const u8 {
     const cs = core.getState();
     const font_size: u16 = size_override orelse cs.config.bar.scaled_font_size;
@@ -494,9 +452,7 @@ pub fn buildSizedFontList(allocator: std.mem.Allocator, size_override: ?u16) ![]
     return sized;
 }
 
-/// Frees a list returned by buildSizedFontList: entries borrowed from the
-/// live config are skipped by the same positional pointer pairing the two
-/// former private copies used.
+/// Frees a list returned by buildSizedFontList, skipping entries borrowed from the live config.
 pub fn freeSizedFontList(allocator: std.mem.Allocator, sized: [][]const u8) void {
     const fonts = core.getState().config.bar.fonts.items;
     for (sized, fonts) |s, orig| {
@@ -505,16 +461,12 @@ pub fn freeSizedFontList(allocator: std.mem.Allocator, sized: [][]const u8) void
     allocator.free(sized);
 }
 
-/// Loads the configured fonts into `dc`. Called once per DrawContext creation
-/// (init and reload).
+/// Loads the configured fonts into `dc`. Called once per DrawContext creation.
 pub fn loadBarFonts(dc: *DrawContext, size_override: ?u16) !void {
     const cs = core.getState();
     const sized = try buildSizedFontList(cs.alloc, size_override);
     defer freeSizedFontList(cs.alloc, sized);
-    // Unconfigured fonts: keep the layout's Pango default — matching
-    // probeFontMetrics' skip so both paths agree on what "unconfigured" means
-    // (loading here would silently swap in the hardcoded fallback font).
-    if (sized.len == 0) return;
+    if (sized.len == 0) return; // keep Pango default, matching probeFontMetrics' unconfigured behavior
     try dc.font.loadFonts(sized);
     if (sized.len > 1) debug.info("Loaded {} fonts with fallback support", .{sized.len});
 }
@@ -525,21 +477,8 @@ fn createPangoLayout(ctx: *c.cairo_t, dpi: f32) !*c.PangoLayout {
     return layout;
 }
 
-fn findVisualById(conn: core.Connection, visual_id: u32) ?*core.xcb.xcb_visualtype_t {
-    var si = core.xcb.xcb_setup_roots_iterator(core.xcb.xcb_get_setup(conn));
-    while (si.rem > 0) : (core.xcb.xcb_screen_next(&si)) {
-        var di = core.xcb.xcb_screen_allowed_depths_iterator(si.data);
-        while (di.rem > 0) : (core.xcb.xcb_depth_next(&di)) {
-            var vi = core.xcb.xcb_depth_visuals_iterator(di.data);
-            while (vi.rem > 0) : (core.xcb.xcb_visualtype_next(&vi))
-                if (vi.data.*.visual_id == visual_id) return vi.data;
-        }
-    }
-    return null;
-}
-
-/// Returns the visual matching `visual_id` across all screens, or falls back to
-/// the first visual on `screen`. Errors if the X server has no visuals at all.
+/// Returns the visual matching `visual_id` across all screens, or falls back
+/// to a visual matching `depth` on `screen`. Errors if no visuals exist.
 fn resolveVisualType(
     conn: core.Connection,
     screen: core.Screen,
@@ -547,26 +486,23 @@ fn resolveVisualType(
     depth: u8,
 ) !*core.xcb.xcb_visualtype_t {
     if (visual_id) |vid| {
-        if (findVisualById(conn, vid)) |vt| return vt;
+        // Scan all screens/depths for the requested visual_id.
+        var si = core.xcb.xcb_setup_roots_iterator(core.xcb.xcb_get_setup(conn));
+        while (si.rem > 0) : (core.xcb.xcb_screen_next(&si)) {
+            var di = core.xcb.xcb_screen_allowed_depths_iterator(si.data);
+            while (di.rem > 0) : (core.xcb.xcb_depth_next(&di)) {
+                var vi = core.xcb.xcb_depth_visuals_iterator(di.data);
+                while (vi.rem > 0) : (core.xcb.xcb_visualtype_next(&vi))
+                    if (vi.data.*.visual_id == vid) return vi.data;
+            }
+        }
     }
-    // Fallback (ND-20): return a visual matching the PIXMAP depth. The
-    // surface pairs visual+drawable, so the old take-first-visual-of-any-
-    // depth choice handed cairo e.g. a 24-bit visual for a 32-bit ARGB
-    // pixmap — a guaranteed BadMatch at first render on multi-depth roots.
+    // Fallback: return a visual matching the PIXMAP depth to avoid BadMatch
+    // when the surface pairs visual+drawable at different depths.
     return firstVisualOfDepth(screen, depth) orelse error.NoVisuals;
 }
 
-/// Returns the value of a trailing `key=value` field inside an Xft font token,
-/// or null when the token doesn't start with `key`.
-inline fn styleField(part: []const u8, comptime key: []const u8) ?[]const u8 {
-    if (!std.mem.startsWith(u8, part, key)) return null;
-    return part[key.len..];
-}
-
 /// Converts Xft `"FontName:size=N:weight=bold"` to Pango `"FontName Bold N"` format.
-/// Returns a freshly allocated conversion (or an allocated copy of `xft_name`
-/// when no `:` is present). Runs once per font per reload, so the old
-/// memoization map is gone; the caller owns and frees the result.
 fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const u8 {
     if (std.mem.indexOfScalar(u8, xft_name, ':') == null)
         return allocator.dupe(u8, xft_name);
@@ -582,25 +518,30 @@ fn convertFontName(allocator: std.mem.Allocator, xft_name: []const u8) ![]const 
     var slant: ?[]const u8 = null;
 
     while (parts.next()) |part| {
-        if (styleField(part, "size=")) |v| size = v else if (styleField(part, "pixelsize=")) |v| size = v else if (styleField(part, "weight=")) |v| weight = v else if (styleField(part, "slant=")) |v| slant = v;
+        if (std.mem.startsWith(u8, part, "size="))
+            size = part[5..]
+        else if (std.mem.startsWith(u8, part, "pixelsize="))
+            size = part[10..]
+        else if (std.mem.startsWith(u8, part, "weight="))
+            weight = part[7..]
+        else if (std.mem.startsWith(u8, part, "slant="))
+            slant = part[6..];
     }
 
-    if (slant) |s| {
-        const is_italic = std.mem.eql(u8, s, "italic") or std.mem.eql(u8, s, "oblique");
-        if (is_italic) {
-            try result.append(allocator, ' ');
-            try result.appendSlice(allocator, "Italic");
-        }
-    }
-
-    if (weight) |w| {
-        const token = if (std.mem.eql(u8, w, "bold")) "Bold" else if (std.mem.eql(u8, w, "light")) "Light" else "";
+    const slant_token: []const u8 = if (slant) |s|
+        if (std.mem.eql(u8, s, "italic") or std.mem.eql(u8, s, "oblique")) "Italic" else ""
+    else
+        "";
+    const weight_token: []const u8 = if (weight) |w|
+        if (std.mem.eql(u8, w, "bold")) "Bold" else if (std.mem.eql(u8, w, "light")) "Light" else ""
+    else
+        "";
+    inline for (&[_][]const u8{ slant_token, weight_token }) |token| {
         if (token.len > 0) {
             try result.append(allocator, ' ');
             try result.appendSlice(allocator, token);
         }
     }
-
     if (size) |s| {
         try result.append(allocator, ' ');
         try result.appendSlice(allocator, s);

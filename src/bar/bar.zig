@@ -734,8 +734,8 @@ pub fn toggleBarSegmentAnchor() void {
         return;
     };
     const no_fullscreen = !actions.fullscreenOccupiedOnWs(@intCast(current_ws));
-    // WP6: the work area changed with the bar's new edge; one model
-    // reconcile re-derives every placement from it (legacy retile deleted).
+    // The work area changed with the bar's new edge; one model reconcile
+    // re-derives every placement from it.
     if (no_fullscreen) pipeline.reconcileInGrab();
     window.updateFloatingWindowBorders();
     window.markBordersFlushed();
@@ -909,11 +909,11 @@ pub fn setBarState(action: Action) void {
     const grabbed = action == .toggle;
     if (grabbed) utils.grabServer(conn);
     if (should_be_visible) _ = xcb.xcb_map_window(conn, s.win.win_id) else _ = xcb.xcb_unmap_window(conn, s.win.win_id);
-    if (grabbed) { // PIPELINE: WP6 — legacy retileAllWorkspaces deleted
+    if (grabbed) {
         pipeline.reconcileInGrab();
         ungrabAndFlush();
     } else {
-        pipeline.reconcileNow(); // PIPELINE: WP6
+        pipeline.reconcileNow();
     }
     debug.info("Bar {s} ({s})", .{ if (should_be_visible) "shown" else "hidden", @tagName(action) });
 }
@@ -1024,7 +1024,7 @@ fn handleTitleClick(s: *State, offset: u16) void {
         return;
     }) orelse return;
 
-    if (minimize.isMinimized(target.window)) { // WP6 — pipeline-only
+    if (minimize.isMinimized(target.window)) {
         actions.restore(target.window);
     } else if (focus.getFocused() == target.window) {
         actions.minimize(target.window);

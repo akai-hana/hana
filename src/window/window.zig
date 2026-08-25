@@ -826,15 +826,15 @@ fn unmanageWindow(win: u32) void {
     // closed window held focus (m.focused is already cleared), so closing a
     // window left the workspace unfocused until a pointer event re-focused
     // it. Both facts ride ctx into actions.unmanage, which runs the same
-    // BC06 fallback as minimize.
+    // close fallback as minimize.
     var actx: actions.Ctx = .{
-        .withdrawn_fullscreen_ws = if (pipeline.initialized) actions.fullscreenWsOf(win) else null,
+        .withdrawn_fullscreen_ws = if (pipeline.initialized) @import("model").fullscreenWsOf(pipeline.model(), win) else null,
         .withdrawn_was_focused = pipeline.initialized and pipeline.model().focused == win,
     };
     workspaces.removeWindow(win);
 
-    // PIPELINE (train d / fix P0-1): drop the MODEL entry, resolve the
-    // post-close focus target (BC06 tiers) and reconcile under one grab.
+    // PIPELINE (train d): drop the MODEL entry, resolve the
+    // post-close focus target (fallback tiers) and reconcile under one grab.
     // Idempotent: a window withdrawn via unmap+destroy runs this once per
     // event; unregister/fallback no-op on the second pass.
     actions.unmanage(&actx, win);
@@ -896,7 +896,7 @@ pub fn geometryFromXcbReply(reply: *xcb.xcb_get_geometry_reply_t) utils.Rect {
 ///
 /// Returns null when even the fallback fails (window gone).
 fn resolveConfigureGeometry(win: u32) ?utils.Rect {
-    // Path 1 (A5): model/sync truth — floating base or last-sent ledger rect.
+    // Model/sync truth — floating base or last-sent ledger rect.
     if (@import("sync").truthRect(pipeline.model(), win)) |rect| {
         const border: u16 = (if (build_options.has_tiling) tiling.getBorderWidth() else 0);
         return .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height, .border_width = border };
@@ -985,7 +985,7 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
                 // Tiled: geometry DENIED, BW honored. Cache + forward the
                 // border width ONLY — the old fall-through forwarded the
                 // whole mixed mask, moving denied-geometry windows until the
-                // next reconcile repaired them (ND-14 / S4F7b, pinned by S19).
+                // next reconcile repaired them.
                 if (build_options.has_tiling)
                     _ = wincache.cacheBorderWidth(win, event.border_width);
                 if (mask != xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH)
@@ -1048,21 +1048,13 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
 /// focus.setFocus(.mouse_enter). The .mouse_enter reason is the direct
 /// EnterNotify path: lightweight, no raise, no confirm.
 inline fn maybeFocusWindow(win: u32) void {
-    if (!isOnCurrentWorkspace(win)) {
-        debug.info("[MAYBE_FOCUS] 0x{x} -> skipped: not on current workspace", .{win});
-        return;
-    }
-    if (minimize.isMinimized(win)) {
-        debug.info("[MAYBE_FOCUS] 0x{x} -> skipped: minimized", .{win});
-        return;
-    }
-    debug.info("[MAYBE_FOCUS] 0x{x} -> setFocus(.mouse_enter)", .{win});
+    if (!isOnCurrentWorkspace(win) or minimize.isMinimized(win)) return;
+    debug.info("[MAYBE_FOCUS] 0x{x}", .{win});
     focus.setFocus(win, .mouse_enter);
 }
 
 pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     focus.setLastEventTime(event.time);
-    debugLogEnterNotify(event);
     if (event.mode != xcb.XCB_NOTIFY_MODE_NORMAL or
         event.detail == xcb.XCB_NOTIFY_DETAIL_INFERIOR)
         return;
@@ -1070,12 +1062,6 @@ pub fn handleEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
     if (suppressSpawnCrossing(event.root_x, event.root_y)) return;
     if (focus.shouldSuppressEnterNotify()) return;
     maybeFocusWindow(findManagedWindow(core.getState().conn, event.event, tracking.isManaged));
-}
-
-fn debugLogEnterNotify(event: *const xcb.xcb_enter_notify_event_t) void {
-    debug.info("[ENTER] win=0x{x} mode={} detail={} root_x={} root_y={}", .{
-        event.event, event.mode, event.detail, event.root_x, event.root_y,
-    });
 }
 
 pub fn handleLeaveNotify(event: *const xcb.xcb_leave_notify_event_t) void {
@@ -1201,7 +1187,7 @@ fn parseSizeHintsIntoCache(
         if (max_y > 0) max_aspect = @as(f32, @floatFromInt(max_x)) / @as(f32, @floatFromInt(max_y));
     }
 
-    // P1: the MODEL copy of size hints must never go stale — layouts read
+    // The MODEL copy of size hints must never go stale — layouts read
     // Entry.size_hints via engine.HintsView. The wincache entry is only the
     // pre-registration staging area (actions.mapRequest bridges it into the
     // freshly created model entry); once registered, this write IS the truth.
@@ -1289,8 +1275,8 @@ var warned_state_unmanaged = false;
 pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
     if (event.format != 32) return;
 
-    // SW-10 diagnostics (S6F9/S6F10 family): pager-driven requests that we
-    // cannot honor are dropped silently otherwise. Both warns fire once per
+    // Pager-driven requests that we cannot honor are dropped silently
+    // otherwise. Both warns fire once per
     // process — a looping pager must not flood the log.
     const net_active = utils.getAtomOrZero("_NET_ACTIVE_WINDOW");
     if (net_active != 0 and event.type == net_active) {
@@ -1328,7 +1314,7 @@ pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
         else => return,
     };
     if (should_enter == is_fs) return;
-    // PIPELINE (fix P0-3): model-path transition — the legacy enter/exit
+    // PIPELINE: model-path transition — the legacy enter/exit
     // fullscreen machinery bypassed (and fought) the single source of truth.
     actions.fullscreenToggleWindow(win);
 }

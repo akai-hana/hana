@@ -271,7 +271,7 @@ test "fullscreen enter: winner fullscreened (rect=screen, bw=0), others parked; 
     fx.rec.clear();
     fx.reconcile(.{});
 
-    // Exit restores width AND pixel (BC14 hard gate). 301: moved off the
+    // Exit restores width AND pixel. 301: moved off the
     // screen-sized fullscreen slot => winner raise merged. 302: unparked =>
     // map + appearance + geometry replay at its surviving slot (stack null:
     // not moved, not the winner).
@@ -341,11 +341,11 @@ test "minimize parks every pass; restore replays original slot geometry" {
 
 // -- Fullscreen -> minimize -> restore -> un-fullscreen (user bug report) ----
 //
-// The model used to DROP the fullscreen-prev window's saved slot on restore
-// (BC08 violation), so the final exit-fullscreen left it base-tiled but
-// home-less: sync's orphan branch kept it at its stale screen-sized geometry
-// while the remaining window retook master — an untileable, engine-invisible
-// window. With the slot re-added, the same sequence must end fully tiled.
+// The model used to DROP the fullscreen-prev window's saved slot on restore,
+// so the final exit-fullscreen left it base-tiled but home-less: sync's
+// orphan branch kept it at its stale screen-sized geometry while the
+// remaining window retook master — an untileable, engine-invisible window.
+// With the slot re-added, the same sequence must end fully tiled.
 test "fs->min->restore->unfs retiles instead of stranding an orphan" {
     var fx: Fixture = undefined;
     fx.init(stdScreen(), stdWa());
@@ -384,7 +384,7 @@ test "fs->min->restore->unfs retiles instead of stranding an orphan" {
     try fx.rec.expectBw(3, 602, cfg_bw);
     try fx.rec.expectGeom(4, 602, 8, 8, 780, 580, .above);
 
-    // Restore: BC08 straight back into fullscreen. 601 replays the
+    // Restore: straight back into fullscreen. 601 replays the
     // fullscreen branch riding its unpark transition (.above); 602 —
     // unparked by the minimize step — parks AGAIN behind the returning
     // fullscreen occupant.

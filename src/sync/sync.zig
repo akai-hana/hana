@@ -1,18 +1,18 @@
-//! INVARIANT(P3): ONLY this module (via its wire sink) sends geometry/border/
-//! map/stack requests. Pure orchestration lives here; every raw XCB request
-//! lives in the sink file (src/sync/wire.zig) — the sanctioned boundary; raw
-//! libxcb symbols may appear only inside its send shims (WP3 acceptance gate).
+//! ONLY this module (via its wire sink) sends geometry/border/map/stack
+//! requests. Pure orchestration lives here; every raw XCB request lives in
+//! the sink file (src/sync/wire.zig) — the sanctioned boundary; raw
+//! libxcb symbols may appear only inside its send shims.
 //!
 //! Shims wrap EXISTING xcb patterns — do not invent new ones:
 //!   Sink.geom        ≙ utils.configureWindow (+ merged stack-mode variant)
 //!   Sink.border_*    ≙ borders.applyWidth + borders.apply + setBorderPixel
 //!   Sink.park        ≙ X-offscreen + BELOW configure_window in ONE request
 //!   Sink.stack_only  ≙ utils.raiseWindow / restack helpers used today
-//!   Sink.flush       ≙ conn.flush()  (caller owns timing, I2)
+//!   Sink.flush       ≙ conn.flush()  (caller owns timing)
 //!
-//! Scroll viewport caller duties (changelog 2026-08-22): snap-right-on-new,
-//! clamp, prev_count update happen in ACTIONS before they call reconcile;
-//! this module never mutates model params (m is const).
+//! Scroll viewport caller duties: snap-right-on-new, clamp, prev_count
+//! update happen in ACTIONS before they call reconcile; this module never
+//! mutates model params (m is const).
 //!
 //! RECONCILE ALGORITHM — UNCONDITIONAL APPLY. Every pass computes the desired
 //! state for every stored window and SENDS it: parked windows get ONE merged
@@ -26,21 +26,15 @@
 //! The SENT LEDGER is a WRITE-ONLY record of what was actually sent
 //! ({rect, has_rect, parked} per window; a park flips `parked` and preserves
 //! rect/has_rect). Exactly three reads of it are behavioral contract:
-//!   1. Multi-tag orphans (tiled mode, mask shows them on the shown ws, but
-//!      no layout owns them because their home tiled list lives elsewhere):
-//!      legacy keeps them at their previous real geometry rather than
-//!      parking. "Previous real geometry" is by definition what we last
-//!      sent; park transitions preserve it, so an all-view orphan with
-//!      history resurfaces at its old slot. A history-less orphan parks
-//!      (first sight / registered offscreen).
-//!   2. Winner-raise derivation: the fullscreen winner / focused placement
-//!      rides .above ONLY when its geometry moved, when it unparked, or
-//!      under force_restack — derived by comparing the new rect against the
-//!      ledger and reading its parked flag. Raising on mere presence would
-//!      re-create a crossing-event storm (documented regression).
+//!   1. Multi-tag orphans: legacy keeps them at their previous real geometry
+//!      rather than parking. A history-less orphan parks (first sight /
+//!      registered offscreen).
+//!   2. Winner-raise derivation: rides .above ONLY when geometry moved,
+//!      when it unparked, or under force_restack — derived by comparing the
+//!      new rect against the ledger and reading its parked flag.
 //!   3. Floating-detach / title prefetch (actions.lastRectFor,
 //!      sync.truthRect): the live rect as the new floating base, null while
-//!      parked — same contract as before.
+//!      parked.
 
 const std = @import("std");
 const utils = @import("utils");
@@ -52,8 +46,8 @@ const engine = @import("engine");
 pub const Stack = enum { above, below };
 
 /// Request sink. Production wires XcbSink; tests wire a recorder. One batch
-/// = everything queued between caller flushes (xcb buffers requests; I2 says
-/// the CALLER decides when to flush).
+/// = everything queued between caller flushes (xcb buffers requests; the
+/// CALLER decides when to flush).
 pub const Sink = struct {
     ptr: *anyopaque,
     vt: *const VTable,
@@ -100,16 +94,15 @@ pub const Sink = struct {
 };
 
 /// Caller-resolved environment (config-derived); resolved once per retile by
-/// the pipeline exactly as invokeLayout did (§7.4 step 3 keeps variant
-/// resolution caller-side). Single definition lives in engine (F7).
+/// the pipeline. Single definition lives in engine.
 pub const Env = engine.Env;
 
 pub const Ctx = struct {
     sink: Sink,
     /// Full screen rect (fullscreen branch geometry).
     screen: utils.Rect,
-    /// Screen minus bar — workArea(ctx) of §7.4 step 1; computed by the
-    /// caller with the existing bar-offset helper.
+    /// Screen minus bar — workArea(ctx); computed by the caller with the
+    /// existing bar-offset helper.
     workarea: utils.Rect,
     /// cfgBW(): config.tiling.border_width, already scaled at load.
     cfg_bw: u16,
@@ -117,7 +110,7 @@ pub const Ctx = struct {
     /// colorFn(win, m): focus/mode color — ported from borders.color minus
     /// its fullscreen check (fullscreen zeroes via bw/pixel policy instead).
     color_of: *const fn (model.WindowId, *const model.Model) u32,
-    /// Bar/top window raised by force_restack (I4 hook); null when no bar.
+    /// Bar/top window raised by force_restack; null when no bar.
     bar_win: ?model.WindowId = null,
 };
 
@@ -162,12 +155,11 @@ pub fn forget(win: model.WindowId) void {
     _ = st.sent.swapRemove(win);
 }
 
-/// Coalesced end-of-dispatch reconcile flag (§7.6 scheduling table:
-/// focus-change class). Set by pipeline.postDispatch callers; consumed by
-/// pipeline.postDispatch in WP5.
+/// Coalesced end-of-dispatch reconcile flag. Set by pipeline.postDispatch
+/// callers; consumed by pipeline.postDispatch.
 pub var scheduled: bool = false;
 
-/// Consume-and-clear for pipeline.postDispatch (fix P1-4).
+/// Consume-and-clear for pipeline.postDispatch.
 pub fn takeScheduled() bool {
     const s = scheduled;
     scheduled = false;
@@ -175,8 +167,8 @@ pub fn takeScheduled() bool {
 }
 
 pub fn reconcileUnderGrab(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
-    // I4: grab_server -> reconcile(opts) -> optional top/bar restack ->
-    // ungrabAndFlush. Zero round trips inside (BC24).
+    // grab_server -> reconcile(opts) -> optional top/bar restack ->
+    // ungrabAndFlush. Zero round trips inside.
     ctx.sink.grabServer();
     defer ctx.sink.ungrabAndFlush();
     reconcile(m, ctx, opts);
@@ -265,7 +257,7 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
         const win = it.key;
         const e: *const model.Entry = it.val;
 
-        // -- desire (§7.4 step 4), computed inline ---------------------------
+        // -- desire, computed inline ------------------------------------------
         var rect: utils.Rect = engine.parked_rect;
         var bw: u16 = ctx.cfg_bw;
         var pixel: u32 = ctx.color_of(win, m);
@@ -277,7 +269,7 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
                 bw = 0;
                 pixel = 0;
             } else {
-                // Parked: rect irrelevant (§7.4 step 4).
+                // Parked: rect irrelevant.
                 parked = true;
             }
         } else switch (e.mode) {
@@ -369,17 +361,16 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
         }
     }
 
-    // STEP 5 (I4 hook): force_restack additionally raises bar/top.
+    // force_restack additionally raises bar/top.
     if (opts.force_restack) {
         if (ctx.bar_win) |bar| ctx.sink.stackOnly(bar, .above);
     }
 
-    // STEP 9: DO NOT FLUSH HERE. Caller owns flushing (I2).
+    // DO NOT FLUSH HERE. Caller owns flushing.
 }
 
-/// PIPELINE (train f): last visible geometry we sent to `win`, or null when
-/// never sent / currently parked. Floating-detach and toggle-float need the
-/// live rect as the new floating base.
+/// Pipeline: last visible geometry we sent to `win`, or null when never sent
+/// / currently parked.
 pub fn lastRectFor(win: model.WindowId) ?utils.Rect {
     const e = st.sent.get(win) orelse return null;
     if (e.parked) return null;
@@ -387,9 +378,7 @@ pub fn lastRectFor(win: model.WindowId) ?utils.Rect {
     return e.rect;
 }
 
-/// Best known live geometry for `win` without a server round trip (A5: the
-/// single geometry source for drag-start / ConfigureRequest echo / title
-/// prefetch — replaces the deleted wincache rect store):
+/// Best known live geometry for `win` without a server round trip:
 ///   1. floating base rect from the model (authoritative while floating),
 ///   2. else the last visible geometry we sent (null while parked/unsent).
 pub fn truthRect(m: *const model.Model, win: model.WindowId) ?utils.Rect {

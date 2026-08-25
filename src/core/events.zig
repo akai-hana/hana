@@ -249,7 +249,7 @@ fn handleConfigReload() !void {
     cs.config = new_ptr;
 
     if (build_options.has_bar) bar.reload();
-    actions.applyConfigReload(); // WP6: model path re-seeds params + reconciles
+    actions.applyConfigReload();
     // Borders sweep AFTER applyConfigReload: its reconcile rebuilds geometry,
     // and sweeping first would send every border twice -- once here, once
     // again deduped against fresh state. Sweeping last lets borders.apply
