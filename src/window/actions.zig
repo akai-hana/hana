@@ -642,6 +642,11 @@ pub fn switchTo(ws_idx: u8) void {
     if (build_options.has_bar) {
         const bar = @import("bar");
         bar.setBarState(if (model_mod.fullscreenOccupantOnWs(m, ws_idx) != null) .hide_fullscreen else .show_fullscreen);
+        // The workspace indicator always changes on switch. prepareClearFocus
+        // returns .none when last_applied is null (empty→empty switch), so
+        // applyPendingFocus won't mark the bar dirty. Unconditionally schedule
+        // a redraw here so the indicator updates at end-of-batch.
+        bar.scheduleRedraw();
     }
 
     // Inline the server grab so pointer resolution, model focus, protocol
