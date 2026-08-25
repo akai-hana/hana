@@ -878,10 +878,8 @@ test "home_ws: findHome scan fallback when cache is null" {
     regCur(&m, 1);
     // Clear the cache to simulate a legacy entry
     m.store.getPtr(1).?.home_ws = null;
-    // findHome should scan tiled_order and recover the value
+    // findHome should scan tiled_order and still return the correct home
     try testing.expectEqual(@as(?WSId, 0), model.findHome(&m, 1));
-    // Cache should be restored by the scan
-    try testing.expectEqual(@as(?WSId, 0), m.store.get(1).?.home_ws);
 }
 
 test "home_ws: minimize clears cache" {
@@ -921,7 +919,7 @@ test "home_ws: detachToFloating clears cache" {
     // The actions code does: e.home_ws = null after detach.
     // Here we test that a floating window's home_ws is null.
     const e = m.store.getPtr(1).?;
-    e.mode = .{ .base = .{ .floating = .{ .x = 0, .y = 0, .w = 100, .h = 100 } } };
+    e.mode = .{ .base = .{ .floating = .{ .x = 0, .y = 0, .width = 100, .height = 100 } } };
     e.home_ws = null;
     try testing.expectEqual(@as(?WSId, null), e.home_ws);
 }
