@@ -622,6 +622,13 @@ pub fn switchTo(ws_idx: u8) void {
     focus_mod.setSuppressReason(.none);
     focus_mod.cancelPointerSync();
 
+    // Fire the pointer query BEFORE the grab so the round trip (client-side
+    // _xcb_conn_wait / poll) happens outside the grab window. The cookie is
+    // consumed INSIDE the grab — by then the reply is already in the XCB
+    // receive buffer (the server processed it between queue and flush), so
+    // consumption is a zero-latency buffer read.
+    const pointer_cookie = xcb.xcb_query_pointer(core.getState().conn, core.getState().root);
+
     // All-view exit is a flag flip (emerges from visibility); temp-window
     // masks do not exist in the model.
     m.all_view_active = false;
@@ -637,19 +644,17 @@ pub fn switchTo(ws_idx: u8) void {
         bar.setBarState(if (model_mod.fullscreenOccupantOnWs(m, ws_idx) != null) .hide_fullscreen else .show_fullscreen);
     }
 
-    // Inline the server grab so the pointer query, model focus, protocol
+    // Inline the server grab so pointer resolution, model focus, protocol
     // focus, and geometry all land atomically (Gap 4 atomicity fix).
-    // Pointer query INSIDE the grab: our requests are processed during the
-    // grab; other clients' requests are blocked, so the pointer position
-    // and the subsequent focus+reconcile cannot be interleaved.
     const c = pipeline.grabCtx();
     c.sink.grabServer();
     defer c.sink.ungrabAndFlush();
 
+    // Consume the pipelined pointer cookie INSIDE the grab. The round trip
+    // already completed before the grab; this is just a buffer read.
     const target: ?model_mod.WindowId = blk: {
         const cs = core.getState();
-        const cookie = xcb.xcb_query_pointer(cs.conn, cs.root);
-        const reply = xcb.xcb_query_pointer_reply(cs.conn, cookie, null);
+        const reply = xcb.xcb_query_pointer_reply(cs.conn, pointer_cookie, null);
         defer if (reply) |r| std.c.free(r);
         if (reply) |r| {
             const child = r.*.child;
