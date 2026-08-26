@@ -103,6 +103,10 @@ fn calcBarHeightAndFontSize() !u16 {
 // ---------------------------------------------------------------------------
 
 pub fn onPollWakeup() void {
+    if (gBar.state) |s| {
+        if (s.is_visible and carousel.scrollingActive())
+            s.markSegmentDirty(.title);
+    }
     submitDraw();
     prompt.blinkTick();
 }
