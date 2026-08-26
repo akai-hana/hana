@@ -14,9 +14,9 @@ const config = @import("config");
 const window = @import("window");
 const tracking = @import("tracking");
 const focus = @import("focus");
-const fullscreen = @import("fullscreen");
-const minimize = @import("minimize");
-const workspaces = @import("workspaces");
+const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else null;
+const minimize = if (build_options.has_minimize) @import("minimize") else null;
+const workspaces = if (build_options.has_workspaces) @import("workspaces") else null;
 const xkbcommon = @import("xkbcommon");
 const build_options = @import("build_options");
 const pipeline = @import("pipeline");
@@ -436,9 +436,11 @@ fn dumpState() void {
     debug.info("Total windows:  {}", .{tracking.windowCount()});
     debug.info("Suppress focus: {s}", .{@tagName(focus.getSuppressReason())});
 
-    if (workspaces.getState()) |ws_state| {
-        for (ws_state.workspaces, 0..) |_, i|
-            debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(@intCast(i))) });
+    if (build_options.has_workspaces) {
+        if (workspaces.getState()) |ws_state| {
+            for (ws_state.workspaces, 0..) |_, i|
+                debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(@intCast(i))) });
+        }
     }
 
     if (build_options.has_tiling and tiling.isEnabled()) {

@@ -229,16 +229,22 @@ fn tryLoadConfig(allocator: std.mem.Allocator, path: []const u8) ?types.Config {
 pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
     const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "./config";
     const xdg_config_home = std.c.getenv("XDG_CONFIG_HOME");
+    var config_home_owned: bool = false;
     const config_home = if (xdg_config_home) |ch|
         std.mem.span(ch)
-    else
-        try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
+    else blk: {
+        config_home_owned = true;
+        break :blk try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
+    };
+    defer if (config_home_owned) allocator.free(config_home);
     const xdg_dir = try std.fs.path.join(allocator, &.{ config_home, "hana" });
+    defer allocator.free(xdg_dir);
 
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     _ = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse return error.CurrentWorkingDirectoryUnlinked;
     const cwd = std.mem.sliceTo(&cwd_buf, 0);
     const local_dir = try std.fs.path.join(allocator, &.{ cwd, "config" });
+    defer allocator.free(local_dir);
 
     // Try directories first (contain multiple .toml files), then single files.
     const dir_attempts = [_][]const u8{ xdg_dir, local_dir };
@@ -250,7 +256,9 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
     }
 
     const xdg_path = try std.fs.path.join(allocator, &.{ xdg_dir, "config.toml" });
+    defer allocator.free(xdg_path);
     const local = try std.fs.path.join(allocator, &.{ cwd, "config.toml" });
+    defer allocator.free(local);
     const file_attempts = [_][]const u8{ xdg_path, local };
     for (file_attempts) |path| {
         if (tryLoadConfig(allocator, path)) |cfg| return cfg;

@@ -8,6 +8,7 @@
 //! (scheduleRedraw & friends).
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 const core = @import("core");
 const xcb = core.xcb;
@@ -21,25 +22,44 @@ const types = @import("types");
 
 const tracking = @import("tracking");
 const focus = @import("focus");
-const minimize = @import("minimize");
+const minimize = if (build_options.has_minimize) @import("minimize") else null;
 const pipeline = @import("pipeline"); // PIPELINE: train a
 const actions = @import("actions"); // PIPELINE: train a
 const model = @import("model");
-const workspaces = @import("workspaces");
+const workspaces = if (build_options.has_workspaces) @import("workspaces") else null;
 
 const window = @import("window");
 
 const drawing = @import("drawing");
-const prompt = @import("prompt");
+const prompt = if (build_options.has_seg_prompt) @import("prompt") else struct {
+    pub fn blinkTick() void {}
+    pub fn blinkPollTimeoutMs() i32 { return std.math.maxInt(i32); }
+    pub fn handlePromptKeypress(_: anytype, _: anytype) bool { return false; }
+    pub fn toggle() void {}
+    pub fn init(_: anytype, _: anytype) !void {}
+    pub fn deinit() void {}
+    pub fn invalidateReloadCaches() void {}
+    pub fn consumeRedrawRequest() bool { return false; }
+    pub fn draw(_: anytype, _: anytype, _: anytype, _: anytype) !u16 { return 0; }
+    pub fn isActive() bool { return false; }
+};
 const segmod = @import("segment");
 const barwin = @import("win");
-const tags = @import("tags");
+const tags = if (build_options.has_seg_tags) @import("tags") else struct {
+    pub fn invalidate() void {}
+};
 
-const clock = @import("clock");
-const title = @import("title");
-const carousel = @import("carousel");
-
-const build_options = @import("build_options");
+const clock = if (build_options.has_seg_clock) @import("clock") else struct {
+    pub const clock_measure_string = "";
+    pub fn tickDeadlineMs() i32 { return std.math.maxInt(i32); }
+    pub fn draw(_: anytype, _: anytype, _: anytype, x: u16) !u16 { return x; }
+    pub fn secondElapsed(_: anytype) bool { return false; }
+};
+const title = if (build_options.has_seg_title) @import("title") else @import("title_stub");
+const carousel = if (build_options.has_seg_carousel) @import("carousel") else struct {
+    pub fn scrollingActive() bool { return false; }
+    pub fn pollDeadlineMs(_: anytype, _: anytype, _: anytype) i32 { return -1; }
+};
 
 const all_dirty: u5 = blk: {
     const fields = @typeInfo(types.BarSegment).@"enum".fields;
@@ -403,28 +423,30 @@ const State = struct {
     /// Returns true when the key changed (batch refetch needed).
     fn scanLiveFrame(self: *State) bool {
         const m = pipeline.model();
-        if (workspaces.getState()) |ws_state| {
-            self.ws_count = @intCast(ws_state.workspaces.len);
-            self.current_ws = @intCast(m.current);
-            self.all_view = m.all_view_active;
-            @memset(&self.ws_has_windows, false);
-            self.wins_len = 0;
-            const cur_bit: u64 = if (self.current_ws < self.ws_count)
-                tracking.workspaceBit(self.current_ws)
-            else
-                0;
-            // OR-accumulate all window masks in a single pass, collecting the
-            // current workspace's windows on the way.
-            var combined_mask: u64 = 0;
-            for (tracking.allWindows()) |entry| {
-                combined_mask |= entry.mask;
-                if (cur_bit != 0 and entry.mask & cur_bit != 0 and self.wins_len < max_frame_windows) {
-                    self.wins[self.wins_len] = entry.win;
-                    self.wins_len += 1;
+        if (build_options.has_workspaces) {
+            if (workspaces.getState()) |ws_state| {
+                self.ws_count = @intCast(ws_state.workspaces.len);
+                self.current_ws = @intCast(m.current);
+                self.all_view = m.all_view_active;
+                @memset(&self.ws_has_windows, false);
+                self.wins_len = 0;
+                const cur_bit: u64 = if (self.current_ws < self.ws_count)
+                    tracking.workspaceBit(self.current_ws)
+                else
+                    0;
+                // OR-accumulate all window masks in a single pass, collecting the
+                // current workspace's windows on the way.
+                var combined_mask: u64 = 0;
+                for (tracking.allWindows()) |entry| {
+                    combined_mask |= entry.mask;
+                    if (cur_bit != 0 and entry.mask & cur_bit != 0 and self.wins_len < max_frame_windows) {
+                        self.wins[self.wins_len] = entry.win;
+                        self.wins_len += 1;
+                    }
                 }
-            }
-            for (0..self.ws_count) |i| {
-                self.ws_has_windows[i] = combined_mask & tracking.workspaceBit(@as(u8, @intCast(i))) != 0;
+                for (0..self.ws_count) |i| {
+                    self.ws_has_windows[i] = combined_mask & tracking.workspaceBit(@as(u8, @intCast(i))) != 0;
+                }
             }
         }
 
@@ -433,7 +455,7 @@ const State = struct {
         // demotes it in the split-view sort — that IS a data change).
         var changed = !self.fetch_key_valid or self.fetch_key_len != self.wins_len;
         for (0..self.wins_len) |i| {
-            const minf = minimize.isMinimized(self.wins[i]);
+            const minf = if (build_options.has_minimize) minimize.isMinimized(self.wins[i]) else false;
             if (!changed and (self.fetch_key_ids[i] != self.wins[i] or self.fetch_key_minimized[i] != minf))
                 changed = true;
             self.fetch_key_ids[i] = self.wins[i];
@@ -664,7 +686,7 @@ fn performDraw() void {
     const s = gBar.state orelse return;
     if (!s.is_visible) return;
     if (gBar.force) s.markAllSegmentsDirty();
-    minimize.collectMinimizedIntoSet(&s.minimized, s.render.allocator) catch {};
+    if (build_options.has_minimize) minimize.collectMinimizedIntoSet(&s.minimized, s.render.allocator) catch {};
     s.fetch_dirty = s.scanLiveFrame();
     s.refreshTitleData();
     const frame = segmod.Frame{
@@ -1100,7 +1122,7 @@ fn handleTitleClick(s: *State, offset: u16) void {
         return;
     }) orelse return;
 
-    if (minimize.isMinimized(target.window)) {
+    if (build_options.has_minimize and minimize.isMinimized(target.window)) {
         actions.restore(target.window);
     } else if (focus.getFocused() == target.window) {
         actions.minimize(target.window);

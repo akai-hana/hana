@@ -2,6 +2,7 @@
 const std = @import("std");
 const utils = @import("utils");
 const model = @import("model");
+const build_options = @import("build_options");
 
 pub const hints = @import("hints");
 const applyHints = hints.applyHints;
@@ -129,12 +130,12 @@ inline fn emitParked(out: *List, win: model.WindowId) void {
 pub fn compute(kind: model.LayoutKind, v: View, out: *List) void {
     out.clear();
     switch (kind) {
-        .master => @import("master").compute(v, out),
-        .monocle => @import("monocle").compute(v, out),
-        .fibonacci => @import("fibonacci").compute(v, out),
-        .grid => @import("grid").compute(v, out),
-        .leaf => @import("leaf").compute(v, out),
-        .scroll => @import("scroll").compute(v, out),
+        .master => if (build_options.has_layout_master) @import("master").compute(v, out),
+        .monocle => if (build_options.has_layout_monocle) @import("monocle").compute(v, out),
+        .fibonacci => if (build_options.has_layout_fibonacci) @import("fibonacci").compute(v, out),
+        .grid => if (build_options.has_layout_grid) @import("grid").compute(v, out),
+        .leaf => if (build_options.has_layout_leaf) @import("leaf").compute(v, out),
+        .scroll => if (build_options.has_layout_scroll) @import("scroll").compute(v, out),
     }
 }
 

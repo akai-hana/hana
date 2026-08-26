@@ -109,7 +109,7 @@ pub const WsState = struct {
     params: LayoutParams = .{},
 };
 
-pub const store_capacity = 512;
+pub const store_capacity = 128;
 pub const mru_capacity = 16;
 /// Bounded per-workspace tiled membership list (defined capacity,
 /// total operations — transitions never allocate, so no OOM rollback paths).

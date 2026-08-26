@@ -11,9 +11,9 @@ const x11_masks = @import("x11_masks");
 const debug = @import("debug");
 const tracking = @import("tracking");
 const focus = @import("focus");
-const fullscreen = @import("fullscreen");
-const minimize = @import("minimize");
-const workspaces = @import("workspaces");
+const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else null;
+const minimize = if (build_options.has_minimize) @import("minimize") else null;
+const workspaces = if (build_options.has_workspaces) @import("workspaces") else null;
 const build_options = @import("build_options");
 const bar = if (build_options.has_bar) @import("bar") else null;
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
@@ -521,9 +521,9 @@ pub fn init(alloc: std.mem.Allocator) !void {
     tracking.init(alloc);
     focus.init();
     wincache.init(alloc);
-    fullscreen.init();
-    try workspaces.init();
-    minimize.init();
+    if (build_options.has_fullscreen) fullscreen.init();
+    if (build_options.has_workspaces) try workspaces.init();
+    if (build_options.has_minimize) minimize.init();
     // Pre-allocate spawn queue capacity for the common case (a handful of
     // concurrent spawns). Failure is non-fatal; the list grows on demand.
     state.?.spawn_queue.ensureTotalCapacity(alloc, 16) catch |err| {
@@ -540,9 +540,9 @@ pub fn deinit() void {
     // managed windows and must not encounter a partially-valid cache), then
     // the remaining subsystems in reverse-init order.
     wincache.deinit();
-    fullscreen.deinit();
-    workspaces.deinit();
-    minimize.deinit();
+    if (build_options.has_fullscreen) fullscreen.deinit();
+    if (build_options.has_workspaces) workspaces.deinit();
+    if (build_options.has_minimize) minimize.deinit();
     // Free heap-backed state before the reset below wipes the struct: a
     // bare `state = .{}` would leak the spawn queue's and rules map's
     // backing memory rather than freeing it.
@@ -824,7 +824,7 @@ fn unmanageWindow(win: u32) void {
         .withdrawn_fullscreen_ws = if (pipeline.initialized) @import("model").fullscreenWsOf(pipeline.model(), win) else null,
         .withdrawn_was_focused = pipeline.initialized and pipeline.model().focused == win,
     };
-    workspaces.removeWindow(win);
+    if (build_options.has_workspaces) workspaces.removeWindow(win);
 
     // PIPELINE (train d): drop the MODEL entry, resolve the
     // post-close focus target (fallback tiers) and reconcile under one grab.
@@ -1043,7 +1043,7 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
 /// focus.grabFocus(.mouse_enter). The .mouse_enter reason is the direct
 /// EnterNotify path: lightweight, no raise, no confirm.
 inline fn maybeFocusWindow(win: u32) void {
-    if (!isOnCurrentWorkspace(win) or minimize.isMinimized(win)) return;
+    if (!isOnCurrentWorkspace(win) or (build_options.has_minimize and minimize.isMinimized(win))) return;
     debug.info("[MAYBE_FOCUS] 0x{x}", .{win});
     focus.grabFocus(win, .mouse_enter);
 }
