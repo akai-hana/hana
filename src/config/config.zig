@@ -57,6 +57,14 @@ const default_tiling_layout = (types.TilingConfig{}).layout;
 /// `error.FileTooLarge` when it exceeds `max_file_bytes`. Allocates the full
 /// ceiling up front and reallocs down; loading is startup/reload-only, so a
 /// stat-then-allocate dance (and its TOCTOU re-check) isn't worth it.
+///
+/// Dual-path rationale (C1): the stat-known-size path is a fast optimization
+/// for regular files where stat reliably reports a positive size, avoiding the
+/// amortised doubling/realloc of the growth loop. The growth path (stat fails
+/// or reports zero) handles edge cases — procfs/sysfs/pipe file descriptors
+/// where stat returns 0 despite carrying content, and fds where stat itself
+/// errors. Collapsing to a single growth path would penalise the common case
+/// (normal config files) for no functional gain.
 pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const io = std.Options.debug_io;
     const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
@@ -233,13 +241,12 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
     const local_dir = try std.fs.path.join(allocator, &.{ cwd, "config" });
 
     // Try directories first (contain multiple .toml files), then single files.
-    // `else |_| {}` intentionally swallows errors: FileNotFound/NotDir are
-    // expected when a path doesn't exist, and OOM is already caught at the
-    // `try` level above; remaining errors are non-fatal (e.g. a corrupt .toml
-    // in a config dir) and we simply try the next candidate.
     const dir_attempts = [_][]const u8{ xdg_dir, local_dir };
     for (dir_attempts) |dir| {
-        if (loadConfigFromDir(allocator, dir)) |cfg| return cfg else |_| {}
+        if (loadConfigFromDir(allocator, dir)) |cfg| return cfg else |err| switch (err) {
+            error.FileNotFound, error.NotDir => {}, // Expected: missing or directory
+            else => std.log.warn("Config load error from {s}: {}", .{ dir, err }),
+        }
     }
 
     const xdg_path = try std.fs.path.join(allocator, &.{ xdg_dir, "config.toml" });

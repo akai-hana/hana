@@ -40,6 +40,13 @@ const title = @import("title");
 const carousel = @import("carousel");
 
 const build_options = @import("build_options");
+
+const all_dirty: u5 = blk: {
+    const fields = @typeInfo(types.BarSegment).@"enum".fields;
+    var mask: u5 = 0;
+    for (0..fields.len) |i| mask |= @as(u5, 1) << @intCast(i);
+    break :blk mask;
+};
 const tiling = if (build_options.has_tiling) @import("tiling") else null;
 const floating = if (build_options.has_floating) @import("floating") else null;
 
@@ -213,7 +220,7 @@ const State = struct {
     /// Per-segment dirty bitfield. Bit i corresponds to
     /// @intFromEnum(types.BarSegment) variant i. When set, the segment is
     /// repainted on the next draw; cleared after painting.
-    segment_dirty: u5 = 0b11111,
+    segment_dirty: u5 = all_dirty,
 
     /// Reserved width of the clock segment (measure string + padding).
     clock_width: u16 = 0,
@@ -578,7 +585,7 @@ const State = struct {
     fn drawAllInner(self: *State, frame: *const segmod.Frame) void {
         const r = &self.render;
         const scaled_spacing = r.config.scaledSpacing(r.height);
-        const is_full_redraw = self.segment_dirty == 0b11111;
+        const is_full_redraw = self.segment_dirty == all_dirty;
 
         if (is_full_redraw) {
             r.dc.fillRect(0, 0, r.width, r.height, r.config.bg);

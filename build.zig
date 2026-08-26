@@ -388,6 +388,11 @@ const Module = struct {
         all: *std.StringHashMap(*std.Build.Module),
         ctx: SharedBuildContext,
     ) void {
+        // NOTE(I-1): Cross-wiring is blanket O(n²). Layer purity (model/tiling
+        // xcb-free, sync sole wire writer) is enforced by src/test/check-layers.sh
+        // at zig build check time, NOT at the module level. If a module accidentally
+        // imports a forbidden dependency, the build succeeds but check-layers catches
+        // the xcb leak. Future improvement: add per-layer import assertions.
         injectShared(root, ctx);
 
         var outer = all.iterator();

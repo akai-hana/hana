@@ -455,6 +455,7 @@ fn dumpState() void {
 /// Searches config mouse bindings for a modifier+button match and executes it.
 /// Returns true and releases the grab if a binding is found, false otherwise.
 fn tryConfigMouseBind(mods: u16, button: u8, win: u32, time: u32) bool {
+    // Linear scan is intentional: mouse bindings are few (~5-10), hash overhead not worth it.
     for (core.getState().config.mouse_bindings.items) |*mb| {
         if (mb.modifiers == mods and mb.button == button) {
             executeMouseAction(&mb.action, win);

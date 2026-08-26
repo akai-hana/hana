@@ -114,11 +114,7 @@ pub fn restore(win: model_mod.WindowId) void {
     const had_occupant_before = model_mod.fullscreenOccupantOnWs(m, m.current) != null;
     model_mod.restore(m, win);
     restoreAndFocus(m, win);
-    if (build_options.has_bar and !had_occupant_before and
-        model_mod.isFullscreenOnWs(pipeline.model(), win, pipeline.model().current))
-    {
-        @import("fullscreen").armPendingBarHide(win);
-    }
+    armFullscreenBarHideIfNeeded(m, win, had_occupant_before);
 }
 
 /// Slot-ordered single restore (LIFO/FIFO keybind paths).
@@ -128,11 +124,7 @@ pub fn restoreOrdered(order: model_mod.RestoreOrder) void {
     const had_occupant_before = model_mod.fullscreenOccupantOnWs(m, m.current) != null;
     model_mod.restore(m, win);
     restoreAndFocus(m, win);
-    if (build_options.has_bar and !had_occupant_before and
-        model_mod.isFullscreenOnWs(pipeline.model(), win, pipeline.model().current))
-    {
-        @import("fullscreen").armPendingBarHide(win);
-    }
+    armFullscreenBarHideIfNeeded(m, win, had_occupant_before);
 }
 
 /// Slot-ordered bulk restore of the current workspace. Focus target is
@@ -146,8 +138,14 @@ pub fn restoreAll() void {
     const had_occupant_before = model_mod.fullscreenOccupantOnWs(m, ws) != null;
     model_mod.restoreAllOnWs(m, ws);
     restoreAndFocus(m, target);
-    if (build_options.has_bar and !had_occupant_before) {
-        if (model_mod.fullscreenOccupantOnWs(m, ws)) |occ| @import("fullscreen").armPendingBarHide(occ);
+    if (model_mod.fullscreenOccupantOnWs(m, ws)) |occ| armFullscreenBarHideIfNeeded(m, occ, had_occupant_before);
+}
+
+fn armFullscreenBarHideIfNeeded(m: *const model_mod.Model, win: model_mod.WindowId, had_occupant_before: bool) void {
+    if (build_options.has_bar and !had_occupant_before and
+        model_mod.isFullscreenOnWs(m, win, m.current))
+    {
+        @import("fullscreen").armPendingBarHide(win);
     }
 }
 

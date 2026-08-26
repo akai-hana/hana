@@ -1,7 +1,6 @@
-//! Model-pipeline entry glue. The strangler flag is gone: the model path IS
-//! the path. This module owns the global Model instance, builds the
-//! per-reconcile sync.Ctx from live state, and exposes the reconcile slots
-//! entry points call.
+//! Model-pipeline entry glue. This module owns the global Model instance,
+//! builds the per-reconcile sync.Ctx from live state, and exposes the
+//! reconcile slots entry points call.
 //!
 //! Call sites (all marked `// PIPELINE:`):
 //!   src/main.zig    startup        → init(alloc)
@@ -32,6 +31,9 @@ pub fn init(_: std.mem.Allocator) void {
     sync.init();
 }
 pub inline fn model() *model_mod.Model {
+    if (std.debug.runtime_safety) {
+        std.debug.assert(initialized);
+    }
     return &instance;
 }
 

@@ -27,9 +27,9 @@ prompt template at docs/analyst-prompt.md (written by the orchestrator).
   legacy ports, caller duties). Never propose stripping them; correcting a
   comment that no longer matches behavior IS a valid finding.
 - **Known trap**: textual reference scans (`grep` for a fn name) MISS
-  comptime/string-keyed dispatch (plugin tables, action enum switches).
-  Verify reachability via compiler or by reading dispatch sites before
-  claiming dead code.
+  comptime/string-keyed dispatch (action enum switches, build-flag-gated
+  handlers). Verify reachability via compiler or by reading dispatch sites
+  before claiming dead code.
 - **History lesson**: two recent simplification estimates overshot ~5x
   because behavior-contract hid inside what looked like mechanism (a diff
   cache held orphan-resurfacing semantics; layout "plumbing" lived in
@@ -108,12 +108,14 @@ five mechanisms braided through one file — prime readability-review
 candidate but every internal state may be load-bearing.
 
 ## Subsystem 7 — Event loop & orchestration — 815 LoC
-Files: `src/core/{core,events,pipeline,plugins,signals,x11}.zig`
-       (93/376/162/84/90/10)
-Role: X connection + event fetch/dispatch loop, plugin registry
-(comptime table: bar segments register hooks incl. poll_timeout_ms),
-pipeline choke points (preReconcileDuties, postDispatch, tilingOpFinished),
-signal handling (reload).
+Files: `src/core/{core,events,pipeline,signals,x11}.zig`
+       (93/376/162/90/10)
+Role: X connection + event fetch/dispatch loop, comptime dispatch table
+(XCB event type → handler function pointer; bar/tiling/floating gated by
+build_options flags at compile time — the former plugin registry was
+absorbed into this direct-dispatch pattern), pipeline choke points
+(preReconcileDuties, postDispatch, tilingOpFinished), signal handling
+(reload).
 Sensitivities: poll-timeout min-over-hooks semantics (clock depends on it);
 postDispatch consumes takeScheduled then flushes once (I2: caller owns
 flush timing).

@@ -16,6 +16,8 @@
 
 const drawing = @import("drawing");
 const types = @import("types");
+const actions = @import("actions");
+const focus = @import("focus");
 
 const tags = @import("tags");
 const clock = @import("clock");
@@ -123,9 +125,6 @@ pub fn onClick(
         .clock => return false,
     }
 }
-
-const actions = @import("actions");
-const focus = @import("focus");
 
 fn resolveWorkspaceClick(offset: u16) ?usize {
     const cell_w = tags.getCachedWorkspaceWidth();

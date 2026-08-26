@@ -148,7 +148,6 @@ fn dispatch(event_type: u8, event: *anyopaque) void {
     // memory-safety bug; cheap insurance.
     if (idx >= dispatch_table.len) return;
     if (dispatch_table[idx]) |handler| handler(event);
-
 }
 
 const CookieEntry = struct { cookie: xcb.xcb_void_cookie_t, keycode: u8 };
