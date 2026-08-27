@@ -1,7 +1,7 @@
 //! Layout icon bar segment.
 //! Displays the active tiling layout symbol on the status bar.
 
-/// D3: reserved row width (moved here from bar.zig — width policy belongs to
+/// Reserved row width (moved here from bar.zig — width policy belongs to
 /// the segment that owns the pixels).
 pub const natural_width: u16 = 60;
 

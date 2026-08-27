@@ -1,4 +1,4 @@
-//! Uniform segment contract (D3).
+//! Uniform segment contract
 //!
 //! ONE dispatch point per segment concern; adding a segment touches this
 //! file plus its own module instead of six switches across bar.zig:
