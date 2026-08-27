@@ -113,6 +113,13 @@ pub fn save(allocator: std.mem.Allocator, m: *const model.Model, path: []const u
     try aw.writer.flush();
     const al = aw.toArrayList();
 
+    var dw: u8 = 0;
+    for (&workspaces) |*r| {
+        if (r.tiled.len > 0) debug.info("DBG saved ws{d} tiled={d}", .{ dw, r.tiled.len });
+        dw += 1;
+    }
+    for (windows) |*r| debug.info("DBG saved win={x} mask={b:0>64} mode={s}", .{ r.win, r.mask, @tagName(r.mode) });
+
     const io = std.Options.debug_io;
     const tmp = try std.fmt.allocPrint(allocator, "{s}.tmp", .{path});
     defer allocator.free(tmp);
@@ -199,4 +206,13 @@ pub fn applyModelLevel(m: *model.Model) void {
             _ = s.focus_mru.append(w);
         }
     }
+
+    for (0..m.store.count()) |i| {
+        const it = m.store.at(i);
+        const ll = std.meta.activeTag(it.val.mode);
+        debug.info("DBG applied ws{} win={x} mask={b:0>64} mode={s}", .{ m.current, it.key, it.val.mask, @tagName(ll) });
+    }
+debug.info("DBG tiled0={d} tiled1={d} current={d} focused={?x}", .{
+        m.ws[0].tiled_order.len, m.ws[1].tiled_order.len, m.current, m.focused,
+    });
 }
