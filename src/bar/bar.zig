@@ -360,6 +360,7 @@ const State = struct {
         }
         try s.focused_title.ensureTotalCapacity(allocator, 256);
         tags.invalidate();
+        if (build_options.has_seg_layout) segmod.invalidateCachedWidths();
         return s;
     }
 
