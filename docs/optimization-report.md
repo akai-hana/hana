@@ -4,7 +4,7 @@ Scope: 14 read-only subsystem analyses over the full tree, consolidated and
 independently verified (symbol greps + quoted-code spot-checks) by the
 orchestrator. Baseline at time of writing: `zig build` clean,
 `zig build test --summary all` **48/48** across 5 binaries,
-`src/test/check-layers.sh` pass. Golden harness not re-run (Xvfb-heavy);
+`dev/scripts/check-layers.sh` pass. Golden harness not re-run (Xvfb-heavy);
 no source files were modified during analysis.
 
 Method: every dead-code claim was mechanically confirmed (zero callers

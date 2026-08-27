@@ -32,7 +32,7 @@ Output format — numbered findings, each with:
 - Evidence: quoted code + concrete consequence
 - Proposal: specific change, not a direction
 - Risk: low/medium/high + specific failure mode if wrong
-- Gate: zig build test (39/39) | src/test/check-layers.sh |
+- Gate: zig build test (39/39) | dev/scripts/check-layers.sh |
   dev/harness run-scenario --compare (18/18) | "none — needs new
   coverage" (say what coverage)
 - Estimate: LoC delta and/or perf effect, labeled guess vs measured

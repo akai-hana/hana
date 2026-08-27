@@ -8,11 +8,11 @@ prompt template at docs/analyst-prompt.md (written by the orchestrator).
 ## Ground rules every agent must know
 
 - **Behavior is frozen.** The contract is `dev/harness/` (18 scenarios,
-  golden artifacts) + `src/test/` (59 tests) + `src/test/check-layers.sh`
+  golden artifacts) + `src/test/` (59 tests) + `dev/scripts/check-layers.sh`
   (layer rules). Any proposal must name which gate would catch its
   regressions. Verification commands:
   - `zig build && zig build test --summary all` (59/59 expected)
-  - `bash src/test/check-layers.sh`
+  - `bash dev/scripts/check-layers.sh`
   - `zig build && bash dev/harness/run-scenario.sh --compare S01-spawn-tiled
     S02-close S03-min-restore S04-min-from-fs S05-restore-all S06-switch-basic
     S07-pinned S08-all-view S09-tag-move S10-fs-cycle S11-configure-honored
@@ -174,7 +174,7 @@ real configs); fallback embedding feeds zero-config boot; types.zig holds
 the layout name/alias table (contract).
 
 ## Subsystem 14 — Build & test infrastructure — auxiliary
-Files: `build.zig`, `src/test/*.zig`, `src/test/check-layers.sh`,
+Files: `build.zig`, `src/test/*.zig`, `dev/scripts/check-layers.sh`,
        `dev/harness/**`
 Role: module discovery/feature-detection, unit tests, layer guards,
 golden-scenario harness (Xvfb-based).

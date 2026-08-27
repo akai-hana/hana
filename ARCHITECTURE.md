@@ -3,7 +3,7 @@
 Authoritative spec: `REARCHITECTURE_PLAN.md` §6–§8. This file summarizes the
 shipped shape; when the two disagree, the plan wins and this file is stale.
 
-## Layers (enforced by `zig build check` → `src/test/check-layers.sh`)
+## Layers (enforced by `zig build check` → `dev/scripts/check-layers.sh`)
 
 ```
 model  ← std + utils only, no xcb          src/model/model.zig
@@ -67,7 +67,7 @@ change is intentional; re-record goldens when adopting it.
 
 ## Allowlists
 
-The allowlists (embedded in `src/test/check-layers.sh`) document
+The allowlists (embedded in `dev/scripts/check-layers.sh`) document
 every file still sending XCB outside sync (bar self-window, ConfigureRequest
 compliance, click-raise, reload BW sweep, wire primitives in utils). Shrink
 by moving the traffic behind sync, then delete the entry.
