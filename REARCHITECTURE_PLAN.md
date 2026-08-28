@@ -1,6 +1,8 @@
 # Hana Window Management — Architecture Rework Plan (v2, prescriptive)
 
-**Status:** WP0 complete. WP1 in progress. This revision supersedes v1.
+**Status:** WP0–WP8 complete (see changelog §16; WP5 trains a–h shipped, WP6
+deletion done, WP7 guards/docs done, WP8 audit done). This revision supersedes
+v1; the shipped shape is summarized in `ARCHITECTURE.md`.
 **Date:** 2026-08-21
 **Prime directive for agents:** implementation is TRANSCRIPTION, not design.
 Every module you are assigned is specified either as literal reference code
@@ -98,7 +100,7 @@ There was no runtime test harness before WP0; `dev/harness/` now provides one
 | Geometry | `utils.Rect { x: i16, y: i16, width: u16, height: u16, border_width (defaulted) }` |
 | Global state | `core.getState()` → conn/screen/config |
 | Compile flags | `build_options.has_tiling`, `.has_bar` |
-| Perf counters | `"bench"` build option exists (`build.zig` ~line 50) |
+| Perf counters | bench counters in `src/core/utils/bench.zig` (`-Dbench=true` probes) |
 | Workspace id | `core.WorkspaceId` (has `.index`), mask bit = `tracking.workspaceBit(idx)` |
 
 ## 3. Glossary

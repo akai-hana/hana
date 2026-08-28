@@ -12,8 +12,10 @@ Date: 2026-08-22 · Scope: REARCHITECTURE_PLAN.md WP0–WP8, trains a–h.
 | M3 trains b–h, flag ON | DONE — `HANA_MODEL_PIPELINE=1` became default; `=0` escapes |
 | M4 deletion + guards + docs | DONE — WP6 inverse-order deletions; `zig build check` enforces §13; `ARCHITECTURE.md` shipped |
 
-Unit tests: 37/37 (`sync_test` 5, `model_test` 20, layout 12). Build clean,
-`zig fmt` clean, layer guards pass.
+Unit tests: 107/107 (`sync_test` 9, `model_test` 38, `tiling_test` 15,
+`schema_test` 11, `perf_test` 9, `carousel_test` 9, `parser_test` 6,
+`config_test` 5, `workspaces_test` 3, `clock_test` 2), run via
+`zig build test`. Build clean, `zig fmt` clean, layer guards pass.
 
 ## Audit: sixteen findings → structural resolution
 

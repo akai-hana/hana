@@ -18,9 +18,13 @@ entry points ← actions + sync              core/, window/, bar/ (src/main.zig)
   fullscreen records, minimize records with LIFO/FIFO sequence numbers,
   focus, all-view flag.
 - **P2** Only `src/sync/` sends geometry/border/map/stack requests. Reconcile
-  computes the desired state for every window and applies it CONDITIONALLY
-  against the sent ledger (skip identical desires; force_restack and a
-  periodic full sweep bypass the diff); parked windows sit at
+  runs UNCONDITIONAL APPLY: every pass computes the desired state for every
+  stored window and sends it (parked windows get one merged park request;
+  visible windows replay map→pixel→bw→geometry in order). X configure/map
+  requests are idempotent, so replaying the full desired state is drift-proof;
+  there is no diff cache or sweep counter. The sent ledger is a WRITE-ONLY
+  record ({rect, has_rect, parked}) read only for multi-tag orphans,
+  winner-raise derivation, and floating-detach; parked windows sit at
   x=-30000+BELOW (I7), never unmapped.
 - **P3/P5** Actions mutate the model only; ConfigureRequests and properties
   enter as model updates before any send derives from reconcile (I5).
@@ -48,13 +52,13 @@ X event / keybind ─► entry point (window.zig / input.zig / bar.zig / events.
 The layout engine (`engine.compute`) receives a frozen `View`
 (order ∩ mask, params, workarea, margins, hints) and writes placements into
 a caller-owned buffer — zero allocation, zero I/O, fully unit-tested
-(`zig build test`, 65 test blocks).
+(`zig build test`, 107 unit test blocks).
 
 ## Tests
 
-65 unit test blocks across `src/test/*.zig` (model transitions, tiling math
-incl. golden-value layout traces, sync wire sequences, config reader,
-workspace overrides, clock deadlines, carousel timing), run via
+107 unit test blocks across `src/test/*_test.zig` (model transitions, tiling
+math incl. golden-value layout traces, sync wire sequences, config reader,
+workspace overrides, clock deadlines, carousel timing, perf sanity), run via
 `zig build test`.
 
 ## Behavioral gates
@@ -71,9 +75,3 @@ The allowlists (embedded in `dev/scripts/check-layers.sh`) document
 every file still sending XCB outside sync (bar self-window, ConfigureRequest
 compliance, click-raise, reload BW sweep, wire primitives in utils). Shrink
 by moving the traffic behind sync, then delete the entry.
-
-## Behavioral gates
-
-BC01–BC26 (plan §8) are the regression contract; the harness from WP0
-replays them against a running X server (not available in CI — run locally
-via `scripts/` harness).

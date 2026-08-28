@@ -4,7 +4,8 @@ Scope: 14 read-only subsystem analyses over the full tree, consolidated and
 independently verified (symbol greps + quoted-code spot-checks) by the
 orchestrator. Baseline at time of writing: `zig build` clean,
 `zig build test --summary all` **48/48** across 5 binaries,
-`dev/scripts/check-layers.sh` pass. Golden harness not re-run (Xvfb-heavy);
+`dev/scripts/check-layers.sh` pass. (Suite has since grown to **107/107**
+across 10 binaries — see §SW-3 note.) Golden harness not re-run (Xvfb-heavy);
 no source files were modified during analysis.
 
 Method: every dead-code claim was mechanically confirmed (zero callers
@@ -66,9 +67,10 @@ Comments referencing deleted entities or contradicting code, each verified:
 Gate: n/a (comments). Risk: zero. Est: 2 h [g].
 
 ### SW-3 · Doc drift fixes (S14F3)
-`docs/subsystems.md:11` "39 tests" → 48 (5 binaries, counts listed in
-ledger); `:14` "39/39 expected" → 48/48; scenario table refresh.
-Also README recipe if it pins 39. Risk: zero.
+`docs/subsystems.md:11` "39 tests" → 107 (10 binaries, counts listed in
+ledger); `:14` "39/39 expected" → 107/107; scenario table refresh. The suite
+has grown from 48 (at this report's baseline) to 107 since; re-verify the
+count before editing. Risk: zero.
 
 ### SW-4 · Asserts & init hardening
 - `store.zig:75 at()`: add `std.debug.assert(seq < count())` (prose-only
@@ -355,8 +357,9 @@ finding isn't re-sized upward later.
 
 ## Open questions for the user (deduplicated across analysts)
 
-1. **Test-count/doc drift**: docs say 39 tests, tree has 48. Confirm 48 is
-   the intended baseline before we edit docs (SW-3).
+1. **Test-count/doc drift**: docs said 39, then 48; the tree now has 107
+   tests across 10 binaries. Re-verify the exact count with
+   `zig build test --summary all` before finalizing doc edits (SW-3).
 2. **spawn_cursor intent**: declared, reset-commented, read once
    (window.zig:1064), never written. Dead leftover, or wiring planned?
    Determines delete vs implement.
