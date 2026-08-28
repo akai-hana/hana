@@ -1,7 +1,7 @@
 //! Unified WM reload coordinator.
 //!
 //! Owns the *decision* (binary changed since boot? → re-exec, else config
-//! reload) and the *process hand-off* (fork + exec of the new binary).
+//! reload) and the *process hand-off* (in-place exec of the new binary).
 //! xcb-free and model-free: it never touches the X connection or the model.
 //! The event loop performs the actual re-exec sequence (save state, close the
 //! X connection, then execNext) so this module stays a pure decision/flag
@@ -20,11 +20,11 @@ const std = @import("std");
 const utils = @import("utils");
 const debug = @import("debug");
 
-// libc bindings for fork/execv (no Zig stdlib wrappers exist for fork(), and
+// libc bindings for execv/setenv (no Zig stdlib wrappers exist for them, and
 // the executable links libc, so mirroring spawn.zig's pattern is the honest
 // route). execv (not execvp) is deliberate: we hand it the absolute self
 // path, so there is no PATH lookup — and as the variadic execv it inherits
-// the process environ, which carries DISPLAY forward to the child.
+// the process environ, which carries DISPLAY and HANA_RESTORE forward.
 const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("stdlib.h");
@@ -161,33 +161,6 @@ pub fn requestReexec() void {
     utils.wake();
 }
 
-/// The re-exec'd successor's pid, while this image bridges the session.
-/// Async-signal-safe reads/writes only (single pid_t, no atomics needed for
-/// a plain aligned scalar in a signal handler context).
-var bridge_child: std.posix.pid_t = 0;
-
-// Session-bridge signal handling. The bridge never returns to the event
-// loop, so the self-pipe byte handlers installed by signals.setup() are dead
-// weight here; re-point the termination signals so `kill <wm-pid>` (or the
-// session scripts' teardown) still reaches the successor WM and ends the
-// session exactly as it did before the re-exec.
-fn bridgeSignalHandler(signo: std.posix.SIG) callconv(.c) void {
-    if (bridge_child > 0) _ = std.os.linux.kill(bridge_child, signo);
-}
-
-// Replaces TERM/INT/HUP dispositions with the forwarding handler. Called
-// only from execNext's parent path, after fork.
-fn installBridgeHandlers() void {
-    const sa: std.posix.Sigaction = .{
-        .handler = .{ .handler = bridgeSignalHandler },
-        .mask = std.posix.sigemptyset(),
-        // No SA.RESTART: the wait loop explicitly retries on EINTR.
-        .flags = 0,
-    };
-    inline for (.{ std.posix.SIG.TERM, std.posix.SIG.INT, std.posix.SIG.HUP }) |sig|
-        std.posix.sigaction(sig, &sa, null);
-}
-
 /// Atomic, mirrors proc.consumeReload: true exactly once per request.
 /// Consumed by the event loop before consumeReload.
 pub fn consumeReexec() bool {
@@ -202,30 +175,28 @@ pub fn selfPath() ?[]const u8 {
     return z[0..std.mem.len(z)];
 }
 
-/// Forks and execs `self_path`, inheriting environ/DISPLAY. Never returns.
-/// MUST be called only after the X connection is closed: the child must not
-/// inherit a live connection to the old display (its root
-/// SubstructureRedirect grab would survive), and under exec all inherited
-/// fds must be CLOEXEC (they are — makePipe).
+/// Execs `self_path` IN PLACE, inheriting environ/DISPLAY. Never returns.
+/// MUST be called only after the X connection is closed (handleReexec does):
+/// a live inherited fd would keep the old client — and its root
+/// SubstructureRedirect grab — alive while the fresh connection tries to
+/// claim the same grab, and the server would reject the newcomer with
+/// BadAccess.
+///
+/// Deliberately NO fork: the process identity — pid and parent — survives
+/// the hand-off. Under startx the display lives exactly as long as the
+/// session client (xinit → Xsession → .xinitrc → this process); replacing
+/// the image in place keeps that chain unbroken, so the successor boots into
+/// a live server and the session only ends when the new WM actually exits.
+/// (The original fork-then-exit design killed every supervised re-exec:
+/// the parent's exit made the session script return and xinit tore down
+/// Xorg mid-hand-off.)
 ///
 /// The restore path crosses the hand-off in HANA_RESTORE: execv inherits
 /// environ, and Zig 0.16's classic `main() !void` cannot read argv, so the
 /// environment is the one channel a fresh boot can see.
-///
-/// After forking, the PARENT does not exit: it becomes the session bridge.
-/// Under startx the display lives exactly as long as the session client
-/// (xinit → Xsession → .xinitrc → this process); if the parent exited
-/// immediately, the session script would return, xinit would kill Xorg, and
-/// the re-exec'd successor would boot into a dying server — the
-/// "freeze a moment, then TTY" crash. The bridge waitpids the successor and
-/// mirrors its fate, so the session chain stays intact for the successor's
-/// whole lifetime and only ends when the new WM actually exits.
 pub fn execNext(self_path: []const u8, restore_path: []const u8) noreturn {
-    // Null-terminated COPIES of both paths, made with the system allocator
-    // BEFORE fork: after fork only async-signal-safe calls are guaranteed
-    // (malloc may be locked by a thread the child doesn't inherit), and
-    // execv's argv needs [*:0] buffers — the caller's slices are not
-    // necessarily terminated.
+    // Null-terminated copies for setenv/execv: the caller's slices are not
+    // necessarily terminated, and nothing runs after exec to free them.
     const self_z = std.heap.c_allocator.dupeZ(u8, self_path) catch {
         debug.err("restart: out of memory copying self path", .{});
         std.process.exit(1);
@@ -235,47 +206,13 @@ pub fn execNext(self_path: []const u8, restore_path: []const u8) noreturn {
         std.process.exit(1);
     };
 
-    const pid = c.fork();
-    if (pid < 0) {
-        debug.err("restart: fork failed", .{});
+    if (c.setenv("HANA_RESTORE", restore_z, 1) != 0) {
+        debug.err("restart: setenv failed", .{});
         std.process.exit(1);
     }
-    if (pid == 0) {
-        // Child: replace itself with the new binary. setenv in the child is
-        // single-threaded (fork'd child has one thread); execv inherits
-        // environ (DISPLAY, HANA_RESTORE) automatically. On any failure fall
-        // through to exit(1).
-        if (c.setenv("HANA_RESTORE", restore_z, 1) != 0) {
-            debug.err("restart: setenv failed", .{});
-            std.process.exit(1);
-        }
-        _ = c.execv(self_z, @ptrCast(&[_:null]?[*:0]const u8{ self_z, null }));
-        std.process.exit(1);
-    }
-
-    // Parent: session bridge. See the doc comment above — exiting here is
-    // what killed every supervised re-exec. The event loop is gone; all we
-    // do is hold the session open.
-    bridge_child = pid;
-    installBridgeHandlers();
-    var status: u32 = 0;
-    while (true) {
-        const rc = std.os.linux.waitpid(pid, &status, 0);
-        switch (std.posix.errno(rc)) {
-            // Successor exited (any status): its career — and the session —
-            // are over. Exit 0: the exit status is irrelevant to the
-            // session scripts, and mirroring a signal-killed child (128+sig)
-            // buys nothing.
-            .SUCCESS => break,
-            // A signal interrupted the wait (e.g. a forwarded TERM, or the
-            // successor's SIGCHLD reaping its own children). The successor
-            // is still alive: keep bridging.
-            .INTR => continue,
-            else => |e| {
-                debug.err("restart: session bridge wait failed ({s}); ending session", .{@errorName(std.posix.unexpectedErrno(e))});
-                break;
-            },
-        }
-    }
-    std.process.exit(0);
+    _ = c.execv(self_z, @ptrCast(&[_:null]?[*:0]const u8{ self_z, null }));
+    // Only reachable when exec failed; the X connection is already closed,
+    // so there is nothing left to do but end the session.
+    debug.err("restart: execv failed", .{});
+    std.process.exit(1);
 }
