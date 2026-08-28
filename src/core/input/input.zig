@@ -24,7 +24,6 @@ const pipeline = @import("pipeline");
 const actions = @import("actions");
 const spawn = @import("spawn");
 const bar = if (build_options.has_bar) @import("bar") else null;
-const tiling = if (build_options.has_tiling) @import("tiling") else null;
 const floating = if (build_options.has_floating) @import("floating") else null;
 
 // Constants
@@ -125,7 +124,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) void {
     const matched: ?*const types.Action = config.lookupKeybinding(mods, keysym);
 
     // The prompt owns all key input while active; routing is handled inside it.
-    if (build_options.has_bar) if (bar.promptHandleKeypress(event, matched)) return;
+    if (build_options.has_bar) if (bar.surfaces.promptHandleKeypress(event, matched)) return;
 
     if (matched) |action| {
         debug.info("[KEY] mods=0x{x} keysym=0x{x} action={s}", .{ mods, keysym, @tagName(action.*) });
@@ -152,8 +151,8 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     // managed-window/replay-pointer machinery built for the synchronous grab
     // a client-window click goes through. Super-held clicks fall through to
     // the normal mouse-binding/drag path.
-    if (!super_held and build_options.has_bar and bar.isBarWindow(clicked_window)) {
-        bar.handleButtonPress(event);
+    if (!super_held and build_options.has_bar and bar.surfaces.isBarWindow(clicked_window)) {
+        bar.surfaces.handleButtonPress(event);
         return;
     }
 
@@ -380,9 +379,9 @@ fn executeWorkspaceAction(action: *const types.Action) void {
 /// and prompt toggle.
 fn executeBarAction(action: *const types.Action) void {
     switch (action.*) {
-        .toggle_bar_visibility => if (build_options.has_bar) bar.setBarState(.toggle),
-        .toggle_bar_position => if (build_options.has_bar) bar.toggleBarSegmentAnchor(),
-        .toggle_prompt => if (build_options.has_bar) bar.promptToggle(),
+        .toggle_bar_visibility => if (build_options.has_bar) bar.surfaces.setBarState(.toggle),
+        .toggle_bar_position => if (build_options.has_bar) bar.surfaces.toggleBarSegmentAnchor(),
+        .toggle_prompt => if (build_options.has_bar) bar.surfaces.promptToggle(),
         else => unhandledAction("bar"),
     }
 }
@@ -445,7 +444,7 @@ fn dumpState() void {
         }
     }
 
-    if (build_options.has_tiling and tiling.isEnabled()) {
+    if (build_options.has_tiling and @import("core").tilingEnabled()) {
         debug.info("Tiling enabled: true", .{});
         debug.info("Tiling layout:  {s}", .{@tagName(pipeline.getCurrentLayout())});
         debug.info("Tiled windows:  {}", .{tracking.tiledCountOnCurrent()});

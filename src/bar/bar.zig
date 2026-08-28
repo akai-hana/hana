@@ -13,6 +13,7 @@ const build_options = @import("build_options");
 const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
+const screen = @import("screen");
 const refresh_rate = @import("refresh_rate");
 const scale = @import("scale");
 const constants = @import("constants");
@@ -121,9 +122,7 @@ const all_dirty: u5 = blk: {
     for (0..fields.len) |i| mask |= @as(u5, 1) << @intCast(i);
     break :blk mask;
 };
-const tiling = if (build_options.has_tiling) @import("tiling") else null;
 const floating = if (build_options.has_floating) @import("floating") else null;
-
 // ---------------------------------------------------------------------------
 // Bar height / font-size resolution (folded from metrics.zig).
 //
@@ -213,7 +212,7 @@ pub fn promptToggle() void {
     prompt.toggle();
 }
 
-pub const Action = enum { toggle, hide_fullscreen, show_fullscreen };
+pub const Action = enum { toggle };
 
 /// Global bar coordination flags. Read and written exclusively on the main
 /// thread; no mutex protection required.
@@ -345,6 +344,22 @@ const State = struct {
     focused_title: std.ArrayListUnmanaged(u8) = .empty,
     /// Window the focused_title buffer was fetched for (null = never/stale).
     focused_title_window: ?u32 = null,
+
+    // -- Last-seen core fact revisions (see core.Facts) --
+
+    /// Last focus_rev we diffed in updateIfDirty. A change marks the title
+    /// segment dirty (cheap). Initialized sentinel so the first update draws.
+    last_focus_rev: u32 = std.math.maxInt(u32),
+    /// Last window_rev we diffed. A change marks all segments dirty (the
+    /// workspaces/title segments reflect window & workspace state).
+    last_window_rev: u32 = std.math.maxInt(u32),
+    /// Last layout_rev we diffed. A change forces a full redraw (all segments
+    /// + a title-data refetch).
+    last_layout_rev: u32 = std.math.maxInt(u32),
+    /// Last fullscreen_rev we diffed. A change means fullscreen occupancy of
+    /// the current workspace changed; the bar recomputes its forced hidden/
+    /// shown state (shared-screen reaction) from the core fact.
+    last_fullscreen_rev: u32 = std.math.maxInt(u32),
 
     fn init(
         allocator: std.mem.Allocator,
@@ -583,14 +598,19 @@ const State = struct {
 
     fn drawSegment(self: *State, frame: *const segmod.Frame, segment: types.BarSegment, x: u16, width: ?u16) !u16 {
         // Title adapter (see segment.zig draw()): needs caller-owned title
-        // data from State; stays local for now.
-        if (segment == .title)
+        // data from State; stays local for now. The branch is comptime-eliminated
+        // when the title segment is absent (has_seg_title=false): without it
+        // there is no title variant any caller will pass, so the special-cased
+        // renderer's types (bar.title vs prompt.title) must not be compared.
+        if (segment == .title) {
+            if (!comptime build_options.has_seg_title) return error.DrewInvalidSegment;
             return prompt.draw(
                 self.titleCtx(x, width orelse title.min_width),
                 self.titleSnapshot(),
                 self.render.allocator,
                 false,
             );
+        }
         return segmod.draw(
             segment,
             .{ .dc = self.render.dc, .config = self.render.config, .height = self.render.height },
@@ -812,6 +832,7 @@ pub fn init() !void {
     const height = try calcBarHeightAndFontSize();
     const bar = try createBar(height, barwin.calcBarYPos(height));
     gBar.state = bar.state;
+    screen.setSurfaceWindow(bar.setup.win_id);
     submitDraw();
     _ = xcb.xcb_map_window(cs.conn, bar.setup.win_id);
     _ = xcb.xcb_flush(cs.conn);
@@ -820,6 +841,7 @@ pub fn init() !void {
         try vim.init(cs.alloc, prompt.default_max_input);
     }
     try prompt.init(cs.alloc, cs.conn);
+    syncScreenClaim();
 }
 
 pub fn deinit() void {
@@ -831,6 +853,8 @@ pub fn deinit() void {
         s.deinit();
         gBar.state = null;
     }
+    screen.releaseClaim(screen.bar_id.?);
+    screen.clearSurfaceWindow();
 }
 
 pub fn reload() void {
@@ -870,6 +894,8 @@ fn applyReload(old: *State, height: u16) !void {
     new_state.is_visible = old.is_visible;
     new_state.is_globally_visible = old.is_globally_visible;
     gBar.state = new_state;
+    screen.setSurfaceWindow(new_bar.setup.win_id);
+    syncScreenClaim();
     submitDrawBlockingFull();
     if (new_state.is_visible) _ = xcb.xcb_map_window(cs.conn, new_bar.setup.win_id);
     _ = xcb.xcb_destroy_window(cs.conn, old.win.win_id);
@@ -901,6 +927,9 @@ pub fn toggleBarSegmentAnchor() void {
         return;
     };
     const no_fullscreen = model.fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) == null;
+    // The bar's edge changed; update its claim so the reconcile below
+    // re-derives every placement from the new usable area.
+    syncScreenClaim();
     // The work area changed with the bar's new edge; one model reconcile
     // re-derives every placement from it.
     // LAYERING NOTE: The bar triggers reconciliation after visibility/position
@@ -914,18 +943,6 @@ pub fn toggleBarSegmentAnchor() void {
     debug.info("Bar position toggled to: {s}", .{@tagName(cs.config.bar.bar_position)});
 }
 
-/// Lightweight focus-only redraw; skipped when a full redraw is already pending.
-pub fn scheduleFocusRedraw(_: ?u32) void {
-    const s = gBar.state orelse return;
-    if (!s.is_visible or s.is_dirty) return;
-    // Only the title segment needs repainting on a focus change; mark it
-    // dirty without forcing a full-bar redraw. A per-frame redraw during
-    // rapid window opening would produce O(N²) property queries and Pango
-    // renders — skipping the early draw lets the post-batch hook do one
-    // coalesced redraw instead.
-    s.markSegmentDirty(.title);
-}
-
 pub fn isBarWindow(win: u32) bool {
     return if (gBar.state) |s| s.win.win_id == win else false;
 }
@@ -936,40 +953,23 @@ pub fn getBarHeight() u16 {
     return if (gBar.state) |s| s.render.height else 0;
 }
 
-/// Screen area not covered by the bar, as a Rect (x=0, y=bar inset or 0).
+/// Pushes the bar's current screen-space claim to core.screen. Called at each
+/// point where the bar's occupancy of the screen changes (visibility toggle,
+/// edge/position change) immediately before the reconcile that re-derives
+/// window placement from the new usable area. Core owns the area math; the
+/// bar only contributes "I take this many pixels from this edge."
+fn syncScreenClaim() void {
+    const s = gBar.state orelse return;
+    const cs = core.getState();
+    const edge: screen.Edge = if (cs.config.bar.bar_position == .bottom) .bottom else .top;
+    const px: u16 = if (s.is_visible) s.render.height else 0;
+    screen.setClaim(screen.bar_id.?, edge, px);
+}
+
 /// Window id of the bar, or null before init(). Lets the boot-time
 /// window adoption skip the WM's own window.
 pub fn winId() ?u32 {
     return if (gBar.state) |s| s.win.win_id else null;
-}
-
-pub fn workAreaRect() utils.Rect {
-    const cs = core.getState();
-    const bar_height: u16 = if (isVisible()) getBarHeight() else 0;
-    const at_bottom = cs.config.bar.bar_position == .bottom;
-    return .{
-        .x = 0,
-        .y = if (at_bottom) 0 else @intCast(bar_height),
-        .width = cs.screen.width_in_pixels,
-        .height = cs.screen.height_in_pixels -| bar_height,
-    };
-}
-
-/// Schedules a full bar redraw, coalesced via updateIfDirty. Zero X11 I/O on the caller.
-pub fn scheduleRedraw() void {
-    if (gBar.state) |s| if (s.is_visible) s.markDirty();
-}
-
-/// Like scheduleRedraw but also forces a title-data refetch on the next draw.
-///
-/// Use when a segment's presence or width may change (e.g. layout switch) or
-/// when cached title data must be re-read from X11 despite an unchanged
-/// fetch key; stale pixels are erased by the unconditional background clear.
-pub fn scheduleFullRedraw() void {
-    if (gBar.state) |s| if (s.is_visible) {
-        gBar.force = true;
-        s.markDirty();
-    };
 }
 
 pub fn isVisible() bool {
@@ -1064,14 +1064,29 @@ pub fn dismissAfterPrompt() void {
     _ = xcb.xcb_flush(s.win.conn);
 }
 
+/// Sets the bar's user-level visibility state. Only the user toggle path
+/// arrives here (keybind / config action). Fullscreen-driven hide/show is NOT
+/// a named call — the bar derives it reactively from the core fullscreen fact
+/// revision in `applyFullscreenVisibility`, so no subsystem pokes the bar.
 pub fn setBarState(action: Action) void {
     const s = gBar.state orelse return;
     if (action == .toggle) s.is_globally_visible = !s.is_globally_visible;
+    applyFullscreenVisibility();
+}
+
+/// Reacts to a change in core's fullscreen-occupancy fact: recomputes whether
+/// the bar must be hidden to share the screen with a fullscreen window on the
+/// current workspace, then maps/unmaps and updates the screen claim. Core owns
+/// the fact revision; the bar merely reads the model & screen facts it already
+/// consumes. Calls `reconcileNow` after a visibility claim change because the
+/// usable area geometry changed (a write-path side effect from a rendering
+/// module — documented in the check-layers.sh allowlist).
+pub fn applyFullscreenVisibility() void {
+    const s = gBar.state orelse return;
     const current_ws = tracking.getCurrentWorkspace() orelse 0;
-    const bar_forced_hidden_by_fullscreen = action != .hide_fullscreen and
-        model.fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) != null;
-    const should_be_visible = !bar_forced_hidden_by_fullscreen and s.is_globally_visible and action != .hide_fullscreen;
-    if (s.is_visible == should_be_visible and action != .toggle) return;
+    const bar_forced_hidden_by_fullscreen = model.fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) != null;
+    const should_be_visible = !bar_forced_hidden_by_fullscreen and s.is_globally_visible;
+    if (s.is_visible == should_be_visible) return;
     s.is_visible = should_be_visible;
     if (should_be_visible) {
         gBar.skip_title_refetch = true;
@@ -1081,18 +1096,42 @@ pub fn setBarState(action: Action) void {
     const conn = core.getState().conn;
     utils.grabServer(conn);
     if (should_be_visible) _ = xcb.xcb_map_window(conn, s.win.win_id) else _ = xcb.xcb_unmap_window(conn, s.win.win_id);
-    // LAYERING NOTE: The bar triggers reconciliation after visibility/position
-    // changes because the work area geometry changed, affecting all window
-    // placements. This is a write-path side effect from a rendering module —
-    // documented in the check-layers.sh allowlist.
+    // The bar's screen occupancy changed with its visibility; update the
+    // claim so the reconcile below re-derives placement from the new area.
+    syncScreenClaim();
     pipeline.reconcileNow();
     ungrabAndFlush();
-    debug.info("Bar {s} ({s})", .{ if (should_be_visible) "shown" else "hidden", @tagName(action) });
+    debug.info("Bar {s} due to fullscreen-occupancy fact change", .{if (should_be_visible) "shown" else "hidden"});
 }
 
 pub fn updateIfDirty() !void {
     const s = gBar.state orelse return;
+
+    // Fullscreen-occupancy reaction runs even when the bar is currently hidden
+    // (it may need to become visible again on fullscreen exit). Diff the core
+    // fact revision; when changed, we recompute shared-screen visibility. Core
+    // owns the fact; we react over a one-way signal rather than being poked.
+    if (s.last_fullscreen_rev != core.fullscreenRev()) {
+        s.last_fullscreen_rev = core.fullscreenRev();
+        applyFullscreenVisibility();
+    }
     if (!s.is_visible) return;
+
+    // Diff core's fact revisions against what we last drew. Core owns these
+    // facts; we react over a one-way signal (revision counters) rather than
+    // being poked by name. Layout changes force a full redraw (title-data
+    // refetch); window/workspace changes repaint all segments; focus changes
+    // cheaply mark only the title.
+    if (s.last_focus_rev != core.focusRev()) s.markSegmentDirty(.title);
+    if (s.last_window_rev != core.windowRev()) s.markDirty();
+    if (s.last_layout_rev != core.layoutRev()) {
+        gBar.force = true;
+        s.markDirty();
+    }
+    s.last_focus_rev = core.focusRev();
+    s.last_window_rev = core.windowRev();
+    s.last_layout_rev = core.layoutRev();
+
     if (prompt.consumeRedrawRequest()) {
         gBar.force = true;
         s.is_dirty = true;
@@ -1212,3 +1251,44 @@ fn titleClickTrampoline(ptr: *anyopaque, offset: u16) void {
     const s: *State = @ptrCast(@alignCast(ptr));
     handleTitleClick(s, offset);
 }
+
+/// Comptime-registered UI-surface hooks for core's event loop (comptime
+/// reference point — the one place the loop knows the bar exists). Core calls
+/// these through a single `surface` alias; when the bar is absent the whole
+/// set is `null` and every such call site compiles away. The emitter lives in
+/// this module, so detaching the bar detaches its handlers.
+pub const Surfaces = struct {
+    handleExpose: *const fn (*const xcb.xcb_expose_event_t) void,
+    handlePropertyNotify: *const fn (*const xcb.xcb_property_notify_event_t) void,
+    updateIfDirty: *const fn () anyerror!void,
+    pollTimeoutMs: *const fn () i32,
+    onPollWakeup: *const fn () void,
+    updateClock: *const fn () bool,
+    onReload: *const fn () void,
+    // Input routing — the prompt pre-empts key handling (returns true when it
+    // consumed the key), button presses on the bar window are routed to it,
+    // and the three bar config actions mutate bar state.
+    promptHandleKeypress: *const fn (*const xcb.xcb_key_press_event_t, ?*const types.Action) bool,
+    isBarWindow: *const fn (u32) bool,
+    handleButtonPress: *const fn (*const xcb.xcb_button_press_event_t) void,
+    setBarState: *const fn (Action) void,
+    toggleBarSegmentAnchor: *const fn () void,
+    promptToggle: *const fn () void,
+};
+
+/// The concrete surface provided by this (present) bar module.
+pub const surfaces = Surfaces{
+    .handleExpose = handleExpose,
+    .handlePropertyNotify = handlePropertyNotify,
+    .updateIfDirty = updateIfDirty,
+    .pollTimeoutMs = pollTimeoutMs,
+    .onPollWakeup = onPollWakeup,
+    .updateClock = updateClock,
+    .onReload = reload,
+    .promptHandleKeypress = promptHandleKeypress,
+    .isBarWindow = isBarWindow,
+    .handleButtonPress = handleButtonPress,
+    .setBarState = setBarState,
+    .toggleBarSegmentAnchor = toggleBarSegmentAnchor,
+    .promptToggle = promptToggle,
+};

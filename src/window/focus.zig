@@ -9,8 +9,6 @@ const constants = @import("constants");
 const utils = @import("utils");
 const window = @import("window");
 const tracking = @import("tracking");
-const build_options = @import("build_options");
-const bar = if (build_options.has_bar) @import("bar") else null;
 
 // Module state
 //
@@ -239,8 +237,9 @@ const CommitFlags = struct {
     /// Used by pointer_sync for windows that may silently drop focus.
     arm_confirm: bool,
 
-    /// Call bar.scheduleFocusRedraw. False only inside a server grab; the
-    /// caller then calls bar.redrawInsideGrab() instead.
+    /// Bump the core focus fact so focus-consuming surfaces (e.g. the bar's
+    /// title segment) redraw. False only inside a server grab; the caller
+    /// triggers the synchronous in-grab redraw (bar.redrawInsideGrab) instead.
     schedule_bar: bool,
 
     /// New suppress_reason. setFocus derives it via suppressionFor(); direct
@@ -362,7 +361,7 @@ pub fn applyPendingFocus(t: FocusTransition) void {
                 state.?.confirm_win = intent.win;
             }
 
-            if (intent.flags.schedule_bar) if (build_options.has_bar) bar.scheduleFocusRedraw(intent.win);
+            if (intent.flags.schedule_bar) core.bumpFocus();
 
             advertiseActiveWindow(intent.win);
         },
@@ -372,7 +371,7 @@ pub fn applyPendingFocus(t: FocusTransition) void {
             state.?.suppress_reason = .none;
             const cs = core.getState();
             focusNow(cs.conn, cs.root);
-            if (build_options.has_bar) bar.scheduleFocusRedraw(null);
+            core.bumpFocus();
             advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
         },
         .none => {},
@@ -503,7 +502,7 @@ pub fn clearFocus() void {
     state.?.suppress_reason = .none;
     const cs = core.getState();
     focusNow(cs.conn, cs.root);
-    if (build_options.has_bar) bar.scheduleFocusRedraw(null);
+    core.bumpFocus();
     advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
 }
 

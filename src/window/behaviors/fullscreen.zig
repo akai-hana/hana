@@ -13,9 +13,6 @@ const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
 
-const build_options = @import("build_options");
-const bar = if (build_options.has_bar) @import("bar") else null;
-
 /// Window configured fullscreen but awaiting ConfigureNotify confirmation.
 /// Zero when none pending. Set in enterFullscreenCommit; cleared in
 /// notifyConfigureIfPending/resetState.
@@ -90,10 +87,12 @@ pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
     // screen dimensions before we hide the bar. Deferred bar show (exit
     // path) must report non-fullscreen dimensions first. The else-if makes
     // the mutual exclusion explicit: both can never match for the same win.
+    // In both cases we only bump core's fullscreen-occupancy fact — the bar
+    // (a consumer) derives its own hide/show from that fact.
     if (g_pending_bar_hide_win == win) {
         if (width == screen_w and height == screen_h) {
             g_pending_bar_hide_win = 0;
-            if (build_options.has_bar) bar.setBarState(.hide_fullscreen);
+            @import("core").bumpFullscreen();
         }
     } else if (g_pending_bar_show_win == win) {
         if (width != screen_w or height != screen_h) {
@@ -104,7 +103,7 @@ pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
 
 fn resolvePendingBarShow() void {
     g_pending_bar_show_win = 0;
-    if (build_options.has_bar) bar.setBarState(.show_fullscreen);
+    @import("core").bumpFullscreen();
 }
 
 /// Arm the deferred bar-hide from the fullscreenToggle path.

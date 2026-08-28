@@ -17,8 +17,35 @@ const constants = @import("constants");
 const types = @import("types");
 
 const drawing = @import("drawing");
-const carousel = @import("carousel");
 const build_options = @import("build_options");
+// The carousel is the title segment's optional marquee-width scroll helper.
+// When the carousel module is absent (has_seg_carousel), the corresponding
+// config flag (carousel_enabled) is also absent/always-false, so an inert
+// stub — no scrolling, zero offset — is the correct degenerate behavior.
+const carousel = if (build_options.has_seg_carousel) @import("carousel") else struct {
+    pub const gap_px: u16 = 0;
+    pub fn scrollingActive() bool {
+        return false;
+    }
+    pub fn offsetFor(
+        win: u32,
+        title: []const u8,
+        text_w: u16,
+        avail_w: u16,
+        enabled: bool,
+        speed_px_s: u16,
+        now_ms: i64,
+    ) f32 {
+        _ = win;
+        _ = title;
+        _ = text_w;
+        _ = avail_w;
+        _ = enabled;
+        _ = speed_px_s;
+        _ = now_ms;
+        return 0;
+    }
+};
 const wincache = @import("wincache");
 const sync = @import("sync");
 const pipeline = @import("pipeline");

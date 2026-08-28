@@ -10,7 +10,6 @@ const focus = @import("focus");
 const pipeline = @import("pipeline");
 const model_mod = @import("model");
 const build_options = @import("build_options");
-const tiling = if (build_options.has_tiling) @import("tiling") else null;
 const wincache = @import("wincache");
 
 /// Returns the border color for `win`: 0 for fullscreen windows,
@@ -26,7 +25,7 @@ pub inline fn color(win: u32) u32 {
 /// Returns the effective border width for tiled windows. Falls back to
 /// the scaled config value when tiling is disabled or not compiled in.
 pub inline fn width() u16 {
-    const bw: u16 = if (build_options.has_tiling) tiling.getBorderWidth() else 0;
+    const bw: u16 = if (build_options.has_tiling) core.borderWidth() else 0;
     if (bw != 0) return bw;
     const cs = core.getState();
     return utils.scaling.scaleBorderWidth(

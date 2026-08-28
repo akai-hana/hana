@@ -160,6 +160,20 @@ pub fn build(b: *std.Build) !void {
             // clock_test imports the `clock` module, which only exists when
             // src/bar/segments/clock.zig is present (has_seg_clock).
             if (!has_seg_clock and std.mem.eql(u8, entry.key_ptr.*, "clock_test")) continue;
+            // carousel_test imports the `carousel` module, which only exists
+            // when src/bar/segments/title/carousel.zig is present.
+            if (!has_seg_carousel and std.mem.eql(u8, entry.key_ptr.*, "carousel_test")) continue;
+            // tiling_test exercises the tiling layout engine internals; without
+            // src/tiling there is no engine to test, and its `engine.HintsView`
+            // reference no longer resolves.
+            if (!has_tiling and std.mem.eql(u8, entry.key_ptr.*, "tiling_test")) continue;
+            // sync_test replays tiling-centric scenarios (retile, fullscreen
+            // enter/exit, minimize, workspace switch); floating-only has none.
+            if (!has_tiling and std.mem.eql(u8, entry.key_ptr.*, "sync_test")) continue;
+            // workspaces_test exercises the workspaces behavior; without
+            // src/window/behaviors/workspaces.zig its `Workspace` type is
+            // replaced by an empty struct and the test no longer compiles.
+            if (!has_workspaces and std.mem.eql(u8, entry.key_ptr.*, "workspaces_test")) continue;
             const t = b.addTest(.{ .root_module = entry.value_ptr.* });
             unit_test_step.dependOn(&b.addRunArtifact(t).step);
         }

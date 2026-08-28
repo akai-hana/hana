@@ -11,6 +11,7 @@ const model_mod = @import("model");
 const pipeline = @import("pipeline");
 const sync = @import("sync");
 const focus = @import("focus");
+const screen = @import("screen");
 const build_options = @import("build_options");
 const debug = @import("debug");
 
@@ -30,27 +31,24 @@ pub const Ctx = struct {
     withdrawn_was_focused: bool = false,
 };
 
-/// Shared tail of the trivial flip-actions (§C): mark the bar stale and push
-/// ONE reconcile through the grab (scroll snap/clamp duties run inside the
-/// pipeline choke point). scheduleRedraw/scheduleFullRedraw are pure dirty-
-/// flag sets with zero X traffic, so marking before the reconcile is wire-
-/// identical to marking after. Actions whose pinned side-effect ORDER differs
-/// (setBarState before the reconcile, armPendingBarHide after, reconcile-only
-/// tails) keep their bespoke tails instead of growing this helper flags.
+/// Shared tail of the trivial flip-actions (§C): bump the relevant core fact
+/// and push ONE reconcile through the grab (scroll snap/clamp duties run
+/// inside the pipeline choke point). Bumping a fact revision is a pure
+/// counter increment with zero X traffic, so doing it before the reconcile is
+/// wire-identical to doing it after. Actions whose pinned side-effect ORDER
+/// differs (setBarState before the reconcile, armPendingBarHide after,
+/// reconcile-only tails) keep their bespoke tails instead of growing this
+/// helper flags.
 fn retileAndNotify(restack: bool, full_redraw: bool) void {
-    if (build_options.has_bar) {
-        const bar = @import("bar");
-        if (full_redraw) bar.scheduleFullRedraw() else bar.scheduleRedraw();
-    }
+    // Bump core's fact revision for the arrange; the bar (a consumer of the
+    // fact) redraws from its own poll. Core is never informed of "the bar".
+    if (full_redraw) @import("core").bumpLayout() else @import("core").bumpWindow();
     pipeline.reconcileUnderGrabNow(if (restack) .{ .force_restack = true } else .{});
 }
 
 /// Same as retileAndNotify but commits a focus transition inside the grab.
 fn retileAndNotifyWithFocus(restack: bool, full_redraw: bool, ft: focus.FocusTransition) void {
-    if (build_options.has_bar) {
-        const bar = @import("bar");
-        if (full_redraw) bar.scheduleFullRedraw() else bar.scheduleRedraw();
-    }
+    if (full_redraw) @import("core").bumpLayout() else @import("core").bumpWindow();
     pipeline.reconcileUnderGrabNowWithFocus(if (restack) .{ .force_restack = true } else .{}, ft);
 }
 
@@ -66,7 +64,8 @@ fn retileAndNotifyWithFocus(restack: bool, full_redraw: bool, ft: focus.FocusTra
 /// Minimizing THE fullscreen occupant also frees the bar-hide reason: the
 /// bar comes back (setBarState re-derives occupancy itself and no-ops when
 /// another occupant remains or the user toggled the bar off). It runs BEFORE
-/// the reconcile because workAreaRect() depends on bar visibility.
+/// the reconcile because the bar must have updated its screen claim (the
+/// usable-area fact the reconcile reads) before placement is re-derived.
 pub fn minimize(focused: ?model_mod.WindowId) void {
     const win = focused orelse return;
     const m = pipeline.model();
@@ -77,12 +76,12 @@ pub fn minimize(focused: ?model_mod.WindowId) void {
 
     const ft: focus.FocusTransition = if (was_focused) focusFallback(m) else .none;
 
-    if (build_options.has_bar) {
-        const bar = @import("bar");
-        if (fs_ws_before) |fs_ws| {
-            if (fs_ws == m.current) bar.setBarState(.show_fullscreen);
-        }
-        bar.scheduleRedraw(); // minimization itself refreshes the title segment
+    @import("core").bumpWindow(); // minimization itself refreshes the title segment
+    // If the minimized window was the current workspace's fullscreen occupant,
+    // its removal changed fullscreen occupancy: bump the core fact and let the
+    // bar (a consumer) react, instead of poking it by name.
+    if (fs_ws_before) |fs_ws| {
+        if (fs_ws == m.current) @import("core").bumpFullscreen();
     }
 
     pipeline.reconcileUnderGrabNowWithFocus(.{ .force_restack = true }, ft); // Atomicity
@@ -236,7 +235,9 @@ pub fn moveWindowTo(win: model_mod.WindowId, ws_idx: u8) void {
     var ft: focus.FocusTransition = .none;
     if (ws_idx != m.current) {
         if (was_focused) ft = focusFallback(m);
-        if (was_fs_current and build_options.has_bar) @import("bar").setBarState(.show_fullscreen);
+        // Moving the current workspace's fullscreen window away changes the
+        // workspace's fullscreen occupancy: bump the core fact; bar reacts.
+        if (was_fs_current) @import("core").bumpFullscreen();
     }
     retileAndNotifyWithFocus(false, false, ft);
 }
@@ -267,8 +268,9 @@ pub fn tagToggle(win: model_mod.WindowId, ws_idx: u8, protect_current: bool) voi
         pipeline.reconcileUnderGrabNowWithFocus(.{}, ft);
     }
     if (!removing_current) {
-        // Off-workspace change: just stale-mark that workspace's bar segment.
-        if (build_options.has_bar) @import("bar").scheduleRedraw();
+        // Off-workspace change: the tag set changed; bump the fact so the
+        // workspace-aware consumers redraw.
+        @import("core").bumpWindow();
     }
 }
 
@@ -457,7 +459,7 @@ pub fn snapScrollToFocused() void {
     const i = idx orelse return;
 
     const sc = scrollContext(m);
-    const wa = @import("bar").workAreaRect();
+    const wa = screen.workArea(@import("core").getState().screen);
     const i64_slot_w: i64 = sc.slot_w;
     const slot_left = @as(i64, @intCast(i)) * i64_slot_w - p.scroll_offset;
     const slot_right = slot_left + i64_slot_w;
@@ -491,7 +493,7 @@ fn scrollContext(m: *const model_mod.Model) ScrollContext {
     if (!build_options.has_layout_scroll) return .{ .tiled_count = 0, .slot_w = 0, .max_off = 0 };
     const algo_scroll = if (build_options.has_layout_scroll) @import("scroll") else return .{ .tiled_count = 0, .slot_w = 0, .max_off = 0 };
     const n = tiledCountOnCurrent(m);
-    const wa = @import("bar").workAreaRect();
+    const wa = screen.workArea(@import("core").getState().screen);
     const slot_w = algo_scroll.slotWidth(wa.width);
     const max_off = algo_scroll.maxOffset(n, slot_w, wa.width);
     return .{ .tiled_count = n, .slot_w = slot_w, .max_off = max_off };
@@ -510,12 +512,11 @@ pub fn seedParamsFromConfig() void {
     if (!build_options.has_tiling) return;
     const types = @import("types");
     const constants = @import("constants");
-    const tiling = if (build_options.has_tiling) @import("tiling") else return;
     const cs = @import("core").getState();
     const cfg = &cs.config.tiling;
     const max_ws = constants.max_workspaces;
 
-    const default_layout: types.Layout = tiling.layoutFromString(cfg.layout) orelse tiling.defaultLayout();
+    const default_layout: types.Layout = @import("core").layoutFromString(cfg.layout) orelse @import("core").defaultLayout();
 
     // Last override wins (legacy loop-overwrite semantics).
     var layout_lookup: [max_ws]?usize = .{null} ** max_ws;
@@ -536,7 +537,7 @@ pub fn seedParamsFromConfig() void {
             if (layout_lookup[id]) |oi| {
                 const o = cfg.workspace_layout_overrides.items[oi];
                 if (o.layout_idx < cfg.layouts.items.len)
-                    layout = tiling.layoutFromString(cfg.layouts.items[o.layout_idx]) orelse default_layout;
+                    layout = @import("core").layoutFromString(cfg.layouts.items[o.layout_idx]) orelse default_layout;
                 variant = o.variant;
             }
         }
@@ -632,17 +633,16 @@ pub fn switchTo(ws_idx: u8) void {
     // tracking/workspaces mirrors are deleted (read-through facades now).
     m.current = ws_idx;
 
-    // Bar visibility follows the NEW workspace's fullscreen occupant
-    // (legacy executeSwitch line ~685), applied before the reconcile batch.
-    if (build_options.has_bar) {
-        const bar = @import("bar");
-        bar.setBarState(if (model_mod.fullscreenOccupantOnWs(m, ws_idx) != null) .hide_fullscreen else .show_fullscreen);
-        // The workspace indicator always changes on switch. prepareClearFocus
-        // returns .none when last_applied is null (empty→empty switch), so
-        // applyPendingFocus won't mark the bar dirty. Unconditionally schedule
-        // a redraw here so the indicator updates at end-of-batch.
-        bar.scheduleRedraw();
-    }
+    // Bump the window fact: the workspace indicator always changes on switch.
+    // prepareClearFocus returns .none when last_applied is null (empty→empty
+    // switch), so the focus fact alone can't guarantee a redraw; bumping the
+    // window fact here makes the bar redraw at end-of-batch.
+    @import("core").bumpWindow();
+    // Bar visibility follows the NEW workspace's fullscreen occupant. Bump the
+    // core fullscreen fact; the bar reacts and re-derives its claim. (Applied
+    // before the reconcile batch below so the bar's drop of its claim is
+    // visible to the placement that follows.)
+    @import("core").bumpFullscreen();
 
     // Inline the server grab so pointer resolution, model focus, protocol
     // focus, and geometry all land atomically (Gap 4 atomicity fix).
@@ -731,7 +731,7 @@ pub fn mapRequest(win: model_mod.WindowId, target_ws: u8, on_current: bool) void
         }
     }
     focus.initWindowGrabs(win); // protocol-side keygrabs, both paths did this
-    if (build_options.has_bar) @import("bar").scheduleRedraw();
+    @import("core").bumpWindow(); // a window was admitted
 
     if (!on_current) return;
 
@@ -769,11 +769,11 @@ pub fn unmanage(ctx: *Ctx, win: model_mod.WindowId) void {
     // protocol commit runs inside the grab (Gap 1 atomicity fix).
     const ft: focus.FocusTransition = if (was_focused) focusFallback(m) else .none;
 
-    if (build_options.has_bar) {
-        const bar = @import("bar");
-        if (was_fs_current) bar.setBarState(.show_fullscreen); // before reconcile: workAreaRect() depends on visibility
-        bar.scheduleRedraw(); // title segment drops the closed window
-    }
+    @import("core").bumpWindow(); // window removed; title segment drops it
+    // Closing the current workspace's fullscreen occupant releases the area:
+    // bump the core fact (bar reacts, re-derives its claim before the reconcile
+    // below reads the work area).
+    if (was_fs_current) @import("core").bumpFullscreen();
 
     pipeline.reconcileUnderGrabNowWithFocus(.{ .force_restack = true }, ft);
 }

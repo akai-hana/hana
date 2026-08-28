@@ -23,7 +23,11 @@ const actions = @import("actions");
 const restart = @import("restart");
 const restart_state = @import("restart_state");
 const build_options = @import("build_options");
-const tiling = if (build_options.has_tiling) @import("tiling") else null;
+// The bar as an optional comptime TYPE (the codebase's standard has_* idiom).
+// Every call below routes through `bar.surfaces` — the bar's comptime
+// "UI surface" hooks — so they're consolidated behind one accessor and
+// compile away entirely when the bar is absent. The emitter lives in bar,
+// so detaching the bar detaches its handlers.
 const bar = if (build_options.has_bar) @import("bar") else null;
 
 const fd_xcb = 0;
@@ -57,14 +61,12 @@ inline fn eventCast(comptime T: type, event: *anyopaque) T {
 
 fn handleExpose(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_expose_event_t, event);
-    // D8: the plugin registry is gone (two compile-time-known "plugins",
-    // only bar ever hooked anything); direct dispatch behind build flags.
-    if (build_options.has_bar) bar.handleExpose(e);
+    if (build_options.has_bar) bar.surfaces.handleExpose(e);
 }
 
 fn handlePropertyNotify(event: *anyopaque) void {
     const e = eventCast(*xcb.xcb_property_notify_event_t, event);
-    if (build_options.has_bar) bar.handlePropertyNotify(e);
+    if (build_options.has_bar) bar.surfaces.handlePropertyNotify(e);
     window.handlePropertyNotify(e);
 }
 
@@ -221,7 +223,7 @@ pub fn grabKeybindings() void {
 // Ordering is load-bearing:
 //   1. Keybind resolution and DPI scaling run pre-swap on the new config.
 //   2. The swap precedes subsystem reloads (reloadBorders / reloadConfig /
-//      bar.reload) so they rebuild from the NEW config. (The old ordering kept
+//      bar.surfaces.onReload) so they rebuild from the NEW config. (The old ordering kept
 //      stale settings, then freed string slices the new bar had shallow-copied;
 //      a use-after-free on the next draw.)
 //   3. grabKeybindings() runs post-swap because fillGrabCookies() reads the
@@ -250,7 +252,7 @@ fn handleConfigReload() !void {
     const old_ptr = cs.config;
     cs.config = new_ptr;
 
-    if (build_options.has_bar) bar.reload();
+    if (build_options.has_bar) bar.surfaces.onReload();
     actions.applyConfigReload();
     // Borders sweep AFTER applyConfigReload: its reconcile rebuilds geometry,
     // and sweeping first would send every border twice -- once here, once
@@ -358,7 +360,7 @@ fn handleXcbEvents() void {
     // spawn queue entry.
     @import("spawn").drainPendingSpawns();
 
-    if (build_options.has_bar) bar.updateIfDirty() catch |err| debug.err("Bar post-batch update failed: {}", .{err});
+    if (build_options.has_bar) bar.surfaces.updateIfDirty() catch |err| debug.err("Bar post-batch update failed: {}", .{err});
     focus.drainPendingConfirm();
     focus.drainPointerSync();
     // Must run after the event-draining loop above: any EnterNotify a tiling
@@ -385,11 +387,11 @@ pub fn run() !void {
         // No built-in deadline: with no timer sources the loop blocks until
         // an X event or signal arrives. Timer sources (clock segment, prompt
         // cursor blink, carousel marquee) contribute deadlines exclusively
-        // through bar.pollTimeoutMs().
+        // through bar.surfaces.pollTimeoutMs().
         var poll_timeout_ms: i32 = -1;
         var cursor_is_blinking = false;
         if (build_options.has_bar) {
-            const ms = bar.pollTimeoutMs();
+            const ms = bar.surfaces.pollTimeoutMs();
             if (ms >= 0) {
                 cursor_is_blinking = true;
                 poll_timeout_ms = ms;
@@ -434,7 +436,7 @@ pub fn run() !void {
 
         if (ready == 0) {
             if (cursor_is_blinking) {
-                if (build_options.has_bar) bar.onPollWakeup();
+                if (build_options.has_bar) bar.surfaces.onPollWakeup();
                 _ = xcb.xcb_flush(cs.conn);
             }
         } else if ((fds[fd_xcb].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP)) != 0) {
@@ -444,6 +446,6 @@ pub fn run() !void {
             handleXcbEvents();
         }
 
-        if (build_options.has_bar) _ = bar.updateClock(); // return value reserved, currently unused
+        if (build_options.has_bar) _ = bar.surfaces.updateClock(); // return value reserved, currently unused
     }
 }

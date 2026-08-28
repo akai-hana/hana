@@ -16,9 +16,9 @@ const utils = @import("utils");
 const borders = @import("borders");
 const focus = @import("focus");
 const xcb_sink = @import("wire");
+const screen = @import("screen");
 const types = @import("types");
 const build_options = @import("build_options");
-const bar = if (build_options.has_bar) @import("bar") else null;
 
 /// True after init(); tracking's facade gates every model access on this so
 /// boot order never touches the undefined global instance.
@@ -65,12 +65,7 @@ fn ctx() *sync.Ctx {
             .width = cs.screen.width_in_pixels,
             .height = screen_h,
         },
-        .workarea = if (build_options.has_bar) bar.workAreaRect() else .{
-            .x = 0,
-            .y = 0,
-            .width = cs.screen.width_in_pixels,
-            .height = screen_h,
-        },
+        .workarea = screen.workArea(cs.screen),
         .cfg_bw = borders.width(),
         .env = .{
             .margins = .{
@@ -86,7 +81,7 @@ fn ctx() *sync.Ctx {
             .monocle_gaps = variantBool(.monocle),
         },
         .color_of = colorOf,
-        .bar_win = if (build_options.has_bar and bar.isVisible()) bar.getBarWindow() else null,
+        .bar_win = screen.mappedSurfaceWindow(),
     };
     return &g_ctx;
 }
@@ -130,7 +125,7 @@ fn preReconcileDuties() void {
         if (e.mask & @import("model").bit(m.current) == 0) continue;
         n += 1;
     }
-    const wa = if (build_options.has_bar) bar.workAreaRect() else return;
+    const wa = screen.workArea(core.getState().screen);
     const slot_w = algo_scroll.slotWidth(wa.width);
     const max_off = algo_scroll.maxOffset(n, slot_w, wa.width);
     if (n > p.scroll_prev_count) p.scroll_offset = max_off;

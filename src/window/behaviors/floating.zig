@@ -12,10 +12,9 @@ const borders = @import("borders");
 const focus = @import("focus");
 const tracking = @import("tracking");
 
-const build_options = @import("build_options");
 const pipeline = @import("pipeline");
 const actions = @import("actions");
-const bar = if (build_options.has_bar) @import("bar") else null;
+const screen = @import("screen");
 
 // Geometry cookies are all issued before any reply is awaited; one round-trip
 // per batch instead of one per window. 64 covers a typical workspace.
@@ -68,7 +67,7 @@ fn workArea() WorkArea {
     const cs = core.getState();
     const sw: i32 = cs.screen.width_in_pixels;
     const bw2: i32 = @as(i32, borders.width()) * 2;
-    const work = if (build_options.has_bar) bar.workAreaRect() else .{ .x = 0, .y = 0, .width = cs.screen.width_in_pixels, .height = cs.screen.height_in_pixels };
+    const work = screen.workArea(cs.screen);
     return .{
         .left = 0,
         .right = sw - bw2,
@@ -166,7 +165,7 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
     const cs = core.getState();
     if (!cs.config.drag_enabled) return;
     if (g_state.drag.active) return;
-    if (build_options.has_bar and bar.isBarWindow(win)) return;
+    if (screen.isSurfaceWindow(win)) return;
     if (@import("model").isFullscreenMode(pipeline.model(), win)) return; // fullscreen geometry must not be touched
 
     // Model/sync truth (floating base or last-sent rect) over a live XCB

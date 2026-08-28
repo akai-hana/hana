@@ -15,8 +15,7 @@ const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else 
 const minimize = if (build_options.has_minimize) @import("minimize") else null;
 const workspaces = if (build_options.has_workspaces) @import("workspaces") else null;
 const build_options = @import("build_options");
-const bar = if (build_options.has_bar) @import("bar") else null;
-const tiling = if (build_options.has_tiling) @import("tiling") else null;
+const screen_mod = @import("screen");
 const wincache = @import("wincache");
 const floating = if (build_options.has_floating) @import("floating") else null;
 const borders = @import("borders");
@@ -574,7 +573,7 @@ inline fn tilingActive() bool {
 
 /// True for the null window, the root, or the bar, never valid focus/manage targets.
 pub inline fn isInvalidWindow(win: u32) bool {
-    return win == 0 or win == core.getState().root or (build_options.has_bar and bar.isBarWindow(win));
+    return win == 0 or win == core.getState().root or screen_mod.isSurfaceWindow(win);
 }
 
 pub inline fn isValidManagedWindow(win: u32) bool {
@@ -923,10 +922,8 @@ pub fn adoptRootWindows() !usize {
         if (tracking.isManaged(win)) continue;
 
         // The WM's own bar window is a root child we created; leave it alone.
-        if (build_options.has_bar) {
-            if (bar.winId()) |bar_win| {
-                if (bar_win == win) continue;
-            }
+        if (screen_mod.surfaceWindow()) |bar_win| {
+            if (bar_win == win) continue;
         }
 
         const attr_reply = xcb.xcb_get_window_attributes_reply(
@@ -1113,7 +1110,7 @@ pub fn geometryFromXcbReply(reply: *xcb.xcb_get_geometry_reply_t) utils.Rect {
 fn resolveConfigureGeometry(win: u32) ?utils.Rect {
     // Model/sync truth — floating base or last-sent ledger rect.
     if (@import("sync").truthRect(pipeline.model(), win)) |rect| {
-        const border: u16 = (if (build_options.has_tiling) tiling.getBorderWidth() else 0);
+        const border: u16 = (if (build_options.has_tiling) @import("core").borderWidth() else 0);
         return .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height, .border_width = border };
     }
 
