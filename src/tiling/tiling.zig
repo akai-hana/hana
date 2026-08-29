@@ -1,11 +1,5 @@
 //! Layout config mapping (stateless).
-//!
-//! The legacy retile engine and its per-window caches are gone: placement is
-//! computed by src/layout/ over the model, sync owns the wire, and the shared
-//! per-window cache lives in window/wincache.zig. What remains are live
-//! mappings from static config (+ model overrides) to layout queries used by
-//! the bar, input diagnostics, and actions -- all computed on demand, no
-//! module state.
+//! Resolves layout names and serves live tiling config to consumers.
 
 const std = @import("std");
 

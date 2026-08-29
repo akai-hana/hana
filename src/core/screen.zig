@@ -1,14 +1,14 @@
-//! core/screen.zig — the usable-screen-area fact.
+//! core/screen.zig: the usable-screen-area fact.
 //!
 //! Core owns "how much of the screen is left for window placement after all
-//! surfaces that occupy screen space are accounted for." Any such surface — a
-//! bar, a dock, a future taskbar — contributes a "claim": an edge plus how
+//! surfaces that occupy screen space are accounted for." Any such surface (a
+//! bar, a dock, a future taskbar) contributes a "claim": an edge plus how
 //! many pixels it takes from that edge, released when it stops occupying
 //! space. Core computes `workArea()` from the set of active claims and the
 //! physical screen dimensions.
 //!
 //! Surfaces push claims and read nothing back beyond `workArea()`. They never
-//! hand core a final number — the subtraction math is core's, so the fact
+//! hand core a final number; the subtraction math is core's, so the fact
 //! lives here, not in any particular surface. With no active claims, the
 //! usable area is the full screen (the natural state when the bar is absent).
 
@@ -28,18 +28,18 @@ const Claim = struct {
 // Compile-time number of claim slots. Each surface that exists in a given
 // build owns one slot, addressed by a comptime id. Today only the bar claims
 // screen space; a future surface adds its own slot here (and its own id
-// constant), keeping the ledger fully comptime-sized — no allocation, no
-// runtime registration.
+// constant), keeping the ledger fully comptime-sized (no allocation, no
+// runtime registration).
 pub const max_claims = if (build_options.has_bar) 1 else 0;
 
 // The bar is surface id 0 (present only when has_bar).
 pub const bar_id: ?u8 = if (build_options.has_bar) 0 else null;
 
-var claims: [max_claims]Claim = undefined;
+var claims: [max_claims]Claim = [_]Claim{.{}} ** max_claims;
 
 /// The X window id of the chrome surface (the bar), registered by that
-/// surface at init/deinit. Lets core recognize "this window is chrome" —
-/// exclude it from management, route clicks to it — without core naming the
+/// surface at init/deinit. Lets core recognize "this window is chrome" (to
+/// exclude it from management, route clicks to it) without core naming the
 /// surface. Null when no surface is present.
 var surface_win: ?core.WindowId = null;
 

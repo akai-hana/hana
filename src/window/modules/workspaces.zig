@@ -1,12 +1,5 @@
 //! Workspace state holder.
-//!
-//! Switching, tagging, moving and all-view live in the model
-//! (`actions.switchTo/tagToggle/moveWindowTo/allViewToggle` + sync); the
-//! legacy engine this module once hosted is deleted. What remains is the
-//! small state holder other modules read: the workspace list and which one
-//! is current. `Workspace` keeps per-ws config override fields only because
-//! workspaces.init() applies them once at boot; runtime layout truth is the
-//! model's per-ws params.
+//! Keeps the workspace list and per-ws config overrides applied once at boot; switching, tagging, and moving live in the model.
 
 const std = @import("std");
 
@@ -68,7 +61,7 @@ pub fn applyWorkspaceOverrides(
 }
 
 /// Last matching override wins: duplicate entries for one workspace now
-/// resolve identically across ALL per-ws fields — this lookup, the
+/// resolve identically across ALL per-ws fields; this lookup, the
 /// master-count loop below, and actions.seedParamsFromConfig's layout lookup
 /// all use loop-overwrite (last-wins).
 fn lookupVariant(cfg_tiling: *const types.TilingConfig, id: u8) ?types.LayoutVariantOverride {
@@ -114,3 +107,10 @@ pub fn deinit() void {
 pub fn removeWindow(win: u32) void {
     tracking.removeWindow(win);
 }
+
+/// This module's window sub-system contribution: lifecycle only, since
+/// workspace state lives in the model.
+pub const module: @import("plugin").WindowModule = .{
+    .init = init,
+    .deinit = deinit,
+};

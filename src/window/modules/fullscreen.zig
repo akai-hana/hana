@@ -1,11 +1,5 @@
 //! Fullscreen protocol-side residue.
-//!
-//! Fullscreen TRUTH lives in the model (`Entry.mode == .fullscreen`);
-//! query it through model.isFullscreenMode / model.fullscreenOccupantOnWs.
-//! This module owns only what is genuinely protocol-side:
-//!   - deferred bar hide/show armed around a fullscreen transition and
-//!     resolved on ConfigureNotify confirmation,
-//!   - EWMH _NET_WM_STATE_FULLSCREEN advertisement.
+//! Owns the deferred bar hide/show armed around transitions and the EWMH _NET_WM_STATE_FULLSCREEN advertisement; fullscreen truth lives in the model.
 
 const std = @import("std");
 
@@ -14,13 +8,13 @@ const xcb = core.xcb;
 const utils = @import("utils");
 
 /// Window configured fullscreen but awaiting ConfigureNotify confirmation.
-/// Zero when none pending. Set in enterFullscreenCommit; cleared in
-/// notifyConfigureIfPending/resetState.
+/// Zero when none pending. Set by armPendingBarHide; cleared in
+/// notifyConfigureIfPending/resetState/onWindowGone.
 var g_pending_bar_hide_win: u32 = 0;
 
 /// Window that has exited fullscreen and been retiled but awaits ConfigureNotify
-/// confirming its new dimensions. Zero when none pending. Set in exitFullscreen
-/// after retile; cleared in notifyConfigureIfPending, resetState, onWindowGone.
+/// confirming its new dimensions. Zero when none pending. Set by
+/// armPendingBarShow; cleared in notifyConfigureIfPending, resetState, onWindowGone.
 var g_pending_bar_show_win: u32 = 0;
 
 // EWMH atoms for _NET_WM_STATE_FULLSCREEN, resolved from the shared atom
@@ -37,7 +31,7 @@ fn resetState() void {
     g_net_wm_state_fullscreen = 0;
 }
 
-pub fn init() void {
+pub fn init() anyerror!void {
     resetState();
 
     // Re-resolve the EWMH fullscreen atoms from the shared atom cache rather
@@ -50,10 +44,9 @@ pub fn deinit() void {
     resetState();
 }
 
-// Set or clear the EWMH _NET_WM_STATE_FULLSCREEN property on `win`.
-// Guards on both atoms being valid before touching the property.
-// Pub for actions.fullscreenToggle — EWMH advertisement stays
-// protocol-side.
+// Sets or clears the EWMH _NET_WM_STATE_FULLSCREEN property on `win`.
+// Guards on both EWMH atoms being valid; pub for actions.fullscreenToggleWindow,
+// keeping the advertisement protocol-side.
 pub fn setEwmhFullscreenState(win: u32, is_fullscreen: bool) void {
     if (g_net_wm_state == xcb.XCB_ATOM_NONE or
         g_net_wm_state_fullscreen == xcb.XCB_ATOM_NONE) return;
@@ -71,7 +64,7 @@ pub fn setEwmhFullscreenState(win: u32, is_fullscreen: bool) void {
 }
 
 // The legacy commit helpers (enterFullscreenCommit / exitFullscreenCommit /
-// applyFullscreenGeometry) are deleted — sync.reconcile derives their wire
+// applyFullscreenGeometry) are deleted; sync.reconcile derives their wire
 // traffic from the model.
 
 /// Called from the ConfigureNotify handler in events.zig. Drives both deferred
@@ -87,7 +80,7 @@ pub fn notifyConfigureIfPending(win: u32, width: u16, height: u16) void {
     // screen dimensions before we hide the bar. Deferred bar show (exit
     // path) must report non-fullscreen dimensions first. The else-if makes
     // the mutual exclusion explicit: both can never match for the same win.
-    // In both cases we only bump core's fullscreen-occupancy fact — the bar
+    // In both cases we only bump core's fullscreen-occupancy fact; the bar
     // (a consumer) derives its own hide/show from that fact.
     if (g_pending_bar_hide_win == win) {
         if (width == screen_w and height == screen_h) {
@@ -120,11 +113,22 @@ pub fn armPendingBarShow(win: u32) void {
 }
 
 /// Called when a window is destroyed; clears its pending deferred bar op so
-/// the bar doesn't stay stuck. Both cases need it: show (window dies
-/// between exit and its ConfigureNotify) AND hide (window dies between
-/// armPendingBarHide and its ConfigureNotify — nothing else would ever
+/// the bar doesn't stay stuck. Both cases need it: show (window dies between
+/// exit and its ConfigureNotify) and hide (window dies between
+/// armPendingBarHide and its ConfigureNotify; nothing else would ever
 /// resolve the hide, leaving the bar hidden for good).
 pub fn onWindowGone(win: u32) void {
     if (g_pending_bar_show_win == win) resolvePendingBarShow();
     if (g_pending_bar_hide_win == win) g_pending_bar_hide_win = 0;
 }
+
+/// This module's window sub-system contribution: the fullscreen protocol hooks.
+pub const module: @import("plugin").WindowModule = .{
+    .init = init,
+    .deinit = deinit,
+    .notifyConfigureIfPending = notifyConfigureIfPending,
+    .onWindowGone = onWindowGone,
+    .setEwmhFullscreenState = setEwmhFullscreenState,
+    .armPendingBarHide = armPendingBarHide,
+    .armPendingBarShow = armPendingBarShow,
+};

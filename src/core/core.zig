@@ -69,7 +69,7 @@ pub const State = struct {
     /// (focus, window/workspace state, layout) whenever that fact changes.
     /// Consumers (e.g. the bar, over its draw poll) diff these revisions
     /// against their last-seen value to decide what to redraw, instead of
-    /// being poked by name. Non-core modules never mutate core's facts —
+    /// being poked by name. Non-core modules never mutate core's facts;
     /// they bump the revision of the fact they changed.
     facts: Facts = .{},
 };
@@ -132,7 +132,7 @@ pub inline fn bumpLayout() void {
 // callers read them here instead of importing the tiling module, so that
 // `tiling` is a true plugin. The implementations are thin config reads; the
 // layout name<->tag mapping lives in `types.layout_table`. None of these name
-// any tiling module — they are just "can this WM tile, how wide are borders,
+// any tiling module; they are just "can this WM tile, how wide are borders,
 // what is the active layout" questions core can answer from its config.
 
 /// Whether the tiling windowing paradigm is enabled (config fact).

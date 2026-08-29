@@ -16,10 +16,6 @@ const pipeline = @import("pipeline");
 const actions = @import("actions");
 const screen = @import("screen");
 
-// Geometry cookies are all issued before any reply is awaited; one round-trip
-// per batch instead of one per window. 64 covers a typical workspace.
-const batch = 64;
-
 pub const DragMode = enum { move, resize };
 
 /// Corner closest to the cursor at drag-start; the opposite corner is the
@@ -41,7 +37,8 @@ pub const DragState = struct {
     start_win_width: u16 = 0,
     start_win_height: u16 = 0,
     /// Geometry from the last updateDrag call. Zero means no motion event
-    /// arrived; saved to the geometry cache by stopDrag on exit.
+    /// arrived; consumed by the resize ConfigureRequest deny while the
+    /// drag is active.
     last_rect: utils.Rect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
     /// Resolved once at drag start: snap distance in pixels (0 = disabled) and
     /// the work-area edges used for snapping. Both are constant for the whole
@@ -76,7 +73,7 @@ fn workArea() WorkArea {
     };
 }
 
-/// Which sides of the window the grabbed corner anchors to (left/top = the
+/// 8-directional resize direction nearest the cursor at a given point.
 pub const ResizeDirection = enum { none, n, s, e, w, ne, nw, se, sw };
 
 /// Which sides of the window the grabbed corner anchors to (left/top = the
@@ -212,7 +209,7 @@ fn computeMoveRect(drag: DragState, dx: i16, dy: i16, wa: WorkArea, was_pending_
     const win_w: i32 = drag.start_win_width;
     const win_h: i32 = drag.start_win_height;
     // Raw drag coords are unbounded i32; pin down to the i16 wire range
-    // before the narrowing cast so a window dragged beyond ±32767 (or into
+    // before the narrowing cast so a window dragged beyond +/-32767 (or into
     // negative X11 coords) can't UB in ReleaseFast.
     const mx: i32 = std.math.clamp(if (was_pending_float) raw_x else snapAxis(raw_x, win_w, wa.left, wa.right, snap), std.math.minInt(i16), std.math.maxInt(i16));
     const my: i32 = std.math.clamp(if (was_pending_float) raw_y else snapAxis(raw_y, win_h, wa.top, wa.bottom, snap), std.math.minInt(i16), std.math.maxInt(i16));
@@ -290,7 +287,7 @@ pub fn updateDrag(x: i16, y: i16) void {
 }
 
 /// Ends the active drag. The model floating rect already holds the final
-/// position (actions.dragRect ran on every tick); nothing else to record —
+/// position (actions.dragRect ran on every tick); nothing else to record;
 /// the sync ledger is the wire truth.
 pub fn stopDrag() void {
     g_state = .{};
@@ -319,3 +316,15 @@ pub fn isResizingWindow(win: u32) bool {
 pub fn getDragLastRect() utils.Rect {
     return g_state.drag.last_rect;
 }
+
+/// This module's window sub-system contribution: the floating drag/resize
+/// commands floating owns.
+pub const module: @import("plugin").WindowModule = .{
+    .startDrag = startDrag,
+    .stopDrag = stopDrag,
+    .updateDrag = updateDrag,
+    .isDragging = isDragging,
+    .isResizingWindow = isResizingWindow,
+    .getDragLastRect = getDragLastRect,
+    .cancelDragForWindow = cancelDragForWindow,
+};

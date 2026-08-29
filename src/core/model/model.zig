@@ -2,24 +2,22 @@
 //!
 //! Layer rule: imports are std + utils + constants ONLY. No X11 access.
 //!
-//! Threading model: the Model is single-threaded — it is accessed only from
-//! the event-loop thread.  All mutations happen sequentially, so no locks or
+//! Threading model: the Model is single-threaded, accessed only from the
+//! event-loop thread. All mutations happen sequentially, so no locks or
 //! atomics are needed on Model fields.
 //!
 //! Strangler pattern: some legacy bookkeeping (e.g. fullscreen records, tiled
 //! order lists) is still updated alongside Model mutations for backward
 //! compatibility with subsystems that have not yet migrated to pure Model
-//! queries.  These dual-writes will be removed as the migration completes.
+//! queries. These dual-writes will be removed as the migration completes.
 const std = @import("std");
 const utils = @import("utils");
 const constants = @import("constants");
 
 pub const WindowId = u32;
-// TYPE NOTE: WorkspaceId (core.zig) is the canonical type for workspace
-// identifiers. Model code uses raw integers for internal array indexing.
-// The conversion happens at the entry-point boundary.
-/// Local alias so model never imports core. Convert core.WorkspaceId via
-/// `.index` at entry points.
+/// Local alias so model never imports core. Core's canonical WorkspaceId is
+/// converted via `.index` at the entry-point boundary; inside the model, ws
+/// values are raw integers used directly as array indices.
 pub const WSId = u16;
 pub const Mask = u64;
 
@@ -27,12 +25,10 @@ pub inline fn bit(ws: WSId) Mask {
     return @as(Mask, 1) << @intCast(ws);
 }
 
-/// REUSE the exact identifier that exists in constants.zig for the max
-/// workspace count (`max_workspaces`); if named differently there, alias it
-/// here under MAX_WS without renaming the original.
+/// Alias for the workspace count ceiling; the canonical value lives in
+/// constants so config plumbing and legacy code share one source.
 const MAX_WS = constants.max_workspaces;
-/// REUSE the exact identifier for the minimize capacity constant used by
-/// legacy minimize.zig (`max_minimized`).
+/// Alias for the minimized-window capacity used by legacy minimize.zig.
 const MAX_MINIMIZED = constants.max_minimized;
 
 pub const ALL_MASK: Mask = ~@as(Mask, 0);
@@ -41,7 +37,7 @@ pub const ALL_MASK: Mask = ~@as(Mask, 0);
 /// pipeline converts between the two during migration. Do NOT import
 /// layouts from here (layer rule).
 pub const SizeHints = struct {
-    max_width: u16 = 0, // PMaxSize
+    max_width: u16 = 0, // PMaxSize limit
     max_height: u16 = 0,
     inc_width: u16 = 0, // PResizeInc: w = base_width + N * inc_width
     inc_height: u16 = 0,
@@ -111,8 +107,8 @@ pub const WsState = struct {
 
 pub const store_capacity = 128;
 pub const mru_capacity = 16;
-/// Bounded per-workspace tiled membership list (defined capacity,
-/// total operations — transitions never allocate, so no OOM rollback paths).
+/// Bounded per-workspace tiled membership list (defined capacity; total
+/// operations, so transitions never allocate and have no OOM rollback paths).
 pub const max_tiled_per_ws = constants.Limits.max_tiled_windows;
 pub const OrderList = utils.BoundedList(WindowId, max_tiled_per_ws);
 pub const MruList = utils.BoundedList(WindowId, mru_capacity);
@@ -131,7 +127,7 @@ pub const Model = struct {
     /// Monotonic minimize counter; stamps MinimizedPayload.seq so actions can
     /// pick LIFO/FIFO restore targets without a side buffer.
     next_seq: u32 = 0,
-    /// Incremental counter for minimized windows — avoids O(n) scan.
+    /// Incremental counter for minimized windows; avoids an O(n) scan.
     count_minimized: u32 = 0,
 };
 
@@ -147,8 +143,8 @@ pub fn findHome(m: *const Model, win: WindowId) ?WSId {
     if (m.store.get(win)) |e| {
         if (e.home_ws) |h| return h;
     }
-    for (&m.ws, 0..) |*s, i| {
-        if (s.tiled_order.indexOfScalar(win) != null) return @intCast(i);
+    for (0..m.ws.len) |i| {
+        if (m.ws[i].tiled_order.indexOfScalar(win) != null) return @intCast(i);
     }
     return null;
 }
@@ -166,7 +162,8 @@ pub fn register(m: *Model, win: WindowId, hint_ws: ?WSId) error{CapacityFull}!vo
         .mask = bit(target),
         .mode = .{ .base = .tiled },
     }) catch return error.CapacityFull;
-    // Defensive: BoundedList.append returns bool, catch path is for future allocator-backed lists
+    // Defensive: BoundedList.append returns a bool; the catch-style guard
+    // would only be needed for a future allocator-backed list.
     if (!m.ws[target].tiled_order.append(win)) {
         _ = m.store.remove(win);
         return error.CapacityFull;
@@ -174,7 +171,7 @@ pub fn register(m: *Model, win: WindowId, hint_ws: ?WSId) error{CapacityFull}!vo
     // home_ws cache: set AFTER tiled_order append succeeds so the cache
     // is only valid when the window actually has a tiled slot.
     ptr.home_ws = target;
-    // NOTE: master-fifo spawn placement lives in actions.mapRequest — this
+    // Master-fifo spawn placement lives in actions.mapRequest; this
     // primitive is a dumb membership insert.
 }
 
@@ -364,7 +361,7 @@ pub fn moveWindowToWs(m: *Model, win: WindowId, ws: WSId) void {
         return;
     }
     // Fullscreen record follows the move (legacy transferFullscreenRecord);
-    // destination occupied ⇒ drop this one rather than clobber the resident.
+    // a destination owner drops this one rather than clobbering the resident.
     if (e.mode == .fullscreen and e.mode.fullscreen.ws != ws) {
         if (fullscreenOccupied(m, win, ws)) {
             e.mode = .{ .base = e.mode.fullscreen.base };
@@ -554,9 +551,32 @@ pub fn visibleOn(m: *const Model, win: WindowId, ws: WSId) bool {
     return e.mask & bit(ws) != 0;
 }
 
+/// True when `win` currently holds a minimized record in the model.
+pub fn isMinimized(m: *const Model, win: WindowId) bool {
+    const e = m.store.get(win) orelse return false;
+    return e.mode == .minimized;
+}
+
+/// Fills `set` with every currently minimized window ID, replacing any prior
+/// contents. Called by bar.zig to build the per-frame minimized set; the
+/// legacy minimize.zig facade now delegates here.
+pub fn collectMinimizedIntoSet(
+    m: *const Model,
+    set: *std.AutoHashMapUnmanaged(WindowId, void),
+    allocator: std.mem.Allocator,
+) !void {
+    set.clearRetainingCapacity();
+    var seq: usize = 0;
+    while (seq < m.store.count()) : (seq += 1) {
+        const item = m.store.at(seq);
+        if (item.val.mode == .minimized)
+            try set.put(allocator, item.key, {});
+    }
+}
+
 /// Fullscreen workspace record of `win`, null unless its current mode is
 /// fullscreen. Callers about to DROP the store entry (unmanage paths) must
-/// read this BEFORE removal — afterwards it is always null.
+/// read this BEFORE removal; afterwards it is always null.
 pub fn fullscreenWsOf(m: *const Model, win: WindowId) ?WSId {
     const e = m.store.get(win) orelse return null;
     return switch (e.mode) {
@@ -575,7 +595,7 @@ pub fn isFullscreenMode(m: *const Model, win: WindowId) bool {
 }
 
 /// Whether `win` is fullscreen AND its record targets workspace `ws`.
-/// Unlike fullscreenOccupantOnWs this does NOT consult visibility — callers
+/// Unlike fullscreenOccupantOnWs this does NOT consult visibility; callers
 /// use it for pre-toggle classification and was-fullscreen captures.
 pub fn isFullscreenOnWs(m: *const Model, win: WindowId, ws: WSId) bool {
     const e = m.store.get(win) orelse return false;
@@ -610,15 +630,14 @@ pub fn fallbackFocusCandidate(m: *const Model, ws: WSId) ?WindowId {
     //    focused one. visibleOn rejects minimized entries, including the
     //    just-minimized window itself.
     const mru = &m.ws[ws].focus_mru;
-    for (mru.items[0..mru.len]) |cand| {
+    for (mru.constSlice()) |cand| {
         if (visibleOn(m, cand, ws)) return cand;
     }
     // 2. reversed tiled_order of the workspace.
-    const order = &m.ws[ws].tiled_order;
-    var j = order.items.len;
+    var j = m.ws[ws].tiled_order.len;
     while (j > 0) {
         j -= 1;
-        const cand = order.items[j];
+        const cand = m.ws[ws].tiled_order.items[j];
         if (visibleOn(m, cand, ws)) return cand;
     }
     // 3. any floating window on ws (base mode, not in tiled_order).
@@ -628,7 +647,7 @@ pub fn fallbackFocusCandidate(m: *const Model, ws: WSId) ?WindowId {
         const it = m.store.at(k);
         if (it.val.mode != .base) continue;
         if (!visibleOn(m, it.key, ws)) continue;
-        if (order.indexOfScalar(it.key) == null) return it.key;
+        if (m.ws[ws].tiled_order.indexOfScalar(it.key) == null) return it.key;
     }
     return null;
 }

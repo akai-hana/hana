@@ -165,7 +165,7 @@ pub fn loaded() ?*const StateFile {
 }
 
 /// Restores model-level fields into the model: current/focused/all_view/
-/// next_seq, per-ws params, tiled_order and focus_mru — pruned to windows
+/// next_seq, per-ws params, tiled_order and focus_mru (pruned to windows
 /// that are actually registered (closed or never adopted ones are dropped).
 /// Call AFTER the adoption pass registered the surviving windows.
 ///
@@ -203,7 +203,7 @@ pub fn applyModelLevel(m: *model.Model) void {
     // Membership repair: the adoption pass registered every surviving window
     // as a base-tiled member of its home workspace (which also appended it to
     // tiled_order), but the loop above clears and rebuilds tiled_order from a
-    // file that may not record everything — a record-less first restore, or a
+    // file that may not record everything (a record-less first restore, or a
     // window whose tiled slot was dropped before the file was written. Without
     // a tiled slot the window has no placement and the reconcile parks it
     // offscreen indefinitely. Re-append any base-tiled member that the file

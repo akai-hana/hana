@@ -707,7 +707,7 @@ test "T33: fullscreen-prev restore re-adds slot; exit-fullscreen retiles" {
     try assertSingleMembership(&m);
 
     // The reported final step: leaving fullscreen must return a TILEABLE,
-    // engine-placed window — not a home-less base.tiled orphan.
+    // engine-placed window - not a home-less base.tiled orphan.
     try testing.expect(model.toggleFullscreen(&m, 1));
     const back = m.store.get(1).?;
     try testing.expect(back.mode == .base and back.mode.base == .tiled);
@@ -749,7 +749,7 @@ test "T34: fallbackFocusCandidate tiers pick the previous focus" {
     try testing.expectEqual(@as(?WindowId, 10), model.fallbackFocusCandidate(&m, 0));
 
     // Minimizing the FOCUSED window (10): the previous focus (11) wins via
-    // the MRU tier even though 10 is still newest in the MRU list — visibleOn
+    // the MRU tier even though 10 is still newest in the MRU list - visibleOn
     // rejects minimized entries.
     try model.minimize(&m, 10);
     try testing.expectEqual(@as(?WindowId, 11), model.fallbackFocusCandidate(&m, 0));
@@ -783,7 +783,7 @@ test "T35: fullscreenWsOf reports the record and null otherwise" {
     try testing.expectEqual(@as(?WSId, null), model.fullscreenWsOf(&m, 31)); // not fullscreen
 
     // After minimize-from-fullscreen the record is GONE (parked inside
-    // prev) — callers must capture before dropping/removal, never after.
+    // prev) - callers must capture before dropping/removal, never after.
     try model.minimize(&m, 30);
     try testing.expectEqual(@as(?WSId, null), model.fullscreenWsOf(&m, 30));
 }
@@ -868,16 +868,16 @@ test "home_ws: findHome uses cache" {
     var m = makeModel();
     regCur(&m, 1);
     try testing.expectEqual(@as(?WSId, 0), m.store.get(1).?.home_ws);
-    // findHome should return the cached value
+    // findHome reads the cached home.
     try testing.expectEqual(@as(?WSId, 0), model.findHome(&m, 1));
 }
 
 test "home_ws: findHome scan fallback when cache is null" {
     var m = makeModel();
     regCur(&m, 1);
-    // Clear the cache to simulate a legacy entry
+    // A null cache simulates a legacy entry with no recorded home.
     m.store.getPtr(1).?.home_ws = null;
-    // findHome should scan tiled_order and still return the correct home
+    // findHome scans tiled_order and recovers the correct home.
     try testing.expectEqual(@as(?WSId, 0), model.findHome(&m, 1));
 }
 
@@ -902,10 +902,10 @@ test "home_ws: moveWindowToWs uses cache" {
     var m = makeModel();
     regCur(&m, 1);
     try testing.expectEqual(@as(?WSId, 0), m.store.get(1).?.home_ws);
-    // moveWindowToWs should use the cached home_ws, not scan
+    // moveWindowToWs reads the cached home rather than scanning.
     model.moveWindowToWs(&m, 1, 5);
-    // Window is now on ws 5; home_ws should still be the original home
-    // (home_ws tracks original home, not current ws)
+    // home_ws tracks the original home, not the current workspace, so it
+    // stays 0 while the window lands on ws 5.
     try expectOrder(&m, 5, &.{1});
 }
 
@@ -913,10 +913,9 @@ test "home_ws: detachToFloating clears cache" {
     var m = makeModel();
     regCur(&m, 1);
     try testing.expectEqual(@as(?WSId, 0), m.store.get(1).?.home_ws);
-    // We can't call actions.detachToFloating from model tests (no X11),
-    // but we can verify the model-level behavior by checking the Entry.
-    // The actions code does: e.home_ws = null after detach.
-    // Here we test that a floating window's home_ws is null.
+    // The window-layer detach path (actions) clears home_ws; model tests
+    // have no X11, so verify the resulting state directly: a floating entry
+    // carries a null home_ws.
     const e = m.store.getPtr(1).?;
     e.mode = .{ .base = .{ .floating = .{ .x = 0, .y = 0, .width = 100, .height = 100 } } };
     e.home_ws = null;
@@ -927,17 +926,15 @@ test "home_ws: detachToFloating clears cache" {
 test "restoreAllOnWs restores in slot order" {
     var m = makeModel();
     defer deinitModel(&m);
-    // Register 3 windows on workspace 0
+    // Minimize every window on ws 0, then restore them all in one call.
     model.register(&m, 10, 0) catch unreachable;
     model.register(&m, 20, 0) catch unreachable;
     model.register(&m, 30, 0) catch unreachable;
-    // Minimize all three
     try model.minimize(&m, 10);
     try model.minimize(&m, 20);
     try model.minimize(&m, 30);
-    // Restore all on ws 0
     model.restoreAllOnWs(&m, 0);
-    // Verify all are restored and in tiled_order
+    // No window may stay minimized after the restore.
     const e10 = m.store.get(10) orelse unreachable;
     const e20 = m.store.get(20) orelse unreachable;
     const e30 = m.store.get(30) orelse unreachable;
@@ -953,13 +950,13 @@ test "cycleLayout wraps around" {
     model.switchTo(&m, 0);
     const start_kind = m.ws[0].params.kind;
     const Count = @typeInfo(model.LayoutKind).@"enum".fields.len;
-    // Cycle forward through all layouts -> should wrap back to start
+    // One full cycle forward returns to the starting layout.
     for (0..Count) |_| model.cycleLayout(&m, 1);
     try testing.expectEqual(start_kind, m.ws[0].params.kind);
-    // Cycle backward 1 from start -> should wrap to last variant
+    // A single backward step leaves the start layout (wraps to the last).
     model.cycleLayout(&m, -1);
     try testing.expect(m.ws[0].params.kind != start_kind);
-    // Cycle forward 1 -> back to start
+    // One forward step recovers the start layout.
     model.cycleLayout(&m, 1);
     try testing.expectEqual(start_kind, m.ws[0].params.kind);
 }
@@ -969,9 +966,9 @@ test "adjustMasterWidth clamps" {
     var m = makeModel();
     defer deinitModel(&m);
     model.switchTo(&m, 0);
-    model.adjustMasterWidth(&m, 10.0); // Way over
+    model.adjustMasterWidth(&m, 10.0); // far above the ceiling
     try testing.expect(m.ws[0].params.master_width <= 0.95);
-    model.adjustMasterWidth(&m, -10.0); // Way under
+    model.adjustMasterWidth(&m, -10.0); // far below the floor
     try testing.expect(m.ws[0].params.master_width >= 0.05);
 }
 
@@ -984,10 +981,10 @@ test "setFloatingRect updates floating window geometry" {
     const new_r: utils.Rect = .{ .x = 50, .y = 60, .width = 400, .height = 300 };
     model.setFloatingRect(&m, 5, new_r);
     try testing.expect(new_r.eql(m.store.get(5).?.mode.base.floating));
-    // Tiled window: no-op
+    // A tiled window is untouched by geometry updates.
     model.register(&m, 6, 0) catch unreachable;
     model.setFloatingRect(&m, 6, new_r);
     try testing.expect(m.store.get(6).?.mode.base == .tiled);
-    // Unknown window: no-op (should not crash)
+    // An unknown window is ignored without crashing.
     model.setFloatingRect(&m, 999, new_r);
 }

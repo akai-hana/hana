@@ -20,7 +20,7 @@ tokens, PIDs/times scrubbed) so runs are diffable.
 `xephyr`/`wmctrl` are NOT needed: interactive debugging uses `--keep`
 (see below) instead of Xephyr; desktop-hint assertions use `xprop` directly.
 Note for this machine's Xvfb build: the screen size needs an explicit screen
-number (`-screen 0 1280x800x24`) — already handled by the runner.
+number (`-screen 0 1280x800x24`), already handled by the runner.
 
 ## Usage
 
@@ -40,7 +40,7 @@ including `STATE DUMP` blocks triggered by Mod+Q), `bench.txt`.
 Goldens live in `golden/<SC>/`; `--compare` diffs new normalized output
 against them.
 
-## Scenarios ↔ behavioral contract
+## Scenarios and behavioral contract
 
 | Scenario | Contract rows |
 |---|---|
@@ -63,4 +63,4 @@ against them.
 Determinism notes: scenarios assert *shape* (rects, stacking, parked
 positions, border widths, EWMH flags) rather than pixel content. The
 normalizer maps window ids to tokens by first appearance, so creation order
-must stay deterministic — keep spawns ordered inside scenario scripts.
+must stay deterministic; keep spawns ordered inside scenario scripts.

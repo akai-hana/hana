@@ -1,7 +1,5 @@
-//! Shared border management helpers.
-//!
-//! Unifies border color resolution, width calculation, and atomic apply
-//! logic that was previously duplicated across tiling.zig and window.zig.
+//! Shared border helpers.
+//! Resolves border color and width and applies them atomically across tiled and floating paths.
 
 const core = @import("core");
 const xcb = core.xcb;

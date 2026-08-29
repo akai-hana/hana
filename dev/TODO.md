@@ -4,7 +4,7 @@
 # ### HIGH-PRIORITY ### #
 
 # *** #
-- both tiling.zig and layouts.zig are really heavy on comments. i believe this ends up harming readability. i don't just want to remove all comments, but i don't want the file to end up being so bloated with them. light commenting, straight to the point and dense with meaningful information, should be the main goal.
+- both tiling.zig and layouts.zig are really heavy on comments. i believe this ends up harming readability. i don't just want to remove all comments, but i don't want the file to end up being so bloated with them. light commenting, straight to the point and dense with meaningful information, should be the main goal.  # DONE (2026-08): tiling.zig is now a ~50-line stateless facade; layouts.zig was split into per-layout files under src/tiling/layouts/
 # *** #
 - the file imports on bar.zig are extremely messy. pending to sort them out. i want the files to be cleaner than they actually are.
 # *** #
@@ -19,7 +19,7 @@
 
 - compare hana's geometry pixel rounding strategy to dwm's
 
-- when cycling between layouts using toggleLayout/toggleLayoutReverse (core.zig, config.zig, input.zig), make it so that mouse hovering doesn't steal focus at windows being re-positioned, if it was previously positioned on one window but the layout cycling made it touch a different one. (focus.zig, window.zig, tracking.zig)
+- when cycling between layouts using cycleLayoutKind / executeTilingAction (&.toggle_layout, input.zig -> window/actions.zig cycleLayoutKind -> core/model/model.zig cycleLayout), make it so that mouse hovering doesn't steal focus at windows being re-positioned, if it was previously positioned on one window but the layout cycling made it touch a different one. (focus.zig, window.zig, tracking.zig)
 
 - when doing toggle_float (mod+middle_click), i want the window to be tiled to the area where it is closest to. what this means is that, if there's already another window tiled, and i do toggle_float with the floating window located onto the left half of the screen, then it should be tiled onto the left. if it's to the right, then tiled to the right. you should take its middle/center of the floating window to be tiled, and decide where to tile it based off of that coordinates. it should work on any tiling layout. 
 
@@ -30,7 +30,7 @@
 
 # ### FEATURES ### #
 
-+ bspwm leaf layout
++ bspwm leaf layout  # DONE (2026-08): implemented as src/tiling/layouts/leaf.zig, registered as layout "leaf"
   - modern" layout: bar at the top, workspaces at the middle, date at the right, system resources at the left, and big spacing in-between (don't make it expanding, but instead static, where each segment is bound to left/right/center, and any gap that remains, remains a gap, isn't filled.)
   - window spawning in this layout is dependant on what the current window focused is: if no windows within workspace, just spawn one regularly, the second one will make both split, the third one will split the right one to a top half and the spawned to the bottom half of the right segment of the display. Up to now it is basically like master-stack layout. the thing is, if i were focusing the left window when i had two windows open, the split would've happened on that window, on the left half. any subsequent splits happen according to the currently focused window, following the horizontal/vertical split criteria mentioned earlier.
   - if window is higher than it is wider, slice it in half, leaving a top and bottom window; if it is wider than higher, slice it in half, leaving a left and right window.

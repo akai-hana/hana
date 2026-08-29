@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""restore_repomix.py: restore files packed by Repomix back onto disk.
+"""restore-repomix.py: restore files packed by Repomix back onto disk.
 
 Repomix (https://repomix.com) packs a repository into one text file shaped
 like XML, with each source file embedded raw between
@@ -19,23 +19,23 @@ not a sync).
 
 Usage:
     # Preview what would happen (default, this never writes anything)
-    ./restore_repomix.py repomix-output.xml
+    ./restore-repomix.py repomix-output.xml
 
     # Preview with full unified diffs for every file that would change
-    ./restore_repomix.py repomix-output.xml --diff
+    ./restore-repomix.py repomix-output.xml --diff
 
     # Actually write the files (existing files that would change are
     # backed up first, see --no-backup / --backup-dir)
-    ./restore_repomix.py repomix-output.xml --apply
+    ./restore-repomix.py repomix-output.xml --apply
 
     # Restore into a specific repo checkout instead of the current directory
-    ./restore_repomix.py repomix-output.xml --apply --target /path/to/repo
+    ./restore-repomix.py repomix-output.xml --apply --target /path/to/repo
 
     # Only restore a subtree
-    ./restore_repomix.py repomix-output.xml --apply --only src/window/
+    ./restore-repomix.py repomix-output.xml --apply --only src/window/
 
     # Just list the files contained in the snapshot
-    ./restore_repomix.py repomix-output.xml --list
+    ./restore-repomix.py repomix-output.xml --list
 
 Limitations:
   - Because content is embedded unescaped, a packed file whose content
