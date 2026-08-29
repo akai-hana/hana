@@ -51,7 +51,8 @@ pub fn build(b: *std.Build) !void {
     if (!has_tiling and !has_floating) {
         @panic("hana requires at least one windowing paradigm: src/tiling/ or src/window/modules/floating.zig");
     }
-    _ = hasPathOption(b, build_opts, "has_minimize", source_root ++ "window/modules/minimize.zig");
+    const has_minimize = hasPathOption(b, build_opts, "has_minimize", source_root ++ "window/modules/minimize.zig");
+    const has_fullscreen = hasPathOption(b, build_opts, "has_fullscreen", source_root ++ "window/modules/fullscreen.zig");
     const has_workspaces = hasPathOption(b, build_opts, "has_workspaces", source_root ++ "window/modules/workspaces.zig");
     _ = hasPathOption(b, build_opts, "has_vim", source_root ++ "bar/segments/prompt/vim.zig");
 
@@ -170,13 +171,20 @@ pub fn build(b: *std.Build) !void {
             // carousel_test imports the `carousel` module, which only exists
             // when src/bar/segments/title/carousel.zig is present.
             if (!has_seg_carousel and std.mem.eql(u8, entry.key_ptr.*, "carousel_test")) continue;
+            // model_test exercises all four window feature modules
+            // (minimize/fullscreen/floating/workspaces), so every one must be present.
+            if (!(has_minimize and has_fullscreen and has_floating and has_workspaces) and std.mem.eql(u8, entry.key_ptr.*, "model_test")) continue;
+            // perf_test replays minimize/fullscreen/workspaces scenarios; without
+            // those modules the referenced behaviors don't exist.
+            if (!(has_minimize and has_fullscreen and has_workspaces) and std.mem.eql(u8, entry.key_ptr.*, "perf_test")) continue;
             // tiling_test exercises the tiling layout engine internals; without
             // src/tiling there is no engine to test, and its `engine.HintsView`
             // reference no longer resolves.
             if (!has_tiling and std.mem.eql(u8, entry.key_ptr.*, "tiling_test")) continue;
             // sync_test replays tiling-centric scenarios (retile, fullscreen
-            // enter/exit, minimize, workspace switch); floating-only has none.
-            if (!has_tiling and std.mem.eql(u8, entry.key_ptr.*, "sync_test")) continue;
+            // enter/exit, minimize, workspace switch), which need minimize and
+            // fullscreen modules in addition to the tiling engine itself.
+            if ((!has_tiling or !has_minimize or !has_fullscreen) and std.mem.eql(u8, entry.key_ptr.*, "sync_test")) continue;
             // workspaces_test exercises the workspaces behavior; without
             // src/window/modules/workspaces.zig its `Workspace` type is
             // replaced by an empty struct and the test no longer compiles.

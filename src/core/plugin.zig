@@ -20,11 +20,27 @@
 //! module, which core tiers iterate with uniform dispatch loops. No merged
 //! single struct, no per-sub-system partial types; just one hook set with
 //! `null` for hooks a module doesn't own.
+//!
+//! Key seams:
+//!   - `coverageOn(m, ws)` -- who owns the screen on a workspace, if anyone
+//!     (fullscreen). Called once per sync reconcile; `null` when no module
+//!     claims the ws.
+//!   - `serializeWindow(m-as-*anyopaque, win, alloc)` -- returns an opaque
+//!     per-window blob for restart persistence, or null. The model is passed
+//!     as `*anyopaque` so the seam stays free of a model type dependency;
+//!     each module decides from the model state whether it owns the window's
+//!     blob (presence-driven), so at most one blob exists per window.
+//!   - `deserializeWindow(win, blob, m-as-*anyopaque)` -- returns a "claimed"
+//!     bool. Hooks self-identify via a format tag (magic byte) inside the
+//!     blob, so the registry adoption loop can't mis-claim another module's
+//!     blob; unclaimed blobs leave the window in its default state.
 
+const std = @import("std");
 const core = @import("core");
 const xcb = core.xcb;
 const types = @import("types");
 const utils = @import("utils");
+const model = @import("model");
 
 /// The chrome-surface hook set a surface module binds to. The bar binds its
 /// `surfaces` value to this; when no surface is compiled in, core's
@@ -70,6 +86,20 @@ pub const WindowModule = struct {
     // Fullscreen protocol-side (deferred bar hide/show, EWMH).
     notifyConfigureIfPending: ?*const fn (u32, u16, u16) void = null,
     onWindowGone: ?*const fn (u32) void = null,
+    // Coverage seam: for a given workspace, which window owns the screen?
+    // sync calls this once per reconcile (through the registry) instead of
+    // scanning a store for fullscreen state. null => no module claims the ws.
+    coverageOn: ?*const fn (*const model.Model, model.WSId) ?model.WindowId = null,
+    // Session persistence seam: modules marshal/unmarshal their per-window
+    // state as an opaque blob; restart_state carries `[]u8` bytes and the
+    // wire layer dispatches. `serializeWindow` null => nothing persisted.
+    // The model is passed as `*anyopaque` so this seam stays free of a model
+    // type dependency; each module decides from the model state whether it
+    // owns the window's blob (at most one module returns bytes per window).
+    // `deserializeWindow` returns whether this module claimed the blob; hooks
+    // self-identify via a format tag so the registry loop can't mis-claim.
+    serializeWindow: ?*const fn (*anyopaque, u32, std.mem.Allocator) ?[]const u8 = null,
+    deserializeWindow: ?*const fn (u32, []const u8, *anyopaque) bool = null,
     setEwmhFullscreenState: ?*const fn (u32, bool) void = null,
     armPendingBarHide: ?*const fn (u32) void = null,
     armPendingBarShow: ?*const fn (u32) void = null,

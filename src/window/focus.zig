@@ -656,11 +656,13 @@ pub fn drainPointerSync() void {
 
     const p = pointer_reply orelse return;
     const child = p.*.child;
-    if (child == 0 or child == cs.root or !window.isValidManagedWindow(child)) return;
-    // A stale reply may reference a window from a workspace that is no longer
-    // current (e.g. after a workspace switch); discard it rather than
-    // redirecting focus to an offscreen window.
-    if (!tracking.isOnCurrentWorkspace(child)) return;
+    if (child == 0 or child == cs.root) return;
+    // Same ownership predicate as a workspace switch's pointer pick: the
+    // window must be visible on the CURRENT workspace (managed + tagged +
+    // not minimized). A stale reply referencing an off-workspace or
+    // unmanaged window is discarded rather than redirecting focus.
+    const pl = @import("pipeline");
+    if (!@import("model").visibleOn(pl.model(), child, pl.model().current)) return;
     grabFocus(child, .pointer_sync);
 }
 

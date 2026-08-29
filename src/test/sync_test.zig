@@ -18,6 +18,9 @@ const model = @import("model");
 const constants = @import("constants");
 
 const sync = @import("sync");
+const build_options = @import("build_options");
+const minimize = if (build_options.has_minimize) @import("minimize") else struct {};
+const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
 
 const gap = 8;
 const border = 2;
@@ -150,6 +153,9 @@ const Fixture = struct {
             .ctx = undefined,
         };
         sync.init();
+        // Reset the minimize module's static store so capacity/seq bookkeeping
+        // never leaks across scenarios (sync drives it via minimize.minimize).
+        minimize.init() catch unreachable;
         self.ctx = .{
             .sink = self.rec.sink(),
             .screen = screen,
@@ -162,6 +168,7 @@ const Fixture = struct {
 
     fn deinit(self: *Fixture) void {
         self.rec.deinit();
+        minimize.deinit();
         sync.deinit();
     }
 
@@ -254,7 +261,7 @@ test "fullscreen enter: winner fullscreened (rect=screen, bw=0), others parked; 
     model.setFocus(&fx.m, 301);
     fx.reconcile(.{}); // baseline tiled
 
-    _ = model.toggleFullscreen(&fx.m, 301);
+    _ = fullscreen.toggleFullscreen(&fx.m, 301);
     fx.rec.clear();
     fx.reconcile(.{ .force_restack = true });
 
@@ -267,7 +274,7 @@ test "fullscreen enter: winner fullscreened (rect=screen, bw=0), others parked; 
     try fx.rec.expectGeom(3, 301, 0, 0, 800, 600, .above);
     try fx.rec.expectPark(4, 302);
 
-    _ = model.toggleFullscreen(&fx.m, 301);
+    _ = fullscreen.toggleFullscreen(&fx.m, 301);
     fx.rec.clear();
     fx.reconcile(.{});
 
@@ -298,7 +305,7 @@ test "minimize parks every pass; restore replays original slot geometry" {
     model.setFocus(&fx.m, 401);
     fx.reconcile(.{}); // baseline
 
-    model.minimize(&fx.m, 402) catch unreachable;
+    minimize.minimize(&fx.m, 402) catch unreachable;
     // Minimizing the stack window also grows 401 to full master width
     // (moved => winner ABOVE); 402 emits ONE merged park request.
     fx.rec.clear();
@@ -325,7 +332,7 @@ test "minimize parks every pass; restore replays original slot geometry" {
     // Restore: 401 shrinks back (moved => winner ABOVE); 402 unparks: map +
     // appearance + geometry at its surviving slot rect (not winner, rect did
     // not move => no raise, stack null).
-    model.restore(&fx.m, 402);
+    minimize.restore(&fx.m, 402);
     fx.rec.clear();
     fx.reconcile(.{});
     try fx.rec.expectLen(8);
@@ -358,7 +365,7 @@ test "fs->min->restore->unfs retiles instead of stranding an orphan" {
 
     // Enter fullscreen: 601 takes the screen (rect=screen, bw=0, pixel=0,
     // ABOVE under force_restack), 602 parks.
-    _ = model.toggleFullscreen(&fx.m, 601);
+    _ = fullscreen.toggleFullscreen(&fx.m, 601);
     fx.rec.clear();
     fx.reconcile(.{ .force_restack = true });
     try fx.rec.expectLen(5);
@@ -374,7 +381,7 @@ test "fs->min->restore->unfs retiles instead of stranding an orphan" {
     // slot as the fallback winner (m.focused is still 601, but its desire is
     // parked): unpark transition => map+appearance+geometry replay, raise
     // merged (the rect moved too).
-    try model.minimize(&fx.m, 601);
+    try minimize.minimize(&fx.m, 601);
     fx.rec.clear();
     fx.reconcile(.{});
     try fx.rec.expectLen(5);
@@ -388,7 +395,7 @@ test "fs->min->restore->unfs retiles instead of stranding an orphan" {
     // fullscreen branch riding its unpark transition (.above); 602 -
     // unparked by the minimize step - parks AGAIN behind the returning
     // fullscreen occupant.
-    model.restore(&fx.m, 601);
+    minimize.restore(&fx.m, 601);
     fx.rec.clear();
     fx.reconcile(.{});
     try fx.rec.expectLen(5);
@@ -405,7 +412,7 @@ test "fs->min->restore->unfs retiles instead of stranding an orphan" {
     // Pre-fix this emitted NO geometry for 601 at all: the orphan branch
     // kept the stale 800x600 fullscreen rect while 602 wrongly kept the
     // full-width master rect - an engine-invisible, untileable window.
-    _ = model.toggleFullscreen(&fx.m, 601);
+    _ = fullscreen.toggleFullscreen(&fx.m, 601);
     fx.rec.clear();
     fx.reconcile(.{});
     try testing.expectEqual(@as(model.WSId, 0), model.findHome(&fx.m, 601).?);
@@ -583,7 +590,7 @@ test "park: offscreen-X constant, ONE merged request per parked window per pass"
     try fx.rec.expectPark(4, 902);
 
     // Minimized windows ride the same single-op park shape.
-    model.minimize(&fx.m, 901) catch unreachable;
+    minimize.minimize(&fx.m, 901) catch unreachable;
     fx.rec.clear();
     fx.reconcile(.{});
     try fx.rec.expectLen(2);

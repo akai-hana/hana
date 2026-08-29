@@ -117,7 +117,7 @@ while IFS= read -r line; do
 done < <(grep -rnE "$pat2" src/ --include='*.zig' | grep -v '^src/core/sync/' | code_lines)
 
 # Rule 3: no xcb imports/references in model/ or tiling/.
-hits=$(grep -rn 'xcb' src/core/model/ src/tiling/ --include='*.zig' | grep -v '^\s*//' | grep -v ':\s*//' || true)
+hits=$(grep -rn 'xcb' src/model/ src/tiling/ --include='*.zig' | grep -v '^\s*//' | grep -v ':\s*//' || true)
 if [ -n "$hits" ]; then
     while IFS= read -r line; do
         f=${line%%:*}

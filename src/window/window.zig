@@ -823,13 +823,13 @@ fn restoredOrCurrent(record: ?*const restart_state.WindowRecord) u8 {
     return tracking.getCurrentWorkspace() orelse 0;
 }
 
-/// Re-applies a restore record's mask and mode onto an already-registered
-/// model entry. Registration (admitWindow -> actions.mapRequest) creates the
-/// entry as a base-tiled window on its target workspace; this overwrites the
-/// per-window state that survived the re-exec so the caller's reconcile can
-/// place it exactly as before. Mode bookkeeping that would otherwise drift
-/// (tiled_order membership, count_minimized) is routed through the model's own
-/// transitions rather than patched by hand.
+/// Re-applies a restore record's mask, mode, and presence onto an
+/// already-registered model entry. Registration (admitWindow ->
+/// actions.mapRequest) creates the entry as a present base-tiled window on its
+/// target workspace; this overwrites the per-window state that survived the
+/// re-exec so the caller's reconcile can place it exactly as before. Presence
+/// bookkeeping that would otherwise drift is routed through the owning window
+/// module's deserialize hook rather than patched by hand.
 fn applyRestoredRecord(win: u32, record: *const restart_state.WindowRecord) void {
     const model = pipeline.model();
     const e = model.store.getPtr(win) orelse return;
@@ -855,20 +855,21 @@ fn applyRestoredRecord(win: u32, record: *const restart_state.WindowRecord) void
             // winner from this mode alone, so no wire action is needed here.
             e.mode = record.mode;
         },
-        .minimized => |restored| {
-            // Call the model's minimize to keep count_minimized and home_ws
-            // bookkeeping consistent, then patch in the restored payload
-            // (which carries the pre-minimize mode and tiled slot). The window
-            // stays hidden: minimize removes it from tiled_order and the
-            // caller's reconcile parks it. On a store-full minimize refusal we
-            // leave the window base-tiled (it maps) rather than corrupting the
-            // minimize count.
-            @import("model").minimize(model, win) catch return;
-            if (model.store.getPtr(win)) |me| {
-                me.mode = .{ .minimized = restored };
-                me.home_ws = null;
-            }
-        },
+    }
+
+    // A window that was parked (hidden by an extension) at save time is
+    // re-parked through the window-module registry's deserialize hook: the
+    // module that claims the opaque ext blob re-asserts presence == .parked
+    // and restores its private record. When no module claims the blob (the
+    // feature was stripped, or the record carried no ext), the entry stays
+    // present and reconciles on-screen -- the graceful degrade.
+    if (record.presence == .parked) {
+        if (record.ext) |blob| {
+            const m_ptr: *anyopaque = @ptrCast(model);
+            for (window_mods) |mod| if (mod.deserializeWindow) |f| {
+                if (f(win, blob, m_ptr)) break; // claimed
+            };
+        }
     }
 }
 
@@ -881,19 +882,19 @@ fn applyRestoredRecord(win: u32, record: *const restart_state.WindowRecord) void
 ///   - skip already-managed windows, the WM's own bar window, and
 ///     override-redirect popups (never manage those);
 ///   - unmapped windows are adopted ONLY when the restore file records them
-///     as minimized (a surviving minimized window must stay hidden); other
-///     unmapped windows are likely withdrawn toplevels and are skipped;
+///     as parked (a surviving hidden window must stay hidden); other unmapped
+///     windows are likely withdrawn toplevels and are skipped;
 ///   - each admitted window registers through the shared admitWindow path on
 ///     its restored-or-current workspace;
-///   - a restore record (if any) then re-applies the window's mask and mode
-///     directly on the model entry.
+///   - a restore record (if any) then re-applies the window's mask, mode, and
+///     presence directly on the model entry.
 ///
 /// CALLING CONTRACT: this does NOT reconcile. Placement derives from
 /// tiled_order / focus_mru, which are rebuilt by restart_state.applyModelLevel
 /// AFTER this returns; a reconcile here would place pre-restore state. The
 /// caller (main) therefore runs:
 ///     adoptRootWindows(); restart_state.applyModelLevel(m); one reconcile.
-/// Returns the number of windows admitted (restored-minimized ones included).
+/// Returns the number of windows admitted (restored-parked ones included).
 pub fn adoptRootWindows() !usize {
     // Defensive boot-order guard: adoption expects the window module's state
     // (child cache, spawn queue) to be initialized; if window.init hasn't run
@@ -934,10 +935,12 @@ pub fn adoptRootWindows() !usize {
         if (override_redirect) continue;
 
         // Visibility gate: adopt mapped windows; adopt unmapped ONLY when the
-        // restore file says they were minimized (they must stay hidden).
+        // restore file records them as parked (a surviving hidden window must
+        // stay hidden). Other unmapped windows are likely withdrawn toplevels
+        // and are skipped.
         const record = if (loaded) |f| findWindowRecord(f.windows, win) else null;
         if (map_state != xcb.XCB_MAP_STATE_VIEWABLE) {
-            if (record == null or record.?.mode != .minimized) continue;
+            if (record == null or record.?.presence != .parked) continue;
         }
 
         // Claim the management event mask so the adopted window delivers the
@@ -1035,9 +1038,17 @@ fn unmanageWindow(win: u32) void {
     // it. Both facts ride ctx into actions.unmanage, which runs the same
     // close fallback as minimize.
     var actx: actions.Ctx = .{
-        .withdrawn_fullscreen_ws = if (pipeline.initialized) @import("model").fullscreenWsOf(pipeline.model(), win) else null,
+        .withdrawn_fullscreen_ws = if (pipeline.initialized) (if (build_options.has_fullscreen) @import("fullscreen").fullscreenWsOf(pipeline.model(), win) else null) else null,
         .withdrawn_was_focused = pipeline.initialized and pipeline.model().focused == win,
     };
+    // Module cleanup on window drop: each compiled-in window module's
+    // onWindowGone fires before the model entry is unregistered below, so
+    // per-window bookkeeping (e.g. minimize's parked record) is dropped with
+    // the window. This is the ONLY fire on the withdraw route (UnmapNotify /
+    // wm_close, XID still alive); a DestroyNotify already fired it from
+    // events.zig first, and every hook is idempotent (find-then-clear), so
+    // the repeat for the same window is harmless.
+    for (window_mods) |mod| if (mod.onWindowGone) |f| f(win);
     if (build_options.has_workspaces) tracking.removeWindow(win);
 
     // PIPELINE (train d): drop the MODEL entry, resolve the
@@ -1109,15 +1120,17 @@ fn resolveConfigureGeometry(win: u32) ?utils.Rect {
         return .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height, .border_width = border };
     }
 
-    if (@import("model").isFullscreenMode(pipeline.model(), win)) {
-        const screen = core.getState().screen;
-        return .{
-            .x = 0,
-            .y = 0,
-            .width = @intCast(screen.width_in_pixels),
-            .height = @intCast(screen.height_in_pixels),
-            .border_width = 0,
-        };
+    if (build_options.has_fullscreen) {
+        if (@import("fullscreen").isFullscreenMode(pipeline.model(), win)) {
+            const screen = core.getState().screen;
+            return .{
+                .x = 0,
+                .y = 0,
+                .width = @intCast(screen.width_in_pixels),
+                .height = @intCast(screen.height_in_pixels),
+                .border_width = 0,
+            };
+        }
     }
 
     const conn = core.getState().conn;
@@ -1164,7 +1177,7 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
     }
 
     // DECISION goes through the model's single tested procedure (T13):
-    // tiled/fullscreen/minimized -> deny+echo; floating -> apply into the
+    // tiled/fullscreen/parked -> deny+echo; floating -> apply into the
     // model rect (which also stops reconcile snap-backs after a client
     // self-move); unknown windows stay honored (unmanaged clients are not
     // the WM's to override). Wire sends + cache recording remain here per
@@ -1178,29 +1191,31 @@ pub fn handleConfigureRequest(event: *const xcb.xcb_configure_request_event_t) v
             .height = if (mask & xcb.XCB_CONFIG_WINDOW_HEIGHT != 0) event.height else null,
             .border_width = if (mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0) event.border_width else null,
         };
-        switch (@import("model").honorConfigureRequest(pipeline.model(), win, req)) {
-            .geometry_applied => {
-                // Floating: the model stored exactly these values, so the
-                // wire send mirrors the request verbatim. BW rides along and
-                // is cached so dedup compares against server truth.
-                if (build_options.has_tiling and mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0)
-                    _ = wincache.cacheBorderWidth(win, event.border_width);
-                if (mask == xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH) return;
-                sendRequestedConfigure(win, event, mask);
-            },
-            .border_only => {
-                // Tiled: geometry DENIED, BW honored. Cache + forward the
-                // border width ONLY; the old fall-through forwarded the
-                // whole mixed mask, moving denied-geometry windows until the
-                // next reconcile repaired them.
-                if (build_options.has_tiling)
-                    _ = wincache.cacheBorderWidth(win, event.border_width);
-                if (mask != xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH)
-                    _ = xcb.xcb_configure_window(core.getState().conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{event.border_width});
-            },
-            .ignored => {
-                sendSyntheticConfigureNotify(win);
-            },
+        if (build_options.has_floating) {
+            switch (@import("floating").honorConfigureRequest(pipeline.model(), win, req)) {
+                .geometry_applied => {
+                    // Floating: the model stored exactly these values, so the
+                    // wire send mirrors the request verbatim. BW rides along and
+                    // is cached so dedup compares against server truth.
+                    if (build_options.has_tiling and mask & xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH != 0)
+                        _ = wincache.cacheBorderWidth(win, event.border_width);
+                    if (mask == xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH) return;
+                    sendRequestedConfigure(win, event, mask);
+                },
+                .border_only => {
+                    // Tiled: geometry DENIED, BW honored. Cache + forward the
+                    // border width ONLY; the old fall-through forwarded the
+                    // whole mixed mask, moving denied-geometry windows until the
+                    // next reconcile repaired them.
+                    if (build_options.has_tiling)
+                        _ = wincache.cacheBorderWidth(win, event.border_width);
+                    if (mask != xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH)
+                        _ = xcb.xcb_configure_window(core.getState().conn, win, xcb.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{event.border_width});
+                },
+                .ignored => {
+                    sendSyntheticConfigureNotify(win);
+                },
+            }
         }
         return;
     }
@@ -1256,7 +1271,10 @@ inline fn suppressSpawnCrossing(root_x: i16, root_y: i16) bool {
 /// focus.grabFocus(.mouse_enter). The .mouse_enter reason is the direct
 /// EnterNotify path: lightweight, no raise, no confirm.
 inline fn maybeFocusWindow(win: u32) void {
-    if (!isOnCurrentWorkspace(win) or (build_options.has_minimize and @import("model").isMinimized(pipeline.model(), win))) return;
+    if (!isOnCurrentWorkspace(win)) return;
+    if (build_options.has_minimize) {
+        if (@import("minimize").isMinimized(pipeline.model(), win)) return;
+    }
     debug.info("[MAYBE_FOCUS] 0x{x}", .{win});
     focus.grabFocus(win, .mouse_enter);
 }
@@ -1519,7 +1537,7 @@ pub fn handleClientMessage(event: *const xcb.xcb_client_message_event_t) void {
     }
 
     const action = event.data.data32[0];
-    const is_fs = @import("model").isFullscreenMode(pipeline.model(), win);
+    const is_fs = if (build_options.has_fullscreen) @import("fullscreen").isFullscreenMode(pipeline.model(), win) else false;
     const should_enter = switch (action) {
         1 => true, // _NET_WM_STATE_ADD
         0 => false, // _NET_WM_STATE_REMOVE

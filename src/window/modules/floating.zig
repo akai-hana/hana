@@ -1,5 +1,7 @@
 //! Floating window subsystem.
-//! Manages placement, dragging, and per-corner resizing of floating windows.
+//! A self-contained plugin over the model: placement, dragging, and
+//! per-corner resizing of floating windows, plus floating geometry honoring
+//! (configure requests update the model's floating rect).
 
 const std = @import("std");
 
@@ -15,6 +17,9 @@ const tracking = @import("tracking");
 const pipeline = @import("pipeline");
 const actions = @import("actions");
 const screen = @import("screen");
+
+const model = @import("model");
+const build_options = @import("build_options");
 
 pub const DragMode = enum { move, resize };
 
@@ -151,8 +156,8 @@ fn directionToCorner(dir: ResizeDirection) ResizeCorner {
     };
 }
 
-fn nearestCorner(x: i16, y: i16, geom: utils.Rect) ResizeCorner {
-    const dir = resizeDirectionFromPoint(x, y, geom, 0);
+fn nearestCorner(x: i16, y: i16, geom: utils.Rect, border_width: u32) ResizeCorner {
+    const dir = resizeDirectionFromPoint(x, y, geom, border_width);
     return directionToCorner(dir);
 }
 
@@ -163,7 +168,9 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
     if (!cs.config.drag_enabled) return;
     if (g_state.drag.active) return;
     if (screen.isSurfaceWindow(win)) return;
-    if (@import("model").isFullscreenMode(pipeline.model(), win)) return; // fullscreen geometry must not be touched
+    if (build_options.has_fullscreen) {
+        if (@import("fullscreen").isFullscreenMode(pipeline.model(), win)) return; // fullscreen geometry must not be touched
+    }
 
     // Model/sync truth (floating base or last-sent rect) over a live XCB
     // round-trip; fall back to a live query when never placed.
@@ -172,7 +179,7 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
         break :blk window.getGeometry(cs.conn, win) orelse return;
     };
 
-    const resize_corner: ResizeCorner = if (button == 1) .bottom_right else nearestCorner(x, y, geom);
+    const resize_corner: ResizeCorner = if (button == 1) .bottom_right else nearestCorner(x, y, geom, core.borderWidth());
 
     // Snap distance and work area are resolved here so updateDrag's per-event
     // path only does arithmetic. They are constant for the duration of a drag.
@@ -315,6 +322,46 @@ pub fn isResizingWindow(win: u32) bool {
 /// isDragging() and after at least one motion event.
 pub fn getDragLastRect() utils.Rect {
     return g_state.drag.last_rect;
+}
+
+/// Updates a floating window's rect on the model, no-op for tiled/unknown.
+pub fn setFloatingRect(m: *model.Model, win: model.WindowId, r: utils.Rect) void {
+    const e = m.store.getPtr(win) orelse return;
+    switch (e.mode) {
+        .base => |*bm| switch (bm.*) {
+            .floating => |*fr| fr.* = r,
+            .tiled => {},
+        },
+        else => {},
+    }
+}
+
+/// Honors a configure request against a floating window record on the model.
+pub fn honorConfigureRequest(m: *model.Model, win: model.WindowId, req: model.ConfigureReq) model.HonorDecision {
+    if (build_options.has_minimize) {
+        if (@import("minimize").isMinimized(m, win)) return .ignored;
+    }
+    const e = m.store.getPtr(win) orelse return .ignored;
+    switch (e.mode) {
+        .base => |*bm| switch (bm.*) {
+            .floating => |*r| {
+                if (req.x) |v| r.x = v;
+                if (req.y) |v| r.y = v;
+                if (req.width) |v| r.width = v;
+                if (req.height) |v| r.height = v;
+                // NOTE: a requested border_width is not stored here (the
+                // floating rect has no bw field); the entry point sends and
+                // caches it alongside the geometry it applies.
+                return .geometry_applied;
+            },
+            .tiled => {
+                // Geometry denied. BW honored; recording is SYNC's job.
+                if (req.border_width != null) return .border_only;
+                return .ignored;
+            },
+        },
+        .fullscreen => return .ignored,
+    }
 }
 
 /// This module's window sub-system contribution: the floating drag/resize

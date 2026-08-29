@@ -68,12 +68,13 @@ fn retileAndNotifyWithFocus(restack: bool, full_redraw: bool, ft: focus.FocusTra
 /// the reconcile because the bar must have updated its screen claim (the
 /// usable-area fact the reconcile reads) before placement is re-derived.
 pub fn minimize(focused: ?model_mod.WindowId) void {
+    if (!build_options.has_minimize) return;
     const win = focused orelse return;
     const m = pipeline.model();
     const was_focused = m.focused == win;
-    const fs_ws_before = model_mod.fullscreenWsOf(m, win);
+    const fs_ws_before = if (build_options.has_fullscreen) @import("fullscreen").fullscreenWsOf(m, win) else null;
 
-    model_mod.minimize(m, win) catch return; // Pre-refusal (CapacityFull)
+    if (build_options.has_minimize) @import("minimize").minimize(m, win) catch return; // Pre-refusal (CapacityFull)
 
     const ft: focus.FocusTransition = if (was_focused) focusFallback(m) else .none;
 
@@ -109,20 +110,22 @@ fn focusFallback(m: *model_mod.Model) focus.FocusTransition {
 
 /// Restores a specific minimized window (title-bar click path).
 pub fn restore(win: model_mod.WindowId) void {
+    if (!build_options.has_minimize) return;
     const m = pipeline.model();
     if (!isMinimizedOnAnyWs(m, win)) return;
-    const had_occupant_before = model_mod.fullscreenOccupantOnWs(m, m.current) != null;
-    model_mod.restore(m, win);
+    const had_occupant_before = if (build_options.has_fullscreen) @import("fullscreen").fullscreenOccupantOnWs(m, m.current) != null else false;
+    if (build_options.has_minimize) @import("minimize").restore(m, win);
     restoreAndFocus(m, win);
     armFullscreenBarHideIfNeeded(m, win, had_occupant_before);
 }
 
 /// Slot-ordered single restore (LIFO/FIFO keybind paths).
 pub fn restoreOrdered(order: model_mod.RestoreOrder) void {
+    if (!build_options.has_minimize) return;
     const m = pipeline.model();
-    const win = model_mod.restoreCandidate(m, m.current, order) orelse return;
-    const had_occupant_before = model_mod.fullscreenOccupantOnWs(m, m.current) != null;
-    model_mod.restore(m, win);
+    const win = (if (build_options.has_minimize) @import("minimize").restoreCandidate(m, m.current, order) else null) orelse return;
+    const had_occupant_before = if (build_options.has_fullscreen) @import("fullscreen").fullscreenOccupantOnWs(m, m.current) != null else false;
+    if (build_options.has_minimize) @import("minimize").restore(m, win);
     restoreAndFocus(m, win);
     armFullscreenBarHideIfNeeded(m, win, had_occupant_before);
 }
@@ -132,26 +135,28 @@ pub fn restoreOrdered(order: model_mod.RestoreOrder) void {
 /// fullscreen-prev windows replay through the same reconcile's fullscreen
 /// branch, straight back into fullscreen).
 pub fn restoreAll() void {
+    if (!build_options.has_minimize) return;
     const m = pipeline.model();
     const ws = m.current;
-    const target = model_mod.latestMinimizedBase(m, ws) orelse return;
-    const had_occupant_before = model_mod.fullscreenOccupantOnWs(m, ws) != null;
-    model_mod.restoreAllOnWs(m, ws);
+    const target = (if (build_options.has_minimize) @import("minimize").latestMinimizedBase(m, ws) else null) orelse return;
+    const had_occupant_before = if (build_options.has_fullscreen) @import("fullscreen").fullscreenOccupantOnWs(m, ws) != null else false;
+    if (build_options.has_minimize) @import("minimize").restoreAllOnWs(m, ws);
     restoreAndFocus(m, target);
-    if (model_mod.fullscreenOccupantOnWs(m, ws)) |occ| armFullscreenBarHideIfNeeded(m, occ, had_occupant_before);
+    if (build_options.has_fullscreen) {
+        if (@import("fullscreen").fullscreenOccupantOnWs(m, ws)) |occ| armFullscreenBarHideIfNeeded(m, occ, had_occupant_before);
+    }
 }
 
 fn armFullscreenBarHideIfNeeded(m: *const model_mod.Model, win: model_mod.WindowId, had_occupant_before: bool) void {
-    if (build_options.has_bar and !had_occupant_before and
-        model_mod.isFullscreenOnWs(m, win, m.current))
-    {
+    const is_fs = if (build_options.has_fullscreen) @import("fullscreen").isFullscreenOnWs(m, win, m.current) else false;
+    if (build_options.has_bar and !had_occupant_before and is_fs) {
         for (window_mods) |wm| if (wm.armPendingBarHide) |f| f(win);
     }
 }
 
 fn isMinimizedOnAnyWs(m: *const model_mod.Model, win: model_mod.WindowId) bool {
-    const e = m.store.get(win) orelse return false;
-    return e.mode == .minimized;
+    if (!build_options.has_minimize) return false;
+    return @import("minimize").isMinimized(m, win);
 }
 
 fn restoreAndFocus(m: *model_mod.Model, win: model_mod.WindowId) void {
@@ -178,6 +183,7 @@ fn restoreAndFocus(m: *model_mod.Model, win: model_mod.WindowId) void {
 /// the dispatch site and lands here too.
 pub fn fullscreenToggleWindow(win: model_mod.WindowId) void {
     const core = @import("core");
+    if (!build_options.has_fullscreen) return;
     if (!core.getState().config.fullscreen_enabled) return;
 
     const m = pipeline.model();
@@ -188,14 +194,18 @@ pub fn fullscreenToggleWindow(win: model_mod.WindowId) void {
     // Classify BEFORE toggling so bar deferrals match legacy timing exactly.
     // Cache the occupant scan; both the classification and prev_fs_win need
     // the same result, saving one full store scan.
-    const prev_fs_win = model_mod.fullscreenOccupantOnWs(m, m.current);
+    const prev_fs_win = if (build_options.has_fullscreen) @import("fullscreen").fullscreenOccupantOnWs(m, m.current) else null;
     const kind: enum { enter, exit, switch_ } = blk: {
-        if (model_mod.isFullscreenOnWs(m, win, m.current)) break :blk .exit;
+        if (build_options.has_fullscreen) {
+            if (@import("fullscreen").isFullscreenOnWs(m, win, m.current)) break :blk .exit;
+        }
         if (prev_fs_win != null) break :blk .switch_;
         break :blk .enter;
     };
 
-    if (!model_mod.toggleFullscreen(m, win)) return;
+    if (build_options.has_fullscreen) {
+        if (!@import("fullscreen").toggleFullscreen(m, win)) return;
+    }
 
     // EWMH writes + bar arming land inside the same grab as geometry
     // (Gap 2 atomicity fix). All fire-and-forget or pure state.
@@ -215,13 +225,14 @@ pub fn fullscreenToggleWindow(win: model_mod.WindowId) void {
 /// (legacy evictWindow + retileRedrawAndFlush collapse into it).
 pub fn moveWindowTo(win: model_mod.WindowId, ws_idx: u8) void {
     const constants = @import("constants");
+    if (!build_options.has_workspaces) return;
     if (ws_idx >= constants.max_workspaces) return;
 
     const m = pipeline.model();
     const was_focused = m.focused == win;
-    const was_fs_current = model_mod.isFullscreenOnWs(m, win, m.current);
+    const was_fs_current = if (build_options.has_fullscreen) @import("fullscreen").isFullscreenOnWs(m, win, m.current) else false;
 
-    model_mod.moveWindowToWs(m, win, ws_idx);
+    if (build_options.has_workspaces) @import("workspaces").moveWindowToWs(m, win, ws_idx);
     if (m.store.get(win) == null) return; // unknown window parity
 
     var ft: focus.FocusTransition = .none;
@@ -238,21 +249,26 @@ pub fn moveWindowTo(win: model_mod.WindowId, ws_idx: u8) void {
 /// removing the CURRENT tag evicts the window and re-focuses.
 pub fn tagToggle(win: model_mod.WindowId, ws_idx: u8, protect_current: bool) void {
     const constants = @import("constants");
+    if (!build_options.has_workspaces) return;
     if (ws_idx >= constants.max_workspaces) return;
 
     const m = pipeline.model();
     const e = m.store.get(win) orelse return;
-    if (e.mode == .minimized) return; // legacy guard
+    if (build_options.has_minimize) {
+        if (@import("minimize").isMinimized(m, win)) return;
+    }
 
     const had_bit = e.mask & model_mod.bit(ws_idx) != 0;
     const removing_current = ws_idx == m.current;
 
     var ft: focus.FocusTransition = .none;
     if (had_bit) {
-        if (!model_mod.tagRemove(m, win, ws_idx)) return; // last tag protected
+        if (build_options.has_workspaces) {
+            if (!@import("workspaces").tagRemove(m, win, ws_idx)) return; // last tag protected
+        }
         if (removing_current and m.focused == win) ft = focusFallback(m);
     } else {
-        model_mod.tagAdd(m, win, ws_idx, protect_current);
+        if (build_options.has_workspaces) @import("workspaces").tagAdd(m, win, ws_idx, protect_current);
     }
 
     if (removing_current or (!had_bit and ws_idx == m.current)) {
@@ -268,18 +284,22 @@ pub fn tagToggle(win: model_mod.WindowId, ws_idx: u8, protect_current: bool) voi
 
 /// move_to_all_workspaces / toggle_tag_all: pinned <-> current-only.
 pub fn pinToggle(win: model_mod.WindowId) void {
+    if (!build_options.has_workspaces) return;
     const m = pipeline.model();
-    const e = m.store.get(win) orelse return;
-    if (e.mode == .minimized) return; // legacy guard
-    model_mod.pinToggle(m, win);
+    if (m.store.get(win) == null) return; // unknown window parity
+    if (build_options.has_minimize) {
+        if (@import("minimize").isMinimized(m, win)) return;
+    }
+    if (build_options.has_workspaces) @import("workspaces").pinToggle(m, win);
     retileAndNotify(false, false);
 }
 
 /// all_workspaces (Mod+5): flag flip; sync maps foreign windows on enter and
 /// parks them again on exit through the ordinary diff.
 pub fn allViewToggle() void {
+    if (!build_options.has_workspaces) return;
     const m = pipeline.model();
-    const entering = model_mod.allViewToggle(m);
+    const entering = if (build_options.has_workspaces) @import("workspaces").allViewToggle(m) else false;
     var ft: focus.FocusTransition = .none;
     if (!entering and m.focused != null and !model_mod.visibleOn(m, m.focused.?, m.current)) {
         ft = focusFallback(m);
@@ -326,8 +346,9 @@ pub fn toggleFloating(win: model_mod.WindowId) void {
 /// window's geometry actually differs). Called from floating.zig's
 /// updateDrag instead of its direct configureWindow when the flag is ON.
 pub fn dragRect(win: model_mod.WindowId, r: @import("utils").Rect) void {
+    if (!build_options.has_floating) return;
     const m = pipeline.model();
-    model_mod.setFloatingRect(m, win, r);
+    if (build_options.has_floating) @import("floating").setFloatingRect(m, win, r);
     pipeline.reconcileNow();
 }
 
@@ -526,16 +547,6 @@ pub fn snapScrollToFocused() void {
     pipeline.reconcileUnderGrabNow(.{});
 }
 
-fn tiledCountOnCurrent(m: *const model_mod.Model) usize {
-    var n: usize = 0;
-    for (m.ws[m.current].tiled_order.constSlice()) |w| {
-        const e = m.store.get(w) orelse continue;
-        if (e.mask & model_mod.bit(m.current) == 0) continue;
-        n += 1;
-    }
-    return n;
-}
-
 const ScrollContext = struct {
     tiled_count: usize,
     slot_w: i32,
@@ -546,7 +557,7 @@ fn scrollContext(m: *const model_mod.Model) ScrollContext {
     if (!build_options.has_tiling) return .{ .tiled_count = 0, .slot_w = 0, .max_off = 0 };
     if (!build_options.has_layout_scroll) return .{ .tiled_count = 0, .slot_w = 0, .max_off = 0 };
     const algo_scroll = if (build_options.has_layout_scroll) @import("scroll") else return .{ .tiled_count = 0, .slot_w = 0, .max_off = 0 };
-    const n = tiledCountOnCurrent(m);
+    const n = model_mod.tiledCountOnWs(m, m.current);
     const wa = screen.workArea(@import("core").getState().screen);
     const slot_w = algo_scroll.slotWidth(wa.width);
     const max_off = algo_scroll.maxOffset(n, slot_w, wa.width);
@@ -716,7 +727,9 @@ pub fn switchTo(ws_idx: u8) void {
                 break :blk @as(?model_mod.WindowId, child);
             }
         }
-        break :blk fallbackFocusOnWs(m, ws_idx);
+        // Delegate to the model's tiered fallback (newest-first MRU, then
+        // reversed tiled_order, then floating) — same policy as focusFallback.
+        break :blk model_mod.fallbackFocusCandidate(m, ws_idx);
     };
 
     const ft: focus.FocusTransition = blk: {
@@ -733,22 +746,6 @@ pub fn switchTo(ws_idx: u8) void {
 
     // force_restack raises the bar window.
     sync.reconcile(m, c, .{ .force_restack = true });
-}
-
-/// Post-switch focus fallback: newest-first focus_mru of `ws`, then first
-/// visible store entry (== lastFocusedOrFirst's tracking-order scan).
-fn fallbackFocusOnWs(m: *const model_mod.Model, ws: model_mod.WSId) ?model_mod.WindowId {
-    const mru = &m.ws[ws].focus_mru;
-    var i = mru.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (model_mod.visibleOn(m, mru.items[i], ws)) return mru.items[i];
-    }
-    for (0..m.store.count()) |k| {
-        const it = m.store.at(k);
-        if (model_mod.visibleOn(m, it.key, ws)) return it.key;
-    }
-    return null;
 }
 
 // ------------------------------------------------------- spawn/map lifecycle

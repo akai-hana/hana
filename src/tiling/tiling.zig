@@ -30,22 +30,6 @@ pub inline fn defaultLayout() Layout {
     return types.layout_table[0].tag;
 }
 
-// Live tiling state accessors.
-
-pub inline fn isEnabled() bool {
-    return core.getState().config.tiling.enabled;
-}
-
-pub inline fn getBorderWidth() u16 {
-    const cs = core.getState();
-    return utils.scaling.scaleBorderWidth(cs.config.tiling.border_width, cs.screen.height_in_pixels);
-}
-
-pub inline fn getLayoutVariants() LayoutVariants {
-    const cfg_tiling = core.getState().config.tiling;
-    return .{
-        .master = cfg_tiling.master_variant,
-        .monocle = cfg_tiling.monocle_variant,
-        .grid = cfg_tiling.grid_variant,
-    };
-}
+// NOTE: live tiling state accessors (isEnabled/getBorderWidth/getLayoutVariants)
+// were removed as dead symbols (2026-08, D3): callers read the config directly
+// (borders.zig) and no module used the layout-variant bundle.

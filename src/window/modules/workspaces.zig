@@ -1,5 +1,8 @@
-//! Workspace state holder.
-//! Keeps the workspace list and per-ws config overrides applied once at boot; switching, tagging, and moving live in the model.
+//! Complete workspaces feature: tag membership transitions + per-workspace
+//! config-override types.
+//! A self-contained plugin over the model: switching, tagging, and moving are
+//! model transitions (tag mask + tiled_order moves), and the workspace list
+//! with its per-ws config overrides applied once at boot is held here.
 
 const std = @import("std");
 
@@ -8,6 +11,7 @@ const types = @import("types");
 const constants = @import("constants");
 
 const tracking = @import("tracking");
+const model = @import("model");
 const build_options = @import("build_options");
 
 pub const Workspace = struct {
@@ -106,6 +110,87 @@ pub fn deinit() void {
 /// Facade kept for module boundary; inlined would be equivalent.
 pub fn removeWindow(win: u32) void {
     tracking.removeWindow(win);
+}
+
+pub fn switchTo(m: *model.Model, ws: model.WSId) void {
+    m.current = ws;
+}
+
+pub fn moveWindowToWs(m: *model.Model, win: model.WindowId, ws: model.WSId) void {
+    const e = m.store.getPtr(win) orelse return;
+    if (e.mask == model.ALL_MASK) return; // pinned stays everywhere-visible
+    if (build_options.has_minimize) {
+        if (@import("minimize").isMinimized(m, win)) {
+            e.mask = model.bit(ws); // record follows the move
+            return;
+        }
+    }
+    // Fullscreen record follows the move (legacy transferFullscreenRecord);
+    // a destination owner drops this one rather than clobbering the resident.
+    if (e.mode == .fullscreen and e.mode.fullscreen.ws != ws) {
+        if (build_options.has_fullscreen) {
+            if (@import("fullscreen").fullscreenOccupied(m, win, ws)) {
+                e.mode = .{ .base = e.mode.fullscreen.base };
+            } else {
+                e.mode.fullscreen.ws = ws;
+            }
+        } else {
+            e.mode.fullscreen.ws = ws;
+        }
+    }
+    e.mask = model.bit(ws);
+    const h: ?model.WSId = e.home_ws;
+    if (h) |old_h| {
+        if (old_h != ws) {
+            // Refuse-before-mutate: a full destination list cancels the
+            // move instead of stranding the window home-less.
+            if (m.ws[ws].tiled_order.len >= model.max_tiled_per_ws) {
+                e.mask = model.bit(old_h);
+                return;
+            }
+            model.removeValue(&m.ws[old_h].tiled_order, win);
+            _ = m.ws[ws].tiled_order.append(win);
+            e.home_ws = ws;
+        }
+    }
+}
+
+/// Remove tag `ws`; the last remaining tag is protected (returns false).
+/// Fullscreen-on-removed-ws transfers to the lowest remaining bit, or drops
+/// when that destination is occupied (legacy transferFullscreenRecord).
+pub fn tagRemove(m: *model.Model, win: model.WindowId, ws: model.WSId) bool {
+    const e = m.store.getPtr(win) orelse return false;
+    if (@popCount(e.mask) <= 1) return false;
+    e.mask &= ~model.bit(ws);
+    if (e.mode == .fullscreen and e.mode.fullscreen.ws == ws) {
+        const dest = model.lowestBit(e.mask);
+        if (build_options.has_fullscreen) {
+            if (@import("fullscreen").fullscreenOccupied(m, win, dest)) {
+                e.mode = .{ .base = e.mode.fullscreen.base };
+            } else {
+                e.mode.fullscreen.ws = dest;
+            }
+        } else {
+            e.mode.fullscreen.ws = dest;
+        }
+    }
+    return true;
+}
+
+pub fn tagAdd(m: *model.Model, win: model.WindowId, ws: model.WSId, protect_current: bool) void {
+    const e = m.store.getPtr(win) orelse return;
+    e.mask |= model.bit(ws);
+    if (protect_current) e.mask |= model.bit(m.current);
+}
+
+pub fn pinToggle(m: *model.Model, win: model.WindowId) void {
+    const e = m.store.getPtr(win) orelse return;
+    e.mask = if (e.mask == model.ALL_MASK) model.bit(m.current) else model.ALL_MASK;
+}
+
+pub fn allViewToggle(m: *model.Model) bool {
+    m.all_view_active = !m.all_view_active;
+    return m.all_view_active;
 }
 
 /// This module's window sub-system contribution: lifecycle only, since

@@ -524,7 +524,7 @@ const State = struct {
         // demotes it in the split-view sort, and that IS a data change).
         var changed = !self.fetch_key_valid or self.fetch_key_len != self.wins_len;
         for (0..self.wins_len) |i| {
-            const minf = if (build_options.has_minimize) model.isMinimized(pipeline.model(), self.wins[i]) else false;
+            const minf = if (build_options.has_minimize) @import("minimize").isMinimized(pipeline.model(), self.wins[i]) else false;
             if (!changed and (self.fetch_key_ids[i] != self.wins[i] or self.fetch_key_minimized[i] != minf))
                 changed = true;
             self.fetch_key_ids[i] = self.wins[i];
@@ -795,8 +795,9 @@ fn performDraw() void {
     // refetch or a title repaint will actually read it, never on frames where
     // the title is clean (the set is left untouched so the last refresh is
     // reused verbatim).
-    if (build_options.has_minimize and (gBar.force or s.fetch_dirty or s.isSegmentDirty(.title)))
-        model.collectMinimizedIntoSet(pipeline.model(), &s.minimized, s.render.allocator) catch {};
+    if (build_options.has_minimize and (gBar.force or s.fetch_dirty or s.isSegmentDirty(.title))) {
+        @import("minimize").collectMinimizedIntoSet(pipeline.model(), &s.minimized, s.render.allocator) catch {};
+    }
     s.refreshTitleData();
     const frame = segmod.Frame{
         .workspace_count = s.ws_count,
@@ -949,7 +950,7 @@ pub fn toggleBarSegmentAnchor() void {
         ungrabAndFlush();
         return;
     };
-    const no_fullscreen = model.fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) == null;
+    const no_fullscreen = if (build_options.has_fullscreen) @import("fullscreen").fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) == null else true;
     // The bar's edge changed; update its claim so the reconcile below
     // re-derives every placement from the new usable area.
     syncScreenClaim();
@@ -969,12 +970,6 @@ pub fn toggleBarSegmentAnchor() void {
 pub fn isBarWindow(win: u32) bool {
     return if (gBar.state) |s| s.win.win_id == win else false;
 }
-pub fn getBarWindow() u32 {
-    return if (gBar.state) |s| s.win.win_id else 0;
-}
-pub fn getBarHeight() u16 {
-    return if (gBar.state) |s| s.render.height else 0;
-}
 
 /// Pushes the bar's current screen-space claim to core.screen. Called at each
 /// point where the bar's occupancy of the screen changes (visibility toggle,
@@ -993,10 +988,6 @@ fn syncScreenClaim() void {
 /// window adoption skip the WM's own window.
 pub fn winId() ?u32 {
     return if (gBar.state) |s| s.win.win_id else null;
-}
-
-pub fn isVisible() bool {
-    return if (gBar.state) |s| s.is_visible else false;
 }
 
 /// Synchronous bar update safe to call inside xcb_grab_server.
@@ -1080,7 +1071,8 @@ pub fn dismissAfterPrompt() void {
     if (!gBar.prompt_forced_visible) return;
     gBar.prompt_forced_visible = false;
     const current_ws = tracking.getCurrentWorkspace() orelse 0;
-    const should_show = model.fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) == null and s.is_globally_visible;
+    const no_fullscreen = if (build_options.has_fullscreen) @import("fullscreen").fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) == null else true;
+    const should_show = no_fullscreen and s.is_globally_visible;
     if (should_show) return; // conditions changed while the prompt was open; stay visible
     s.is_visible = false;
     _ = xcb.xcb_unmap_window(s.win.conn, s.win.win_id);
@@ -1107,7 +1099,7 @@ pub fn setBarState(action: types.Action) void {
 pub fn applyFullscreenVisibility() void {
     const s = gBar.state orelse return;
     const current_ws = tracking.getCurrentWorkspace() orelse 0;
-    const bar_forced_hidden_by_fullscreen = model.fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) != null;
+    const bar_forced_hidden_by_fullscreen = if (build_options.has_fullscreen) @import("fullscreen").fullscreenOccupantOnWs(pipeline.model(), @intCast(current_ws)) != null else false;
     const should_be_visible = !bar_forced_hidden_by_fullscreen and s.is_globally_visible;
     if (s.is_visible == should_be_visible) return;
     s.is_visible = should_be_visible;
@@ -1258,7 +1250,8 @@ fn handleTitleClick(s: *State, offset: u16) void {
         return;
     }) orelse return;
 
-    if (build_options.has_minimize and model.isMinimized(pipeline.model(), target.window)) {
+    const is_minimized = if (build_options.has_minimize) @import("minimize").isMinimized(pipeline.model(), target.window) else false;
+    if (is_minimized) {
         actions.restore(target.window);
     } else if (focus.getFocused() == target.window) {
         actions.minimize(target.window);

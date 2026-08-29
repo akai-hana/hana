@@ -448,7 +448,7 @@ fn dumpState() void {
     if (build_options.has_tiling and @import("core").tilingEnabled()) {
         debug.info("Tiling enabled: true", .{});
         debug.info("Tiling layout:  {s}", .{@tagName(pipeline.getCurrentLayout())});
-        debug.info("Tiled windows:  {}", .{tracking.tiledCountOnCurrent()});
+        debug.info("Tiled windows:  {}", .{@import("model").tiledCountOnWs(pipeline.model(), pipeline.model().current)});
     }
 
     debug.info("================================", .{});

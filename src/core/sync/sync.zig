@@ -233,11 +233,14 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
     // STEP 1: wa := workArea(ctx) (screen minus bar).
     const wa = ctx.workarea;
 
-    // STEP 2: fullscreen winner scan.
+    // STEP 2: fullscreen winner scan. Parked windows (presence != present)
+    // are hidden: their retained fullscreen record must NOT claim the screen
+    // (minimize-from-fullscreen re-parks the record, so it is not an occupant).
     var fs_win: ?model.WindowId = null;
     for (0..m.store.count()) |i| {
         const it = m.store.at(i);
         if (it.val.mode != .fullscreen) continue;
+        if (it.val.presence != .present) continue;
         const f = it.val.mode.fullscreen;
         if (model.visibleOn(m, it.key, m.current) or f.ws == m.current) {
             fs_win = it.key;
@@ -338,7 +341,11 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
         var pixel: u32 = ctx.color_of(win, m);
         var parked = false;
 
-        if (fs_win != null) {
+        if (e.presence == .parked) {
+            bw = 0;
+            pixel = 0;
+            parked = true;
+        } else if (fs_win != null) {
             if (win == fs_win.?) {
                 rect = ctx.screen;
                 bw = 0;
@@ -348,11 +355,6 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
                 parked = true;
             }
         } else switch (e.mode) {
-            .minimized => {
-                bw = 0;
-                pixel = 0;
-                parked = true;
-            },
             .fullscreen => {
                 bw = 0;
                 pixel = 0;
@@ -459,7 +461,7 @@ pub fn lastRectFor(win: model.WindowId) ?utils.Rect {
 ///   2. else the last visible geometry we sent (null while parked/unsent).
 pub fn truthRect(m: *const model.Model, win: model.WindowId) ?utils.Rect {
     const e = m.store.get(win) orelse return null;
-    if (e.mode == .base and e.mode.base == .floating) return e.mode.base.floating;
+    if (e.presence == .present and e.mode == .base and e.mode.base == .floating) return e.mode.base.floating;
     return lastRectFor(win);
 }
 
