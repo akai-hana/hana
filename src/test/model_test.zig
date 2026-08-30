@@ -9,14 +9,14 @@ const minimize = if (build_options.has_minimize) @import("minimize") else struct
 const fullscreen = if (build_options.has_fullscreen) @import("fullscreen") else struct {};
 const floating = if (build_options.has_floating) @import("floating") else struct {};
 const workspaces = if (build_options.has_workspaces) @import("workspaces") else struct {};
-// The layout cycle moved out of the model into the registry layer; the
-// model's kind is an opaque u8. We step it through a representative config
-// name list for replay parity (no-op when the tiling subsystem is absent).
-const tiling_engine = if (build_options.has_tiling) @import("engine") else struct {};
+// The model's kind is an opaque u8; we step it through a representative
+// config name list, matching the registry's cycle (no-op when the tiling
+// subsystem is absent).
+const tiling = if (build_options.has_tiling) @import("tiling") else struct {};
 const test_cycle_names = [_][]const u8{ "master", "monocle", "grid", "fibonacci" };
 fn stepCycle(m: *Model, dir: i32) void {
     if (!build_options.has_tiling) return;
-    m.ws[m.current].params.kind = tiling_engine.cycleKind(m.ws[m.current].params.kind, dir, &test_cycle_names);
+    m.ws[m.current].params.kind = tiling.cycleKind(m.ws[m.current].params.kind, dir, &test_cycle_names);
     m.ws[m.current].params.variant_idx = 0;
 }
 
@@ -71,9 +71,9 @@ fn eqModel(a: *const Model, b: *const Model) bool {
         if (!std.mem.eql(WindowId, sa.focus_mru.constSlice(), sb.focus_mru.constSlice())) return false;
         if (sa.params.kind != sb.params.kind) return false;
         if (sa.params.variant_idx != sb.params.variant_idx) return false;
-        if (sa.params.master_width != sb.params.master_width) return false;
-        if (sa.params.master_count != sb.params.master_count) return false;
-        if (sa.params.stack_balance != sb.params.stack_balance) return false;
+        if (sa.params.primary_width != sb.params.primary_width) return false;
+        if (sa.params.primary_count != sb.params.primary_count) return false;
+        if (sa.params.secondary_balance != sb.params.secondary_balance) return false;
     }
     return true;
 }
@@ -354,7 +354,8 @@ test "T09: pinToggle across all modes" {
     try testing.expect(m.store.get(4).?.presence == .parked);
 }
 
-// T10: allViewToggle round trip; visibility parity with legacy.
+// T10: allViewToggle round trip; the all-view flag drives per-window
+// visibility.
 test "T10: all-view flag drives visibility for every stored window" {
     var m = makeModel();
     defer deinitModel(&m);
@@ -375,8 +376,8 @@ test "T10: all-view flag drives visibility for every stored window" {
     try testing.expect(!model.visibleOn(&m, 2, 0));
 }
 
-// T11: reorderTiled bounds-checked; swapMaster master/stack swap.
-test "T11: reorder and swapMaster" {
+// T11: reorderTiled bounds-checked; swapPrimary primary/next-slot swap.
+test "T11: reorder and swapPrimary" {
     var m = makeModel();
     defer deinitModel(&m);
     for ([_]WindowId{ 1, 2, 3, 4 }) |w| regCur(&m, w);
@@ -395,17 +396,17 @@ test "T11: reorder and swapMaster" {
     model.reorderTiled(&m, 42, 0);
     try expectOrder(&m, 0, &.{ 3, 1, 2, 4 });
 
-    // swapMaster swaps slots 0 and 1.
-    model.swapMaster(&m);
+    // swapPrimary exchanges slots 0 and 1.
+    model.swapPrimary(&m);
     try expectOrder(&m, 0, &.{ 1, 3, 2, 4 });
-    model.swapMaster(&m);
+    model.swapPrimary(&m);
     try expectOrder(&m, 0, &.{ 3, 1, 2, 4 });
 
     // Fewer than two tiled windows: no-op.
     var small = makeModel();
     defer deinitModel(&small);
     regCur(&small, 7);
-    model.swapMaster(&small);
+    model.swapPrimary(&small);
     try expectOrder(&small, 0, &.{7});
 }
 
@@ -518,21 +519,21 @@ test "T14: config reload rescales params, keeps scroll viewport" {
     var m = makeModel();
     defer deinitModel(&m);
     regCur(&m, 1);
-    m.ws[0].params = .{ .kind = 1, .master_width = 0.7, .master_count = 3 };
-    m.ws[0].params.scroll_offset = 42;
-    m.ws[0].params.scroll_prev_count = 2;
-    m.ws[1].params.master_width = 0.9;
+    m.ws[0].params = .{ .kind = 1, .primary_width = 0.7, .primary_count = 3 };
+    m.ws[0].params.viewport_offset = 42;
+    m.ws[0].params.viewport_prev_count = 2;
+    m.ws[1].params.primary_width = 0.9;
 
-    const tpl: model.LayoutParams = .{ .kind = 2, .master_width = 0.6 };
+    const tpl: model.LayoutParams = .{ .kind = 2, .primary_width = 0.6 };
     model.applyConfigReload(&m, tpl);
 
     for (&m.ws) |*s| {
         try testing.expectEqual(@as(u8, 2), s.params.kind);
-        try testing.expectEqual(@as(f32, 0.6), s.params.master_width);
-        try testing.expectEqual(@as(u8, 1), s.params.master_count);
+        try testing.expectEqual(@as(f32, 0.6), s.params.primary_width);
+        try testing.expectEqual(@as(u8, 1), s.params.primary_count);
     }
-    try testing.expectEqual(@as(i32, 42), m.ws[0].params.scroll_offset);
-    try testing.expectEqual(@as(u32, 2), m.ws[0].params.scroll_prev_count);
+    try testing.expectEqual(@as(i32, 42), m.ws[0].params.viewport_offset);
+    try testing.expectEqual(@as(u32, 2), m.ws[0].params.viewport_prev_count);
 }
 
 // T15: setFocus updates focused+MRU; MRU capped (mru_capacity).
@@ -677,7 +678,7 @@ test "T18: identical operation sequences produce identical models" {
             model.register(m, 7, null) catch unreachable;
             workspaces.switchTo(m, 0);
             model.reorderTiled(m, 3, 0);
-            model.swapMaster(m);
+            model.swapPrimary(m);
             minimize.minimize(m, 4) catch unreachable;
             minimize.restore(m, 4);
             minimize.minimize(m, 5) catch unreachable;
@@ -686,7 +687,7 @@ test "T18: identical operation sequences produce identical models" {
             workspaces.pinToggle(m, 1);
             workspaces.moveWindowToWs(m, 7, 1);
             stepCycle(m, 1);
-            model.adjustMasterWidth(m, 0.1);
+            model.adjustPrimaryWidth(m, 0.1);
             model.setFocus(m, 3);
             model.setFocus(m, 1);
             _ = workspaces.allViewToggle(m);
@@ -795,7 +796,7 @@ test "T33: fullscreen-prev restore re-adds slot; exit-fullscreen retiles" {
     try assertSingleMembership(&m);
 
     // The reported final step: leaving fullscreen must return a TILEABLE,
-    // engine-placed window - not a home-less stranded orphan.
+    // tiling-placed window - not a home-less stranded orphan.
     try testing.expect(fullscreen.toggleFullscreen(&m, 1));
     const back = m.store.get(1).?;
     try testing.expect(back.anchor == .tiled and back.presence == .present);
@@ -990,7 +991,7 @@ test "home_ws: findHome uses cache" {
 test "home_ws: findHome scan fallback when cache is null" {
     var m = makeModel();
     regCur(&m, 1);
-    // A null cache simulates a legacy entry with no recorded home.
+    // A null cache simulates an entry with no recorded home.
     m.store.getPtr(1).?.home_ws = null;
     // findHome scans tiled_order and recovers the correct home.
     try testing.expectEqual(@as(?WSId, 0), model.findHome(&m, 1));
@@ -1071,15 +1072,15 @@ test "restoreAllOnWs restores in slot order" {
     try testing.expect(!minimize.isMinimized(&m, 30));
 }
 
-// I-3: adjustMasterWidth clamps to [0.05, 0.95].
-test "adjustMasterWidth clamps" {
+// I-3: adjustPrimaryWidth clamps to [0.05, 0.95].
+test "adjustPrimaryWidth clamps" {
     var m = makeModel();
     defer deinitModel(&m);
     workspaces.switchTo(&m, 0);
-    model.adjustMasterWidth(&m, 10.0); // far above the ceiling
-    try testing.expect(m.ws[0].params.master_width <= 0.95);
-    model.adjustMasterWidth(&m, -10.0); // far below the floor
-    try testing.expect(m.ws[0].params.master_width >= 0.05);
+    model.adjustPrimaryWidth(&m, 10.0); // far above the ceiling
+    try testing.expect(m.ws[0].params.primary_width <= 0.95);
+    model.adjustPrimaryWidth(&m, -10.0); // far below the floor
+    try testing.expect(m.ws[0].params.primary_width >= 0.05);
 }
 
 // I-3: setFloatingRect updates floating geometry, no-ops for tiled/unknown.

@@ -40,7 +40,7 @@ pub inline fn getState() ?*State {
 
 /// Applies per-workspace master-count/variant overrides from `cfg_tiling`.
 ///
-/// `master_width` and `stack_balance` have no config-file representation;
+/// `primary_width` and `secondary_balance` have no config-file representation;
 /// they are pure runtime state living only in the model's per-ws params, so
 /// nothing here touches them.
 pub fn applyWorkspaceOverrides(
@@ -126,10 +126,10 @@ pub fn moveWindowToWs(m: *model.Model, win: model.WindowId, ws: model.WSId) void
             return;
         }
     }
-    // Fullscreen record follows the move (legacy transferFullscreenRecord); a
-    // destination owner drops this one into de-fullscreen (toggle OFF) rather
-    // than clobbering the resident. Ghost records (minimized-from-fullscreen)
-    // move their ws too, matching legacy where mode persisted through minimize.
+    // Fullscreen record follows the move; a destination owner drops this one
+    // into de-fullscreen (toggle OFF) rather than clobbering the resident.
+    // Ghost records (minimized-from-fullscreen) move their ws too, following
+    // the parked window's mask.
     if (build_options.has_fullscreen) {
         const fmod = @import("fullscreen");
         if (fmod.isFullscreenMode(m, win)) {
@@ -162,8 +162,7 @@ pub fn moveWindowToWs(m: *model.Model, win: model.WindowId, ws: model.WSId) void
 
 /// Remove tag `ws`; the last remaining tag is protected (returns false).
 /// Fullscreen-on-removed-ws transfers to the lowest remaining bit, or drops
-/// into de-fullscreen when that destination is occupied (legacy
-/// transferFullscreenRecord).
+/// into de-fullscreen when that destination is occupied.
 pub fn tagRemove(m: *model.Model, win: model.WindowId, ws: model.WSId) bool {
     const e = m.store.getPtr(win) orelse return false;
     if (@popCount(e.mask) <= 1) return false;
@@ -203,4 +202,9 @@ pub fn allViewToggle(m: *model.Model) bool {
 pub const module: @import("plugin").WindowModule = .{
     .init = init,
     .deinit = deinit,
+    .sendToWs = moveWindowToWs,
+    .addToWs = tagAdd,
+    .removeFromWs = tagRemove,
+    .togglePin = pinToggle,
+    .toggleAllView = allViewToggle,
 };

@@ -38,7 +38,7 @@ const window_mods = @import("window_modules").modules;
 /// absent. Gated on has_tiling so tree variants without tiling compile (the
 /// scenario matrix removes src/tiling entirely).
 const tiling_mods = if (build_options.has_tiling) @import("tiling_modules").modules else &[_]@import("plugin").Layout{};
-const engine = if (build_options.has_tiling) @import("engine") else struct {};
+const tiling = if (build_options.has_tiling) @import("tiling") else struct {};
 
 const MAX_WS = constants.max_workspaces;
 
@@ -64,7 +64,7 @@ pub const WsRecord = struct {
 
 /// Top-level serialized state file.
 pub const StateFile = struct {
-    version: u32 = 3,
+    version: u32 = 4,
     current: u8,
     focused: ?u32,
     all_view_active: bool,
@@ -72,25 +72,25 @@ pub const StateFile = struct {
     windows: []const WindowRecord,
 };
 
-/// Legacy version-1 window mode: old files may contain a `.minimized` variant
+/// Version-1 window mode: old files may contain a `.minimized` variant
 /// that the current anchor-based record cannot hold. The payload is absorbed
 /// as an empty struct (lenient parse) and conversion re-homes it visible.
-/// `fullscreen` is shadowed as a plain struct (model.FullscreenPayload no
-/// longer exists); the payload maps to the underlying anchor.
+/// `fullscreen` is shadowed as a plain struct; the payload maps to the
+/// underlying anchor.
 const ModeV1 = union(enum) {
     base: model.BaseMode,
     fullscreen: struct { ws: u8, base: model.BaseMode },
     minimized: struct {},
 };
 
-/// Legacy version-1 window record (win/mask/mode only; no presence/ext).
+/// Version-1 window record (win/mask/mode only; no presence/ext).
 const WindowRecordV1 = struct {
     win: u32,
     mask: model.Mask,
     mode: ModeV1,
 };
 
-/// Legacy version-1 state file (kept only for upgrade tolerance).
+/// Version-1 state file (kept only for upgrade tolerance).
 const StateFileV1 = struct {
     version: u32 = 1,
     current: u8,
@@ -101,14 +101,14 @@ const StateFileV1 = struct {
     windows: []const WindowRecordV1,
 };
 
-/// Legacy version-2 (Tier-1 dev-only intermediate): `mode` field instead of
+/// Version-2 (Tier-1 dev-only intermediate): `mode` field instead of
 /// `anchor`. Tolerated so a mid-refactor session file never bricks the boot.
 const ModeV2 = union(enum) {
     base: model.BaseMode,
     fullscreen: struct { ws: u8, base: model.BaseMode },
 };
 
-/// Legacy version-2 window record (win/mask/mode/presence/ext).
+/// Version-2 window record (win/mask/mode/presence/ext).
 const WindowRecordV2 = struct {
     win: u32,
     mask: model.Mask,
@@ -117,7 +117,7 @@ const WindowRecordV2 = struct {
     ext: ?[]const u8 = null,
 };
 
-/// Legacy version-2 state file.
+/// Version-2 state file.
 const StateFileV2 = struct {
     version: u32 = 2,
     current: u8,
@@ -132,7 +132,7 @@ const StateFileV2 = struct {
 /// loadToGlobal call. Single-threaded (event-loop thread), like the model.
 var loaded_parsed: ?std.json.Parsed(StateFile) = null;
 
-/// Legacy (v1/v2) upgrade path storage: the converted records and the legacy
+/// (v1/v2) upgrade path storage: the converted records and the
 /// arena that owns their workspace slices. Both are module-owned and kept for
 /// the process lifetime (or until the next loadToGlobal replaces them).
 var g_legacy_active: bool = false;
@@ -207,7 +207,7 @@ pub fn save(allocator: std.mem.Allocator, m: *const model.Model, path: []const u
     }
 
     const state = StateFile{
-        .version = 3,
+        .version = 4,
         .current = @intCast(m.current),
         .focused = m.focused,
         .all_view_active = m.all_view_active,
@@ -242,13 +242,13 @@ pub fn loadToGlobal(allocator: std.mem.Allocator, path: []const u8) !bool {
         allocator,
         std.Io.Limit.limited(1 << 20),
     ) catch |err| {
-        debug.warn("restart_state: no usable restore file ({s}); booting fresh", .{@errorName(err)});
+        debug.warn("persist: no usable restore file ({s}); booting fresh", .{@errorName(err)});
         return false;
     };
     defer allocator.free(raw);
 
     var parsed = std.json.parseFromSlice(StateFile, allocator, raw, .{}) catch {
-        // Legacy-format tolerance: a version-1 file written by a pre-Tier-1
+        // Format tolerance: a version-1 file written by a pre-Tier-1
         // build may carry `.minimized` window modes (and `next_seq`) that the
         // current anchor-based record cannot hold, and a version-2 (Tier-1
         // dev-only intermediate) file may carry a `.mode` field instead of
@@ -256,7 +256,7 @@ pub fn loadToGlobal(allocator: std.mem.Allocator, path: []const u8) !bool {
         // convert (see loadLegacy).
         return try loadLegacy(allocator, raw);
     };
-    if (parsed.value.version != 3) {
+    if (parsed.value.version != 4) {
         parsed.deinit();
         return try loadLegacy(allocator, raw);
     }
@@ -264,15 +264,15 @@ pub fn loadToGlobal(allocator: std.mem.Allocator, path: []const u8) !bool {
     if (loaded_parsed) |old| old.deinit();
     loaded_parsed = parsed;
     g_legacy_active = false;
-    debug.info("restart_state: loaded session state ({} windows, {d} workspaces)", .{
+    debug.info("persist: loaded session state ({} windows, {d} workspaces)", .{
         loaded_parsed.?.value.windows.len,
         loaded_parsed.?.value.workspaces.len,
     });
     return true;
 }
 
-/// Parses a legacy restore file and converts it into the current (v3)
-/// StateFile shape. Two legacy formats are tolerated:
+/// Parses a version-1/version-2 restore file and converts it into the
+/// current (v3) StateFile shape. Two older formats are tolerated:
 ///   - v1 (pre-Tier-1): `.minimized` modes + `next_seq`; converted with
 ///     presence = .present and minimized windows re-homed visible (the old
 ///     payload has no module-blob equivalent).
@@ -280,7 +280,7 @@ pub fn loadToGlobal(allocator: std.mem.Allocator, path: []const u8) !bool {
 ///     `.anchor`; presence/ext are carried through verbatim so the module
 ///     blobs replay their re-park/cover exactly as a fresh v3 file would.
 /// The converted windows array is copied into static storage (model store
-/// capacity); the workspace slices alias the legacy parse arena and are kept
+/// capacity); the workspace slices alias the parse arena and are kept
 /// alive by `g_legacy_v1`/`g_legacy_v2`.
 fn loadLegacy(allocator: std.mem.Allocator, raw: []const u8) !bool {
     if (g_legacy_v1) |old| old.deinit();
@@ -304,7 +304,7 @@ fn loadLegacy(allocator: std.mem.Allocator, raw: []const u8) !bool {
                 };
             }
             g_legacy_state = .{
-                .version = 3,
+                .version = 4,
                 .current = f.current,
                 .focused = f.focused,
                 .all_view_active = f.all_view_active,
@@ -313,7 +313,7 @@ fn loadLegacy(allocator: std.mem.Allocator, raw: []const u8) !bool {
             };
             g_legacy_v1 = v1;
             g_legacy_active = true;
-            debug.info("restart_state: loaded legacy v1 session state ({} windows, {d} workspaces)", .{
+            debug.info("persist: loaded v1 session state ({} windows, {d} workspaces)", .{
                 n,
                 f.workspaces.len,
             });
@@ -323,11 +323,11 @@ fn loadLegacy(allocator: std.mem.Allocator, raw: []const u8) !bool {
     }
 
     var v2 = std.json.parseFromSlice(StateFileV2, allocator, raw, .{}) catch |err| {
-        debug.warn("restart_state: restore file unparseable ({s}); booting fresh", .{@errorName(err)});
+        debug.warn("persist: restore file unparseable ({s}); booting fresh", .{@errorName(err)});
         return false;
     };
     if (v2.value.version != 2) {
-        debug.warn("restart_state: unsupported restore version {}; booting fresh", .{v2.value.version});
+        debug.warn("persist: unsupported restore version {}; booting fresh", .{v2.value.version});
         v2.deinit();
         return false;
     }
@@ -346,7 +346,7 @@ fn loadLegacy(allocator: std.mem.Allocator, raw: []const u8) !bool {
         };
     }
     g_legacy_state = .{
-        .version = 3,
+        .version = 4,
         .current = g.current,
         .focused = g.focused,
         .all_view_active = g.all_view_active,
@@ -355,7 +355,7 @@ fn loadLegacy(allocator: std.mem.Allocator, raw: []const u8) !bool {
     };
     g_legacy_v2 = v2;
     g_legacy_active = true;
-    debug.info("restart_state: loaded legacy v2 session state ({} windows, {d} workspaces)", .{
+    debug.info("persist: loaded v2 session state ({} windows, {d} workspaces)", .{
         n2,
         g.workspaces.len,
     });
@@ -372,12 +372,12 @@ pub fn loaded() ?*const StateFile {
 /// The degraded-restore fallback layout kind: the active config's default
 /// layout name (canonical at parse time, re-canonicalized here for defense),
 /// resolved against the registry by name, else index 0 -- the same neutral
-/// last resort as engine.defaultKind. Runs only on the removed-layout path
+/// last resort as tiling.defaultKind. Runs only on the removed-layout path
 /// (applyModelLevel) where core is already initialized and config is live.
 fn resumableDefaultKind() u8 {
     if (!build_options.has_tiling) return 0;
     const layout_name = @import("core").getState().config.tiling.layout;
-    return @intCast(engine.layoutByName(config_mod.canonicalLayoutName(layout_name)) orelse 0);
+    return @intCast(tiling.layoutByName(config_mod.canonicalLayoutName(layout_name)) orelse 0);
 }
 
 /// Restores model-level fields into the model: current/focused/all_view,
@@ -408,7 +408,7 @@ pub fn applyModelLevel(m: *model.Model) void {
         // the degraded path must not replace a layout silently.
         if (s.params.kind >= tiling_mods.len and tiling_mods.len > 0) {
             const fallback = resumableDefaultKind();
-            debug.warn("restart_state: restoring persisted layout kind {} which no longer resolves ({} registered layouts); using default layout kind {}", .{
+            debug.warn("persist: restoring persisted layout kind {} which no longer resolves ({} registered layouts); using default layout kind {}", .{
                 s.params.kind,
                 tiling_mods.len,
                 fallback,

@@ -369,4 +369,6 @@ pub const module: @import("plugin").WindowModule = .{
     .isResizingWindow = isResizingWindow,
     .getDragLastRect = getDragLastRect,
     .cancelDragForWindow = cancelDragForWindow,
+    .setFloatingRect = setFloatingRect,
+    .honorConfigureRequest = honorConfigureRequest,
 };

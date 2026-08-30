@@ -160,8 +160,12 @@ segment imports it and casts the contract's `*anyopaque` seams to it.
 | `pollTimeoutMs` | `fn () i32` | bar's join over the whole registry, each frame | you need periodic wakeups (clock). Return `<= 0` for "no wake"; the bar ignores negatives and sleeps when every segment is negative. |
 | `onPollWakeup` | `fn () void` | the joined poll tick | you poll (clock). |
 | `secondsElapsed` / `invalidate` | `fn ([]const u8) bool` / `fn () void` | bar second-ticker / full redraw | you render time or react to frame resets (clock; segments with caches). `secondsElapsed` returns true when your display changed so the bar redraws. |
-| `measureString` | `fn () []const u8` | bar, once per frame | CLOCK ONLY — the bar reserves the clock's measured string width in the row and hands it to other segments as `clock_width`. At most one module may provide it. |
+| `measureString` | `fn () []const u8` | bar, once per frame | the reserved-width probe (the clock's measure string); the bar reserves the measured string width in the row and hands it to other segments as `clock_width`. At most one module may provide it. |
 | `naturalWidth` | `fn (*const anyopaque, u16) u16` | bar, once per frame per CONFIGURED segment | your segment reserves a fixed row width (`frame` is `*const segment.Frame`, second arg the measured clock width). |
+| `self_ticking` | `bool = false` | — | capability flag: declares the segment drives its own refresh cadence (the wall-clock segment). The bar's second-ticker targets it. At most one module SHOULD claim it (first-match wins); a bar with none skips the whole timer path. |
+| `center_slot` | `bool = false` | — | capability flag: declares the segment claims the reserved center slot (the title segment). The bar reserves/clamps that slot's width and omits the gap after it in the center cluster. At most one module SHOULD claim it. |
+| `dirty_sources` | `DirtySources = .{}` | — | capability bitmask (`packed struct(u2) { focus: bool, frame: bool }`) declaring which core fact-revisions repaint the segment: `focus` and/or `frame` (title: focus+frame; workspaces/tags: frame; everything else: none). Name-free per-source dirty marking. |
+| `clickable` | `bool = true` | — | whether the segment participates in click-hit bounds. False only for segments with no click behavior (the clock). |
 | `draw` | `fn (*anyopaque, u16) anyerror!u16` | bar, once per frame per configured segment, left-to-right | always (configured). `*anyopaque` is `*segment.DrawCtx` (bar-built per-frame scratch: dc, config, height, conn, allocator, width, minimized_api, frame, title snapshots); your segment casts back, paints with `ctx.dc`, returns its advanced x. |
 | `onClick` | `fn (u16, bool, bool, *anyopaque, *const fn (*anyopaque, u16) void, *const fn () void) bool` | bar click routing | you respond to clicks (tags, layout, title). Return true when consumed (mirrors the chrome-surface input routing). |
 | `handleKeypress` / `isActive` / `consumeRedrawRequest` / `invalidateReloadCaches` | prompt chrome-surface extras | bar's `Surfaces` hooks (bar binds them to whichever registry entry provides them) | PROMPT OVERLAY ONLY — the bar treats a module that binds these as its chrome-surface input provider. |
@@ -172,9 +176,10 @@ Rules, verbatim:
   resolves names → registry ids once at init and loops that list for
   width-sum/draw/click. `configurable = false` segments join the uniform
   lifecycle/poll loops but never the draw loop.
-- **Clock reservation:** the bar resolves `id("clock")` once at init (D6);
-  `measureString` is read only from that module. A second module providing
-  `measureString` would be dead code, not a conflict.
+- **Self-ticking reservation:** the bar resolves the `self_ticking` segment
+  once at init (first-match, comptime, name-free); `measureString` is read only
+  from that module. A second module claiming `self_ticking` would be dead code,
+  not a conflict.
 - **The prompt is not "special"** — it is a non-configurable segment whose
   poll/lifecycle hooks join the uniform loops; the title addon delegates to it
   while it is active (§5). A tree without prompt.zig simply has no
@@ -202,9 +207,9 @@ lives in `src/tiling/engine.zig`; your module casts the contract's
 | `variant_count` / `has_variants` | `u8` / `bool` | cycle_variant actions, bar variants segment | your layout exposes config-selectable variants (master 2, monocle 2, grid 2; else 1/false). Must match what your `compute` branches on. |
 | `fifo_variant` | `?u8` | actions master-fifo spawn placement | ONE variant index toggles fifo spawn behavior (master binds 1). |
 | `variant_parse` | `fn ([]const u8) ?u8` | config seed-time resolution | maps a registry-driven VALUE-STRING (from config `variants` words/map) to this layout's variant index; null = unknown string (uses 0). Registry-driven, no closed per-layout enums. |
-| `gap_mode` | `?u8` | pipeline env `monocle_gaps` hint | the variant index at which this layout honours gaps (monocle binds 1 = "gaps"); null = gaps never toggle for this layout. Name-free hint derivation. |
-| `relax_mode` | `?u8` | pipeline env `grid_relaxed` hint | the variant index at which this layout switches to its relaxed mode (grid binds 1 = "relaxed"); null = no relaxed toggle. Name-free hint derivation. |
-| `slotWidth` / `maxOffset` | `fn (u16) i32` / `fn (usize, i32, u16) i32` | actions scrollStep/snapScrollToFocused/scrollContext | SCROLL LAYOUT ONLY. **Presence of these hooks is the definition of a scroll layout** (D5) — no name matching anywhere. |
+| `gap_mode` | `?u8` | your module's OWN translation of `v.env.variant_idx` | the variant index at which this layout honours gaps (monocle binds 1 = "gaps"); null = gaps never toggle for this layout. The core passes only the generic `v.env.variant_idx`; the module compares it against a module-local const equal to this value (see monocle.gap_variant). |
+| `relax_mode` | `?u8` | your module's OWN translation of `v.env.variant_idx` | the variant index at which this layout switches to its relaxed mode (grid binds 1 = "relaxed"); null = no relaxed toggle. The core passes only the generic `v.env.variant_idx`; the module compares it against a module-local const equal to this value (see grid.relax_variant). |
+| `slotWidth` / `maxOffset` | `fn (u16) i32` / `fn (usize, i32, u16) i32` | actions viewportStep/snapViewportToFocused/viewportContext | SCROLL LAYOUT ONLY. **Presence of these hooks is the definition of a scroll layout** (D5) — no name matching anywhere. |
 | `preReconcile` | `fn (*anyopaque, usize, u16) void` | pipeline preReconcileDuties, every reconcile choke point | scroll viewport duties (snap-right on count growth, clamp). `*anyopaque` is `*model.LayoutParams`. |
 | `icon` / `indicators` | `?[]const u8` / `?[]const []const u8` | bar layout/variants segments (metadata-driven, D15) | always (bar glyph + variant indicator strings). |
 
@@ -285,9 +290,12 @@ Rules, verbatim:
   feature-dependent code under `if (build_options.has_<stem>)`.
 - **Registering a NEW modules/ owner** (a fourth `src/<x>/modules/`): add the
   owner to build.zig's `ownerContractName` map with its contract.
-- Segments keep their probe/option convention too — `has_seg_<stem>` for
-  `src/bar/modules/<stem>.zig`, helpers under `src/bar/support/` keep their
-  own probes (`has_vim`, `has_seg_carousel`) — all listed in build.zig:49-84.
+- Nested segment directories: a segment may use a per-segment subdirectory,
+  e.g. `src/bar/modules/title/title.zig` with its private helpers alongside it
+  (`title/carousel.zig`). Only the **eponymous file** (stem == directory name)
+  is a registry member; sibling helpers stay out of the registry (still
+  importable by name via greedy module discovery) and keep their own probes
+  (`has_vim`, `has_seg_carousel`) — all listed in build.zig:49-84.
 - Test gating: `zig build test` builds every `src/test/*_test.zig`; each
   suite lists its module requirements in build.zig (e.g. model_test needs
   all four; sync_test needs tiling+minimize+fullscreen). If your feature has

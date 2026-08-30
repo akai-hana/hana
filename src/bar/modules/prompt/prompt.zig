@@ -20,18 +20,15 @@ const vim = if (build_options.has_vim) @import("vim") else struct {
     pub fn init(_: std.mem.Allocator, _: usize) !void {}
     pub fn deinit(_: std.mem.Allocator) void {}
 };
-const carousel = if (build_options.has_seg_carousel) @import("carousel") else struct {
-    pub fn deactivate() void {}
-};
 pub const XK = core.XK;
-const xk_back_space = @intFromEnum(XK.BackSpace);
-const xk_return = @intFromEnum(XK.Return);
-const xk_escape = @intFromEnum(XK.Escape);
-const xk_delete = @intFromEnum(XK.Delete);
-const xk_left = @intFromEnum(XK.Left);
-const xk_right = @intFromEnum(XK.Right);
-const xk_home = @intFromEnum(XK.Home);
-const xk_end = @intFromEnum(XK.End);
+pub const xk_back_space = @intFromEnum(XK.BackSpace);
+pub const xk_return = @intFromEnum(XK.Return);
+pub const xk_escape = @intFromEnum(XK.Escape);
+pub const xk_delete = @intFromEnum(XK.Delete);
+pub const xk_left = @intFromEnum(XK.Left);
+pub const xk_right = @intFromEnum(XK.Right);
+pub const xk_home = @intFromEnum(XK.Home);
+pub const xk_end = @intFromEnum(XK.End);
 
 pub const default_max_input: usize = 256;
 pub const Action = enum { none, deactivate, spawn };
@@ -491,10 +488,8 @@ fn acceptGhost() bool {
 /// whole title slot. Returns the right edge (start_x + width). Only invoked by
 /// the title segment's draw delegation while the prompt is open.
 pub fn draw(ctx: *segmod.DrawCtx, x: u16) !u16 {
-    // The prompt covers the whole title segment, so no title.draw (and thus
-    // no carousel.offsetFor) runs while it's open; drop the marquee's
-    // active-scroll latch so the poll loop stops repainting hidden pixels.
-    carousel.deactivate();
+    // While covered, title's pollTimeoutMsHook contributes no marquee wakeup
+    // (title owns that decision), so no explicit carousel pause is needed here.
     return drawActive(ctx.dc, ctx.config, ctx.height, x, ctx.width);
 }
 

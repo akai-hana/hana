@@ -1,1 +1,0 @@
-You also mentioned "model.Window.floating: utils.Rect and the .floating anchor variant stay in the model". But then, core STILL references code from floating.zig, am I wrong? Why do you say that "This isn't "creep from the module""?

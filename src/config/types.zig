@@ -240,7 +240,7 @@ pub const WorkspaceMasterCountOverride = struct {
 pub const TilingConfig = struct {
     enabled: bool = true,
     /// Canonical default layout name (resolved at seed time against the
-    /// `tiling_modules` registry). Legacy "master-stack"/"master_stack"
+    /// `tiling_modules` registry). The "master-stack"/"master_stack" alias
     /// spellings in config are canonicalized onto "master" by the config
     /// boundary, so the stored value is always canonical.
     layout: []const u8 = "master",

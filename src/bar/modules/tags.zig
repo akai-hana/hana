@@ -176,6 +176,7 @@ fn onClickHook(offset: u16, left: bool, right: bool, _: *anyopaque, _: *const fn
 
 pub const module: @import("plugin").Segment = .{
     .name = "workspaces",
+    .dirty_sources = .{ .frame = true },
     .invalidate = invalidate,
     .naturalWidth = naturalWidthHook,
     .draw = drawHook,

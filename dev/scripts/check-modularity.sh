@@ -177,7 +177,7 @@ run_scenarios() {
 
     run_scenario \
         "vim (removable)" \
-        "src/bar/support/vim.zig"
+        "src/bar/modules/prompt/vim.zig"
 
     run_scenario \
         "bar + tiling (both)" \
@@ -258,13 +258,13 @@ run_scenarios() {
 
     run_scenario \
         "bar segment: -title+carousel" \
-        "src/bar/modules/title.zig" \
-        "src/bar/support/carousel.zig"
+        "src/bar/modules/title/title.zig" \
+        "src/bar/modules/title/carousel.zig"
 
     run_scenario \
         "bar segment: -prompt (no vim)" \
-        "src/bar/modules/prompt.zig" \
-        "src/bar/support/vim.zig"
+        "src/bar/modules/prompt/prompt.zig" \
+        "src/bar/modules/prompt/vim.zig"
 
     run_scenario \
         "bar segment: all segments removed" \
@@ -272,10 +272,10 @@ run_scenarios() {
         "src/bar/modules/tags.zig" \
         "src/bar/modules/layout.zig" \
         "src/bar/modules/variants.zig" \
-        "src/bar/modules/title.zig" \
-        "src/bar/support/carousel.zig" \
-        "src/bar/modules/prompt.zig" \
-        "src/bar/support/vim.zig"
+        "src/bar/modules/title/title.zig" \
+        "src/bar/modules/title/carousel.zig" \
+        "src/bar/modules/prompt/prompt.zig" \
+        "src/bar/modules/prompt/vim.zig"
 
     # Tier 5: Bar internals
     echo ""

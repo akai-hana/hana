@@ -104,7 +104,7 @@ fn expectConfigsEqual(a: *const types.Config, b: *const types.Config) !void {
     }
 }
 
-test "master trio: legacy flat [tiling] names match dedicated section" {
+test "master trio: flat [tiling] names match dedicated section" {
     var flat = try loadToml(testing.allocator, "master-flat",
         \\[tiling]
         \\master_count = 3
@@ -170,13 +170,13 @@ test "[tiling.aesthetics] and flat [tiling] gap/border reads agree" {
 }
 
 test "[bar.modules.workspaces] and [workspaces] agree on count/enabled" {
-    var legacy = try loadToml(testing.allocator, "ws-legacy",
+    var flat_ws = try loadToml(testing.allocator, "ws-flat",
         \\[workspaces]
         \\count = 5
         \\enabled = false
         \\
     );
-    defer legacy.deinit(testing.allocator);
+    defer flat_ws.deinit(testing.allocator);
     var nested = try loadToml(testing.allocator, "ws-nested",
         \\[bar.modules.workspaces]
         \\count = 5
@@ -184,7 +184,7 @@ test "[bar.modules.workspaces] and [workspaces] agree on count/enabled" {
         \\
     );
     defer nested.deinit(testing.allocator);
-    try expectConfigsEqual(&legacy, &nested);
+    try expectConfigsEqual(&flat_ws, &nested);
     try testing.expectEqual(@as(u8, 5), nested.workspaces.count);
     try testing.expect(!nested.workspaces.enabled);
 }

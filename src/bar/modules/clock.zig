@@ -75,9 +75,9 @@ pub fn draw(dc: *drawing.DrawContext, config: types.BarConfig, height: u16, star
     const str = try formatTime(&buf, sec, fmt);
     // Record the attempt before rendering: a persistent render failure
     // (e.g. fonts unavailable) must degrade to one retry per boundary --
-    // the legacy thread's cadence -- never to a per-event-batch retry storm.
+    // the second-boundary cadence -- never to a per-event-batch retry storm.
     // A genuine transient miss simply shows the previous second for up to
-    // one extra second, exactly as the old design did.
+    // one extra second, exactly as the cadence design intends.
     rendered_sec = sec;
     rendered_fmt = fmt;
     return dc.drawSegment(start_x, height, str, config.scaledSegmentPadding(height), config.bg, config.fg);
@@ -124,6 +124,8 @@ fn drawHook(ctx: *anyopaque, x: u16) !u16 {
 
 pub const module: @import("plugin").Segment = .{
     .name = "clock",
+    .self_ticking = true,
+    .clickable = false,
     .pollTimeoutMs = tickDeadlineMs,
     .secondsElapsed = secondElapsed,
     .measureString = measureString,

@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) !void {
     const has_minimize = hasPathOption(b, build_opts, "has_minimize", source_root ++ "window/modules/minimize.zig");
     const has_fullscreen = hasPathOption(b, build_opts, "has_fullscreen", source_root ++ "window/modules/fullscreen.zig");
     const has_workspaces = hasPathOption(b, build_opts, "has_workspaces", source_root ++ "window/modules/workspaces.zig");
-    _ = hasPathOption(b, build_opts, "has_vim", source_root ++ "bar/support/vim.zig");
+    _ = hasPathOption(b, build_opts, "has_vim", source_root ++ "bar/modules/prompt/vim.zig");
 
     // Tier 5: bar internals; if any core internal is missing, forfeit the entire bar.
     const has_drawing = pathExists(b.build_root.handle, b.graph.io, source_root ++ "bar/drawing.zig");
@@ -77,9 +77,9 @@ pub fn build(b: *std.Build) !void {
     const has_seg_clock = hasPathOption(b, build_opts, "has_seg_clock", source_root ++ "bar/modules/clock.zig");
     _ = hasPathOption(b, build_opts, "has_seg_tags", source_root ++ "bar/modules/tags.zig");
     _ = hasPathOption(b, build_opts, "has_seg_layout", source_root ++ "bar/modules/layout.zig");
-    _ = hasPathOption(b, build_opts, "has_seg_title", source_root ++ "bar/modules/title.zig");
-    _ = hasPathOption(b, build_opts, "has_seg_prompt", source_root ++ "bar/modules/prompt.zig");
-    const has_seg_carousel = hasPathOption(b, build_opts, "has_seg_carousel", source_root ++ "bar/support/carousel.zig");
+    _ = hasPathOption(b, build_opts, "has_seg_title", source_root ++ "bar/modules/title/title.zig");
+    _ = hasPathOption(b, build_opts, "has_seg_prompt", source_root ++ "bar/modules/prompt/prompt.zig");
+    const has_seg_carousel = hasPathOption(b, build_opts, "has_seg_carousel", source_root ++ "bar/modules/title/carousel.zig");
     _ = hasPathOption(b, build_opts, "has_seg_variants", source_root ++ "bar/modules/variants.zig");
 
     // Module discovery
@@ -172,7 +172,7 @@ pub fn build(b: *std.Build) !void {
             // src/bar/modules/clock.zig is present (has_seg_clock).
             if (!has_seg_clock and std.mem.eql(u8, entry.key_ptr.*, "clock_test")) continue;
             // carousel_test imports the `carousel` module, which only exists
-            // when src/bar/support/carousel.zig is present.
+            // when src/bar/modules/title/carousel.zig is present.
             if (!has_seg_carousel and std.mem.eql(u8, entry.key_ptr.*, "carousel_test")) continue;
             // model_test exercises all four window feature modules
             // (minimize/fullscreen/floating/workspaces), so every one must be present.
@@ -426,7 +426,7 @@ const OwnerRegistry = struct {
                     const dup_owner = try b.allocator.dupe(u8, owner);
                     const gop = try ctx.owner_registry.owners.getOrPut(b.allocator, dup_owner);
                     if (!gop.found_existing) gop.value_ptr.* = .empty;
-                    try ctx.collectStems(sub_path, &gop.value_ptr.*);
+                    try ctx.collectStems(sub_path, true, &gop.value_ptr.*);
                 } else {
                     const dup_path = try b.allocator.dupe(u8, sub_path);
                     try ctx.walkForOwnerDirs(dup_path);
@@ -434,11 +434,23 @@ const OwnerRegistry = struct {
             }
         }
 
-        /// Recursively collects the `.zig` stems directly-or-nestedly under a
-        /// `modules/` tree (path-independent, so `modules/foo/bar.zig` lands
-        /// in the same owner registry as `modules/baz.zig`).
-        fn collectStems(ctx: *ScanCtx, dir_path: []const u8, stems: *std.ArrayListUnmanaged([]const u8)) !void {
+        /// Recursively collects the `<owner>_modules` registry stems under a
+        /// `modules/` tree.
+        ///
+        /// Convention: at the owner root (`is_root`), every direct `.zig` file
+        /// is a segment module. Inside a nested segment directory, ONLY the
+        /// file whose stem equals the directory's name (the eponymous segment
+        /// file) is a registry member; sibling files there are that segment's
+        /// private helpers and stay out of the registry (they remain
+        /// importable by name via the separate greedy module discovery).
+        fn collectStems(
+            ctx: *ScanCtx,
+            dir_path: []const u8,
+            is_root: bool,
+            stems: *std.ArrayListUnmanaged([]const u8),
+        ) !void {
             const b = ctx.b;
+            const dir_name = std.fs.path.basename(std.mem.trimRight(u8, dir_path, "/"));
             var dir = try b.build_root.handle.openDir(b.graph.io, dir_path, .{ .iterate = true });
             defer dir.close(b.graph.io);
 
@@ -450,7 +462,7 @@ const OwnerRegistry = struct {
                         if (Module.isHiddenDirectory(entry.name)) continue;
                         const sub_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, entry.name });
                         const dup_path = try b.allocator.dupe(u8, sub_path);
-                        try ctx.collectStems(dup_path, stems);
+                        try ctx.collectStems(dup_path, false, stems);
                     },
                     .file => {
                         if (!Module.isZigSource(entry.name)) continue;
@@ -458,6 +470,11 @@ const OwnerRegistry = struct {
                         if (Module.isEntryPointPath(rel_path, ctx.entry_point_path)) continue;
 
                         const stem = try b.allocator.dupe(u8, std.fs.path.stem(entry.name));
+                        // In a nested segment directory, keep only the
+                        // eponymous file (stem == containing dir name) as a
+                        // segment; helpers simply are not registered.
+                        if (!is_root and !std.mem.eql(u8, stem, dir_name)) continue;
+
                         // Dedup-guard against doubles scored from nested
                         // `modules/` trees: names must be unique per owner, so
                         // a hit here would be a developer error the generated

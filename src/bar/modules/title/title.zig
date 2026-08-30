@@ -10,7 +10,7 @@ const std = @import("std");
 const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
-const refresh_rate = @import("refresh_rate");
+const refresh = @import("refresh");
 const debug = @import("debug");
 
 const constants = @import("constants");
@@ -19,8 +19,6 @@ const types = @import("types");
 const drawing = @import("drawing");
 const build_options = @import("build_options");
 const segmod = @import("segment");
-const model = @import("model");
-// The carousel is the title segment's optional marquee-width scroll helper.
 const carousel = if (build_options.has_seg_carousel) @import("carousel") else struct {
     pub const gap_px: u16 = 0;
     pub fn scrollingActive() bool {
@@ -56,18 +54,9 @@ const prompt = if (build_options.has_seg_prompt) @import("prompt") else struct {
         return x;
     }
 };
-// Minimize is the title segment's window-addon seam (D12): the title addon
-// owns all minimized-window knowledge (set synthesis + per-window checks),
-// mirroring the workspaces->fullscreen gated cross-addon pattern. Gated on
-// has_minimize so deleting minimize.zig (or building without it) compiles.
-const minimize = if (build_options.has_minimize) @import("minimize") else struct {
-    pub fn isMinimized(_: *const model.Model, _: model.WindowId) bool {
-        return false;
-    }
-    pub fn collectMinimizedIntoSet(_: *const model.Model, set: *std.AutoHashMapUnmanaged(u32, void), _: std.mem.Allocator) !void {
-        set.clearRetainingCapacity();
-    }
-};
+// The minimized-state service (set synthesis + per-window checks) is provided
+// by the window module registry and forwarded through the shared DrawCtx by
+// the bar (D12); the title segment just reads `snapshot.minimized_set`.
 
 const SegmentGeometry = struct {
     seg_x: u16,
@@ -87,7 +76,7 @@ fn drawInner(
     allocator: std.mem.Allocator,
     title_invalidated: bool,
 ) !u16 {
-    refresh_rate.ensureRefreshRateDetected(ctx.conn);
+    refresh.ensureRefreshRateDetected(ctx.conn);
     std.debug.assert((ctx.cached_title != null) == (ctx.cached_title_window != null));
     const window_count = snapshot.current_ws_wins.len;
     if (emptyWorkspace(ctx, window_count)) |end_x| return end_x;
@@ -303,27 +292,8 @@ fn monotonicMs() i64 {
 
 // -- Segment hooks -----------------------------------------------------------
 
-/// Live per-window minimized query exposed to the bar through the DrawCtx
-/// (D12). `m` is the bar-passed `*const model.Model` behind `*const anyopaque`.
-fn isMinimizedHook(m: *const anyopaque, win: u32) bool {
-    const mm: *const model.Model = @ptrCast(@alignCast(m));
-    return minimize.isMinimized(mm, win);
-}
-
-/// Full minimized-set synthesis exposed to the bar through the DrawCtx (D12).
-fn collectMinimizedHook(m: *const anyopaque, set: *std.AutoHashMapUnmanaged(u32, void), allocator: std.mem.Allocator) void {
-    const mm: *const model.Model = @ptrCast(@alignCast(m));
-    minimize.collectMinimizedIntoSet(mm, set, allocator) catch {};
-}
-
 fn drawHook(ctx: *anyopaque, x: u16) !u16 {
     const c: *segmod.DrawCtx = @ptrCast(@alignCast(ctx));
-    if (build_options.has_minimize) {
-        c.minimized_api = .{
-            .is_minimized = isMinimizedHook,
-            .collect = collectMinimizedHook,
-        };
-    }
     if (prompt.isActive()) return prompt.draw(c, x);
     return renderTitle(c, x);
 }
@@ -351,16 +321,24 @@ fn naturalWidthHook(_: *const anyopaque, _: u16) u16 {
 }
 
 fn pollTimeoutMsHook() i32 {
+    // The prompt covers the whole title slot (draw delegates to prompt), so
+    // no marquee is visible; contribute no wakeup instead of leaving the
+    // carousel polling hidden pixels. The next visible draw re-arms motion
+    // via offsetFor. Title owns this decision, so prompt never reaches into
+    // the carousel to pause it.
+    if (prompt.isActive()) return -1;
     return carousel.pollDeadlineMs(
         monotonicMs(),
         core.getState().config.bar.carousel_enabled,
-        refresh_rate.detectedHz(),
+        refresh.detectedHz(),
     );
 }
 
 /// This module's bar-segment contribution (registry binding).
 pub const module: @import("plugin").Segment = .{
     .name = "title",
+    .center_slot = true,
+    .dirty_sources = .{ .focus = true, .frame = true },
     .pollTimeoutMs = pollTimeoutMsHook,
     .naturalWidth = naturalWidthHook,
     .draw = drawHook,

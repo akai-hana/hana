@@ -22,7 +22,7 @@ const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
 const screen = @import("screen");
-const refresh_rate = @import("refresh_rate");
+const refresh = @import("refresh");
 const scale = @import("scale");
 const constants = @import("constants");
 const debug = @import("debug");
@@ -54,8 +54,8 @@ const bar_mods = @import("bar_modules").modules;
 const registry_len = bar_mods.len;
 const registry_empty = registry_len == 0;
 
-const clock_id: ?usize = segmod.idByName(&bar_mods, "clock");
-const title_id: ?usize = segmod.idByName(&bar_mods, "title");
+const self_ticking_role: ?usize = segmod.findByCapability(&bar_mods, .{ .self_ticking = true });
+const center_slot_role: ?usize = segmod.findByCapability(&bar_mods, .{ .center_slot = true });
 
 inline fn segId(name: []const u8) ?usize {
     return segmod.idByName(&bar_mods, name);
@@ -142,20 +142,21 @@ fn monotonicMs() i64 {
     return @intCast(utils.monotonicNs() / std.time.ns_per_ms);
 }
 
-/// Routes a keypress through every module that consumes one (the prompt).
-pub fn promptHandleKeypress(event: *const xcb.xcb_key_press_event_t, matched: ?*const types.Action) bool {
+/// Routes a keypress through every module that consumes one (the chrome
+/// overlay segment).
+pub fn chromeHandleKeypress(event: *const xcb.xcb_key_press_event_t, matched: ?*const types.Action) bool {
     for (bar_mods) |m| {
         if (m.handleKeypress) |h| if (h(event, matched)) return true;
     }
     return false;
 }
 
-/// Opens the prompt. Routed through the resolved title module's onClick hook
-/// (right-click path): the prompt overlay lives in the title module (D9) and
-/// the bar must not name it.
-pub fn promptToggle() void {
+/// Toggles the chrome overlay. Routed through the resolved title module's
+/// onClick hook (right-click path): the overlay lives in the title module
+/// (D9) and the bar must not name it.
+pub fn chromeToggleOverlay() void {
     const s = gBar.state orelse return;
-    if (title_id) |tid| {
+    if (center_slot_role) |tid| {
         if (bar_mods[tid].onClick) |oc|
             _ = oc(0, false, true, s, titleClickTrampoline, redrawInsideGrab);
     }
@@ -334,7 +335,7 @@ const State = struct {
         // Reserved clock width comes from the resolved clock module's
         // measureString hook (at most one module provides it).
         var clock_width: u16 = 0;
-        if (clock_id) |cid| {
+        if (self_ticking_role) |cid| {
             if (bar_mods[cid].measureString) |ms|
                 clock_width = dc.measureTextWidth(ms()) + 2 * config.scaledSegmentPadding(height);
         }
@@ -397,6 +398,17 @@ const State = struct {
         if (segId(name)) |id| self.segment_dirty[id] = false;
     }
 
+    /// Marks dirty every segment whose declared `dirty_sources` has bit
+    /// `source` set, and flags the bar dirty. Name-free: the bit masks are a
+    /// declared contract capability, not a name-keyed lookup.
+    fn markDirtySource(self: *State, source: segmod.DirtySourcesSource) void {
+        self.is_dirty = true;
+        if (comptime registry_empty) return;
+        for (bar_mods, 0..) |m, i| {
+            if (segmod.hasSource(m.dirty_sources, source)) self.segment_dirty[i] = true;
+        }
+    }
+
     fn isSegmentDirty(self: *const State, name: []const u8) bool {
         if (comptime registry_empty) return false;
         if (segId(name)) |id| {
@@ -421,10 +433,12 @@ const State = struct {
 
     /// Records the on-screen bounds of a clickable segment as the layout pass
     /// positions it, so handleButtonPress can hit-test against them without
-    /// redoing the layout. Called unconditionally for every segment; the clock
-    /// is skipped (it has no click behavior).
+    /// redoing the layout. Called unconditionally for every segment; segments
+    /// whose module declares `clickable == false` (the clock) are skipped.
     fn recordClickBound(self: *State, name: []const u8, x: u16, w: u16) void {
-        if (std.mem.eql(u8, name, "clock")) return;
+        if (comptime registry_empty) return;
+        const id = segId(name) orelse return;
+        if (!bar_mods[id].clickable) return;
         if (self.bounds_len >= max_click_bounds) return;
         self.bounds[self.bounds_len] = .{ .name = name, .x = x, .w = w };
         self.bounds_len += 1;
@@ -435,6 +449,24 @@ const State = struct {
             if (std.mem.eql(u8, b.name, name)) return b;
         }
         return null;
+    }
+
+    /// True when `name` resolves to the segment claiming the reserved center
+    /// slot (name-free; the role is the title capability today).
+    fn isCenterSlot(self: *const State, name: []const u8) bool {
+        _ = self;
+        if (comptime registry_empty) return false;
+        const id = segId(name) orelse return false;
+        return center_slot_role != null and id == center_slot_role.?;
+    }
+
+    /// True when `name` resolves to the self-ticking segment (name-free; the
+    /// role is the clock capability today).
+    fn isSelfTicking(self: *const State, name: []const u8) bool {
+        _ = self;
+        if (comptime registry_empty) return false;
+        const id = segId(name) orelse return false;
+        return self_ticking_role != null and id == self_ticking_role.?;
     }
 
     /// Measures a segment's natural (reserved) width via its uniform
@@ -487,6 +519,11 @@ const State = struct {
             .is_all_view_active = self.all_view,
             .workspace_has_windows = self.ws_has_windows[0..self.ws_count],
         };
+        // The minimized-state service is drawn from the window module registry
+        // here (upfront, per frame) so the title segment need not name the
+        // addon that owns it (D12). All hooks null => empty api => scanLiveFrame
+        // no-ops, matching prior boot ordering.
+        ctx.minimized_api = minimizedApiFromRegistry();
         const wins_slice = self.wins[0..self.wins_len];
         var minimized_title: []const u8 = "";
         if (wins_slice.len > 0 and self.minimized.contains(wins_slice[0]) and self.fetched_len > 0)
@@ -641,7 +678,7 @@ const State = struct {
         omit_gap_after_title: bool,
         scaled_spacing: u16,
     ) u16 {
-        const omit_gap = omit_gap_after_title and std.mem.eql(u8, name, "title");
+        const omit_gap = omit_gap_after_title and self.isCenterSlot(name);
         const x_before = x;
         const drawn_x = self.drawSegmentSafe(ctx, name, x, w);
         if (!omit_gap and drawn_x != x_before) {
@@ -676,7 +713,7 @@ const State = struct {
             right_x -= seg_w;
             if (pending_gap) right_x -= scaled_spacing;
 
-            if (std.mem.eql(u8, names[i], "clock")) self.clock_x = right_x;
+            if (self.isSelfTicking(names[i])) self.clock_x = right_x;
             self.recordClickBound(names[i], right_x, seg_w);
 
             if (self.isSegmentDirty(names[i])) {
@@ -752,8 +789,9 @@ const State = struct {
                     else
                         0;
                     for (lay.segments.items) |seg| {
-                        const omit_gap = (lay.position == .center) and std.mem.eql(u8, seg, "title");
-                        const w = if (lay.position == .center and std.mem.eql(u8, seg, "title")) remaining else self.measureSegmentWidth(frame, seg);
+                        const is_center = self.isCenterSlot(seg);
+                        const omit_gap = (lay.position == .center) and is_center;
+                        const w = if (is_center) remaining else self.measureSegmentWidth(frame, seg);
                         self.recordClickBound(seg, x, w);
                         if (self.isSegmentDirty(seg)) {
                             if (!is_full_redraw) {
@@ -781,7 +819,7 @@ const State = struct {
     /// (second rolled over). Cheap region-scoped blit.
     fn drawClockOnly(self: *State) void {
         const clock_x = self.clock_x orelse return;
-        const cid = clock_id orelse return;
+        const cid = self_ticking_role orelse return;
         if (bar_mods[cid].draw == null) return;
         var ctx = segmod.DrawCtx{
             .dc = self.render.dc,
@@ -805,7 +843,7 @@ const State = struct {
         // frame left.
         const drawn_w: u16 = drawn_end -| clock_x;
         self.render.dc.blitRegion(clock_x, @max(self.clock_width, drawn_w));
-        self.clearSegmentDirty("clock");
+        self.clearSegmentDirty(bar_mods[cid].name);
     }
 };
 
@@ -831,8 +869,9 @@ fn performDraw() void {
     };
     s.fillDrawCtx(&ctx);
     s.drawAllInner(&ctx);
-    // Cache the title addon's minimized api (registered during its draw) so
-    // scanLiveFrame can synthesize the set on subsequent frames (D12).
+    // Cache the minimized-state service (built by fillDrawCtx from the window
+    // module registry) so scanLiveFrame can synthesize the set each frame
+    // (D12). Guarded so an empty api still leaves the prior snapshot intact.
     if (ctx.minimized_api.is_minimized != null) s.minimized_api = ctx.minimized_api;
     s.render.dc.queueBlit();
     gBar.force = false;
@@ -880,7 +919,7 @@ pub fn init() !void {
     const cs = core.getState();
     std.debug.assert(cs.config.bar.enabled);
     barwin.initAtoms();
-    refresh_rate.ensureRefreshRateDetected(cs.conn);
+    refresh.ensureRefreshRateDetected(cs.conn);
     const height = try calcBarHeightAndFontSize();
     const bar = try createBar(height, barwin.calcBarYPos(height));
     gBar.state = bar.state;
@@ -967,6 +1006,34 @@ fn applyReload(old: *State, height: u16) !void {
 }
 
 // Public event handlers & queries
+
+/// Builds the minimized-state service the title segment consumes, from the
+/// window module registry's hide family (D12). The bar never names the addon;
+/// it only forwards the registry's `isWindowHidden`/`collectHiddenSet` hooks
+/// through the shared DrawCtx. All hooks null (no hide module compiled in) =>
+/// the empty api, so the bar's synthesis loops no-op.
+fn minimizedApiFromRegistry() segmod.MinimizedApi {
+    var api: segmod.MinimizedApi = .{};
+    if (@import("plugin").providerOf(window_mods[0..], .isWindowHidden) != null) api.is_minimized = minimizedIsHidden;
+    if (@import("plugin").providerOf(window_mods[0..], .collectHiddenSet) != null) api.collect = minimizedCollect;
+    return api;
+}
+
+/// Live per-window hidden query forwarded to the hide-family provider
+/// (DrawCtx api signature, D12). `m` is the bar-passed model behind
+/// `*const anyopaque` (type-free seam, D3).
+fn minimizedIsHidden(m: *const anyopaque, win: u32) bool {
+    const mm: *const model.Model = @ptrCast(@alignCast(m));
+    if (@import("plugin").providerOf(window_mods[0..], .isWindowHidden)) |wm| return wm.isWindowHidden.?(mm, @intCast(win));
+    return false;
+}
+
+/// Full hidden-set synthesis forwarded to the hide-family provider
+/// (DrawCtx api signature, D12).
+fn minimizedCollect(m: *const anyopaque, set: *std.AutoHashMapUnmanaged(u32, void), allocator: std.mem.Allocator) void {
+    const mm: *const model.Model = @ptrCast(@alignCast(m));
+    if (@import("plugin").providerOf(window_mods[0..], .collectHiddenSet)) |wm| wm.collectHiddenSet.?(mm, set, allocator);
+}
 
 /// Whether a window module (the fullscreen addon) claims the screen on `ws`
 /// via the registry coverageOn seam (D12). Non-null means the bar must hide to
@@ -1065,11 +1132,8 @@ pub fn redrawInsideGrab() void {
     const focus_changed = s.focused_title_window != focus.getFocused();
     const frame_changed = s.scanLiveFrame();
     if (focus_changed or frame_changed) {
-        if (focus_changed) s.markSegmentDirty("title");
-        if (frame_changed) {
-            s.markSegmentDirty("workspaces");
-            s.markSegmentDirty("title");
-        }
+        if (focus_changed) s.markDirtySource(.focus);
+        if (frame_changed) s.markDirtySource(.frame);
         return;
     }
     // Phase 1+2a: render to pixmap, queue the blit; sent with ungrabAndFlush().
@@ -1189,7 +1253,7 @@ pub fn updateIfDirty() !void {
     // being poked by name. Layout changes force a full redraw (title-data
     // refetch); window/workspace changes repaint all segments; focus changes
     // cheaply mark only the title.
-    if (s.last_focus_rev != core.focusRev()) s.markSegmentDirty("title");
+    if (s.last_focus_rev != core.focusRev()) s.markDirtySource(.focus);
     if (s.last_window_rev != core.windowRev()) s.markDirty();
     if (s.last_layout_rev != core.layoutRev()) {
         gBar.force = true;
@@ -1224,7 +1288,7 @@ fn barModsConsumeRedrawRequest() bool {
 pub fn updateClock() bool {
     const s = gBar.state orelse return false;
     if (!s.is_visible) return false;
-    if (clock_id == null) return false;
+    if (self_ticking_role == null) return false;
     const fmt = cs_configClockFormat();
     var redraw_clock = false;
     for (bar_mods) |m| {
@@ -1265,7 +1329,7 @@ pub fn handlePropertyNotify(event: *const xcb.xcb_property_notify_event_t) void 
         // Renamed focused window: force the title data refetch on the next
         // draw (the fetch key alone wouldn't notice a text-only change).
         gBar.force = true;
-        s.markSegmentDirty("title");
+        s.markDirtySource(.focus);
     }
 }
 
@@ -1317,7 +1381,9 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 ///   - otherwise -> focuses it
 fn handleTitleClick(s: *State, offset: u16) void {
     if (s.wins_len == 0) return;
-    const tb = s.recordedBound("title") orelse return;
+    if (comptime registry_empty) return;
+    const center_id = center_slot_role orelse return;
+    const tb = s.recordedBound(bar_mods[center_id].name) orelse return;
 
     const target = (segmod.hitTest(s.titleCtx(tb.x, tb.w), s.titleSnapshot(), s.render.allocator, offset) catch |e| {
         debug.warnOnErr(e, "bar title click hitTest");
@@ -1357,10 +1423,10 @@ pub const surfaces = @import("plugin").Surfaces{
     .onPollWakeup = onPollWakeup,
     .updateClock = updateClock,
     .onReload = reload,
-    .promptHandleKeypress = promptHandleKeypress,
+    .chromeHandleKeypress = chromeHandleKeypress,
     .isBarWindow = isBarWindow,
     .handleButtonPress = handleButtonPress,
     .setBarState = setBarState,
     .toggleBarSegmentAnchor = toggleBarSegmentAnchor,
-    .promptToggle = promptToggle,
+    .chromeToggleOverlay = chromeToggleOverlay,
 };

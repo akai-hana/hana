@@ -427,7 +427,7 @@ test "fs->min->restore->unfs retiles instead of stranding an orphan" {
     try fx.rec.expectGeom(7, 602, 404, 8, 384, 580, null);
 }
 
-// -- Workspace switch (train c wire shape) -----------------------------------
+// -- Workspace switch (wire shape) -------------------------------------------
 
 test "workspace switch: leavers park, arrivers map + place ABOVE; return unpark raises" {
     var fx: Fixture = undefined;
@@ -489,7 +489,7 @@ test "all-view orphan resurfaces at last real rect; history-less orphan parks" {
     fx.reconcile(.{});
 
     // Orphan pass: ws 1's home list is empty so no placement owns 701, but
-    // the mask shows it here - legacy keeps it at its previous REAL geometry
+    // the mask shows it here - kept at its previous REAL geometry
     // (never parks a window with sent history). Even though it is the
     // fallback winner, the raise stays suppressed: same rect, no transition,
     // no restack (winner-raise only-on-change, ledger read #2).

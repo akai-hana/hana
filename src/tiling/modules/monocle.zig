@@ -4,52 +4,56 @@
 const std = @import("std");
 const utils = @import("utils");
 const model = @import("model");
-const engine = @import("engine");
+const tiling = @import("tiling");
 
 /// Compute monocle layout. Origin top-left, y-down. Gaps: full gap on each
 /// screen edge when gaps enabled, else zero. All dimensions are u16 and
 /// shrunk via shrinkClamped (floor clamped to min_dim).
-pub fn compute(v: engine.View, out: *engine.List) void {
+pub fn compute(v: tiling.View, out: *tiling.List) void {
     // Empty workspace: the top-window pick indexes order[len - 1], which
     // would underflow. Emit nothing instead.
     if (v.order.len == 0) return;
 
     const m = v.env.margins;
-    // Variant resolved by the caller (legacy: layout_variants.monocle == .gaps).
-    const inset: u16 = if (v.env.monocle_gaps) m.gap else 0;
+    // Module-owned translation of the generic core variant index: the gaps
+    // variant is active when the index equals gap_variant, which MUST equal
+    // this module's plugin.Layout.gap_mode / variant_parse target (both 1 =
+    // "gaps"). Mirrors the pipeline's former caller-side gaps flag.
+    const gap_variant: u8 = 1;
+    const inset: u16 = if (v.env.variant_idx == gap_variant) m.gap else 0;
     const total_margin = utils.doubledBorder(m) + inset * 2;
 
     // Pick the top (visible) window: prefer the focused window, else the list
     // tail, so the last-focused window resurfaces on close. A focus change
     // alone doesn't retile (monocle hides via offscreen positioning, not stack
     // order); snapScrollToFocused / mapWindowToScreen handle the retiles.
-    const top_win = engine.focusedElse(&v, v.order, v.order[v.order.len - 1]);
+    const top_win = tiling.focusedElse(&v, v.order, v.order[v.order.len - 1]);
 
     const top_rect = utils.Rect{
         .x = @intCast(inset),
-        .y = @intCast(engine.waY(&v) +| inset),
-        .width = engine.shrinkClamped(v.workarea.width, total_margin, v.env.min_dim),
-        .height = engine.shrinkClamped(v.workarea.height, total_margin, v.env.min_dim),
+        .y = @intCast(tiling.waY(&v) +| inset),
+        .width = tiling.shrinkClamped(v.workarea.width, total_margin, v.env.min_dim),
+        .height = tiling.shrinkClamped(v.workarea.height, total_margin, v.env.min_dim),
     };
 
     // showOneHideRest: raise/configure `top` on-screen, park every other window.
-    engine.emitView(&v, out, top_win, top_rect, true);
+    tiling.emitView(&v, out, top_win, top_rect, true);
     for (v.order) |win| {
         if (win == top_win) continue;
-        engine.emitHidden(out, win);
+        tiling.emitHidden(out, win);
     }
 }
 
 /// Cast shim: plugin's type-free seam -> compute's typed params.
 fn computeHook(view: *const anyopaque, out: *anyopaque) void {
-    const v: *const engine.View = @ptrCast(@alignCast(view));
-    const o: *engine.List = @ptrCast(@alignCast(out));
+    const v: *const tiling.View = @ptrCast(@alignCast(view));
+    const o: *tiling.List = @ptrCast(@alignCast(out));
     compute(v.*, o);
 }
 
-/// Parses a monocle variant VALUE-STRING into its variant index, mirroring
-/// the legacy MonocleVariant enum ordinals (gapless=0, gaps=1) with the
-/// legacy exact-case stringToEnum matching. null for any other string.
+/// Parses a monocle variant VALUE-STRING into its variant index, mapping the
+/// accepted variant spellings to their ordinal slots (gapless=0, gaps=1),
+/// exact-case. null for any other string.
 fn variantParse(str: []const u8) ?u8 {
     if (std.mem.eql(u8, str, "gapless")) return 0;
     if (std.mem.eql(u8, str, "gaps")) return 1;

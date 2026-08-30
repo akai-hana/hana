@@ -5,7 +5,7 @@ const std = @import("std");
 const core = @import("core");
 const types = @import("types");
 const constants = @import("constants");
-const x11_masks = @import("x11_masks");
+const masks = @import("masks");
 const debug = @import("debug");
 const xkbcommon = @import("xkbcommon");
 const parser = @import("parser");
@@ -340,10 +340,9 @@ fn getDefaultConfig(allocator: std.mem.Allocator) !types.Config {
     var cfg: types.Config = .{};
     errdefer cfg.deinit(allocator);
     schema.applyDefaults(&cfg);
-    // Canonical legacy default name: it resolves to the "master" module at
-    // seed time. canonicalLayoutName folds the legacy "master-stack" spelling
-    // so every stored name is canonical.
-    const default_layout = try allocator.dupe(u8, canonicalLayoutName("master-stack"));
+    // Canonical default name: it resolves to the "master" module at seed
+    // time; every stored name is canonical.
+    const default_layout = try allocator.dupe(u8, "master");
     try cfg.tiling.layouts.append(allocator, default_layout);
     cfg.tiling.layout = cfg.tiling.layouts.items[0];
     const default_icons = [_][]const u8{ "1", "2", "3", "4", "5", "6", "7", "8", "9" };
@@ -383,13 +382,13 @@ fn warnUnconsumedSections(doc: *parser.Document) void {
 }
 
 const mod_map = std.StaticStringMap(u16).initComptime(.{
-    .{ "super", x11_masks.mod_super },
-    .{ "mod4", x11_masks.mod_super },
-    .{ "alt", x11_masks.mod_alt },
-    .{ "mod1", x11_masks.mod_alt },
-    .{ "control", x11_masks.mod_control },
-    .{ "ctrl", x11_masks.mod_control },
-    .{ "shift", x11_masks.mod_shift },
+    .{ "super", masks.mod_super },
+    .{ "mod4", masks.mod_super },
+    .{ "alt", masks.mod_alt },
+    .{ "mod1", masks.mod_alt },
+    .{ "control", masks.mod_control },
+    .{ "ctrl", masks.mod_control },
+    .{ "shift", masks.mod_shift },
 });
 
 const mouse_button_map = std.StaticStringMap(u8).initComptime(.{
@@ -762,10 +761,10 @@ pub fn load(allocator: std.mem.Allocator, screen: core.Screen, xkb_state: *xkbco
     return cfg;
 }
 
-/// Canonicalizes the legacy master-spelling aliases for layout names read
-/// from config: "master-stack" and "master_stack" (any case) fold onto the
-/// registry module's canonical name "master". Every config-sourced layout
-/// name passes through here so downstream resolution (engine.layoutByName,
+/// Canonicalizes the layout-name aliases accepted from config: "master-stack"
+/// and "master_stack" (any case) fold onto the registry module's canonical
+/// name "master". Every config-sourced layout name passes through here so
+/// downstream resolution (engine.layoutByName,
 /// which is exact-on-canonical) needs no alias handling. Returns `name`
 /// unchanged otherwise; never allocates, and the returned slice aliases the
 /// input whenever it is not the canonical literal.
@@ -804,7 +803,7 @@ fn parseTilingStructures(allocator: std.mem.Allocator, doc: *parser.Document, cf
 /// Per-workspace master count overrides: [tiling.layouts.master-stack.counts]
 /// workspace_number (1-based) = count. Only meaningful when global_layout = false.
 /// The sub-table key is canonicalized (config.canonicalLayoutName) so the
-/// legacy "master-stack"/"master_stack" spellings resolve the same table.
+/// "master-stack"/"master_stack" spellings resolve the same table.
 fn parseMasterStackCounts(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     const prefix = "tiling.layouts.";
     const suffix = ".counts";
@@ -857,7 +856,7 @@ fn clearTilingVariants(allocator: std.mem.Allocator, cfg: *types.Config) void {
     cfg.tiling.variants.clearRetainingCapacity();
 }
 
-/// Legacy flat `[tiling] master_variant/monocle_variant/grid_variant` keys
+/// The flat `[tiling] master_variant/monocle_variant/grid_variant` keys
 /// map onto their canonical layout names.
 const flat_variant_keys = [_]struct { key: []const u8, canon: []const u8 }{
     .{ .key = "master_variant", .canon = "master" },
@@ -883,10 +882,10 @@ fn setTilingVariant(allocator: std.mem.Allocator, cfg: *types.Config, canon: []c
 /// Records per-layout variant value-strings into `cfg.tiling.variants`,
 /// keyed by the canonical layout name. Two sources, both generic (no typed
 /// per-layout enums):
-///   - flat legacy `[tiling] master_variant/monocle_variant/grid_variant`
+///   - flat `[tiling] master_variant/monocle_variant/grid_variant`
 ///     keys -> canonical names "master"/"monocle"/"grid";
 ///   - `[tiling.layouts.<name>] variants = "..."` sub-tables (the table key
-///     canonicalized so the legacy master spellings hit the same entry).
+///     canonicalized so the master alias spellings hit the same entry).
 /// No validity check happens here: a value-string's meaning is owned by the
 /// layout module's `variant_parse` hook, resolved at seed time.
 fn parseTilingVariants(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
@@ -904,7 +903,7 @@ fn parseTilingVariants(allocator: std.mem.Allocator, doc: *parser.Document, cfg:
         if (!std.mem.startsWith(u8, sec_name, prefix)) continue;
         // Only direct "tiling.layouts.<name>" sub-table keys qualify; deeper
         // ones ("<name>.counts") are handled by parseMasterStackCounts. The
-        // key is canonicalized so the legacy master spellings resolve the
+        // key is canonicalized so the master alias spellings resolve the
         // same variant entry.
         const tail = sec_name[prefix.len..];
         const seg = if (std.mem.indexOfScalar(u8, tail, '.')) |_| continue else tail;

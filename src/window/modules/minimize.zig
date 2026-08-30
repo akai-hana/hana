@@ -29,8 +29,7 @@ pub fn deinit() void {
     g_seq = 0;
 }
 
-/// Ceiling on concurrently minimized windows, sourced from constants (the
-/// build option referenced by the legacy record store never existed).
+/// Ceiling on concurrently minimized windows, sourced from constants.
 const MAX_MINIMIZED = constants.max_minimized;
 
 pub const MinimizeError = error{CapacityFull};
@@ -233,7 +232,7 @@ pub fn collectMinimizedIntoSet(
 /// loop self-identify (minimize claims only parked windows). Returns null
 /// when the window has no minimized record OR the model presence is not
 /// parked (a covering window is fullscreen's blob). The returned slice is
-/// allocator-owned; restart_state frees it after writing.
+/// allocator-owned; persist frees it after writing.
 pub fn serializeWindow(model_ptr: *anyopaque, win: u32, alloc: std.mem.Allocator) ?[]const u8 {
     const idx = findRec(win) orelse return null;
     const m: *const model.Model = @ptrCast(@alignCast(model_ptr));
@@ -258,7 +257,7 @@ pub fn deserializeWindow(win: u32, bytes: []const u8, ptr: *anyopaque) bool {
     if (findRec(win) != null) return true; // already adopted; idempotent
     if (g_recs.len >= MAX_MINIMIZED) return false;
     // Slice the payload back into two native-endian u32s via an aligned copy
-    // (restart_state buffers are byte-aligned; u32 loads need 4-byte align).
+    // (persist buffers are byte-aligned; u32 loads need 4-byte align).
     var buf: [8]u8 align(@alignOf(u32)) = [_]u8{0} ** 8;
     @memcpy(&buf, bytes[1..9]);
     const raw = std.mem.bytesAsSlice(u32, buf[0..]);
@@ -282,6 +281,23 @@ pub fn onWindowGone(win: u32) void {
     if (findRec(win)) |i| _ = g_recs.orderedRemove(i);
 }
 
+/// Adapter for the hide seam: widens the module's `MinimizeError!void`
+/// return set to the contract's uniform `anyerror!void` (the error set
+/// coerces; this wrapper keeps the binding explicit).
+pub fn hideWindow(m: *model.Model, win: model.WindowId) anyerror!void {
+    return minimize(m, win);
+}
+
+/// collectHiddenSet adapter: widens the internal `anyerror!void` synthesis to
+/// the contract's infallible `void` (the bar swallows allocation failures).
+pub fn collectHiddenSet(
+    m: *const model.Model,
+    set: *std.AutoHashMapUnmanaged(model.WindowId, void),
+    allocator: std.mem.Allocator,
+) void {
+    collectMinimizedIntoSet(m, set, allocator) catch {};
+}
+
 /// This module's window sub-system contribution: lifecycle + persistence
 /// seam + record cleanup for torn-down windows.
 pub const module: @import("plugin").WindowModule = .{
@@ -290,4 +306,11 @@ pub const module: @import("plugin").WindowModule = .{
     .onWindowGone = onWindowGone,
     .serializeWindow = serializeWindow,
     .deserializeWindow = deserializeWindow,
+    .hideWindow = hideWindow,
+    .restoreWindow = restore,
+    .restoreCandidateOn = restoreCandidate,
+    .restoreOnWs = restoreAllOnWs,
+    .latestHiddenOnWs = latestMinimizedBase,
+    .isWindowHidden = isMinimized,
+    .collectHiddenSet = collectHiddenSet,
 };

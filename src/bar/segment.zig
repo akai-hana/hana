@@ -17,7 +17,7 @@ const std = @import("std");
 const core = @import("core");
 const xcb = core.xcb;
 const utils = @import("utils");
-const refresh_rate = @import("refresh_rate");
+const refresh = @import("refresh");
 const build_options = @import("build_options");
 
 const drawing = @import("drawing");
@@ -130,18 +130,6 @@ pub const DrawCtx = struct {
 
 /// Minimum reserved row width for the title segment.
 pub const title_min_width: u16 = 100;
-
-const SegmentGeometry = struct {
-    seg_x: u16,
-    seg_w: u16,
-    text_x: u16,
-    avail_w: u16,
-};
-
-/// Fixed left indent applied inside every title cell, independent of
-/// `scaledSegmentPadding`.  Provides visual breathing room between the
-/// segment edge and the title text.
-const title_lead_px: u16 = 4;
 
 /// Maximum number of windows rendered in split-view.
 const max_visible_windows: usize = 128;
@@ -556,6 +544,19 @@ inline fn titlesNeedFree(snapshot: TitleSnapshot, win_count: usize) bool {
     return snapshot.titles.len < win_count;
 }
 
+/// Which core fact-revision to mark-dirty with. Mirrors the `DirtySources`
+/// packed bitmask over bar segments; the bar calls `markDirtySource(src)` and
+/// every module whose `dirty_sources` declares that bit gets repainted.
+pub const DirtySourcesSource = enum { focus, frame };
+
+/// True when `sources` has the `source` bit set.
+pub fn hasSource(sources: @import("plugin").DirtySources, source: DirtySourcesSource) bool {
+    return switch (source) {
+        .focus => sources.focus,
+        .frame => sources.frame,
+    };
+}
+
 /// Resolves a configured segment name to its registry index, or null when no
 /// module with that name is compiled in (segment removed or unknown).
 pub fn idByName(modules: []const @import("plugin").Segment, name: []const u8) ?usize {
@@ -563,4 +564,29 @@ pub fn idByName(modules: []const @import("plugin").Segment, name: []const u8) ?u
         if (std.mem.eql(u8, m.name, name)) return i;
     }
     return null;
+}
+
+/// Resolves the registry index of the first module whose capability `check`
+/// predicate holds, or null when no module claims it (first-match wins, like
+/// `idByName`). `check` is a comptime predicate over a segment (e.g. a struct
+/// literal `.{ .self_ticking = true }` compared by field); used by the bar to
+/// locate role-bearing segments without naming them. Comptime-friendly: the
+/// returned index can feed `const` role ids so role-null guards
+/// dead-code-eliminate, just like the `registry_empty` comptime pattern.
+pub fn findByCapability(modules: []const @import("plugin").Segment, comptime check: anytype) ?usize {
+    for (modules, 0..) |m, i| {
+        if (matchCapabilities(m, check)) return i;
+    }
+    return null;
+}
+
+fn matchCapabilities(m: @import("plugin").Segment, comptime check: anytype) bool {
+    comptime var ok = true;
+    inline for (std.meta.fields(@TypeOf(check))) |f| {
+        if (@field(m, f.name) != @field(check, f.name)) {
+            ok = false;
+            break;
+        }
+    }
+    return ok;
 }

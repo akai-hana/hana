@@ -15,7 +15,7 @@ const core = @import("core");
 const utils = @import("utils");
 const borders = @import("borders");
 const focus = @import("focus");
-const xcb_sink = @import("wire");
+const xcb_sink = @import("sink");
 const screen = @import("screen");
 const types = @import("types");
 const debug = @import("debug");
@@ -31,7 +31,7 @@ const window_mods = @import("window_modules").modules;
 /// it (see model.LayoutParams.kind). Empty when the tiling subsystem is
 /// absent. Gated on has_tiling so tree variants without tiling compile.
 const tiling_mods = if (build_options.has_tiling) @import("tiling_modules").modules else &[_]@import("plugin").Layout{};
-const engine = if (build_options.has_tiling) @import("engine") else struct {};
+const tiling = if (build_options.has_tiling) @import("tiling") else struct {};
 
 /// True after init(); tracking's facade gates every model access on this so
 /// boot order never touches the undefined global instance.
@@ -51,17 +51,17 @@ pub inline fn model() *model_mod.Model {
 /// Returns the current tiling layout (a registry index, see
 /// model.LayoutParams.kind) from the live model state. Falls back to config
 /// name resolution pre-init. An unresolvable config name (removed module,
-/// legacy "floating" spelling) is loud, never silent.
+/// unknown spelling) is loud, never silent.
 pub inline fn getCurrentLayout() u8 {
     if (initialized) return model().ws[model().current].params.kind;
     const cs = core.getState();
     if (!build_options.has_tiling) return 0;
-    return @intCast(engine.layoutByName(cs.config.tiling.layout) orelse blk: {
+    return @intCast(tiling.layoutByName(cs.config.tiling.layout) orelse blk: {
         debug.warn("Config: layout name '{s}' did not resolve to a registered layout; using default layout '{s}'", .{
             cs.config.tiling.layout,
-            engine.moduleName(engine.defaultKind()),
+            tiling.moduleName(tiling.defaultKind()),
         });
-        break :blk engine.defaultKind();
+        break :blk tiling.defaultKind();
     });
 }
 
@@ -92,22 +92,13 @@ fn ctx() *sync.Ctx {
                 .border = utils.scaling.scaleBorderWidth(cs.config.tiling.border_width, screen_h),
             },
             .min_dim = cs.config.tiling.min_window_dim,
-            .master_on_right = cs.config.tiling.master_side == .right,
-            // Variant booleans resolve from the CURRENT workspace's model
-            // params (per-ws overrides and stepVariant must reach the engine,
-            // which takes booleans caller-side), derived from the ACTIVE
-            // module's metadata rather than matching on layout names: a module
-            // pins the index at which it toggles gaps (gap_mode) or relaxes
-            // (relax_mode), and the flag is true only while that variant is
-            // active in the current workspace.
-            .grid_relaxed = if (build_options.has_tiling and p.kind < tiling_mods.len) blk: {
-                const rec = tiling_mods[p.kind].relax_mode orelse break :blk false;
-                break :blk p.variant_idx == rec;
-            } else false,
-            .monocle_gaps = if (build_options.has_tiling and p.kind < tiling_mods.len) blk: {
-                const rec = tiling_mods[p.kind].gap_mode orelse break :blk false;
-                break :blk p.variant_idx == rec;
-            } else false,
+            .primary_on_right = cs.config.tiling.master_side == .right,
+            // The model already stores the variant index for the current
+            // workspace's layout params; pass it through generically. Each
+            // layout MODULE translates this index to its own behavior
+            // (e.g. monocle.gap_variant, grid.relax_variant) inside its own
+            // file — the core carries no layout-feature booleans.
+            .variant_idx = p.variant_idx,
         },
         .color_of = colorOf,
         .bar_win = screen.mappedSurfaceWindow(),

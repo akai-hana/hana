@@ -170,6 +170,12 @@ pub const module: @import("plugin").Segment = .{
     .onPollWakeup = onPollWakeup,
     .secondsElapsed = secondsElapsed,
     .invalidate = invalidate,
+    // Role capabilities (all default to false / .{} / true; set only as
+    // needed — each "at most one": first-match wins, name-free):
+    //   .self_ticking = true,          // drive your own refresh cadence (clock)
+    //   .center_slot = true,           // claim the reserved center slot (title)
+    //   .dirty_sources = .{ .focus = true, .frame = true }, // repaint on fact-revs
+    //   .clickable = false,            // skip click-hit bounds (clock)
     // Configured-segment hooks — bind + set configurable=true when ready:
     //   .measureString = measureString,   // (clock convention) reserved width
     //   .naturalWidth = naturalWidth,

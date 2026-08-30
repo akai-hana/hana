@@ -3,13 +3,13 @@
 
 const std = @import("std");
 const utils = @import("utils");
-const engine = @import("engine");
+const tiling = @import("tiling");
 
 /// Compute grid layout. Origin top-left, y-down. Gaps: full gap between cells
 /// and at screen edges (`gap * (cols+1)` / `gap * (rows+1)` subtracted from
 /// screen dims). Cell dimensions are u16, integer-divided; last partial row
 /// may be wider in relaxed mode. All dims clamped to min_dim.
-pub fn compute(v: engine.View, out: *engine.List) void {
+pub fn compute(v: tiling.View, out: *tiling.List) void {
     const n = v.order.len;
     // Empty workspace: calcGridShape(0) yields rows == 0, which would divide
     // by zero below. Emit nothing instead.
@@ -25,19 +25,24 @@ pub fn compute(v: engine.View, out: *engine.List) void {
 
     const cell_w = (screen_w -| (grid.cols + 1) *| m.gap) / grid.cols;
     const cell_h = (screen_h -| (grid.rows + 1) *| m.gap) / grid.rows;
-    const win_h = engine.shrinkClamped(cell_h, bm, v.env.min_dim);
-    const win_w = engine.shrinkClamped(cell_w, bm, v.env.min_dim);
-    const wa_y = engine.waY(&v);
+    const win_h = tiling.shrinkClamped(cell_h, bm, v.env.min_dim);
+    const win_w = tiling.shrinkClamped(cell_w, bm, v.env.min_dim);
+    const wa_y = tiling.waY(&v);
 
     // In relaxed mode a partial last row shares the full screen width
     // rather than a narrower grid-column width, so fewer columns means
     // less wasted horizontal space. Gated on the caller-resolved flag so
     // the division is skipped entirely on the default rigid path.
+    // Module-owned translation of the generic core variant index: the relaxed
+    // mode is active when the index equals relax_variant, which MUST equal
+    // this module's plugin.Layout.relax_mode / variant_parse target (both 1 =
+    // "relaxed"). Mirrors the pipeline's former caller-side relaxed flag.
+    const relax_variant: u8 = 1;
     const last_row_count = n % grid.cols;
-    const partial_win_w: u16 = if (v.env.grid_relaxed and last_row_count != 0) blk: {
+    const partial_win_w: u16 = if (v.env.variant_idx == relax_variant and last_row_count != 0) blk: {
         const count: u16 = @intCast(last_row_count);
         const partial_cell_w = (screen_w -| (count + 1) *| m.gap) / count;
-        break :blk engine.shrinkClamped(partial_cell_w, bm, v.env.min_dim);
+        break :blk tiling.shrinkClamped(partial_cell_w, bm, v.env.min_dim);
     } else win_w;
 
     var col: u16 = 0;
@@ -51,7 +56,7 @@ pub fn compute(v: engine.View, out: *engine.List) void {
             .width = if (is_partial_row) partial_win_w else win_w,
             .height = win_h,
         };
-        engine.emitView(&v, out, win, rect, true);
+        tiling.emitView(&v, out, win, rect, true);
 
         col += 1;
         if (col == grid.cols) {
@@ -74,14 +79,14 @@ inline fn calcGridShape(n: usize) struct { cols: u16, rows: u16 } {
 
 /// Cast shim: plugin's type-free seam -> compute's typed params.
 fn computeHook(view: *const anyopaque, out: *anyopaque) void {
-    const v: *const engine.View = @ptrCast(@alignCast(view));
-    const o: *engine.List = @ptrCast(@alignCast(out));
+    const v: *const tiling.View = @ptrCast(@alignCast(view));
+    const o: *tiling.List = @ptrCast(@alignCast(out));
     compute(v.*, o);
 }
 
-/// Parses a grid variant VALUE-STRING into its variant index, mirroring the
-/// legacy GridVariant enum ordinals (rigid=0, relaxed=1) with the legacy
-/// exact-case stringToEnum matching. null for any other string.
+/// Parses a grid variant VALUE-STRING into its variant index, mapping the
+/// accepted variant spellings to their ordinal slots (rigid=0, relaxed=1),
+/// exact-case. null for any other string.
 fn variantParse(str: []const u8) ?u8 {
     if (std.mem.eql(u8, str, "rigid")) return 0;
     if (std.mem.eql(u8, str, "relaxed")) return 1;
