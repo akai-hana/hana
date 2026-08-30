@@ -204,6 +204,11 @@ pub const Layout = struct {
     /// layout that varies gap behavior pins the index here. null = no variant
     /// toggles gaps for this layout.
     gap_mode: ?u8 = null,
+    /// The variant index at which this layout switches to its relaxed mode
+    /// (see grid's "relaxed" variant). The engine's per-layout "relaxed" hint
+    /// derives from this, name-free, like gap_mode. null = no variant toggles
+    /// a relaxed mode for this layout.
+    relax_mode: ?u8 = null,
     // Scroll viewport addon hooks (only the scroll layout registers them;
     // "is scroll in use" == "the active layout provides these hooks").
     slotWidth: ?*const fn (u16) i32 = null,

@@ -606,7 +606,6 @@ fn scrollContext(m: *const model_mod.Model) ScrollContext {
 /// No reconcile: callers decide when to push state to X.
 pub fn seedParamsFromConfig() void {
     if (!build_options.has_tiling) return;
-    const types = @import("types");
     const constants = @import("constants");
     const cs = @import("core").getState();
     const cfg = &cs.config.tiling;

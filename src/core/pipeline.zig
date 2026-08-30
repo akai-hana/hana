@@ -75,6 +75,7 @@ fn ctx() *sync.Ctx {
     const cs = core.getState();
     if (g_sink == null) g_sink = .{ .conn = cs.conn };
     const screen_h = cs.screen.height_in_pixels;
+    const p = &model().ws[model().current].params;
     g_ctx = .{
         .sink = (&g_sink.?).sink(),
         .screen = .{
@@ -93,24 +94,25 @@ fn ctx() *sync.Ctx {
             .min_dim = cs.config.tiling.min_window_dim,
             .master_on_right = cs.config.tiling.master_side == .right,
             // Variant booleans resolve from the CURRENT workspace's model
-            // params: per-ws overrides and stepVariant must reach the engine,
-            // which takes booleans caller-side.
-            .grid_relaxed = variantBool("grid"),
-            .monocle_gaps = variantBool("monocle"),
+            // params (per-ws overrides and stepVariant must reach the engine,
+            // which takes booleans caller-side), derived from the ACTIVE
+            // module's metadata rather than matching on layout names: a module
+            // pins the index at which it toggles gaps (gap_mode) or relaxes
+            // (relax_mode), and the flag is true only while that variant is
+            // active in the current workspace.
+            .grid_relaxed = if (build_options.has_tiling and p.kind < tiling_mods.len) blk: {
+                const rec = tiling_mods[p.kind].relax_mode orelse break :blk false;
+                break :blk p.variant_idx == rec;
+            } else false,
+            .monocle_gaps = if (build_options.has_tiling and p.kind < tiling_mods.len) blk: {
+                const rec = tiling_mods[p.kind].gap_mode orelse break :blk false;
+                break :blk p.variant_idx == rec;
+            } else false,
         },
         .color_of = colorOf,
         .bar_win = screen.mappedSurfaceWindow(),
     };
     return &g_ctx;
-}
-
-/// Variant boolean for the current workspace's params, resolved via the
-/// registry name: the engine takes resolved booleans caller-side.
-fn variantBool(comptime name: []const u8) bool {
-    if (!build_options.has_tiling) return false;
-    const idx = engine.layoutByName(name) orelse return false;
-    const p = &model().ws[model().current].params;
-    return p.kind == @as(u8, @intCast(idx)) and p.variant_idx == 1;
 }
 
 /// Ported from borders.color minus its fullscreen check: fullscreen windows

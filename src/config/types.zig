@@ -223,7 +223,6 @@ pub const MasterSide = enum {
 /// strings; there are no closed per-layout variant enums here anymore (the
 /// former MasterVariant/MonocleVariant/GridVariant and the
 /// LayoutVariantOverride union were deleted in Stage 3).
-
 /// Per-workspace startup layout assignment, overriding the global default.
 /// variant is null -> use the per-layout map default ([tiling].variants).
 pub const WorkspaceLayoutOverride = struct {
@@ -261,7 +260,7 @@ pub const TilingConfig = struct {
     // layout-name -> VALUE-STRING map. The value-strings are never freed here
     // (they alias strings parsed by the `parser` Document, or literals), so
     // deinit only releases the hashmap storage itself.
-    variants: std.StringHashMap([]const u8) = .empty,
+    variants: std.StringHashMapUnmanaged([]const u8) = .empty,
 
     /// Per-workspace layout assignments parsed from the layouts array.
     workspace_layout_overrides: std.ArrayList(WorkspaceLayoutOverride) = .empty,

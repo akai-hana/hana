@@ -95,6 +95,7 @@ pub const module: @import("plugin").Layout = .{
     .variant_count = 2,
     .has_variants = true,
     .variant_parse = variantParse,
+    .relax_mode = 1,
     .icon = "[+]",
     .indicators = &.{ "[#]", "[~]" },
 };
