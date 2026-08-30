@@ -128,3 +128,18 @@ inline fn splitAndAdvance(
         cur.h = cur.h -| (win_dim + gap);
     }
 }
+
+/// Cast shim: plugin's type-free seam -> compute's typed params.
+fn computeHook(view: *const anyopaque, out: *anyopaque) void {
+    const v: *const engine.View = @ptrCast(@alignCast(view));
+    const o: *engine.List = @ptrCast(@alignCast(out));
+    compute(v.*, o);
+}
+
+/// This layout's registry contribution: metadata plus the dispatch hook.
+pub const module: @import("plugin").Layout = .{
+    .name = "fibonacci",
+    .compute = computeHook,
+    .variant_count = 1,
+    .icon = "[@]",
+};

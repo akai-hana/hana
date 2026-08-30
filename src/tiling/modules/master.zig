@@ -1,6 +1,7 @@
 //! Master-stack tiling layout.
 //! Divides the screen into a master pane and a stack pane, spilling overflow into a column-major grid.
 
+const std = @import("std");
 const utils = @import("utils");
 const constants = @import("constants");
 const model = @import("model");
@@ -375,3 +376,31 @@ inline fn windowY(i: u16, count: u16, available: u16, y_offset: u16, m: utils.Ma
     const cum: u32 = @as(u32, i) * @as(u32, available) / @as(u32, count);
     return y_offset +| m.gap +| @as(u16, @intCast(cum)) +| i *| (m.gap +| 2 *| m.border);
 }
+
+/// Cast shim: plugin's type-free seam -> compute's typed params.
+fn computeHook(view: *const anyopaque, out: *anyopaque) void {
+    const v: *const engine.View = @ptrCast(@alignCast(view));
+    const o: *engine.List = @ptrCast(@alignCast(out));
+    compute(v.*, o);
+}
+
+/// Parses a master variant VALUE-STRING into its variant index, mirroring the
+/// legacy MasterVariant enum ordinals (lifo=0, fifo=1) with the legacy
+/// exact-case stringToEnum matching. null for any other string.
+fn variantParse(str: []const u8) ?u8 {
+    if (std.mem.eql(u8, str, "lifo")) return 0;
+    if (std.mem.eql(u8, str, "fifo")) return 1;
+    return null;
+}
+
+/// This layout's registry contribution: metadata plus the dispatch hook.
+pub const module: @import("plugin").Layout = .{
+    .name = "master",
+    .compute = computeHook,
+    .variant_count = 2,
+    .has_variants = true,
+    .fifo_variant = 1,
+    .variant_parse = variantParse,
+    .icon = "[]=",
+    .indicators = &.{ "[N]", "=N=" },
+};

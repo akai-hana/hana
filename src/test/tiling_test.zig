@@ -17,6 +17,16 @@ const scroll_algo = if (build_options.has_layout_scroll) @import("scroll") else 
 const List = engine.List;
 const Placement = engine.Placement;
 
+/// Registry indices for each layout, resolved by name (instead of a closed
+/// enum) so the tests stay robust to registry ordering. Computed at
+/// compile time from the build-generated module registry.
+const K_MASTER: u8 = @intCast(engine.layoutByName("master") orelse 0);
+const K_MONOCLE: u8 = @intCast(engine.layoutByName("monocle") orelse 0);
+const K_GRID: u8 = @intCast(engine.layoutByName("grid") orelse 0);
+const K_FIB: u8 = @intCast(engine.layoutByName("fibonacci") orelse 0);
+const K_LEAF: u8 = @intCast(engine.layoutByName("leaf") orelse 0);
+const K_SCROLL: u8 = @intCast(engine.layoutByName("scroll") orelse 0);
+
 /// Standard test margins/min_dim used by most cases.
 const gap = 8;
 const border = 2;
@@ -89,7 +99,7 @@ test "T19 master single window" {
     defer fx.deinit();
 
     var out: List = .{};
-    engine.compute(.master, tuned(&fx), &out);
+    engine.compute(K_MASTER, tuned(&fx), &out);
 
     try testing.expectEqual(@as(usize, 1), out.len);
     // master_inner_w = shrink(800, gap*2 + border*2 = 20) = 780
@@ -104,7 +114,7 @@ test "T20 master two windows" {
     defer fx.deinit();
 
     var out: List = .{};
-    engine.compute(.master, tuned(&fx), &out);
+    engine.compute(K_MASTER, tuned(&fx), &out);
 
     try testing.expectEqual(@as(usize, 2), out.len);
     // master_w = round(800 * 0.5) = 400; inner = shrink(400, 12 + 4) = 384
@@ -123,7 +133,7 @@ test "T21 master on right" {
     v.env.master_on_right = true;
 
     var out: List = .{};
-    engine.compute(.master, v, &out);
+    engine.compute(K_MASTER, v, &out);
 
     try testing.expectEqual(@as(usize, 2), out.len);
     // master_x = 800 - 400 = 400; x = 408
@@ -139,7 +149,7 @@ test "T22 grid 2x2" {
     defer fx.deinit();
 
     var out: List = .{};
-    engine.compute(.grid, tuned(&fx), &out);
+    engine.compute(K_GRID, tuned(&fx), &out);
 
     try testing.expectEqual(@as(usize, 4), out.len);
     // cell_w = (800 - 3*8)/2 = 388 -> win_w 384; cell_h = (600-24)/2 = 288 -> 284
@@ -160,7 +170,7 @@ test "T23 grid relaxed partial row" {
     v.env.grid_relaxed = true;
 
     var out: List = .{};
-    engine.compute(.grid, v, &out);
+    engine.compute(K_GRID, v, &out);
 
     try testing.expectEqual(@as(usize, 5), out.len);
     // cols=3 rows=2; rigid win_w = shrink((800-32)/3 = 256, 4) = 252
@@ -174,7 +184,7 @@ test "T23 grid relaxed partial row" {
     // Rigid mode keeps the column width in the partial row.
     var outr: List = .{};
     v.env.grid_relaxed = false;
-    engine.compute(.grid, v, &outr);
+    engine.compute(K_GRID, v, &outr);
     try expectP(&outr, 3, 14, 8, 304, 252, 284, true);
     try expectP(&outr, 4, 15, 272, 304, 252, 284, true);
 }
@@ -186,7 +196,7 @@ test "T24 fibonacci spiral" {
     defer fx.deinit();
 
     var out: List = .{};
-    engine.compute(.fibonacci, tuned(&fx), &out);
+    engine.compute(K_FIB, tuned(&fx), &out);
 
     try testing.expectEqual(@as(usize, 4), out.len);
     // outerArea: (8,8) 784x584; win_dim=(784-8)/2=388 etc.
@@ -213,7 +223,7 @@ test "T25 fibonacci overflow fallback" {
 
     const v = tuned(&fx);
     var out: List = .{};
-    engine.compute(.fibonacci, v, &out);
+    engine.compute(K_FIB, v, &out);
 
     try testing.expectEqual(@as(usize, 40), out.len);
     var visible_count: usize = 0;
@@ -240,7 +250,7 @@ test "T26 leaf balanced splits" {
     defer fx.deinit();
 
     var out: List = .{};
-    engine.compute(.leaf, tuned(&fx), &out);
+    engine.compute(K_LEAF, tuned(&fx), &out);
 
     try testing.expectEqual(@as(usize, 4), out.len);
     // Root split vertical-ish? No: w(784) >= h(584) -> horizontal halves at x=8 / x=404,
@@ -269,7 +279,7 @@ test "T27 scroll strip and parking" {
     params.scroll_prev_count = 5;
 
     var out: List = .{};
-    engine.compute(.scroll, tuned(&fx), &out);
+    engine.compute(K_SCROLL, tuned(&fx), &out);
 
     try testing.expectEqual(@as(usize, 5), out.len);
     // cols 0..2 fully left of the viewport -> parked.
@@ -293,7 +303,7 @@ test "T28 monocle gaps variant" {
     v.env.monocle_gaps = true;
 
     var out: List = .{};
-    engine.compute(.monocle, v, &out);
+    engine.compute(K_MONOCLE, v, &out);
 
     try testing.expectEqual(@as(usize, 3), out.len);
     // total_margin = doubledBorder(4) + inset*2 (16) = 20
@@ -305,7 +315,7 @@ test "T28 monocle gaps variant" {
     // Without the gaps variant the inset is zero: full size minus borders only.
     v.env.monocle_gaps = false;
     var out2: List = .{};
-    engine.compute(.monocle, v, &out2);
+    engine.compute(K_MONOCLE, v, &out2);
     try expectP(&out2, 0, 12, 0, 0, 796, 596, true);
 }
 
@@ -322,7 +332,7 @@ test "T29 hints applied at emit" {
     fx.hint_buf[0] = fx.m.store.getPtr(11).?.size_hints;
 
     var out: List = .{};
-    engine.compute(.master, tuned(&fx), &out);
+    engine.compute(K_MASTER, tuned(&fx), &out);
 
     // Raw master rect is {8,8,780,580}; snapped down to 700x500 and centred
     // back into its slot: dx = (780-700)/2 = 40, dy = 40.
@@ -341,9 +351,9 @@ test "T30 deterministic and non-mutating" {
 
     const v = tuned(&fx);
     var out_a: List = .{};
-    engine.compute(.grid, v, &out_a);
+    engine.compute(K_GRID, v, &out_a);
     var out_b: List = .{};
-    engine.compute(.grid, v, &out_b);
+    engine.compute(K_GRID, v, &out_b);
 
     try testing.expectEqual(out_a.len, out_b.len);
     for (out_a.constSlice(), out_b.constSlice()) |a, b| {
@@ -364,7 +374,7 @@ test "T31 n=0 emits nothing across all layouts" {
     fx.init(&.{}, stdWa());
     defer fx.deinit();
 
-    const kinds = [_]model.LayoutKind{ .master, .monocle, .fibonacci, .grid, .leaf, .scroll };
+    const kinds = [_]u8{ K_MASTER, K_MONOCLE, K_FIB, K_GRID, K_LEAF, K_SCROLL };
     for (kinds) |kind| {
         var out: List = .{};
         engine.compute(kind, tuned(&fx), &out);
@@ -394,14 +404,14 @@ test "T32 scroll orphan keep-last invariant" {
     params.scroll_offset = stale_off;
     params.scroll_prev_count = 4;
     var out_orphan: List = .{};
-    engine.compute(.scroll, tuned(&fx), &out_orphan);
+    engine.compute(K_SCROLL, tuned(&fx), &out_orphan);
     try testing.expect(out_orphan.constSlice()[3].visible);
 
     // (2) Clamped per duty 2: the last window is at least flush-visible at
     // max offset (its slot's right edge reaches the screen edge).
     params.scroll_offset = @min(stale_off, scroll_algo.maxOffset(4, slot_w, 800));
     var out_last: List = .{};
-    engine.compute(.scroll, tuned(&fx), &out_last);
+    engine.compute(K_SCROLL, tuned(&fx), &out_last);
     try testing.expect(out_last.constSlice()[3].visible);
 
     // (3) Shrink 4 -> 2: maxOffset(2) == 0 forces offset 0; both visible.
@@ -413,7 +423,7 @@ test "T32 scroll orphan keep-last invariant" {
     params2.scroll_offset = 0;
     params2.scroll_prev_count = 2;
     var out_shrunk: List = .{};
-    engine.compute(.scroll, tuned(&fx2), &out_shrunk);
+    engine.compute(K_SCROLL, tuned(&fx2), &out_shrunk);
     try testing.expect(out_shrunk.constSlice()[0].visible);
     try testing.expect(out_shrunk.constSlice()[1].visible);
 }
@@ -429,7 +439,7 @@ test "T33 emission order pin across layouts" {
     model.setFocus(&fx.m, 12);
 
     // Every input-order layout emits exactly the tiled_order sequence.
-    const in_order_kinds = [_]model.LayoutKind{ .master, .fibonacci, .grid, .leaf, .scroll };
+    const in_order_kinds = [_]u8{ K_MASTER, K_FIB, K_GRID, K_LEAF, K_SCROLL };
     for (in_order_kinds) |kind| {
         var out: List = .{};
         engine.compute(kind, tuned(&fx), &out);
@@ -441,9 +451,40 @@ test "T33 emission order pin across layouts" {
 
     // Monocle emits the focused window first, then hidden in list order.
     var out_mono: List = .{};
-    engine.compute(.monocle, tuned(&fx), &out_mono);
+    engine.compute(K_MONOCLE, tuned(&fx), &out_mono);
     try testing.expectEqual(@as(usize, 3), out_mono.len);
     try testing.expectEqual(@as(model.WindowId, 12), out_mono.constSlice()[0].win);
     try testing.expectEqual(@as(model.WindowId, 11), out_mono.constSlice()[1].win);
     try testing.expectEqual(@as(model.WindowId, 13), out_mono.constSlice()[2].win);
+}
+
+// T34 - layout cycling is registry-driven and config-order (S20): the cycle
+// ring is the config layout-name list resolved by name (unresolvable names
+// are skipped); stepping wraps modulo the list. Replaces the removed
+// model.cycleLayout (kind is now an opaque u8, resolved at seed time).
+test "T34 layout cycle is config-order and wraps" {
+    const names = [_][]const u8{ "master", "monocle", "grid", "fibonacci" };
+    var ring: [8]u8 = undefined;
+    var n: usize = 0;
+    for (names) |nm| {
+        if (engine.layoutByName(nm)) |idx| {
+            ring[n] = @intCast(idx);
+            n += 1;
+        }
+    }
+    const start = ring[0];
+    // One full cycle forward returns to the starting layout.
+    var k = start;
+    for (0..n) |_| k = engine.cycleKind(k, 1, &names);
+    try testing.expectEqual(start, k);
+    // A single backward step leaves the start (wraps to the last)...
+    try testing.expect(engine.cycleKind(start, -1, &names) != start);
+    // ...and one forward step recovers it.
+    try testing.expectEqual(start, engine.cycleKind(engine.cycleKind(start, -1, &names), 1, &names));
+    // Forward steps traverse each resolved list entry in order.
+    k = start;
+    for (0..n) |i| {
+        k = engine.cycleKind(k, 1, &names);
+        try testing.expectEqual(ring[if (i + 1 == n) 0 else i + 1], k);
+    }
 }

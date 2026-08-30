@@ -129,21 +129,94 @@ inline fn emitParked(out: *List, win: model.WindowId) void {
     }
 }
 
-/// Compute `kind`'s layout into `out` (cleared first). Each layout module
-/// implements `pub fn compute(v: View, out: *List) void` and must append
-/// exactly one placement per window in `v.order` (off-viewport/hidden windows
-/// are parked via emitHidden). The caller sorts afterwards, so layout
-/// emission order is only pinned by tests, not by sync.
-pub fn compute(kind: model.LayoutKind, v: View, out: *List) void {
-    out.clear();
-    switch (kind) {
-        .master => if (build_options.has_layout_master) @import("master").compute(v, out),
-        .monocle => if (build_options.has_layout_monocle) @import("monocle").compute(v, out),
-        .fibonacci => if (build_options.has_layout_fibonacci) @import("fibonacci").compute(v, out),
-        .grid => if (build_options.has_layout_grid) @import("grid").compute(v, out),
-        .leaf => if (build_options.has_layout_leaf) @import("leaf").compute(v, out),
-        .scroll => if (build_options.has_layout_scroll) @import("scroll").compute(v, out),
+/// Dispatch registry (build-generated, alphabetical stems). The active layout
+/// is a `u8` index into this table; the engine never owns a closed enum.
+const tiling_mods = @import("tiling_modules").modules;
+
+/// Lowercased-name lookup over the registry (exact match on module names).
+fn indexOfName(lower: []const u8) ?usize {
+    for (tiling_mods, 0..) |m, i| {
+        if (std.mem.eql(u8, lower, m.name)) return i;
     }
+    return null;
+}
+
+/// Resolve a config layout name (case-insensitive) to its registry index.
+/// Config-parsed names are canonicalized at the config boundary
+/// (config.canonicalLayoutName), so this is an exact lowercased match on
+/// module names; the legacy "master-stack"/"master_stack" spellings never
+/// reach the engine.
+pub fn layoutByName(name: []const u8) ?usize {
+    if (name.len > 64) return null;
+    var buf: [64]u8 = undefined;
+    const lower = std.ascii.lowerString(buf[0..name.len], name);
+    return indexOfName(lower);
+}
+
+/// Neutral last-resort default layout: the first registered module (index 0).
+/// The effective default is config-driven (cfg.tiling.layout resolves at every
+/// seeding site); this only stands in when that name fails to resolve (a
+/// removed/unknown module), keeping dispatch ids always resolvable.
+pub fn defaultKind() u8 {
+    return 0;
+}
+
+/// The registry module name for `kind` ("" when out of range).
+pub fn moduleName(kind: u8) []const u8 {
+    if (kind >= tiling_mods.len) return "";
+    return tiling_mods[kind].name;
+}
+
+/// Variant count for `kind` (cycle_variant actions/mod bar). Registry-driven.
+pub fn variantCount(kind: u8) u8 {
+    if (kind >= tiling_mods.len) return 1;
+    return tiling_mods[kind].variant_count;
+}
+
+/// Step a layout within the config layout-name list (config order is the
+/// cycle order). Each name resolves to a registry index (unresolvable names
+/// are skipped); `cur`'s position steps by `dir` and wraps modulo the list.
+/// When `cur` is not in the list (safety net — defaults/overrides always come
+/// from config names) it lands on the first/last edge by direction.
+pub fn cycleKind(cur: u8, dir: i32, names: []const []const u8) u8 {
+    var indices: [256]u8 = undefined;
+    var n: usize = 0;
+    for (names) |nm| {
+        if (layoutByName(nm)) |idx| {
+            if (n < indices.len) {
+                indices[n] = @intCast(idx);
+                n += 1;
+            }
+        }
+    }
+    if (n == 0) return cur;
+    var pos: usize = 0;
+    var found = false;
+    for (indices[0..n], 0..) |idx, i| {
+        if (idx == cur) {
+            pos = i;
+            found = true;
+            break;
+        }
+    }
+    const next: usize = if (found)
+        @intCast(@mod(@as(i32, @intCast(pos)) + dir, @as(i32, @intCast(n))))
+    else if (dir >= 0)
+        0
+    else
+        n - 1;
+    return indices[next];
+}
+
+/// Compute `kind`'s layout into `out` (cleared first). Each layout module
+/// binds its `compute` hook to the module's placement function and must
+/// append exactly one placement per window in `v.order` (off-viewport/hidden
+/// windows are parked via emitHidden). The caller sorts afterwards, so
+/// layout emission order is only pinned by tests, not by sync.
+pub fn compute(kind: u8, v: View, out: *List) void {
+    out.clear();
+    if (kind >= tiling_mods.len) return;
+    if (tiling_mods[kind].compute) |f| f(&v, out);
 }
 
 // Algo modules share this file's private emit helpers via pub re-exports.

@@ -20,6 +20,9 @@ const build_options = @import("build_options");
 const pipeline = @import("pipeline");
 const actions = @import("actions");
 const spawn = @import("spawn");
+// Layout-name resolution for diagnostics (registry-driven; gated so a
+// tiling-less build still compiles).
+const engine = if (build_options.has_tiling) @import("engine") else struct {};
 // The bar's hook set is reached through the core-owned `surfaces` composition
 // root, never by importing the bar module here. When the bar is absent it is
 // the comptime `null` type, so every `if (build_options.has_bar)` call below
@@ -447,7 +450,7 @@ fn dumpState() void {
 
     if (build_options.has_tiling and @import("core").tilingEnabled()) {
         debug.info("Tiling enabled: true", .{});
-        debug.info("Tiling layout:  {s}", .{@tagName(pipeline.getCurrentLayout())});
+        debug.info("Tiling layout:  {s}", .{engine.moduleName(pipeline.getCurrentLayout())});
         debug.info("Tiled windows:  {}", .{@import("model").tiledCountOnWs(pipeline.model(), pipeline.model().current)});
     }
 

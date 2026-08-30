@@ -41,6 +41,10 @@ const utils = @import("utils");
 const constants = @import("constants");
 const build_options = @import("build_options");
 const model = @import("model");
+// The per-module coverage seam (who owns the screen per ws) is iterated via
+// the build-generated registry: a tree without a coverage module simply has
+// no entry, so the loop below no-ops.
+const window_mods = @import("window_modules").modules;
 
 /// When tiling is absent, provide stub types/constants so the rest of sync
 /// compiles.  The reconcile path still runs (park/map/stack), but the layout
@@ -233,18 +237,17 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
     // STEP 1: wa := workArea(ctx) (screen minus bar).
     const wa = ctx.workarea;
 
-    // STEP 2: fullscreen winner scan. Parked windows (presence != present)
-    // are hidden: their retained fullscreen record must NOT claim the screen
-    // (minimize-from-fullscreen re-parks the record, so it is not an occupant).
+    // STEP 2: coverage winner scan. Delegate to the module registry's coverageOn
+    // seam (fullscreen owns the screen claim): parked windows are excluded by
+    // the modules themselves (minimize-from-fullscreen re-parks the record, so
+    // it is not an occupant). At most one module claims per workspace.
     var fs_win: ?model.WindowId = null;
-    for (0..m.store.count()) |i| {
-        const it = m.store.at(i);
-        if (it.val.mode != .fullscreen) continue;
-        if (it.val.presence != .present) continue;
-        const f = it.val.mode.fullscreen;
-        if (model.visibleOn(m, it.key, m.current) or f.ws == m.current) {
-            fs_win = it.key;
-            break;
+    for (window_mods) |mod| {
+        if (mod.coverageOn) |f| {
+            if (f(m, m.current)) |w| {
+                fs_win = w;
+                break;
+            }
         }
     }
 
@@ -293,8 +296,8 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
     if (winner == null) {
         if (m.focused) |f| {
             if (m.store.get(f)) |fe| {
-                if (fe.mode == .base and model.visibleOn(m, f, m.current)) {
-                    switch (fe.mode.base) {
+                if (fe.presence == .present and model.visibleOn(m, f, m.current)) {
+                    switch (fe.anchor) {
                         .floating => winner = f,
                         .tiled => if (findPlacement(&placements, f)) |p| {
                             if (p.visible) winner = f;
@@ -354,42 +357,43 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
                 // Parked: rect irrelevant.
                 parked = true;
             }
-        } else switch (e.mode) {
-            .fullscreen => {
-                bw = 0;
-                pixel = 0;
-                parked = true;
+        } else if (e.presence == .covering) {
+            // Fullscreen-carrying window NOT claimed by the coverage module
+            // for this workspace (its base isn't visible / its rec targets
+            // another ws): parked, mirroring the legacy fullscreen winner
+            // scan that skipped it and the STEP-3 ".fullscreen => parked" arm.
+            bw = 0;
+            pixel = 0;
+            parked = true;
+        } else switch (e.anchor) {
+            .floating => |r| {
+                rect = r;
+                parked = !model.visibleOn(m, win, m.current);
             },
-            .base => |b| switch (b) {
-                .floating => |r| {
-                    rect = r;
-                    parked = !model.visibleOn(m, win, m.current);
-                },
-                .tiled => {
-                    if (findPlacement(&placements, win)) |p| {
-                        rect = p.rect;
-                        parked = !p.visible;
-                    } else if (model.visibleOn(m, win, m.current)) {
-                        // Multi-tagged window whose home list isn't the shown
-                        // ws: legacy never hides it and no layout owns it here,
-                        // so it stays at its previous real geometry, which is
-                        // precisely the ledger's record of what we last sent.
-                        // Park only when nothing was ever sent (first sight /
-                        // registered offscreen).
-                        const prev = ledger;
-                        if (!prev.has_rect) {
-                            bw = 0;
-                            pixel = 0;
-                            parked = true;
-                        } else {
-                            rect = prev.rect;
-                        }
-                    } else {
+            .tiled => {
+                if (findPlacement(&placements, win)) |p| {
+                    rect = p.rect;
+                    parked = !p.visible;
+                } else if (model.visibleOn(m, win, m.current)) {
+                    // Multi-tagged window whose home list isn't the shown
+                    // ws: legacy never hides it and no layout owns it here,
+                    // so it stays at its previous real geometry, which is
+                    // precisely the ledger's record of what we last sent.
+                    // Park only when nothing was ever sent (first sight /
+                    // registered offscreen).
+                    const prev = ledger;
+                    if (!prev.has_rect) {
                         bw = 0;
                         pixel = 0;
                         parked = true;
+                    } else {
+                        rect = prev.rect;
                     }
-                },
+                } else {
+                    bw = 0;
+                    pixel = 0;
+                    parked = true;
+                }
             },
         }
         // Off-ws windows are parked by construction above (no placement /
@@ -461,7 +465,7 @@ pub fn lastRectFor(win: model.WindowId) ?utils.Rect {
 ///   2. else the last visible geometry we sent (null while parked/unsent).
 pub fn truthRect(m: *const model.Model, win: model.WindowId) ?utils.Rect {
     const e = m.store.get(win) orelse return null;
-    if (e.presence == .present and e.mode == .base and e.mode.base == .floating) return e.mode.base.floating;
+    if (e.presence == .present and e.anchor == .floating) return e.anchor.floating;
     return lastRectFor(win);
 }
 

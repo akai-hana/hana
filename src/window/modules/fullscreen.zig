@@ -151,35 +151,50 @@ pub fn isFullscreenOnWs(m: *const model.Model, win: model.WindowId, ws: model.WS
     return g_recs.slice()[idx].ws == ws;
 }
 
-/// The first record on `ws` whose window is non-null in the store and NOT
-/// parked (minimized). Ghost records whose window is parked return null
-/// (Tier-1 parity T35) — the slot looks free to the bar even though the rec
-/// still exists on-disk. At most one visible fullscreen per ws is guaranteed
-/// by sync (others parked).
+/// The first record on `ws` whose window exists, is present-not-parked AND
+/// visible on `ws` (Tier-1 occupant parity: a stray record targeting `ws`
+/// whose base is tagged elsewhere never counts as an occupant -- sync parks
+/// such strays instead of letting them claim the slot). Ghost records whose
+/// window is parked (minimized) return null (Tier-1 parity T35) -- the slot
+/// looks free to the bar even though the rec still exists on-disk. At most one
+/// visible fullscreen per ws is guaranteed by sync (others parked).
 pub fn fullscreenOccupantOnWs(m: *const model.Model, ws: model.WSId) ?model.WindowId {
     for (g_recs.constSlice()) |rec| {
         if (rec.ws != ws) continue;
         const e = m.store.get(rec.win) orelse continue;
         if (e.presence == .parked) continue;
+        if (!model.visibleOn(m, rec.win, ws)) continue;
         return rec.win;
     }
     return null;
 }
 
-/// True iff some OTHER window's record covers `dest`: a rec with `r.win != win`
-/// and `r.ws == dest`, whose window is present-not-parked (same visibility rule
-/// as the occupant query). Shared with the workspaces move/tag slice:
-/// fullscreen transfer-on-move drops the mover rather than clobbering a
-/// resident.
+/// True iff some OTHER window's record covers `dest`: a rec with `r.win != win`,
+/// `r.ws == dest`, whose window is present-not-parked AND visible on `dest`
+/// (same visibility rule as the occupant query). Shared with the workspaces
+/// move/tag slice: fullscreen transfer-on-move drops the mover rather than
+/// clobbering a resident.
 pub fn fullscreenOccupied(m: *const model.Model, win: model.WindowId, dest: model.WSId) bool {
     for (g_recs.constSlice()) |rec| {
         if (rec.win == win) continue;
         if (rec.ws != dest) continue;
         const e = m.store.get(rec.win) orelse continue;
         if (e.presence == .parked) continue;
+        if (!model.visibleOn(m, rec.win, dest)) continue;
         return true;
     }
     return false;
+}
+
+/// Seam for the workspaces module's move/tag slice (legacy
+/// transferFullscreenRecord): retargets `win`'s record to `ws` WITHOUT
+/// touching the model entry (a covering window stays covering; a ghost record
+/// of a minimized window follows the mask). The caller has already confirmed
+/// the destination is not occupied.
+pub fn moveFullscreenTo(m: *const model.Model, win: model.WindowId, ws: model.WSId) void {
+    _ = m;
+    const idx = findRec(win) orelse return;
+    g_recs.slice()[idx].ws = ws;
 }
 
 /// The coverage seam body (plugin.WindowModule.coverageOn) consumed by sync's

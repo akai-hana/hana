@@ -823,53 +823,47 @@ fn restoredOrCurrent(record: ?*const restart_state.WindowRecord) u8 {
     return tracking.getCurrentWorkspace() orelse 0;
 }
 
-/// Re-applies a restore record's mask, mode, and presence onto an
+/// Re-applies a restore record's mask, anchor, and presence onto an
 /// already-registered model entry. Registration (admitWindow ->
-/// actions.mapRequest) creates the entry as a present base-tiled window on its
-/// target workspace; this overwrites the per-window state that survived the
-/// re-exec so the caller's reconcile can place it exactly as before. Presence
-/// bookkeeping that would otherwise drift is routed through the owning window
-/// module's deserialize hook rather than patched by hand.
+/// actions.mapRequest) creates the entry as a present tiled-anchored window on
+/// its target workspace; this overwrites the per-window state that survived
+/// the re-exec so the caller's reconcile can place it exactly as before.
+/// Presence bookkeeping that would otherwise drift is routed through the owning
+/// window module's deserialize hook rather than patched by hand.
 fn applyRestoredRecord(win: u32, record: *const restart_state.WindowRecord) void {
     const model = pipeline.model();
     const e = model.store.getPtr(win) orelse return;
 
     e.mask = record.mask;
 
-    switch (record.mode) {
-        .base => |b| switch (b) {
-            .tiled => {
-                // Registration already created a base-tiled entry with its
-                // home_ws populated; nothing further to patch.
-            },
-            .floating => |rect| {
-                // Mirror toggleFloating's floating storage: mode + home_ws
-                // null (a floating window has no tiled slot). The caller's
-                // reconcile sizes the window from this rect.
-                e.mode = .{ .base = .{ .floating = rect } };
-                e.home_ws = null;
-            },
+    switch (record.anchor) {
+        .tiled => {
+            // Registration already created a tiled-anchored entry with its
+            // home_ws populated; nothing further to patch.
         },
-        .fullscreen => {
-            // Fullscreen truth is model-side; sync places the fullscreen
-            // winner from this mode alone, so no wire action is needed here.
-            e.mode = record.mode;
+        .floating => |rect| {
+            // Mirror toggleFloating's floating storage: anchor + home_ws null
+            // (a floating window has no tiled slot). The caller's reconcile
+            // sizes the window from this rect.
+            e.anchor = .{ .floating = rect };
+            e.home_ws = null;
         },
     }
 
-    // A window that was parked (hidden by an extension) at save time is
-    // re-parked through the window-module registry's deserialize hook: the
-    // module that claims the opaque ext blob re-asserts presence == .parked
-    // and restores its private record. When no module claims the blob (the
-    // feature was stripped, or the record carried no ext), the entry stays
-    // present and reconciles on-screen -- the graceful degrade.
-    if (record.presence == .parked) {
-        if (record.ext) |blob| {
-            const m_ptr: *anyopaque = @ptrCast(model);
-            for (window_mods) |mod| if (mod.deserializeWindow) |f| {
-                if (f(win, blob, m_ptr)) break; // claimed
-            };
-        }
+    // Presence that was non-present at save time is re-asserted through the
+    // window-module registry's deserialize hook: the module that claims the
+    // opaque ext blob re-parks the window / resumes its coverage and restores
+    // its private record. Dispatch happens for ANY non-null ext (not only
+    // parked records): a covering (fullscreen) window advertises presence
+    // .covering + a fullscreen blob, and must route through the module in the
+    // same pass. When no module claims the blob (the feature was stripped, or
+    // the record carried no ext), the entry stays present and reconciles
+    // on-screen -- the graceful degrade.
+    if (record.ext) |blob| {
+        const m_ptr: *anyopaque = @ptrCast(model);
+        for (window_mods) |mod| if (mod.deserializeWindow) |f| {
+            if (f(win, blob, m_ptr)) break; // claimed
+        };
     }
 }
 

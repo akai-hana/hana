@@ -56,10 +56,12 @@ pub const SizeHints = struct {
     max_aspect: f32 = 0.0,
 };
 
-pub const LayoutKind = enum { master, monocle, grid, fibonacci, leaf, scroll };
-
 pub const LayoutParams = struct {
-    kind: LayoutKind = .master,
+    /// Index into the build-generated `tiling_modules` registry (dispatch
+    /// order == deterministic scan order). Resolved from config at seed time;
+    /// out-of-range values are disambiguated by the registry layer (master
+    /// fallback). The model stays registry-free: it is a bare index here.
+    kind: u8 = 0,
     variant_idx: u8 = 0,
     master_width: f32 = 0.5,
     master_count: u8 = 1,
@@ -301,31 +303,6 @@ pub fn swapMaster(m: *Model) void {
     const tmp = list.items[0];
     list.items[0] = list.items[1];
     list.items[1] = tmp;
-}
-
-pub fn cycleLayout(m: *Model, dir: i32) void {
-    const p = &m.ws[m.current].params;
-    const n: i32 = @typeInfo(LayoutKind).@"enum".fields.len;
-    const cur: i32 = @intCast(@intFromEnum(p.kind));
-    // @mod's result carries the divisor's sign; with n > 0 it is already in
-    // [0, n), so no negative correction is needed (the old `if (next < 0)`
-    // was unreachable).
-    const next = @mod(cur + dir, n);
-    // Cast to LayoutKind's tag type (inferred via std.meta.Tag), so the
-    // width follows automatically if the enum ever grows past 8 variants
-    // (no hardcoded u3 that would silently truncate).
-    p.kind = @enumFromInt(@as(std.meta.Tag(LayoutKind), @intCast(next)));
-    p.variant_idx = 0;
-}
-
-/// Variant count per layout kind (caller-side variant resolution): master
-/// lifo/fifo, monocle gapless/gaps, grid rigid/relaxed; the rest have
-/// exactly one.
-pub fn variantCount(kind: LayoutKind) u8 {
-    return switch (kind) {
-        .master, .monocle, .grid => 2,
-        else => 1,
-    };
 }
 
 pub fn adjustMasterWidth(m: *Model, delta: f32) void {

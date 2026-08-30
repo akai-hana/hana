@@ -1,6 +1,7 @@
 //! Monocle tiling layout. Stacks all windows fullscreen, showing only the
 //! topmost one, with optional gap insets.
 
+const std = @import("std");
 const utils = @import("utils");
 const model = @import("model");
 const engine = @import("engine");
@@ -38,3 +39,31 @@ pub fn compute(v: engine.View, out: *engine.List) void {
         engine.emitHidden(out, win);
     }
 }
+
+/// Cast shim: plugin's type-free seam -> compute's typed params.
+fn computeHook(view: *const anyopaque, out: *anyopaque) void {
+    const v: *const engine.View = @ptrCast(@alignCast(view));
+    const o: *engine.List = @ptrCast(@alignCast(out));
+    compute(v.*, o);
+}
+
+/// Parses a monocle variant VALUE-STRING into its variant index, mirroring
+/// the legacy MonocleVariant enum ordinals (gapless=0, gaps=1) with the
+/// legacy exact-case stringToEnum matching. null for any other string.
+fn variantParse(str: []const u8) ?u8 {
+    if (std.mem.eql(u8, str, "gapless")) return 0;
+    if (std.mem.eql(u8, str, "gaps")) return 1;
+    return null;
+}
+
+/// This layout's registry contribution: metadata plus the dispatch hook.
+pub const module: @import("plugin").Layout = .{
+    .name = "monocle",
+    .compute = computeHook,
+    .variant_count = 2,
+    .has_variants = true,
+    .gap_mode = 1,
+    .variant_parse = variantParse,
+    .icon = "[M]",
+    .indicators = &.{ "<->", ">-<" },
+};

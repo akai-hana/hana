@@ -13,16 +13,20 @@ const std = @import("std");
 const types = @import("types");
 const utils = @import("utils");
 const drawing = @import("drawing");
+const segmod = @import("segment");
 
 const c = @cImport(@cInclude("time.h"));
 
 const ns_per_s = std.time.ns_per_s;
 
 /// Measurement string used to pre-compute the clock segment width.
-/// Wider than the default "%Y-%m-%d %H:%M:%S" format (19 chars) so that
-/// typical user extensions (e.g. a day-of-week prefix) still fit without
-/// the segment changing width mid-session.
 pub const clock_measure_string: []const u8 = "0000-00-00 00:00:00";
+
+/// The clock's reserved-width probe (D14): the string the bar measures at
+/// layout width. At most one module provides a `measureString` hook.
+pub fn measureString() []const u8 {
+    return clock_measure_string;
+}
 
 /// What is currently on screen: the epoch second last rendered and the
 /// format string used for it. Plain vars -- only the main thread touches
@@ -107,3 +111,22 @@ fn formatTime(buf: []u8, sec: i64, fmt: []const u8) ![]const u8 {
     if (n == 0) return error.StrftimeFailed;
     return buf[0..n];
 }
+
+/// This module's bar-segment contribution (registry binding).
+fn naturalWidthHook(_: *const anyopaque, clock_width: u16) u16 {
+    return clock_width;
+}
+
+fn drawHook(ctx: *anyopaque, x: u16) !u16 {
+    const dc: *segmod.DrawCtx = @ptrCast(@alignCast(ctx));
+    return draw(dc.dc, dc.config, dc.height, x);
+}
+
+pub const module: @import("plugin").Segment = .{
+    .name = "clock",
+    .pollTimeoutMs = tickDeadlineMs,
+    .secondsElapsed = secondElapsed,
+    .measureString = measureString,
+    .naturalWidth = naturalWidthHook,
+    .draw = drawHook,
+};

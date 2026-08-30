@@ -4,6 +4,7 @@
 const utils = @import("utils");
 const model = @import("model");
 const engine = @import("engine");
+const std = @import("std");
 
 // CALLER DUTIES: the viewport bookkeeping on params.scroll_offset /
 // params.scroll_prev_count. Offset clamping is internal to compute(), so only
@@ -16,14 +17,14 @@ const engine = @import("engine");
 
 /// Pixel width of one scroll slot: exactly half the screen width. Single
 /// source of truth; maxOffset and compute derive their geometry from it.
-pub inline fn slotWidth(screen_w: u16) i32 {
+pub fn slotWidth(screen_w: u16) i32 {
     return @intCast(screen_w / 2);
 }
 
 /// Maximum scroll offset: reached when the last of `n` windows' right edge
 /// is flush with the screen's right edge. Zero (nothing to scroll) when the
 /// strip is no wider than the screen.
-pub inline fn maxOffset(n: usize, slot_w: i32, screen_w: u16) i32 {
+pub fn maxOffset(n: usize, slot_w: i32, screen_w: u16) i32 {
     const n_i32: i32 = @intCast(n);
     const sw_i32: i32 = @intCast(screen_w);
     return @max(0, n_i32 * slot_w - sw_i32);
@@ -96,3 +97,33 @@ pub fn compute(v: engine.View, out: *engine.List) void {
         engine.emitView(&v, out, win, rect, true);
     }
 }
+
+/// Cast shim: plugin's type-free seam -> compute's typed params.
+fn computeHook(view: *const anyopaque, out: *anyopaque) void {
+    const v: *const engine.View = @ptrCast(@alignCast(view));
+    const o: *engine.List = @ptrCast(@alignCast(out));
+    compute(v.*, o);
+}
+
+/// Pre-reconcile duty, exactly the former pipeline.preReconcileDuties body:
+/// snap right when the visible count grew (spawn/restore/tag-add), then
+/// clamp to content. `p` is `*model.LayoutParams`.
+fn preReconcileHook(p: *anyopaque, n: usize, wa_width: u16) void {
+    const lp: *model.LayoutParams = @ptrCast(@alignCast(p));
+    const slot_w = slotWidth(wa_width);
+    const max_off = maxOffset(n, slot_w, wa_width);
+    if (n > lp.scroll_prev_count) lp.scroll_offset = max_off;
+    lp.scroll_offset = std.math.clamp(lp.scroll_offset, 0, max_off);
+    lp.scroll_prev_count = @intCast(n);
+}
+
+/// This layout's registry contribution: metadata plus the dispatch hooks.
+pub const module: @import("plugin").Layout = .{
+    .name = "scroll",
+    .compute = computeHook,
+    .variant_count = 1,
+    .slotWidth = slotWidth,
+    .maxOffset = maxOffset,
+    .preReconcile = preReconcileHook,
+    .icon = "[|]",
+};

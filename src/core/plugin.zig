@@ -112,3 +112,105 @@ pub const WindowModule = struct {
     getDragLastRect: ?*const fn () utils.Rect = null,
     cancelDragForWindow: ?*const fn (u32) void = null,
 };
+
+/// The bar-segment hook set. Every module under a bar-owner's `modules/`
+/// directory (today `src/bar/modules/`) binds its `pub const module` value to
+/// this type, binding only the hooks it owns (everything else stays `null`).
+/// build.zig scans `src/bar/modules/` and emits a `bar_modules` registry array
+/// of every discovered module's value (deterministic sorted-stem order); the
+/// bar orchestrator iterates it with uniform loops, so adding a segment is a
+/// drop-in file and removing one degrades to shorter loops. This is the
+/// same open-addon contract as `WindowModule`, typed for bar segments.
+///
+/// Type-free seams: hooks that must carry bar-side structs (`Frame`, `Env`,
+/// the title render/snapshot scratch) pass `*anyopaque`; the segment casts to
+/// the shared bar vocabulary it imports (`@import("segment")`). This keeps the
+/// contract free of an import edge into the bar layer.
+pub const Segment = struct {
+    /// Config identity ("workspaces", "title", "clock", "layout", "variants").
+    /// Unique across the registry; config text resolves to the module by name.
+    name: []const u8 = "",
+    /// False for segments that exist as runtime overlays (the prompt) and must
+    /// not be selectable from config. Non-configurable segments still join the
+    /// uniform lifecycle/poll loops.
+    configurable: bool = true,
+    // Lifecycle. `handlers` is a bar-provided service handle (function
+    // pointers for chrome behaviors the segment must call back into); passed
+    // once at init so segments never import the bar orchestrator.
+    init: ?*const fn (std.mem.Allocator, core.Connection, ?*const anyopaque) anyerror!void = null,
+    deinit: ?*const fn (std.mem.Allocator) void = null,
+    // Bar-frame services: uniform polls the orchestrator runs each loop,
+    // regardless of whether the segment is configured.
+    pollTimeoutMs: ?*const fn () i32 = null,
+    onPollWakeup: ?*const fn () void = null,
+    secondsElapsed: ?*const fn ([]const u8) bool = null,
+    invalidate: ?*const fn () void = null,
+    // Metrics, draw and click for configured segments.
+    /// Reserved row width probe (clock's measure string; bar measures the
+    /// string at layout width). At most one module provides it.
+    measureString: ?*const fn () []const u8 = null,
+    /// Reserved width in the row; `frame` is `*const segment.Frame`,
+    /// `clock_width` the measured clock width for segments that need it.
+    naturalWidth: ?*const fn (*const anyopaque, u16) u16 = null,
+    /// Draw at `x`, return advanced `x`. `ctx` is `*segment.DrawCtx`
+    /// (bar-built scratch shared by every segment draw).
+    draw: ?*const fn (*anyopaque, u16) anyerror!u16 = null,
+    /// Click dispatch for recorded bounds; mirrors the chrome-surface input
+    /// routing (state/title_click/redraw are bar-provided fn pointers).
+    onClick: ?*const fn (u16, bool, bool, *anyopaque, *const fn (*anyopaque, u16) void, *const fn () void) bool = null,
+    // Prompt chrome-surface extras (bound into the chrome `Surfaces` hooks
+    // and polled uniformly; the prompt is the only segment that sets them).
+    handleKeypress: ?*const fn (*const xcb.xcb_key_press_event_t, ?*const types.Action) bool = null,
+    isActive: ?*const fn () bool = null,
+    consumeRedrawRequest: ?*const fn () bool = null,
+    invalidateReloadCaches: ?*const fn () void = null,
+};
+
+/// The tiling-layout hook set. Every module under a tiling-owner's `modules/`
+/// directory (today `src/tiling/modules/`) binds its `pub const module` value
+/// to this type. build.zig scans `src/tiling/modules/` and emits a
+/// `tiling_modules` registry; the engine resolves the active layout (a
+/// `u8` registry index in `model.LayoutParams.kind`) and dispatches through
+/// this contract, so adding a layout is a drop-in file and removing one just
+/// shortens the registry (kind restore falls back to the first entry).
+///
+/// Type-free seams: `view`/`out` are `*const engine.View`/`*engine.List`
+/// (pure tiling-layer types the layout modules already import); the cast
+/// happens inside each module. `params` is `*model.LayoutParams` for the
+/// per-layout pre-reconcile duty (scroll viewport snapping).
+pub const Layout = struct {
+    /// Canonical name ("master", "monocle", ...). Config text resolves to the
+    /// module by name; names also drive the cycle order (config order wins).
+    name: []const u8 = "",
+    /// Placement computation; must append exactly one placement per window.
+    compute: ?*const fn (*const anyopaque, *anyopaque) void = null,
+    /// Number of variants this layout exposes for cycle_variant actions.
+    variant_count: u8 = 1,
+    /// True when config may declare variants for this layout.
+    has_variants: bool = false,
+    /// Variant index that toggles "fifo" spawn behavior (master-stack), if any.
+    fifo_variant: ?u8 = null,
+    /// Parses a config VALUE-STRING (e.g. "lifo", "fifo", "gaps", "gapless",
+    /// "relaxed", "rigid") into this layout's variant index (< variant_count),
+    /// or null when the string is not one of its values. Config-driven
+    /// variant resolution calls this (see actions.seedParamsFromConfig); a
+    /// module that binds it decides which spellings map to which indices, so
+    /// the variant tables are fully registry-driven. null = this layout does
+    /// not accept per-variant value strings.
+    variant_parse: ?*const fn ([]const u8) ?u8 = null,
+    /// The variant index at which this layout honours window gaps (see
+    /// monocle's "gaps" variant). pipeline computes gap flags from the ACTIVE
+    /// module's metadata (gap_mode) instead of matching on layout names, so a
+    /// layout that varies gap behavior pins the index here. null = no variant
+    /// toggles gaps for this layout.
+    gap_mode: ?u8 = null,
+    // Scroll viewport addon hooks (only the scroll layout registers them;
+    // "is scroll in use" == "the active layout provides these hooks").
+    slotWidth: ?*const fn (u16) i32 = null,
+    maxOffset: ?*const fn (usize, i32, u16) i32 = null,
+    /// Pre-reconcile duty (snap-right on count growth, clamp viewport).
+    preReconcile: ?*const fn (*anyopaque, usize, u16) void = null,
+    // Bar rendering metadata (layout/variants segments render generically).
+    icon: ?[]const u8 = null,
+    indicators: ?[]const []const u8 = null,
+};

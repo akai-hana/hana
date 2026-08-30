@@ -16,6 +16,11 @@ const debug = @import("debug");
 // naming a sub-system module here.
 const window_mods = @import("window_modules").modules;
 
+/// Layout registry (build-generated); the active layout is a `u8` index into
+/// it, never a closed enum. Empty when the tiling subsystem is absent.
+const tiling_mods = if (build_options.has_tiling) @import("tiling_modules").modules else &[_]@import("plugin").Layout{};
+const engine = if (build_options.has_tiling) @import("engine") else struct {};
+
 /// Withdrawal facts for actions.unmanage. The sole caller (window.
 /// unmanageWindow) removes the model entry BEFORE the action runs, so both
 /// fields are captured up front and ride the context in; every other entry
@@ -315,28 +320,32 @@ pub fn allViewToggle() void {
 pub fn toggleFloating(win: model_mod.WindowId) void {
     const m = pipeline.model();
     const e = m.store.getPtr(win) orelse return;
-    switch (e.mode) {
-        .base => |b| switch (b) {
-            .tiled => {
-                const r = sync.lastRectFor(win) orelse return;
-                e.mode = .{ .base = .{ .floating = r } };
-                e.home_ws = null; // no longer in tiled_order
-            },
-            .floating => {
-                e.mode = .{ .base = .tiled };
-                // Defense in depth (the stranded-slot bug class): a
-                // tiled-mode window must ALWAYS have a home-list entry
-                // (single-membership invariant). Repair legacy-stranded
-                // state instead of leaving an engine-invisible window that
-                // this very toggle could never fix again.
-                if (model_mod.findHome(m, win) == null) {
-                    const h: model_mod.WSId = model_mod.lowestBit(e.mask);
-                    _ = m.ws[h].tiled_order.append(win);
-                    e.home_ws = h;
-                }
-            },
+    // A window carrying a fullscreen record keeps its anchor (legacy
+    // `.fullscreen => return`): the fs record owns the screen while covering,
+    // and a ghost (parked) record must survive the command so the later
+    // toggle-off restores the ORIGINAL anchor, not a flipped one.
+    if (build_options.has_fullscreen) {
+        if (@import("fullscreen").isFullscreenMode(m, win)) return;
+    }
+    switch (e.anchor) {
+        .tiled => {
+            const r = sync.lastRectFor(win) orelse return;
+            e.anchor = .{ .floating = r };
+            e.home_ws = null; // no longer in tiled_order
         },
-        else => return,
+        .floating => {
+            e.anchor = .tiled;
+            // Defense in depth (the stranded-slot bug class): a
+            // tiled-anchored window must ALWAYS have a home-list entry
+            // (single-membership invariant). Repair legacy-stranded
+            // state instead of leaving an engine-invisible window that
+            // this very toggle could never fix again.
+            if (model_mod.findHome(m, win) == null) {
+                const h: model_mod.WSId = model_mod.lowestBit(e.mask);
+                _ = m.ws[h].tiled_order.append(win);
+                e.home_ws = h;
+            }
+        },
     }
     retileAndNotify(true, false);
 }
@@ -357,9 +366,12 @@ pub fn dragRect(win: model_mod.WindowId, r: @import("utils").Rect) void {
 pub fn detachToFloating(win: model_mod.WindowId) void {
     const m = pipeline.model();
     const e = m.store.getPtr(win) orelse return;
-    if (e.mode != .base or e.mode.base != .tiled) return;
+    if (build_options.has_fullscreen) {
+        if (@import("fullscreen").isFullscreenMode(m, win)) return;
+    }
+    if (e.anchor != .tiled) return;
     const r = sync.lastRectFor(win) orelse return;
-    e.mode = .{ .base = .{ .floating = r } };
+    e.anchor = .{ .floating = r };
     e.home_ws = null;
     pipeline.reconcileUnderGrabNow(.{});
 }
@@ -428,14 +440,27 @@ pub fn cancelDragForWindow(win: model_mod.WindowId) void {
 
 pub fn cycleLayoutKind(dir: i32) void {
     const m = pipeline.model();
-    model_mod.cycleLayout(m, dir);
+    cycleActiveLayout(m, dir);
     retileAndNotify(false, true);
 }
 
+/// Step the active layout within the config layout-name list (config order
+/// is the cycle order, S20), reproducing the old model.cycleLayout
+/// wrap-around while resetting the variant index. Defaults/overrides always
+/// come from config names, so the active kind is always resolvable.
+fn cycleActiveLayout(m: *model_mod.Model, dir: i32) void {
+    if (!build_options.has_tiling) return;
+    const cfg = &@import("core").getState().config.tiling;
+    const p = &m.ws[m.current].params;
+    p.kind = engine.cycleKind(p.kind, dir, cfg.layouts.items);
+    p.variant_idx = 0;
+}
+
 pub fn stepVariantDir(dir: i32) void {
+    if (!build_options.has_tiling) return;
     const m = pipeline.model();
     const p = &m.ws[m.current].params;
-    const n = model_mod.variantCount(p.kind);
+    const n = engine.variantCount(p.kind);
     const cur: i32 = @intCast(p.variant_idx);
     const next: i32 = @mod(cur + dir, @as(i32, @intCast(n)));
     p.variant_idx = @intCast(next);
@@ -502,11 +527,11 @@ pub fn moveFocused(delta: i32) void {
 /// snap-right duty lives in preReconcileDuties (pipeline choke point).
 pub fn scrollStep(dir: i32) void {
     if (!build_options.has_tiling) return;
+    if (!build_options.has_bar) return;
     const m = pipeline.model();
     const p = &m.ws[m.current].params;
-    if (p.kind != .scroll) return;
-    if (!build_options.has_bar) return;
     const sc = scrollContext(m);
+    if (!sc.active) return;
     p.scroll_offset += dir * sc.slot_w;
     p.scroll_offset = std.math.clamp(p.scroll_offset, 0, sc.max_off);
     p.scroll_prev_count = @intCast(sc.tiled_count);
@@ -517,10 +542,11 @@ pub fn scrollStep(dir: i32) void {
 /// the viewport minimally so the focused window's slot is fully on-screen.
 pub fn snapScrollToFocused() void {
     if (!build_options.has_tiling) return;
+    if (!build_options.has_bar) return;
     const m = pipeline.model();
     const p = &m.ws[m.current].params;
-    if (p.kind != .scroll) return;
-    if (!build_options.has_bar) return;
+    const sc = scrollContext(m);
+    if (!sc.active) return;
     const win = m.focused orelse return;
 
     var idx: ?usize = null;
@@ -533,7 +559,6 @@ pub fn snapScrollToFocused() void {
     }
     const i = idx orelse return;
 
-    const sc = scrollContext(m);
     const wa = screen.workArea(@import("core").getState().screen);
     const i64_slot_w: i64 = sc.slot_w;
     const slot_left = @as(i64, @intCast(i)) * i64_slot_w - p.scroll_offset;
@@ -548,20 +573,26 @@ pub fn snapScrollToFocused() void {
 }
 
 const ScrollContext = struct {
+    active: bool,
     tiled_count: usize,
     slot_w: i32,
     max_off: i32,
 };
 
+/// Viewport context for the active layout, resolved through the layout
+/// metadata: a layout "is scroll" iff it registers the slotWidth/maxOffset
+/// hooks. Returns inactive for non-scroll layouts or an out-of-range kind.
 fn scrollContext(m: *const model_mod.Model) ScrollContext {
-    if (!build_options.has_tiling) return .{ .tiled_count = 0, .slot_w = 0, .max_off = 0 };
-    if (!build_options.has_layout_scroll) return .{ .tiled_count = 0, .slot_w = 0, .max_off = 0 };
-    const algo_scroll = if (build_options.has_layout_scroll) @import("scroll") else return .{ .tiled_count = 0, .slot_w = 0, .max_off = 0 };
+    if (!build_options.has_tiling) return .{ .active = false, .tiled_count = 0, .slot_w = 0, .max_off = 0 };
+    const p = &m.ws[m.current].params;
+    const mod: ?@import("plugin").Layout = if (p.kind < tiling_mods.len) tiling_mods[p.kind] else null;
+    const md = mod orelse return .{ .active = false, .tiled_count = 0, .slot_w = 0, .max_off = 0 };
+    if (md.slotWidth == null or md.maxOffset == null) return .{ .active = false, .tiled_count = 0, .slot_w = 0, .max_off = 0 };
     const n = model_mod.tiledCountOnWs(m, m.current);
     const wa = screen.workArea(@import("core").getState().screen);
-    const slot_w = algo_scroll.slotWidth(wa.width);
-    const max_off = algo_scroll.maxOffset(n, slot_w, wa.width);
-    return .{ .tiled_count = n, .slot_w = slot_w, .max_off = max_off };
+    const slot_w = md.slotWidth.?(wa.width);
+    const max_off = md.maxOffset.?(n, slot_w, wa.width);
+    return .{ .active = true, .tiled_count = n, .slot_w = slot_w, .max_off = max_off };
 }
 
 // ------------------------------------------------- config reload (train g)
@@ -581,7 +612,17 @@ pub fn seedParamsFromConfig() void {
     const cfg = &cs.config.tiling;
     const max_ws = constants.max_workspaces;
 
-    const default_layout: types.Layout = @import("core").layoutFromString(cfg.layout) orelse @import("core").defaultLayout();
+    // Config layout names resolve to registry ids here, once per seed.
+    // A name that fails to resolve (removed module, legacy "floating"
+    // spelling) must not be silent: report it and the fallback used.
+    const default_kind: u8 = blk: {
+        if (engine.layoutByName(cfg.layout)) |k| break :blk @intCast(k);
+        debug.warn("Config: layout name '{s}' did not resolve to a registered layout; using default layout '{s}'", .{
+            cfg.layout,
+            engine.moduleName(engine.defaultKind()),
+        });
+        break :blk engine.defaultKind();
+    };
 
     // Last override wins (legacy loop-overwrite semantics).
     var layout_lookup: [max_ws]?usize = .{null} ** max_ws;
@@ -596,31 +637,49 @@ pub fn seedParamsFromConfig() void {
     const m = pipeline.model();
     for (&m.ws, 0..) |*s, i| {
         const id: u8 = @intCast(i);
-        var layout = default_layout;
-        var variant: ?types.LayoutVariantOverride = null;
+        var kind = default_kind;
+        var override_variant: ?[]const u8 = null;
         if (id < max_ws) {
             if (layout_lookup[id]) |oi| {
                 const o = cfg.workspace_layout_overrides.items[oi];
                 if (o.layout_idx < cfg.layouts.items.len)
-                    layout = @import("core").layoutFromString(cfg.layouts.items[o.layout_idx]) orelse default_layout;
-                variant = o.variant;
+                    kind = @intCast(engine.layoutByName(cfg.layouts.items[o.layout_idx]) orelse blk: {
+                        debug.warn("Config: workspace {} layout name '{s}' did not resolve to a registered layout; using layout '{s}'", .{
+                            i,
+                            cfg.layouts.items[o.layout_idx],
+                            engine.moduleName(default_kind),
+                        });
+                        break :blk default_kind;
+                    });
+                override_variant = o.variant;
             }
         }
-        s.params.kind = layoutKindFromConfig(layout);
-        // A variant override that doesn't belong to the workspace's active
-        // layout is silently dropped by variantIdx; say so once per affected
-        // workspace instead of failing invisibly.
-        if (variant) |v| {
-            const applies = switch (s.params.kind) {
-                .master => v == .master,
-                .monocle => v == .monocle,
-                .grid => v == .grid,
-                else => false,
-            };
-            if (!applies)
-                debug.warn("Config: workspace {d} layout variant ignored — not a variant of the active layout", .{i});
+        s.params.kind = kind;
+        // Resolve the active variant index from the registry-driven
+        // value-string: a per-workspace override when present, else the
+        // per-layout variants map entry for the active module's canonical
+        // name. The module's own variant_parse hook interprets the string;
+        // an unparseable/unknown string warns (Stage-1 style) and uses 0.
+        var value_string: ?[]const u8 = override_variant;
+        const active_mod: ?@import("plugin").Layout = if (kind < tiling_mods.len) tiling_mods[kind] else null;
+        var v_idx: u8 = 0;
+        if (active_mod) |md| {
+            if (value_string == null) value_string = cfg.variants.get(md.name);
+            if (value_string) |vs| {
+                if (md.variant_parse) |vp| {
+                    if (vp(vs)) |parsed| {
+                        v_idx = parsed;
+                    } else if (override_variant != null) {
+                        debug.warn("Config: workspace {d} layout variant '{s}' ignored — not a variant of the active layout", .{ i, vs });
+                    } else {
+                        debug.warn("Unknown {s} variants '{s}', using default", .{ md.name, vs });
+                    }
+                } else if (override_variant != null) {
+                    debug.warn("Config: workspace {d} layout variant ignored — not a variant of the active layout", .{i});
+                }
+            }
         }
-        s.params.variant_idx = variantIdx(variant, s.params.kind);
+        s.params.variant_idx = v_idx;
         s.params.master_count = if (id < max_ws)
             (count_lookup[id] orelse cfg.master_count)
         else
@@ -633,31 +692,6 @@ pub fn seedParamsFromConfig() void {
 pub fn applyConfigReload() void {
     seedParamsFromConfig();
     pipeline.reconcileUnderGrabNow(.{});
-}
-
-fn layoutKindFromConfig(l: anytype) model_mod.LayoutKind {
-    return switch (l) {
-        .master => .master,
-        .monocle => .monocle,
-        .grid => .grid,
-        .fibonacci => .fibonacci,
-        .leaf => .leaf,
-        .scroll => .scroll,
-        // The engine has no floating layout; windows keep their current
-        // params kind. Legacy "floating" means "don't retile", which the
-        // model path approximates by leaving placements alone.
-        .floating => .master,
-    };
-}
-
-fn variantIdx(v: anytype, kind: model_mod.LayoutKind) u8 {
-    const vov = v orelse return 0;
-    return switch (kind) {
-        .master => if (vov == .master) @intFromEnum(vov.master) else 0,
-        .monocle => if (vov == .monocle) @intFromEnum(vov.monocle) else 0,
-        .grid => if (vov == .grid) @intFromEnum(vov.grid) else 0,
-        else => 0,
-    };
 }
 
 // ---------------------------------------------------------- workspace switch
@@ -777,8 +811,14 @@ pub fn mapRequest(win: model_mod.WindowId, target_ws: u8, on_current: bool) void
     {
         const home: model_mod.WSId = if (on_current) m.current else @intCast(target_ws);
         const p = &m.ws[home].params;
-        if (p.kind == .master and p.variant_idx == 1 and m.ws[home].tiled_order.len > 1) {
-            model_mod.reorderTiled(m, win, 0);
+        // Master-fifo variant spawn placement (moved out of model.register; it
+        // is SPAWN policy, not membership policy): new window takes the master
+        // slot, previous master drops to stack head. Driven by the active
+        // module's fifo_variant metadata (master binds variant index 1).
+        if (p.kind < tiling_mods.len) {
+            const fv = tiling_mods[p.kind].fifo_variant;
+            if (fv != null and p.variant_idx == fv.? and m.ws[home].tiled_order.len > 1)
+                model_mod.reorderTiled(m, win, 0);
         }
     }
     focus.initWindowGrabs(win); // protocol-side keygrabs, both paths did this
