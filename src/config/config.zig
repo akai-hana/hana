@@ -43,7 +43,7 @@ fn initDefaultBarLayout(allocator: std.mem.Allocator, cfg: *types.Config) !void 
     };
     for (defaults) |d| {
         var layout = types.BarLayout{ .position = d.pos, .segments = .empty };
-        try layout.segments.append(allocator, d.seg);
+        try layout.segments.append(allocator, try allocator.dupe(u8, d.seg));
         try cfg.bar.layout.append(allocator, layout);
     }
 }
@@ -1136,7 +1136,7 @@ fn parseBarLayout(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *typ
         if (layout_section.getArray("segments")) |seg_arr|
             for (seg_arr) |item| {
                 if (item.asString()) |s|
-                    try bar_layout.segments.append(allocator, s)
+                    try bar_layout.segments.append(allocator, try allocator.dupe(u8, s))
                 else
                     debug.warn("Non-string entry in bar segment list, skipping", .{});
             };

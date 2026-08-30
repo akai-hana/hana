@@ -375,6 +375,7 @@ pub const BarLayout = struct {
     segments: std.ArrayList([]const u8),
 
     pub inline fn deinit(self: *BarLayout, allocator: std.mem.Allocator) void {
+        for (self.segments.items) |s| allocator.free(s);
         self.segments.deinit(allocator);
     }
 };
