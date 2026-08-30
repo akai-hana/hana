@@ -450,7 +450,7 @@ const OwnerRegistry = struct {
             stems: *std.ArrayListUnmanaged([]const u8),
         ) !void {
             const b = ctx.b;
-            const dir_name = std.fs.path.basename(std.mem.trimRight(u8, dir_path, "/"));
+            const dir_name = std.fs.path.basename(dir_path);
             var dir = try b.build_root.handle.openDir(b.graph.io, dir_path, .{ .iterate = true });
             defer dir.close(b.graph.io);
 
