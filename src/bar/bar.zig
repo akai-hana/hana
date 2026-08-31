@@ -396,12 +396,6 @@ const State = struct {
         self.markAllSegmentsDirty();
     }
 
-    fn markSegmentDirty(self: *State, name: []const u8) void {
-        self.is_dirty = true;
-        if (comptime registry_empty) return;
-        if (segId(name)) |id| self.segment_dirty[id] = true;
-    }
-
     fn clearSegmentDirty(self: *State, name: []const u8) void {
         if (comptime registry_empty) return;
         if (segId(name)) |id| self.segment_dirty[id] = false;
@@ -416,14 +410,6 @@ const State = struct {
         for (bar_mods, 0..) |m, i| {
             if (segmod.hasSource(m.dirty_sources, source)) self.segment_dirty[i] = true;
         }
-    }
-
-    fn isSegmentDirty(self: *const State, name: []const u8) bool {
-        if (comptime registry_empty) return false;
-        if (segId(name)) |id| {
-            if (self.segment_dirty[id]) return true;
-        }
-        return false;
     }
 
     /// True when the segment must be repainted on this draw: its dirty bit
