@@ -33,9 +33,11 @@ var active_win: u32 = 0;
 var active_hash: u64 = 0;
 var scrolling: bool = false;
 
-/// True while the last offsetFor() call produced an active scroll. bar.zig
-/// consults this to keep the title segment out of the snapshot-diff skip:
-/// marquee frames repaint moving pixels whose data hasn't changed.
+/// True while the last offsetFor() call produced an active scroll. The title
+/// segment forwards this through its Segment needsRepaint hook, which the
+/// bar consults on every draw to keep the title segment out of the
+/// snapshot-diff skip: marquee frames repaint moving pixels whose data
+/// hasn't changed.
 pub fn scrollingActive() bool {
     return scrolling;
 }
