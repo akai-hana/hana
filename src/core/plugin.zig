@@ -42,6 +42,11 @@ const types = @import("types");
 const utils = @import("utils");
 const model = @import("model");
 
+/// The tiling registry (build-generated). Re-exported here so consumers share
+/// one conditional-import definition instead of copy-pasting the
+/// `has_tiling` guard across files. Empty when the tiling subsystem is absent.
+pub const tiling_mods = if (@import("build_options").has_tiling) @import("tiling_modules").modules else &[_]Layout{};
+
 /// The chrome-surface hook set a surface module binds to. The bar binds its
 /// `surfaces` value to this; when no surface is compiled in, core's
 /// generated `plugins.Surfaces` is the comptime `null` type and every
