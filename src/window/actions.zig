@@ -747,10 +747,15 @@ pub fn switchTo(ws_idx: u8) void {
     // switch), so the focus fact alone can't guarantee a redraw; bumping the
     // window fact here makes the bar redraw at end-of-batch.
     @import("core").bumpWindow();
-    // Bar visibility follows the NEW workspace's fullscreen occupant. Bump the
-    // core fullscreen fact; the bar reacts and re-derives its claim. (Applied
-    // before the reconcile batch below so the bar's drop of its claim is
-    // visible to the placement that follows.)
+    // Bar visibility follows the NEW workspace's fullscreen occupant. Apply it
+    // NOW (X-free, no reconcile) so the FIRST reconcile below already reads the
+    // correct screen claim / workarea for this workspace. Otherwise the bar's
+    // deferred visibility update would require a SECOND reconcile on this
+    // workspace, retiling Discord's geometry twice and causing a flicker.
+    if (build_options.has_bar) @import("plugins").Surfaces.updateBarVisibilityForWorkspace(@intCast(ws_idx));
+    // Bump the core fullscreen fact; the bar's reactive path in updateIfDirty
+    // will no-op since the claim is already applied, but keeping the fact in
+    // sync avoids any stale-revision edge.
     @import("core").bumpFullscreen();
 
     // Inline the server grab so pointer resolution, model focus, protocol

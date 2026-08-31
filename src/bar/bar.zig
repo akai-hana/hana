@@ -1215,6 +1215,20 @@ pub fn setBarState(action: types.Action) void {
     applyFullscreenVisibility();
 }
 
+/// Pre-computes and applies the bar's visibility state for `ws` WITHOUT doing
+/// any X11 operations or triggering a reconcile. Used by the workspace-switch
+/// path so the bar's screen claim (and thus the workarea used by the FIRST
+/// reconcile on the new workspace) is correct from the start, preventing the
+/// two-reconcile flicker caused by a deferred visibility update.
+pub fn updateBarVisibilityForWorkspace(ws: u8) void {
+    const s = gBar.state orelse return;
+    const bar_forced_hidden_by_fullscreen = if (build_options.has_fullscreen) fullscreenScreenClaimer(ws) != null else false;
+    const should_be_visible = !bar_forced_hidden_by_fullscreen and s.is_globally_visible;
+    if (s.is_visible == should_be_visible) return;
+    s.is_visible = should_be_visible;
+    syncScreenClaim();
+}
+
 /// Reacts to a change in core's fullscreen-occupancy fact: recomputes whether
 /// the bar must be hidden to share the screen with a fullscreen window on the
 /// current workspace, then maps/unmaps and updates the screen claim. Core owns
@@ -1438,6 +1452,7 @@ pub const surfaces = @import("plugin").Surfaces{
     .isBarWindow = isBarWindow,
     .handleButtonPress = handleButtonPress,
     .setBarState = setBarState,
+    .updateBarVisibilityForWorkspace = updateBarVisibilityForWorkspace,
     .toggleBarSegmentAnchor = toggleBarSegmentAnchor,
     .chromeToggleOverlay = chromeToggleOverlay,
 };

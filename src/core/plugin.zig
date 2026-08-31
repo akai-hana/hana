@@ -71,6 +71,10 @@ pub const Surfaces = struct {
     isBarWindow: *const fn (u32) bool,
     handleButtonPress: *const fn (*const xcb.xcb_button_press_event_t) void,
     setBarState: *const fn (types.Action) void,
+    /// Pre-computes and applies bar visibility for `ws` (X-free, no
+    /// reconcile) so the workspace-switch path gets the correct workarea on
+    /// the first reconcile.
+    updateBarVisibilityForWorkspace: *const fn (u8) void,
     toggleBarSegmentAnchor: *const fn () void,
     chromeToggleOverlay: *const fn () void,
 };
