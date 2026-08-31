@@ -44,8 +44,9 @@ pub fn scrollingActive() bool {
 
 /// Advances the marquee by the time elapsed since the previous call and
 /// returns the SUB-PIXEL pixel offset the text should be drawn at (0 is the
-/// cell's left edge; grows unbounded only within one wrap cycle). Returns 0
-/// and deactivates when disabled or the text fits its slot.
+/// title's head at its resting position, which the title segment anchors at
+/// the padded text start; grows unbounded only within one wrap cycle). Returns
+/// 0 and deactivates when disabled or the text fits its slot.
 ///
 /// Call at most once per rendered frame for the focused cell (the split-view
 /// path calls it only for the focused window's segment). `now_ms` is any

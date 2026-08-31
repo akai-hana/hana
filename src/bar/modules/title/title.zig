@@ -182,7 +182,9 @@ fn drawMarqueeCell(
         return;
     }
     const cycle: f32 = @as(f32, @floatFromInt(text_w)) + @as(f32, carousel.gap_px);
-    const x0: f64 = @as(f64, @floatFromInt(geom.seg_x)) - off;
+    // Anchor the scroll at the padded text start (same spot static mode uses),
+    // so enabling the carousel continues seamlessly from where the head sat.
+    const x0: f64 = @as(f64, @floatFromInt(geom.text_x)) - off;
     try ctx.dc.drawTextScrolled(geom.seg_x, geom.seg_w, baseline_y, .{ x0, x0 + cycle }, txt, fg);
 }
 
