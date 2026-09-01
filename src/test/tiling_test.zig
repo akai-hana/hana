@@ -344,6 +344,34 @@ test "T29 hints applied at emit" {
     try expectP(&out, 0, 11, 48, 48, 700, 500, true);
 }
 
+// T29b - horizontal geometry enforcement on the master-slave axis: a slave
+// that declares a small max_width (e.g. a dialog) shrinks the stack column to
+// its natural width and the master absorbs the freed horizontal space, so the
+// dialog no longer leaves a dead gap beside it. Mirrors tileColumn's vertical
+// max_height capping, on the width axis.
+test "T29b master swallows freed space from a narrow dialog slave" {
+    var fx: Fixture = undefined;
+    fx.init(&.{ 11, 12 }, stdWa());
+    defer fx.deinit();
+
+    // Window 12 (the stack slave) declares a small max_width. Re-materialize
+    // the hint snapshot into the buffer, exactly as sync does per retile.
+    fx.m.store.getPtr(12).?.size_hints = .{ .max_width = 200 };
+    fx.hint_buf[1] = fx.m.store.getPtr(12).?.size_hints;
+
+    var out: List = .{};
+    tiling.compute(K_MASTER, tuned(&fx), &out);
+
+    try testing.expectEqual(@as(usize, 2), out.len);
+    // Raw stack pane = 800 - (0.5*800 = 400) = 400; natural width for the
+    // 200-wide dialog = 200 + (gap/2 4 + gap 8 + 2*border 4 = 16) = 216,
+    // which is < 400, so the stack shrinks to 216 and master grows to 584.
+    // master: x=8, inner=shrink(584, 12+4=16)=568, h=580.
+    try expectP(&out, 0, 11, 8, 8, 568, 580, true);
+    // stack_x = master_w = 584; x=584+4=588, inner=shrink(216,16)=200.
+    try expectP(&out, 1, 12, 588, 8, 200, 580, true);
+}
+
 // T30 - purity: compute twice yields identical output and mutates nothing.
 test "T30 deterministic and non-mutating" {
     var fx: Fixture = undefined;

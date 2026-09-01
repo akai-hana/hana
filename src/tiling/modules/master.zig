@@ -54,12 +54,26 @@ pub fn compute(v: tiling.View, out: *tiling.List) void {
     const stack_n: u16 = @intCast(n - master_n);
 
     // When no stack exists the master pane takes the full width.
-    const master_w: u16 = if (stack_n > 0)
+    const master_w_frac: u16 = if (stack_n > 0)
         @intFromFloat(@round(@as(f32, @floatFromInt(screen_w)) * v.params.primary_width))
     else
         screen_w;
 
+    // Horizontal geometry enforcement on the master-slave axis -- the
+    // counterpart to tileColumn's per-window max_height capping. The stack
+    // pane only needs as much width as its widest bounded slave declares
+    // (max_width), floored to one usable window. When that natural width is
+    // narrower than the fraction-allocated stack, the slave column shrinks to
+    // it and the master absorbs the freed horizontal space. A dialog-sized
+    // slave (small max_width) thus no longer leaves a dead gap beside it; the
+    // no-geometry master swallows that space instead.
     const is_primary_on_right = v.env.primary_on_right;
+    const stack_pane_w: u16 = screen_w -| master_w_frac;
+    const natural_stack_w: u16 = minStackWidth(&v, windows[master_n..], m, min_dim);
+    const stack_w: u16 =
+        if (natural_stack_w > 0 and natural_stack_w < stack_pane_w) natural_stack_w else stack_pane_w;
+    const master_w: u16 = screen_w -| stack_w;
+
     const master_x: u16 = if (is_primary_on_right) screen_w -| master_w else 0;
 
     // The master column gets a full gap on its screen edge and a half-gap
@@ -76,7 +90,7 @@ pub fn compute(v: tiling.View, out: *tiling.List) void {
     if (stack_n == 0) return;
 
     const stack_x: u16 = if (is_primary_on_right) 0 else master_w;
-    tileStack(&v, out, windows[master_n..], stack_x, tiling.waY(&v), screen_w -| master_w, screen_h, m, StackBoost.fromBalance(v.params.secondary_balance), min_dim);
+    tileStack(&v, out, windows[master_n..], stack_x, tiling.waY(&v), stack_w, screen_h, m, StackBoost.fromBalance(v.params.secondary_balance), min_dim);
 }
 
 /// Tile a vertical column of `windows` at a fixed x with a fixed content
@@ -275,6 +289,33 @@ inline fn windowWeight(i: u16, count: u16, boost: StackBoost) f32 {
 /// hints entry.
 inline fn windowMaxHeight(v: *const tiling.View, win: model.WindowId) u16 {
     return v.hints.forWin(win).max_height;
+}
+
+/// Minimum horizontal width the stack pane needs: the widest bounded slave's
+/// declared max_width, floored to one usable min_dim window, plus the column's
+/// shared gap/border margins. Windows with no max_width are unbounded and
+/// impose no floor. Returns 0 when no slave is bounded -- the sentinel for
+/// "no constraint", so compute() leaves the fraction-allocated stack width
+/// untouched. This is the horizontal counterpart to the max_height capping in
+/// distributeStackHeightsWeighted: it lets the slave column shrink to its
+/// natural width so a small (e.g. dialog) slave no longer leaves a dead
+/// horizontal gap sitting beside it.
+fn minStackWidth(
+    v: *const tiling.View,
+    windows: []const model.WindowId,
+    m: utils.Margins,
+    min_dim: u16,
+) u16 {
+    var widest_bounded: u16 = 0;
+    for (windows) |win| {
+        const max_w = v.hints.forWin(win).max_width;
+        if (max_w == 0) continue;
+        widest_bounded = @max(widest_bounded, @max(min_dim, max_w));
+    }
+    if (widest_bounded == 0) return 0;
+    // Reverse of tileStack's single-column stack_inner_w shrink: pane width
+    // = content + (stack half-gap + shared gap + doubled border).
+    return widest_bounded +| (m.gap / 2 +| m.gap +| 2 *| m.border);
 }
 
 /// Tile the stack pane, spilling into a column-major overflow grid when the

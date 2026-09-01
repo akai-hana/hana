@@ -329,17 +329,15 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !types.Config {
     return cfg;
 }
 
-/// Builds the built-in default Config: every scalar knob comes from
-/// schema.applyDefaults (the one table; schema_test.zig pins it to
-/// types.Config's field initializers), plus heap-dup'd non-scalar seed data
-/// so deinit can free every owned field unconditionally, and one `layouts`
-/// entry so the layout cycle always has something to rotate. OOM propagates;
-/// the errdefer tears down the partial Config, never leaving string literals
-/// for deinit to free.
+/// Builds the built-in default Config: every scalar knob seeds from
+/// types.Config's field initializers (the single source of truth), plus
+/// heap-dup'd non-scalar seed data so deinit can free every owned field
+/// unconditionally, and one `layouts` entry so the layout cycle always has
+/// something to rotate. OOM propagates; the errdefer tears down the partial
+/// Config, never leaving string literals for deinit to free.
 fn getDefaultConfig(allocator: std.mem.Allocator) !types.Config {
     var cfg: types.Config = .{};
     errdefer cfg.deinit(allocator);
-    schema.applyDefaults(&cfg);
     // Canonical default name: it resolves to the "master" module at seed
     // time; every stored name is canonical.
     const default_layout = try allocator.dupe(u8, "master");

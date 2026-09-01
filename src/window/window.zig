@@ -110,7 +110,7 @@ pub fn markBordersFlushed() void {
 pub fn getGeometry(conn: core.Connection, win: u32) ?utils.Rect {
     const reply = xcb.xcb_get_geometry_reply(conn, xcb.xcb_get_geometry(conn, win), null) orelse return null;
     defer std.c.free(reply);
-    return utils.rectFromXcb(reply);
+    return utils.rectFromXcb(reply, true);
 }
 
 // ICCCM focus property cache
@@ -1092,16 +1092,6 @@ fn sendConfigureNotify(win: u32, geom: utils.Rect) void {
     _ = xcb.xcb_send_event(core.getState().conn, 0, win, xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY, @ptrCast(&ev));
 }
 
-fn geometryFromXcbReply(reply: *xcb.xcb_get_geometry_reply_t) utils.Rect {
-    return .{
-        .x = reply.*.x,
-        .y = reply.*.y,
-        .width = reply.*.width,
-        .height = reply.*.height,
-        .border_width = reply.*.border_width,
-    };
-}
-
 /// Resolve the window's current geometry, cheapest source first:
 ///
 ///   1. Tiling cache: zero round-trips (always current after a retile).
@@ -1141,7 +1131,7 @@ fn resolveConfigureGeometry(win: u32) ?utils.Rect {
         null,
     ) orelse return null;
     defer std.c.free(reply);
-    return geometryFromXcbReply(reply);
+    return utils.rectFromXcb(reply, true);
 }
 
 fn sendSyntheticConfigureNotify(win: u32) void {
