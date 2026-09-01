@@ -42,10 +42,6 @@ const utils = @import("utils");
 const constants = @import("constants");
 const build_options = @import("build_options");
 const model = @import("model");
-// The per-module coverage seam (who owns the screen per ws) is iterated via
-// the build-generated registry: a tree without a coverage module simply has
-// no entry, so the loop below no-ops.
-const window_mods = @import("window_modules").modules;
 
 /// When tiling is absent, provide a compute stub so the rest of sync
 /// compiles. The interchange TYPES (View/List/Placement/Env/HintsView/
@@ -308,19 +304,10 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
     // STEP 1: wa := workArea(ctx) (screen minus bar).
     const wa = ctx.workarea;
 
-    // STEP 2: coverage winner scan. Delegate to the module registry's coverageOn
-    // seam (fullscreen owns the screen claim): parked windows are excluded by
-    // the modules themselves (minimize-from-fullscreen re-parks the record, so
-    // it is not an occupant). At most one module claims per workspace.
-    var fs_win: ?model.WindowId = null;
-    for (window_mods) |mod| {
-        if (mod.coverageOn) |f| {
-            if (f(m, m.current)) |w| {
-                fs_win = w;
-                break;
-            }
-        }
-    }
+    // STEP 2: coverage winner scan. The core model helper (coveringOccupantOnWs)
+    // resolves which covering window owns the screen on the current workspace,
+    // replacing the former per-module registry enumeration.
+    const fs_win: ?model.WindowId = model.coveringOccupantOnWs(m, m.current);
 
     // STEP 3 (else branch): run layout.compute over the shown workspace.
     var order_buf: [model.store_capacity]model.WindowId = undefined;
@@ -409,70 +396,12 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
         const gop = sentGetOrPut(win) catch null;
         const ledger = (if (gop) |g| g.value_ptr.* else SentEntry{});
 
-        // Desire, computed inline below.
-        var rect: utils.Rect = tiling.parked_rect;
-        var bw: u16 = ctx.cfg_bw;
-        var pixel: u32 = ctx.color_of(win, m);
-        var parked = false;
-
-        if (e.presence == .parked) {
-            bw = 0;
-            pixel = 0;
-            parked = true;
-        } else if (fs_win != null) {
-            if (win == fs_win.?) {
-                rect = ctx.screen;
-                bw = 0;
-                pixel = 0;
-            } else {
-                // Parked: rect irrelevant.
-                parked = true;
-            }
-        } else if (e.presence == .covering) {
-            // Fullscreen-carrying window NOT claimed by the coverage module
-            // for this workspace (its base isn't visible / its rec targets
-            // another ws): parked, matching the coverage scan that skipped it
-            // and the covering-parked model arm.
-            bw = 0;
-            pixel = 0;
-            parked = true;
-        } else switch (e.anchor) {
-            .floating => |r| {
-                rect = r;
-                parked = !model.visibleOn(m, win, m.current);
-            },
-            .tiled => {
-                if (findPlacement(&placements, win)) |p| {
-                    rect = p.rect;
-                    parked = !p.visible;
-                } else if (model.visibleOn(m, win, m.current)) {
-                    // Multi-tagged window whose home list isn't the shown
-                    // ws: never hidden (no layout owns it here), so it stays
-                    // at its previous real geometry, which is precisely the
-                    // ledger's record of what we last sent.
-                    // Park only when nothing was ever sent (first sight /
-                    // registered offscreen).
-                    const prev = ledger;
-                    if (!prev.has_rect) {
-                        bw = 0;
-                        pixel = 0;
-                        parked = true;
-                    } else {
-                        rect = prev.rect;
-                    }
-                } else {
-                    bw = 0;
-                    pixel = 0;
-                    parked = true;
-                }
-            },
-        }
-        // Off-ws windows are parked by construction above (no placement /
-        // visibleOn false), which is exactly "mask lacks bit(shown)".
-
-        // Fallback winner: first non-parked desire in store order.
-        if (winner == null and !parked) winner = win;
-        const is_winner = winner != null and winner.? == win;
+        const desire = computeDesire(m, ctx, e, win, fs_win, &placements, &winner, ledger);
+        const rect = desire.rect;
+        const bw = desire.bw;
+        const pixel = desire.pixel;
+        const parked = desire.parked;
+        const is_winner = desire.is_winner;
 
         if (parked) {
             // ONE merged request (X-offscreen + BELOW). Idempotent by nature,
@@ -556,6 +485,99 @@ pub fn truthRect(m: *const model.Model, win: model.WindowId) ?utils.Rect {
     const e = m.store.get(win) orelse return null;
     if (e.presence == .present and e.anchor == .floating) return e.anchor.floating;
     return lastRectFor(win);
+}
+
+const Desire = struct {
+    rect: utils.Rect,
+    bw: u16,
+    pixel: u32,
+    parked: bool,
+    is_winner: bool,
+};
+
+/// Compute the desired state for a single store entry. The `winner` pointer
+/// is mutated when this is the first non-parked entry in store order (fallback
+/// winner election). `ledger` is the pre-send record for orphan keep-last.
+fn computeDesire(
+    m: *const model.Model,
+    ctx: *Ctx,
+    e: *const model.Entry,
+    win: model.WindowId,
+    fs_win: ?model.WindowId,
+    placements: *const tiling.List,
+    winner: *?model.WindowId,
+    ledger: SentEntry,
+) Desire {
+    var rect: utils.Rect = tiling.parked_rect;
+    var bw: u16 = ctx.cfg_bw;
+    var pixel: u32 = ctx.color_of(win, m);
+    var parked = false;
+
+    if (e.presence == .parked) {
+        bw = 0;
+        pixel = 0;
+        parked = true;
+    } else if (fs_win != null) {
+        if (win == fs_win.?) {
+            rect = ctx.screen;
+            bw = 0;
+            pixel = 0;
+        } else {
+            // Parked: rect irrelevant.
+            parked = true;
+        }
+    } else if (e.presence == .covering) {
+        // Fullscreen-carrying window NOT claimed by the coverage module
+        // for this workspace (its base isn't visible / its rec targets
+        // another ws): parked, matching the coverage scan that skipped it
+        // and the covering-parked model arm.
+        bw = 0;
+        pixel = 0;
+        parked = true;
+    } else switch (e.anchor) {
+        .floating => |r| {
+            rect = r;
+            parked = !model.visibleOn(m, win, m.current);
+        },
+        .tiled => {
+            if (findPlacement(placements, win)) |p| {
+                rect = p.rect;
+                parked = !p.visible;
+            } else if (model.visibleOn(m, win, m.current)) {
+                // Multi-tagged window whose home list isn't the shown
+                // ws: never hidden (no layout owns it here), so it stays
+                // at its previous real geometry, which is precisely the
+                // ledger's record of what we last sent.
+                // Park only when nothing was ever sent (first sight /
+                // registered offscreen).
+                if (!ledger.has_rect) {
+                    bw = 0;
+                    pixel = 0;
+                    parked = true;
+                } else {
+                    rect = ledger.rect;
+                }
+            } else {
+                bw = 0;
+                pixel = 0;
+                parked = true;
+            }
+        },
+    }
+    // Off-ws windows are parked by construction above (no placement /
+    // visibleOn false), which is exactly "mask lacks bit(shown)".
+
+    // Fallback winner: first non-parked desire in store order.
+    if (winner.* == null and !parked) winner.* = win;
+    const is_winner = winner.* != null and winner.*.? == win;
+
+    return .{
+        .rect = rect,
+        .bw = bw,
+        .pixel = pixel,
+        .parked = parked,
+        .is_winner = is_winner,
+    };
 }
 
 fn findPlacement(placements: *const tiling.List, win: model.WindowId) ?tiling.Placement {

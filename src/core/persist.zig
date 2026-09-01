@@ -46,12 +46,17 @@ const MAX_WS = constants.max_workspaces;
 /// `presence` restores visibility semantics across the re-exec (parked /
 /// covering windows are re-hidden by the adopting module via their `ext`
 /// blob); `ext` is the opaque feature-owned serialized blob (null when no
-/// feature claimed it).
+/// feature claimed it). `covering_ws` is the model's core covering intent,
+/// persisted directly on the record (independent of module blobs) so a
+/// window minimized-from-fullscreen — whose fullscreen blob is deliberately
+/// absent (parked ⇒ minimize owns the slot) — still restores its covering
+/// identity across the re-exec without needing any optional subsystem.
 pub const WindowRecord = struct {
     win: u32,
     mask: model.Mask,
     anchor: model.BaseMode,
     presence: model.Presence = .present,
+    covering_ws: ?model.WSId = null,
     ext: ?[]const u8 = null,
 };
 
@@ -185,6 +190,7 @@ pub fn save(allocator: std.mem.Allocator, m: *const model.Model, path: []const u
             .mask = item.val.mask,
             .anchor = item.val.anchor,
             .presence = item.val.presence,
+            .covering_ws = item.val.covering_ws,
             .ext = blob,
         };
     }
@@ -411,6 +417,24 @@ fn resumableDefaultKind() u8 {
 /// tiled membership and copies scalars.
 pub fn applyModelLevel(m: *model.Model) void {
     const f = loaded() orelse return;
+
+    // Restore the model-authoritative covering intent (presence + covering_ws)
+    // from the window records, independent of module blobs. The covering
+    // window's fullscreen blob is absent whenever it was parked at save time
+    // (parked ⇒ minimize owns the slot, so the fullscreen module refused to
+    // serialize and the module did not reconstruct its record during adoption).
+    // Persisting `covering_ws` directly on the model makes the covering
+    // identity survive that gap: the model entry stays the single authority on
+    // the capture target even when no module blob existed. Idempotent with what
+    // the fullscreen module's deserializeWindow already applied (same values);
+    // a `.parked` record that still carries covering_ws (minimized-from-
+    // fullscreen) keeps presence intact while restoring the capture target.
+    for (f.windows) |r| {
+        if (r.covering_ws == null and r.presence != .covering) continue;
+        const e = m.store.getPtr(r.win) orelse continue;
+        if (r.presence == .covering) e.presence = .covering;
+        if (r.covering_ws) |cws| e.covering_ws = cws;
+    }
 
     if (f.current < MAX_WS) m.current = f.current;
     m.all_view_active = f.all_view_active;

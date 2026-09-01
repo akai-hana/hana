@@ -213,6 +213,17 @@ Appendix B maps all sixteen audit findings onto these flaws.
 ## 6. Principles and invariants
 
 - **P1 Model is truth.** One authoritative structure for management state.
+  **Effected as "core intents, open addons"**: the model hosts the orthogonal
+  CORE INTENTS that cross-cut features — `presence` (`present`/`parked`/
+  `covering`), `covering_ws`, `mask`, `anchor`, `home_ws` — rather than a
+  feature `Mode` union. Optional subsystems are PRODUCERS that write their
+  cross-cutting facts into these intent fields; core layers (sync, bar,
+  persistence) read ONLY the model's core intents, never a subsystem's private
+  store. This is what makes a removed subsystem leave no residue: it simply
+  stops producing its intent fields' values, and core never names the feature.
+  Per-feature *identity* (minimize slot/seq, the pre-fullscreen anchor, ghost
+  bookkeeping) stays privately in the open addon, where core never reads it.
+  (H8 refinement; see §7.2 and `docs/rework-report.md`.)
 - **P2 Single writer.** Only sync sends geometry/border/map/stack requests;
   recording lives inside it.
 - **P3 Actions are pure** Model→Model functions; zero XCB.
@@ -255,16 +266,34 @@ Layer rule (build-enforced later, §13):
 
 ### 7.2 Model types (transcribe from Appendix E.2)
 
+**ACTUAL DESIGN (H8 refinement):** the plan's `Mode = union(enum){ base,
+fullscreen, minimized }` was NOT implemented. Instead the model hosts the
+orthogonal core intents the features write to:
+
 - `BaseMode = union(enum){ tiled, floating: utils.Rect }`
-- `Mode = union(enum){ base: BaseMode, fullscreen: struct{ws: WSId, base: BaseMode}, minimized: struct{base: BaseMode, fullscreen_saved: ?utils.Rect} }`
-- `Entry = struct{ mask: Mask, mode: Mode, size_hints: SizeHints = .{} }`
-- `WsState = struct{ tiled_order: List(WindowId), params: LayoutParams }`
-- `Model = struct{ store: Store, ws: [MAX_WS]WsState, current: WSId, focused: ?WindowId }`
+- `Presence = enum{ present, parked, covering }` — an open visibility PATTERN
+  (not a feature: the model never names fullscreen or minimize)
+- `Entry = struct{ mask, anchor: BaseMode, presence, covering_ws, home_ws,
+  size_hints }` — `covering_ws` is the core covering intent (workspace a
+  covering window's capture anchors to)
+- `WsState = struct{ tiled_order: List(WindowId), focus_mru, params }`
+- `Model = struct{ store, ws: [MAX_WS]WsState, current, focused,
+  all_view_active }`
+
+Why intents, not a `Mode` union: a `Mode` union would force the model to name
+every feature and to carry feature-specific payloads (a fullscreen ws+base, a
+minimized prev+slot), coupling core to the addons and leaving residue when a
+subsystem is removed. Intents are the opposite: the model holds only the
+cross-cutting facts any feature might need to express (a window is presented,
+hidden, or covering; if covering, on which ws), and optional subsystems produce
+those fields' values. A removed subsystem simply stops producing its intents.
+Per-feature identity stays in the open addon (`g_recs` for fullscreen's
+pre-fullscreen anchor + ghost tracking; minimize's slot/seq).
 
 Decisions already made (see also Appendix C): tiled membership is an ordered
 list per workspace (kills filtered-index arithmetic); minimized remembers its
-base mode + optional fullscreen rect (kills the float/tiled guess); fullscreen
-is a window mode with ws tag (kills the per-ws record table); mask orthogonal
+slot (kills the float/tiled guess); fullscreen is expressed by `presence ==
+.covering` + `covering_ws` (kills a per-ws record table in core); mask orthogonal
 to mode; size hints are client-authored input data in the model.
 
 ### 7.3 Layout engine contract
@@ -672,6 +701,14 @@ pub fn Store(comptime K: type, comptime V: type, comptime capacity: usize) type 
 
 ### E.2 `src/model/model.zig` — types block
 
+> **SUPERSEDED (H8 refinement, see §7.2 and `docs/rework-report.md`):** the
+> `Mode` union below was an earlier design. The shipped model does NOT use it.
+> The actual `model.zig` hosts orthogonal core intents (`Presence`, `mask`,
+> `anchor`, `covering_ws`, `home_ws`) instead of a feature `Mode` union, so the
+> model never names a feature and a removed subsystem leaves no residue. Read
+> the live `src/model/model.zig` for the authoritative types. The block below
+> is retained verbatim for historical reference.
+
 ```zig
 //! INVARIANT(P1): single source of truth for management state.
 //! Layer rule: imports are std + utils + constants ONLY. No xcb.
@@ -732,6 +769,7 @@ pub const BaseMode = union(enum) {
 /// Contract refinement vs §7.2 (changelog 2026-08-21): minimized stores the
 /// ENTIRE previous mode plus its tiled slot, which preserves BC08 exactly
 /// (restore pops straight back into fullscreen when that was prior).
+/// SUPERSEDED by H8: replaced by `presence` + `covering_ws` core intents.
 pub const Mode = union(enum) {
     base: BaseMode,
     fullscreen: struct { ws: WSId, base: BaseMode },
@@ -1295,7 +1333,7 @@ pub inline fn reconcileNow() void { /* WP5 */ }
 | 2026-08-22 | WP7: scripts/check-layers.sh per §13 wired as zig build check dependency; wire + grab allowlist files document every surviving out-of-sync send with rationale | rule enforcement: sync-owned wire, grab, xcb-free model/layout, zig fmt |
 | 2026-08-22 | Dead-code sweep removed 10 transitively-orphaned legacy fns (minimize partition/restore helpers, workspaces all-view exits, tiling swap core, scroll takePrevFocused) | fixpoint removal after entry-arm deletions |
 | 2026-08-22 | ARCHITECTURE.md written from §6–§7: layers, data flow, flag, allowlists, BC gates | WP7 docs deliverable |
-| 2026-08-22 | WP8: docs/rework-report.md — 16-finding audit with verify-at pointers, request-count budget table (structural analysis + deferred harness measurements), residual risk list | final deliverable; measured S01–S26 numbers need live Xvfb harness |
+| 2026-08-22 | WP8: docs/rework-report.md — 16-finding audit with verify-at pointers, request-count budget table (structural analysis + deferred harness measurements), residual risk list | final deliverable; measured S01–S26 numbers need live Xvfb harness. The file itself was **created** in the H8 work (it did not exist despite this changelog reference) — see docs/rework-report.md |
 | 2026-08-22 | Harness replay on live Xvfb: ALL 15 scenarios byte-identical vs WP0 goldens with the model pipeline DEFAULT-ON (S01–S15 incl. BC14 hard gate) | measured M4 confirmation; supersedes ±10% budget estimates; report updated |
 | 2026-08-22 | P0-4 recycled-XID fix: sync.forget(win) evicts LastSent on unmanage | reused XIDs stayed unmapped because stale LastSent diffed away every field; actions.unmanage calls forget after model unregister |
 | 2026-08-22 | mapRequest focus reorder: setFocus AFTER reconcileUnderGrabNow | SetInputFocus before map → BadMatch (code=8 major=42); focus-after-map |
@@ -1384,3 +1422,28 @@ pub inline fn reconcileNow() void { /* WP5 */ }
 - Scrolling cells clip against the WHOLE segment box and start flush at its
   left edge -- no padding inset, text exits/enters exactly at the edges.
 - Default speed raised 30 -> 125 px/s (the legacy carousel's default).
+
+## Changelog 2026-09-01 (H8: core intents, open addons)
+
+Resolves the deferred gap in §6 P1 / §7.2 / Appendix E.2 where a `Mode` union
+was still prescribed. The design is now *"core intents, open addons"*:
+
+- The model hosts **orthogonal CORE INTENTS** (`presence`, `covering_ws`,
+  `mask`, `anchor`, `home_ws`) — never a feature `Mode` union — so optional
+  subsystems leave no residue when removed.
+- `model.Entry.covering_ws` is a new core covering intent (the workspace a
+  covering window's capture anchors to, present iff `presence == ..covering`),
+  and `model.coveringOccupantOnWs(m, ws)` is a pure core helper resolving the
+  screen owner against only core intents.
+- `fullscreen.zig` now WRITES `covering_ws` (a producer of the core intent), and
+  `fullscreenWsOf` READS the model intent (removing the dual read-authority
+  that previously read `g_recs[].ws`); the module's `g_recs[].ws` is kept in
+  lockstep as feature identity.
+- `persist.zig` persists `covering_ws` directly on the window record (version 4,
+  backward-compatible; a missing field parses to null), so a window
+  minimized-from-fullscreen — whose fullscreen blob is absent (parked ⇒
+  minimize owns the slot) — restores its covering identity across a re-exec.
+- `sync.zig`/`bar.zig` (parallel) now read `model.coveringOccupantOnWs` rather
+  than the per-module `coverageOn` registry scan.
+- Docs reconciled and `docs/rework-report.md` created (it was referenced but
+  missing). See docs/rework-report.md for the full write-up.

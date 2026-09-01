@@ -78,7 +78,12 @@ Semantics, verbatim:
   geometry** for the claim — that is sync's job (§6, "only sync sends").
 - State that must be observable (e.g. "which ws is this window fullscreen
   on") is answered by the module's own query fns, which core calls through
-  the gated-import rule (§5) — never through this seam.
+  the gated-import rule (§5) — never through this seam. Since H8, these
+  query fns read back the model's core intent they wrote: fullscreen's
+  `fullscreenWsOf` returns `Entry.covering_ws`, and core's cross-cutting
+  readers (`sync`, `bar`) use the pure `model.coveringOccupantOnWs` helper
+  instead of enumerating registries — so the module stays a producer of core
+  intents, not a second authority.
 
 ### 1.4 Session persistence seams
 
@@ -243,9 +248,16 @@ Rules, verbatim:
 3. **Capacity checks precede every mutation.** A full store must refuse
    cleanly (return `false`/`error.CapacityFull`) leaving the model and your
    store byte-identical (model_test T17). A refusal must never half-mutate.
-4. **The model entry is the source of truth; your store is derived state.**
-   Read the model to serialize (presence-driven ownership) and to decide
-   coverage. Never write model fields your feature doesn't own.
+4. **The model entry is the source of truth for CORE INTENTS; your store is
+   derived state.** "Derived state" is true of the cross-cutting facts core
+   reads: a module must WRITE its cross-cutting facts into the model's intent
+   fields (`presence`, `covering_ws`, `mask`, `anchor`, `home_ws`) and READ
+   them back from the model, never keeping a divergent second authority. (E.g.
+   fullscreen writes `covering_ws` on toggle and reads it back via
+   `fullscreenWsOf`; `g_recs[].ws` stays in lockstep only as feature identity.)
+   Your module's private store is allowed to hold ONLY per-feature identity
+   that core never reads (minimize slot/seq, the pre-fullscreen anchor, ghost
+   bookkeeping). Never write model fields your feature doesn't own.
 5. **Presence is your API surface.** `Entry.presence` is
    `union(enum){ present, parked, covering }`:
    - `present` — visible, normal. default.

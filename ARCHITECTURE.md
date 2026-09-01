@@ -6,17 +6,26 @@ shipped shape; when the two disagree, the plan wins and this file is stale.
 ## Layers (enforced by `zig build check` through `dev/scripts/check-layers.sh`)
 
 ```
-model  ← std + utils only, no xcb          src/core/model/model.zig
+model  ← std + utils only, no xcb          src/model/model.zig
 tiling ← model types only, pure            src/tiling/{engine,hints,layouts/*}.zig
 sync   ← model + tiling; ONLY writer       src/core/sync/sync.zig (+ wire.zig)
 actions← model transitions, zero XCB       src/window/actions.zig
 entry points ← actions + sync              core/, window/, bar/ (src/main.zig)
 ```
 
-- **P1** The model (`src/core/model/model.zig`) is the single source of truth:
-  per-ws `tiled_order`, masks (multi-tag), `BaseMode` (tiled/floating rect),
-  fullscreen records, minimize records with LIFO/FIFO sequence numbers,
-  focus, all-view flag.
+- **P1** The model (`src/model/model.zig`) is the single source of truth
+  for the **core intents** that cross-cut features: per-ws `tiled_order`, masks
+  (multi-tag), `BaseMode` (tiled/floating rect), `presence` (present/parked/
+  covering), `covering_ws` (a covering window's capture target), `home_ws`,
+  focus, all-view flag. The model is **authoritative for these core intents**;
+  it does NOT hold feature names or feature payloads.
+  Per-feature *identity* — minimize slot/sequence, fullscreen's pre-fullscreen
+  anchor + ghost bookkeeping — lives in the open addon modules
+  (`src/window/modules/*.zig`) as a private store that core never reads. This is
+  by design ("open addons, trace-free removal"): a feature writes its
+  cross-cutting facts into the model's intent fields and reads them back from
+  the model, so deleting the addon simply stops it producing those fields'
+  values. Core layers (sync, bar, persistence) read ONLY the core intents.
 - **P2** Only `src/core/sync/` sends geometry/border/map/stack requests. Reconcile
   runs UNCONDITIONAL APPLY: every pass computes the desired state for every
   stored window and sends it (parked windows get one merged park request;

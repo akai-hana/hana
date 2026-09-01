@@ -71,10 +71,19 @@ against them.
 | S19 fullscreen-toggle | ND-14: ConfigureRequest decision paths around fullscreen |
 | S20 layout-storm | SW-9/S14F10: layout cycling + master-count clamp extremes |
 | S21 hints-resize | SW-9/S14F10: hint clamp on fixed-size clients |
-| S22 tagmove-minimized | BC12: minimized record restore target follows the new ws |
-| S23 crossws-restore | BC10: cross-ws specific restore leaves current ws undisturbed |
+
+Known coverage gaps (contracts with no deterministic keybind-expressible
+scenario): BC10 (cross-ws *specific* restore — `unminimize_*` restores to the
+current ws, not a window's home), BC12 (tag-move of a minimized window —
+`move_to_workspace` targets the focused window), BC19 (pin-toggle off), BC24
+(bar non-blocking under grabs), BC25 (focus <= 1 round-trip), BC26 (capacity
+refusal). Most need a new action/binding or live X timing; revisit when such
+a binding exists.
 
 Determinism notes: scenarios assert *shape* (rects, stacking, parked
 positions, border widths, EWMH flags) rather than pixel content. The
 normalizer maps window ids to tokens by first appearance, so creation order
-must stay deterministic; keep spawns ordered inside scenario scripts.
+must stay deterministic; keep spawns ordered inside scenario scripts. Do NOT
+add a scenario whose `dump` captures two or more parked windows with identical
+geometry (`-30000`) that live on *different* workspaces — their X-stacking
+order is nondeterministic and will make `--compare` flaky (see S23, reverted).
