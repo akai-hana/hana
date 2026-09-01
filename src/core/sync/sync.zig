@@ -8,6 +8,7 @@
 //!   Sink.border_*    ~ borders.applyWidth + borders.apply + setBorderPixel
 //!   Sink.park        ~ X-offscreen + BELOW configure_window in ONE request
 //!   Sink.stack_only  ~ utils.raiseWindow / restack helpers used today
+//!   Sink.set_ewmh_fullscreen ~ xcb_change_property for _NET_WM_STATE_FULLSCREEN
 //!   Sink.flush       ~ conn.flush() (caller owns timing)
 //!
 //! Scroll viewport caller duties (snap-right-on-new, clamp, prev_count update)
@@ -79,6 +80,7 @@ pub const Sink = struct {
         border_pixel: *const fn (*anyopaque, model.WindowId, u32) void,
         park: *const fn (*anyopaque, model.WindowId) void,
         stack_only: *const fn (*anyopaque, model.WindowId, Stack) void,
+        set_ewmh_fullscreen: *const fn (*anyopaque, model.WindowId, u32, u32, bool) void,
         flush: *const fn (*anyopaque) void,
         grab_server: *const fn (*anyopaque) void,
         ungrab_and_flush: *const fn (*anyopaque) void,
@@ -101,6 +103,9 @@ pub const Sink = struct {
     }
     pub inline fn stackOnly(self: Sink, win: model.WindowId, s: Stack) void {
         self.vt.stack_only(self.ptr, win, s);
+    }
+    pub inline fn setEwmhFullscreen(self: Sink, win: model.WindowId, state_atom: u32, fs_atom: u32, is_fullscreen: bool) void {
+        self.vt.set_ewmh_fullscreen(self.ptr, win, state_atom, fs_atom, is_fullscreen);
     }
     pub inline fn flush(self: Sink) void {
         self.vt.flush(self.ptr);
@@ -136,6 +141,14 @@ pub const ReconcileOpts = struct { force_restack: bool = false };
 // model.Store because (1) it needs no iteration-order guarantees (unlike the
 // model, whose sorted-key order reconcile walks), and (2) the API surface
 // needed is minimal (get, put, remove, clear).
+//
+// The ledger's hottest operation is reconcile's one get-or-create per window
+// (every pass). A bare linear scan over the compact array is O(N) per window
+// = O(N^2) per pass, the dominant hot path. So sent_keys/sent_vals are backed
+// by a parallel open-addressing hash index (sent_index) mapping window-id ->
+// slot, giving amortized O(1) get/get-or-create. The compact arrays remain
+// the source of truth for iteration and swap-remove; sent_index is kept
+// consistent on every insert and every swap-remove (see sentSwapRemove).
 
 /// What we last sent per window; WRITE-ONLY bookkeeping whose three contract
 /// reads are documented in the header:
@@ -150,11 +163,20 @@ const SentEntry = struct {
     parked: bool = false,
 };
 
+const empty_mark: usize = std.math.maxInt(usize);
+const tomb_mark: usize = empty_mark - 1;
+
 pub const State = struct {
     /// Ledger of sent state (see SentEntry).
     sent_keys: [model.store_capacity]model.WindowId = undefined,
     sent_vals: [model.store_capacity]SentEntry = undefined,
     sent_count: usize = 0,
+    /// O(1) lookup index over the compact ledger: open-addressed hash (linear
+    /// probing) from window-id -> slot into sent_keys/sent_vals. A bucket is
+    /// EMPTY_MARK when free, TOMB_MARK after a removal (re-usable on insert),
+    /// otherwise the slot holding that window. Kept consistent with the
+    /// compact arrays on every insert and swap-remove.
+    sent_index: [model.store_capacity]usize = [_]usize{empty_mark} ** model.store_capacity,
 };
 
 /// Owned by the compositor process; re-init() on reconnect.
@@ -168,37 +190,102 @@ pub fn deinit() void {
     st = .{};
 }
 
-pub fn sentGet(win: model.WindowId) ?SentEntry {
-    for (0..st.sent_count) |i| {
-        if (st.sent_keys[i] == win) return st.sent_vals[i];
+fn bucketOf(win: model.WindowId) usize {
+    return @intCast(win % model.store_capacity);
+}
+
+/// Slot holding `win` in the compact arrays, or null when absent.
+fn sentFind(win: model.WindowId) ?usize {
+    const cap = model.store_capacity;
+    var h = bucketOf(win);
+    for (0..cap) |_| {
+        const v = st.sent_index[h];
+        if (v == empty_mark) return null;
+        if (v != tomb_mark and st.sent_keys[v] == win) return v;
+        h = (h + 1) % cap;
     }
     return null;
+}
+
+/// Record that `slot` now holds `win`. Call only when `win` has no entry.
+fn sentIndexInsert(win: model.WindowId, slot: usize) void {
+    const cap = model.store_capacity;
+    var h = bucketOf(win);
+    for (0..cap) |_| {
+        const v = st.sent_index[h];
+        if (v == empty_mark or v == tomb_mark) {
+            st.sent_index[h] = slot;
+            return;
+        }
+        h = (h + 1) % cap;
+    }
+    unreachable; // sentIndexInsert only runs below capacity; a bucket is free.
+}
+
+/// Tombstone the index bucket mapping `win` to `slot`.
+fn sentIndexRemove(win: model.WindowId, slot: usize) void {
+    const cap = model.store_capacity;
+    var h = bucketOf(win);
+    for (0..cap) |_| {
+        const v = st.sent_index[h];
+        if (v == empty_mark or v == tomb_mark) return;
+        if (v == slot and st.sent_keys[slot] == win) {
+            st.sent_index[h] = tomb_mark;
+            return;
+        }
+        h = (h + 1) % cap;
+    }
+}
+
+/// After a swap-remove relocated `win` from `old_slot` to `new_slot`, re-point
+/// its index bucket so lookups still land on the (now moved) compact entry.
+fn sentIndexMove(win: model.WindowId, old_slot: usize, new_slot: usize) void {
+    const cap = model.store_capacity;
+    var h = bucketOf(win);
+    for (0..cap) |_| {
+        const v = st.sent_index[h];
+        if (v == empty_mark or v == tomb_mark) unreachable;
+        if (v == old_slot and st.sent_keys[old_slot] == win) {
+            st.sent_index[h] = new_slot;
+            return;
+        }
+        h = (h + 1) % cap;
+    }
+    unreachable;
+}
+
+pub fn sentGet(win: model.WindowId) ?SentEntry {
+    const slot = sentFind(win) orelse return null;
+    return st.sent_vals[slot];
 }
 
 pub fn sentGetOrPut(win: model.WindowId) !struct {
     found_existing: bool,
     value_ptr: *SentEntry,
 } {
-    for (0..st.sent_count) |i| {
-        if (st.sent_keys[i] == win) return .{ .found_existing = true, .value_ptr = &st.sent_vals[i] };
+    if (sentFind(win)) |slot| {
+        return .{ .found_existing = true, .value_ptr = &st.sent_vals[slot] };
     }
     if (st.sent_count >= model.store_capacity) return error.SentLedgerFull;
     const idx = st.sent_count;
     st.sent_count += 1;
     st.sent_keys[idx] = win;
     st.sent_vals[idx] = .{};
+    sentIndexInsert(win, idx);
     return .{ .found_existing = false, .value_ptr = &st.sent_vals[idx] };
 }
 
 pub fn sentSwapRemove(win: model.WindowId) void {
-    for (0..st.sent_count) |i| {
-        if (st.sent_keys[i] == win) {
-            st.sent_count -= 1;
-            st.sent_keys[i] = st.sent_keys[st.sent_count];
-            st.sent_vals[i] = st.sent_vals[st.sent_count];
-            return;
-        }
+    const slot = sentFind(win) orelse return;
+    const last = st.sent_count - 1;
+    sentIndexRemove(win, slot);
+    if (slot != last) {
+        const moved = st.sent_keys[last];
+        st.sent_keys[slot] = moved;
+        st.sent_vals[slot] = st.sent_vals[last];
+        sentIndexMove(moved, last, slot);
     }
+    st.sent_count = last;
 }
 
 /// Drop a window's ledger record (X ids recycle: after a destroy, a new
@@ -433,6 +520,24 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
     }
 
     // DO NOT FLUSH HERE. Caller owns flushing.
+}
+
+/// Raise `win` to the top of the stack immediately, then flush. Used by
+/// floating drag-start, where the raise must be visible right away. The caller
+/// owns this invoke OUTSIDE any server grab (a flush under a grab would break
+/// batch atomicity); drag ticks afterward stay flushless (reconcileNow).
+pub fn raiseNow(ctx: *Ctx, win: model.WindowId) void {
+    ctx.sink.stackOnly(win, .above);
+    ctx.sink.flush();
+}
+
+/// Set or clear the EWMH _NET_WM_STATE_FULLSCREEN property on `win` via the
+/// sink. Queued only (no flush here): fullscreenToggle callers invoke this
+/// inside the enclosing grab, whose ungrabAndFlush lands it atomically with
+/// geometry. The EWMH atoms are resolved by the fullscreen module and passed
+/// through; the fullscreen module's XCB_ATOM_NONE guard already ran.
+pub fn setEwmhFullscreen(ctx: *Ctx, win: model.WindowId, state_atom: u32, fs_atom: u32, is_fullscreen: bool) void {
+    ctx.sink.setEwmhFullscreen(win, state_atom, fs_atom, is_fullscreen);
 }
 
 /// Pipeline: last visible geometry we sent to `win`, or null when never sent

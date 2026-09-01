@@ -113,7 +113,6 @@ pub fn moveWindowToWs(m: *model.Model, win: model.WindowId, ws: model.WSId) void
     if (build_options.has_minimize) {
         if (@import("minimize").isMinimized(m, win)) {
             e.mask = model.bit(ws); // record follows the move
-            return;
         }
     }
     // Fullscreen record follows the move; a destination owner drops this one

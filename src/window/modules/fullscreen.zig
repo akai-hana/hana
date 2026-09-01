@@ -324,22 +324,21 @@ pub fn deserializeWindow(win: u32, bytes: []const u8, ptr: *anyopaque) bool {
 // Protocol hooks (EWMH advertisement + deferred bar hide/show).
 // ---------------------------------------------------------------------------
 
-// Sets or clears the EWMH _NET_WM_STATE_FULLSCREEN property on `win`.
-// Guards on both EWMH atoms being valid; pub for actions.fullscreenToggleWindow,
-// keeping the advertisement protocol-side.
+// Sets or clears the EWMH _NET_WM_STATE_FULLSCREEN property on `win`. The
+// actual change_property write is routed through sync's sink (the ONLY writer
+// to X); the EWMH atoms stay resolved here and the write is queued inside the
+// enclosing grab (reconcileUnderGrabNowFullscreen), whose ungrabAndFlush lands
+// it atomically with geometry. Guards on both EWMH atoms being valid; pub for
+// actions.fullscreenToggleWindow, keeping the advertisement protocol-side.
 pub fn setEwmhFullscreenState(win: u32, is_fullscreen: bool) void {
     if (g_net_wm_state == xcb.XCB_ATOM_NONE or
         g_net_wm_state_fullscreen == xcb.XCB_ATOM_NONE) return;
-    const count: u32 = if (is_fullscreen) 1 else 0;
-    _ = xcb.xcb_change_property(
-        core.getState().conn,
-        xcb.XCB_PROP_MODE_REPLACE,
+    @import("sync").setEwmhFullscreen(
+        @import("pipeline").grabCtx(),
         win,
         g_net_wm_state,
-        xcb.XCB_ATOM_ATOM,
-        32,
-        count,
-        if (is_fullscreen) &g_net_wm_state_fullscreen else null,
+        g_net_wm_state_fullscreen,
+        is_fullscreen,
     );
 }
 

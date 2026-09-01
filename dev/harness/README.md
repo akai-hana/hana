@@ -6,6 +6,12 @@ synthetic input (`xdotool`), and records X-side truth (`xwininfo`, `xprop`)
 plus hana's own state dumps. Outputs are normalized (window IDs -> stable
 tokens, PIDs/times scrubbed) so runs are diffable.
 
+> **NOTE (goldens):** S02/S04/S05/S16 diverged from their recorded goldens
+> after the intentional **T36 close-fallback** behavior change. `--compare`
+> reports DIFF for these until their goldens are re-recorded (`./run-scenario.sh
+> --golden S02 S04 S05 S16`). This is expected, not a regression; see
+> `ARCHITECTURE.md` ("Behavioral gates") for details.
+
 ## Requirements
 
 | Tool      | Used for                        | Missing? |
@@ -59,6 +65,14 @@ against them.
 | S13 reload | BC20 |
 | S14 drag-snap | BC21 |
 | S15 monocle-focus | BC07, BC22 |
+| S16 close-respawn | P0-1: no registry leak on close (ghosts/phantom slots) |
+| S17 hover-focus | P0-2: EnterNotify focuses (registry resolves managed windows) |
+| S18 ewmh-fullscreen | P0-3: client-message `_NET_WM_STATE` fullscreen path |
+| S19 fullscreen-toggle | ND-14: ConfigureRequest decision paths around fullscreen |
+| S20 layout-storm | SW-9/S14F10: layout cycling + master-count clamp extremes |
+| S21 hints-resize | SW-9/S14F10: hint clamp on fixed-size clients |
+| S22 tagmove-minimized | BC12: minimized record restore target follows the new ws |
+| S23 crossws-restore | BC10: cross-ws specific restore leaves current ws undisturbed |
 
 Determinism notes: scenarios assert *shape* (rects, stacking, parked
 positions, border widths, EWMH flags) rather than pixel content. The

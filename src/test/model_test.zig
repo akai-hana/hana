@@ -1189,3 +1189,138 @@ test "T2E-3: fullscreen serialize/deserialize round-trip" {
     // A foreign-magic blob is not claimed.
     try testing.expect(!fullscreen.deserializeWindow(80, &.{ 0x00, 1, 2 }, @ptrCast(&m)));
 }
+
+// -- Audited behavioral contracts (BC01/05/10/12) ----------------------------
+
+// BC01 (spawn path): on-current spawn admission mirrors actions.mapRequest's
+// model mutations -- register the window tiled+present on the current ws, then
+// focus it. An off-current spawn registers tiled on its TARGET ws but does NOT
+// take focus (mapRequest returns before the setFocus step). This covers the
+// model-side admission policy headlessly; the X-cookie admission (MapRequest
+// event) itself is wire-only.
+test "BC01: spawn admission tiles (on-current focused; off-current target-only)" {
+    var m = makeModel();
+    defer deinitModel(&m);
+
+    // On-current spawn: register(m, win, null) + setFocus (mirrors
+    // actions.mapRequest's on_current=true path).
+    model.register(&m, 1, null) catch unreachable;
+    model.setFocus(&m, 1);
+    var e = m.store.get(1).?;
+    try testing.expect(e.anchor == .tiled);
+    try testing.expect(e.presence == .present);
+    try expectOrder(&m, 0, &.{1});
+    try testing.expectEqual(@as(?WindowId, 1), m.focused);
+
+    // Off-current spawn: current moves away, a new window targets ws 0.
+    // register(m, win, 0) tiles it there; mapRequest's on_current=false early
+    // return means it must NOT steal model focus.
+    workspaces.switchTo(&m, 2);
+    model.register(&m, 2, 0) catch unreachable;
+    e = m.store.get(2).?;
+    try testing.expect(e.anchor == .tiled);
+    try testing.expect(e.presence == .present);
+    try expectOrder(&m, 0, &.{ 1, 2 });
+    try testing.expectEqual(@as(?WindowId, 1), m.focused); // not stolen
+    try assertSingleMembership(&m);
+}
+
+// BC05 (client border-width decision): honoring a border_width-only configure
+// request on a TILED window returns border_only and must not disturb the
+// window's tiling membership -- it stays tiled/present in its slot, so a
+// subsequent retile still finds it. The model does not itself store the
+// width VALUE (wincache tracks the applied server width; sync re-applies
+// cfg_bw), so the value-survival half is not model-representable; this covers
+// the model transition that gate-keeps it.
+test "BC05: border-width honor leaves tiled membership intact across a retile" {
+    var m = makeModel();
+    defer deinitModel(&m);
+    try fullscreen.init();
+    defer fullscreen.deinit();
+    regCur(&m, 1);
+    regCur(&m, 2);
+
+    // Tiled configure request carrying only border_width: geometry denied,
+    // width honored (T13's decision).
+    try testing.expectEqual(
+        model.HonorDecision.border_only,
+        floating.honorConfigureRequest(&m, 1, .{ .border_width = 3 }),
+    );
+    // The decision left the window tiled/present in its slot.
+    const e = m.store.get(1).?;
+    try testing.expect(e.anchor == .tiled);
+    try testing.expect(e.presence == .present);
+    try expectOrder(&m, 0, &.{ 1, 2 });
+
+    // A retile (slot swap) still finds the window; membership/mask intact.
+    model.swapPrimary(&m);
+    try expectOrder(&m, 0, &.{ 2, 1 });
+    try testing.expectEqual(model.bit(0), m.store.get(1).?.mask);
+    try assertSingleMembership(&m);
+}
+
+// BC10 (cross-workspace restore): restoring a minimized window to its HOME
+// workspace while the CURRENT workspace carries its own stack must not disturb
+// that stack.
+test "BC10: restore to home workspace leaves the current workspace's stack intact" {
+    var m = makeModel();
+    defer deinitModel(&m);
+    try minimize.init();
+    defer minimize.deinit();
+
+    model.register(&m, 10, 0) catch unreachable; // home 0
+    model.register(&m, 11, 0) catch unreachable; // home 0
+    model.register(&m, 20, 1) catch unreachable; // home 1
+    model.register(&m, 21, 1) catch unreachable; // home 1
+    try expectOrder(&m, 0, &.{ 10, 11 });
+    try expectOrder(&m, 1, &.{ 20, 21 });
+
+    // Make ws 1 the CURRENT workspace; it is showing its own stack [20, 21].
+    workspaces.switchTo(&m, 1);
+
+    // Minimize a window whose home is ws 0, then restore it -- all while the
+    // current workspace (1) keeps its own stack in view.
+    try minimize.minimize(&m, 10);
+    try expectOrder(&m, 1, &.{ 20, 21 }); // current stack undisturbed
+    minimize.restore(&m, 10);
+
+    // The restored window is back on its HOME ws 0; ws 1's stack is untouched.
+    try expectOrder(&m, 0, &.{ 10, 11 });
+    try expectOrder(&m, 1, &.{ 20, 21 });
+    try testing.expect(m.store.get(10).?.presence == .present);
+    try testing.expect(!minimize.isMinimized(&m, 10));
+    try assertSingleMembership(&m);
+}
+
+// BC12 (tag-move minimized record follows ws): moving a minimized window to
+// another workspace moves its parked record (the tag mask follows), so a later
+// restore lands on the NEW workspace while the old workspace's stack is left
+// undisturbed.
+test "BC12: tag-move of a minimized window moves the record; restore lands on the new ws" {
+    var m = makeModel();
+    defer deinitModel(&m);
+    try minimize.init();
+    defer minimize.deinit();
+
+    model.register(&m, 30, 0) catch unreachable; // home 0
+    model.register(&m, 31, 0) catch unreachable;
+    try minimize.minimize(&m, 30);
+    try testing.expect(minimize.isMinimized(&m, 30));
+
+    // Move the parked window to ws 2: only the record moves (the tag mask
+    // follows per workspaces.moveWindowToWs); it stays minimized, and the old
+    // stack keeps only 31.
+    workspaces.moveWindowToWs(&m, 30, 2);
+    try testing.expectEqual(model.bit(2), m.store.get(30).?.mask);
+    try testing.expect(minimize.isMinimized(&m, 30));
+    try expectOrder(&m, 0, &.{31});
+
+    // Restore lands on the NEW workspace (lowest bit of the moved mask); the
+    // old workspace still only holds 31.
+    minimize.restore(&m, 30);
+    try expectOrder(&m, 2, &.{30});
+    try expectOrder(&m, 0, &.{31});
+    try testing.expectEqual(@as(?WSId, 2), m.store.get(30).?.home_ws);
+    try testing.expect(!minimize.isMinimized(&m, 30));
+    try assertSingleMembership(&m);
+}

@@ -224,12 +224,33 @@ pub fn save(allocator: std.mem.Allocator, m: *const model.Model, path: []const u
     const io = std.Options.debug_io;
     const tmp = try std.fmt.allocPrint(allocator, "{s}.tmp", .{path});
     defer allocator.free(tmp);
-    var file = try std.Io.Dir.createFileAbsolute(io, tmp, .{});
+    // Exclusive, no-follow create: a pre-existing symlink or hardlink at the
+    // temp path would otherwise be followed and redirect the write to an
+    // attacker-chosen file. O_EXCL makes the open fail with PathAlreadyExists
+    // if anything (symlink, hardlink, or regular file) already occupies the
+    // name, so we never write through a planted entry. A stale temp left by a
+    // crashed run is the one legitimate occupant; remove it and retry once.
+    const file = blk: {
+        const attempt = createTmpExclusive(io, tmp) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                std.Io.Dir.deleteFileAbsolute(io, tmp) catch {};
+                break :blk try createTmpExclusive(io, tmp);
+            },
+            else => return err,
+        };
+        break :blk attempt;
+    };
     defer file.close(io);
     try file.writeStreamingAll(io, al.items);
     // POSIX rename replaces the name while the fd stays open; the defer's
     // close lands after the rename moved the temp into place.
     try std.Io.Dir.renameAbsolute(tmp, path, io);
+}
+
+/// Opens `path` for writing, creating it exclusively so a pre-existing
+/// symlink or hardlink at the name is rejected (O_EXCL) rather than followed.
+fn createTmpExclusive(io: std.Io, path: []const u8) std.Io.File.OpenError!std.Io.File {
+    return std.Io.Dir.createFileAbsolute(io, path, .{ .exclusive = true });
 }
 
 /// Parses the restore file into the module-global `loaded`. Returns false
