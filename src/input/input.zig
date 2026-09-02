@@ -227,7 +227,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) void {
 /// same binding later be recognized as a genuine new press.
 pub fn handleKeyRelease(event: *const xcb.xcb_key_release_event_t) void {
     focus.setLastEventTime(event.time);
-    clearKeyHeld(event.state, event.detail);
+    clearKeyHeld(utils.normalizeModifiers(event.state), event.detail);
 }
 
 /// Dispatches a priority-ordered button-press event.
