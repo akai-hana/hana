@@ -214,7 +214,7 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) void {
     if (matched) |action| {
         debug.info("[KEY] mods=0x{x} keysym=0x{x} action={s}", .{ mods, keysym, @tagName(action.*) });
         executeAction(action);
-    } else if (mods == 0 and keysym >= 0xffe1 and keysym <= 0xffee) {
+    } else if (mods == 0 and keysym >= masks.modifier_keysym_lo and keysym <= masks.modifier_keysym_hi) {
         // Bare modifier press (Shift/Ctrl/Alt/Super/Hyper L/R): can never
         // match a binding; staying silent keeps logs free of keystroke noise.
     } else {
