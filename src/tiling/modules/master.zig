@@ -55,7 +55,7 @@ pub fn compute(v: tiling.View, out: *tiling.List) void {
 
     // When no stack exists the master pane takes the full width.
     const master_w_frac: u16 = if (stack_n > 0)
-        @intFromFloat(@round(@as(f32, @floatFromInt(screen_w)) * v.params.primary_width))
+        @intFromFloat(@min(@round(@as(f32, @floatFromInt(screen_w)) * v.params.primary_width), @as(f32, @floatFromInt(std.math.maxInt(u16)))))
     else
         screen_w;
 
@@ -89,8 +89,14 @@ pub fn compute(v: tiling.View, out: *tiling.List) void {
 
     if (stack_n == 0) return;
 
-    const stack_x: u16 = if (is_primary_on_right) 0 else master_w;
-    tileStack(&v, out, windows[master_n..], stack_x, tiling.waY(&v), stack_w, screen_h, m, StackBoost.fromBalance(v.params.secondary_balance), min_dim);
+    // The stack pane occupies the outer edge opposite the master. tileStack
+    // starts its column at x + gap/2, so the pane origin must reserve a FULL
+    // outer gap on the screen edge: mirrored (primary_on_right) puts the
+    // stack at the left edge, so a 0 origin would leave only a half-gap at
+    // the screen edge and break the horizontal mirror of the normal layout
+    // (the master side already mirrors cleanly via master_x).
+    const stack_origin: u16 = if (is_primary_on_right) m.gap else master_w;
+    tileStack(&v, out, windows[master_n..], stack_origin, tiling.waY(&v), stack_w, screen_h, m, StackBoost.fromBalance(v.params.secondary_balance), min_dim);
 }
 
 /// Tile a vertical column of `windows` at a fixed x with a fixed content
@@ -372,10 +378,19 @@ fn tileStackExtra(
 
     var row: u16 = 0;
     while (row < max_fit) : (row += 1) {
-        const cols_in_row: u16 = (stack_n - row + max_fit - 1) / max_fit;
+        // Column-major placement needs each column to fit a window at or above
+        // min_dim (plus both borders) or the windows would overlap their
+        // neighbors (shrinkClamped floors col_inner_w at min_dim, so a col_w
+        // narrower than min_dim+2*border makes a window WIDER than its slot).
+        // Cap the row's column count to what the row width can actually hold;
+        // any surplus windows in this row spill to the next row's columns
+        // (the outer loop already limits rows to max_fit, so worst case the
+        // surplus is dropped, never overlapped).
+        const min_col_w: u16 = min_dim +| 2 *| m.border;
+        const cols_in_row: u16 = @max(1, @min((stack_n - row + max_fit - 1) / max_fit, @max(1, (w +| m.gap) / (min_col_w +| m.gap))));
 
         const gaps_in_row = m.gap / 2 +| m.gap *| cols_in_row;
-        const row_total_w = if (w > gaps_in_row) w - gaps_in_row else cols_in_row *| min_dim;
+        const row_total_w = if (w > gaps_in_row) w - gaps_in_row else cols_in_row *| min_col_w;
         const col_w = row_total_w / cols_in_row;
         const col_inner_w = tiling.shrinkClamped(col_w, 2 * m.border, min_dim);
 

@@ -87,7 +87,14 @@ pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         const buf = try allocator.alloc(u8, known_size);
         errdefer allocator.free(buf);
         const n = try file.readPositionalAll(io, buf, 0);
-        return if (n == buf.len) buf else (allocator.realloc(buf, n) catch buf[0..n]);
+        if (n == buf.len) return buf;
+        // Short read (e.g. a pipe reported a nonzero size). Shrinking in
+        // place can fail, and handing back buf[0..n] would make the caller
+        // free a subslice (UB on the GPA). Copy the content into a fresh
+        // exact-size buffer instead; errdefer frees buf on the error path.
+        const trimmed = try allocator.dupe(u8, buf[0..n]);
+        allocator.free(buf);
+        return trimmed;
     }
     // Growth path (stat failed or reported zero). Single ownership throughout:
     // the armed errdefer frees the whole buffer exactly once on every error
@@ -105,7 +112,13 @@ pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         total += n;
     }
     if (total > max_file_bytes) return error.FileTooLarge;
-    return allocator.realloc(buf, total) catch buf[0..total];
+    if (total == buf.len) return buf;
+    // Same subslice-free trick as the direct path: never return buf[0..total]
+    // on a failed shrink. Copy into an exact-size buffer, then free the
+    // growth buffer (errdefer frees it on the dupe's error path).
+    const trimmed = try allocator.dupe(u8, buf[0..total]);
+    allocator.free(buf);
+    return trimmed;
 }
 
 /// Reads and parses the .toml at `path`, returning null for an empty file.
@@ -320,8 +333,13 @@ fn loadFallbackConfig(allocator: std.mem.Allocator) !types.Config {
     const terminal = fallback.detectTerminal();
     for (cfg.keybindings.items) |*kb| {
         if (kb.action == .exec and std.mem.eql(u8, kb.action.exec, "auto_terminal")) {
+            // Dupe BEFORE freeing the old string: if the dupe throws (OOM),
+            // the `try` propagates and the `errdefer cfg.deinit(allocator)`
+            // above frees kb.action.exec — which must still point at the live
+            // "auto_terminal" allocation, not an already-freed pointer.
+            const new_exec = try allocator.dupe(u8, terminal);
             allocator.free(kb.action.exec);
-            kb.action.exec = try allocator.dupe(u8, terminal);
+            kb.action.exec = new_exec;
         }
     }
 

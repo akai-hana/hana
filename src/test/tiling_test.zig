@@ -143,8 +143,10 @@ test "T21 master on right" {
     try testing.expectEqual(@as(usize, 2), out.len);
     // master_x = 800 - 400 = 400; x = 408
     try expectP(&out, 0, 11, 408, 8, 384, 580, true);
-    // stack_x = 0; x = 4
-    try expectP(&out, 1, 12, 4, 8, 384, 580, true);
+    // Mirrored stack: x = gap + gap/2 = 12 (exact mirror of T20's stack at
+    // [404,388] -> 800-404-384 = 12); a 0 pane origin would leave only a
+    // half-gap at the left screen edge.
+    try expectP(&out, 1, 12, 12, 8, 384, 580, true);
 }
 
 // T22 - grid 2x2.
@@ -164,8 +166,10 @@ test "T22 grid 2x2" {
     try expectP(&out, 3, 14, 404, 304, 384, 284, true);
 }
 
-// T23 - grid relaxed widens the partial last row (verbatim quirk:
-// x spacing stays column-based, so wide partial cells overlap their row).
+// T23 - grid relaxed widens the partial last row: cells share the full
+// screen width AND the partial row is column-spaced by that wider cell, so
+// the wide relaxed cells do not overlap (previously the partial row kept the
+// narrow column stride, making neighbouring wide cells overlap each other).
 test "T23 grid relaxed partial row" {
     var fx: Fixture = undefined;
     fx.init(&.{ 11, 12, 13, 14, 15 }, stdWa());
@@ -182,9 +186,10 @@ test "T23 grid relaxed partial row" {
     try expectP(&out, 0, 11, 8, 8, 252, 284, true);
     try expectP(&out, 1, 12, 272, 8, 252, 284, true);
     try expectP(&out, 2, 13, 536, 8, 252, 284, true);
-    // last row: count=2 -> partial_cell_w = (800-24)/2 = 388 -> 384
+    // last row: count=2 -> partial_cell_w = (800-24)/2 = 388 -> 384, spaced
+    // by the partial cell stride (388+8): x = 8 and 404 (no overlap).
     try expectP(&out, 3, 14, 8, 304, 384, 284, true);
-    try expectP(&out, 4, 15, 272, 304, 384, 284, true);
+    try expectP(&out, 4, 15, 404, 304, 384, 284, true);
 
     // Rigid mode keeps the column width in the partial row.
     var outr: List = .{};
