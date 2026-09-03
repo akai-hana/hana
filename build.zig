@@ -44,6 +44,9 @@ pub fn build(b: *std.Build) !void {
     // Build options
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "has_fallback_toml", fallback_toml != null);
+    // Profile the key-press dispatch hot path (receive -> action dispatch) by
+    // compiling in the nanoTimestamp accumulator in input.handleKeyPress.
+    build_opts.addOption(bool, "profile_key", b.option(bool, "profile-key", "Instrument the key dispatch path to log receive->action latency") orelse false);
 
     // Optional module detection
     const has_tiling = hasPathOption(b, build_opts, "has_tiling", source_root ++ "tiling");
