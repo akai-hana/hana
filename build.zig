@@ -895,6 +895,7 @@ const SystemLibraries = struct {
     fn linkXcb(root: *std.Build.Module) void {
         root.linkSystemLibrary("xcb-keysyms", .{});
         root.linkSystemLibrary("xkbcommon-x11", .{});
+        root.linkSystemLibrary("xcb-xkb", .{}); // Provides xcb_xkb_id (XKB extension opcode lookup) for detectable auto-repeat.
         root.linkSystemLibrary("xcb-cursor", .{}); // Makes hana's root window respect custom cursor settings.
         root.linkSystemLibrary("xcb-randr", .{}); // Monitor refresh-rate detection for the carousel.
     }
