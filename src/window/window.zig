@@ -191,8 +191,12 @@ fn populateFocusCacheFromCookies(
     });
 }
 
-/// Returns null when the WM_PROTOCOLS atom is not yet interned.
-fn fireWMProtocolsQuery(
+/// Fires (but does not drain) a WM_PROTOCOLS query for `win`, so a caller can
+/// pipeline it with other round trips and consume the reply later via
+/// getInputModelResolvedConsume / queryWMProtocolsPropsConsume. Returns null
+/// when the WM_PROTOCOLS atom is not yet interned (the caller then falls back
+/// to the live query path). Fire-and-forget; the caller owns the cookie.
+pub fn fireWMProtocolsQuery(
     conn: core.Connection,
     win: u32,
 ) ?xcb.xcb_get_property_cookie_t {
@@ -261,6 +265,25 @@ pub fn getInputModelResolved(conn: core.Connection, win: u32) InputModelResoluti
     const accepts_input = getOrQueryCachedProps(conn, win).accepts_input;
 
     const supports_take_focus = queryWMProtocolsProps(conn, win).take_focus;
+
+    return .{ .model = inputModelFrom(supports_take_focus, accepts_input), .take_focus = supports_take_focus };
+}
+
+/// Like getInputModelResolved, but for the WM_TAKE_FOCUS half it CONSUMES a
+/// caller pre-fired WM_PROTOCOLS cookie instead of issuing a fresh live query.
+/// `pre_protocols_cookie` is always consumed (drained) here, so the caller must
+/// not hold or discard it afterwards. A null cookie falls back to a live query.
+pub fn getInputModelResolvedConsume(
+    conn: core.Connection,
+    win: u32,
+    pre_protocols_cookie: ?xcb.xcb_get_property_cookie_t,
+) InputModelResolution {
+    const accepts_input = getOrQueryCachedProps(conn, win).accepts_input;
+
+    const supports_take_focus = if (pre_protocols_cookie) |ck|
+        queryWMProtocolsPropsConsume(conn, ck).take_focus
+    else
+        queryWMProtocolsProps(conn, win).take_focus;
 
     return .{ .model = inputModelFrom(supports_take_focus, accepts_input), .take_focus = supports_take_focus };
 }
@@ -421,6 +444,26 @@ fn queryWMProtocolsProps(conn: core.Connection, win: u32) WMProtocolsProps {
     ) orelse return .{};
     defer std.c.free(reply);
     return protocolPropsFromReply(reply, take_focus_atom, wm_delete_atom);
+}
+
+/// Drains a caller-supplied (pre-fired, pipelined) WM_PROTOCOLS reply. Keeps
+/// the scan identical to queryWMProtocolsProps so the pipelined path yields the
+/// exact same verdict; the caller fired the query BEFORE the pointer round trip
+/// so its reply is typically already buffered by the time this is reached.
+fn queryWMProtocolsPropsConsume(conn: core.Connection, cookie: xcb.xcb_get_property_cookie_t) WMProtocolsProps {
+    const take_focus_atom = utils.getAtomCached("WM_TAKE_FOCUS") catch return .{};
+    const wm_delete_atom = utils.getAtomCached("WM_DELETE_WINDOW") catch return .{};
+
+    const reply = xcb.xcb_get_property_reply(conn, cookie, null) orelse return .{};
+    defer std.c.free(reply);
+    return protocolPropsFromReply(reply, take_focus_atom, wm_delete_atom);
+}
+
+/// Discards a pre-fired WM_PROTOCOLS cookie without draining it. Used when a
+/// pipelined cookie was fired for a candidate window that the caller ultimately
+/// does not target, so it never leaks a pending reply on the stream.
+pub fn discardProtocolCookie(conn: core.Connection, opt: ?xcb.xcb_get_property_cookie_t) void {
+    if (opt) |ck| xcb.xcb_discard_reply(conn, ck.sequence);
 }
 
 /// Returns true when absent (assume True per ICCCM) or explicitly True.

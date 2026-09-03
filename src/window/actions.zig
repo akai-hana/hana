@@ -6,6 +6,7 @@ const model_mod = @import("model");
 const pipeline = @import("pipeline");
 const sync = @import("sync");
 const focus = @import("focus");
+const window = @import("window");
 const screen = @import("screen");
 const build_options = @import("build_options");
 const debug = @import("debug");
@@ -123,7 +124,7 @@ fn focusFallback(m: *model_mod.Model) focus.FocusTransition {
     // linking the protocol side (see model.fallbackFocusCandidate).
     if (model_mod.fallbackFocusCandidate(m, m.current)) |winner| {
         model_mod.setFocus(m, winner);
-        return focus.prepareFocus(winner, .tiling_operation);
+        return focus.prepareFocus(winner, .tiling_operation, null);
     } else {
         model_mod.clearFocus(m);
         return focus.prepareClearFocus();
@@ -180,7 +181,7 @@ fn isMinimizedOnAnyWs(m: *const model_mod.Model, win: model_mod.WindowId) bool {
 
 fn restoreAndFocus(m: *model_mod.Model, win: model_mod.WindowId) void {
     model_mod.setFocus(m, win);
-    const ft = focus.prepareFocus(win, .window_spawn);
+    const ft = focus.prepareFocus(win, .window_spawn, null);
     pipeline.reconcileUnderGrabNowWithFocus(.{ .force_restack = true }, ft);
 }
 
@@ -514,7 +515,7 @@ pub fn swapPrimaryAction(focus_swap: bool) void {
     if (focus_swap) {
         if (m.focused != null and m.focused.? != displaced) {
             model_mod.setFocus(m, displaced);
-            ft = focus.prepareFocus(displaced, .tiling_operation);
+            ft = focus.prepareFocus(displaced, .tiling_operation, null);
         }
     }
     pipeline.reconcileUnderGrabNowWithFocus(.{}, ft);
@@ -759,9 +760,33 @@ pub fn switchTo(ws_idx: u8) void {
     // which is exactly the "quick workspace switches sometimes don't register"
     // symptom. Resolve everything outside the grab so the grab body is pure
     // fire-and-forget XCB and is held for the minimum possible time.
+    //
+    // The pointer query and the focus-prep WM_PROTOCOLS query are further
+    // PIPELINED: both are fired before either reply is drained, so the server
+    // processes them in parallel and the switch costs ONE round trip instead of
+    // two (see rtt benchmark: ~45% lower blocking latency). The focus target is
+    // only known after the pointer reply, but the per-window WM_PROTOCOLS query
+    // only ever needs to be pre-fired for the fallback candidate (the common
+    // keyboard-driven case); if the pointer then overrides that candidate we
+    // discard the pre-fired cookie and prepareFocus re-queries for the actual
+    // target, which is no worse than before this change.
     const cs = core.getState();
+
+    // X-free model lookup first: the only candidate whose WM_PROTOCOLS query
+    // can be safely pre-fired alongside the pointer query.
+    const fallback = model_mod.fallbackFocusCandidate(m, ws_idx);
+
+    // Fire both queries up-front, before draining either.
+    const pointer_cookie = xcb.xcb_query_pointer(cs.conn, cs.root);
+    const pre_protocols_cookie = if (fallback) |fb|
+        window.fireWMProtocolsQuery(cs.conn, fb)
+    else
+        null;
+
+    // Drain the pointer reply, which doubles as the flush that lets the server
+    // process the (parallel) WM_PROTOCOLS query above.
     const target: ?model_mod.WindowId = blk: {
-        const reply = xcb.xcb_query_pointer_reply(cs.conn, xcb.xcb_query_pointer(cs.conn, cs.root), null);
+        const reply = xcb.xcb_query_pointer_reply(cs.conn, pointer_cookie, null);
         defer if (reply) |r| std.c.free(r);
         if (reply) |r| {
             const child = r.*.child;
@@ -771,19 +796,24 @@ pub fn switchTo(ws_idx: u8) void {
         }
         // Delegate to the model's tiered fallback (newest-first MRU, then
         // reversed tiled_order, then floating) — same policy as focusFallback.
-        break :blk model_mod.fallbackFocusCandidate(m, ws_idx);
+        break :blk fallback;
     };
 
-    // Resolve the focus transition (round trips) outside the grab too.
+    // Hand the pre-fired cookie to prepareFocus only when it targets the window
+    // the cookie was fired for; otherwise discard it and let prepareFocus do its
+    // own live query (identical to the pre-pipelining behaviour).
+    const use_prefired = (target != null and target.? == fallback);
     const ft: focus.FocusTransition = blk: {
         if (target) |t| {
             model_mod.setFocus(m, t);
-            break :blk focus_mod.prepareFocus(t, .workspace_switch);
+            break :blk focus_mod.prepareFocus(t, .workspace_switch, if (use_prefired) pre_protocols_cookie else null);
         } else {
+            window.discardProtocolCookie(cs.conn, pre_protocols_cookie);
             model_mod.clearFocus(m);
             break :blk focus_mod.prepareClearFocus();
         }
     };
+    if (!use_prefired and target != null) window.discardProtocolCookie(cs.conn, pre_protocols_cookie);
 
     // Inline the server grab so protocol focus and geometry land atomically
     // (Gap 4 atomicity fix). Only fire-and-forget XCB runs below, so the grab
@@ -846,7 +876,7 @@ pub fn mapRequest(win: model_mod.WindowId, target_ws: u8, on_current: bool) void
     // window must be mapped before xcb_set_input_focus, and the map happens
     // during reconcile. Both map+focus land under one grab (Gap 3 fix).
     model_mod.setFocus(m, win);
-    const ft = focus.prepareFocus(win, .window_spawn);
+    const ft = focus.prepareFocus(win, .window_spawn, null);
     pipeline.reconcileUnderGrabNowWithFocusAfter(.{}, ft);
 }
 

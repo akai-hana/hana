@@ -301,11 +301,25 @@ pub const FocusTransition = union(enum) {
 /// Returns a FocusTransition that can be committed inside the grab.
 /// Returns .none when focus should not change (invalid window, same window,
 /// unmapped liveness guard, or no_input model).
-pub fn prepareFocus(win: u32, reason: Reason) FocusTransition {
-    if (window.isInvalidWindow(win)) return .none;
-    if (state.?.last_applied == win) return .none;
-
+///
+/// `pre_protocols_cookie` is an optional already-fired WM_PROTOCOLS query for
+/// `win` (pipelined focus prep — see switchTo). When provided it is consumed
+/// for the input-model resolve or discarded on an early return, so ownership
+/// is fully transferred here regardless of the outcome.
+pub fn prepareFocus(
+    win: u32,
+    reason: Reason,
+    pre_protocols_cookie: ?xcb.xcb_get_property_cookie_t,
+) FocusTransition {
     const conn = core.getState().conn;
+    if (window.isInvalidWindow(win)) {
+        window.discardProtocolCookie(conn, pre_protocols_cookie);
+        return .none;
+    }
+    if (state.?.last_applied == win) {
+        window.discardProtocolCookie(conn, pre_protocols_cookie);
+        return .none;
+    }
 
     // Liveness guard: same as setFocus (mouse_click/user_command/pointer_sync
     // must not focus a destroyed window).
@@ -313,9 +327,13 @@ pub fn prepareFocus(win: u32, reason: Reason) FocusTransition {
     // window is on the current workspace and visible, so the blocking
     // xcb_get_window_attributes round-trip is redundant.
     if ((reason == .mouse_click or reason == .pointer_sync) and
-        !isWindowMapped(conn, win)) return .none;
+        !isWindowMapped(conn, win))
+    {
+        window.discardProtocolCookie(conn, pre_protocols_cookie);
+        return .none;
+    }
 
-    const resolved = window.getInputModelResolved(conn, win);
+    const resolved = window.getInputModelResolvedConsume(conn, win, pre_protocols_cookie);
     if (resolved.model == .no_input) return .none;
 
     // Cancel any stale confirm cookie (client-side, no round trip).
@@ -565,7 +583,7 @@ inline fn suppressionFor(reason: Reason, current: core.FocusSuppressReason) core
 /// happen outside the grab; focus protocol, borders, and geometry land
 /// inside one grab+reconcile+flush. Drop-in for the old setFocus path.
 pub fn grabFocus(win: u32, reason: Reason) void {
-    const ft = prepareFocus(win, reason);
+    const ft = prepareFocus(win, reason, null);
     if (ft == .none) return;
     const pl = @import("pipeline");
     @import("model").setFocus(pl.model(), win);
