@@ -137,23 +137,22 @@ pub inline fn setLastEventTime(t: u32) void {
 /// Sets X input focus to `win`, always with CurrentTime (0), see
 /// "Timestamp handling" above.
 ///
-/// Wraps xcb_set_input_focus with a momentary keyboard grab/ungrab to break
-/// any active keyboard grabs held by other clients (e.g. games using
-/// XGrabKeyboard / SDL fullscreen grab). Without this, a client that grabbed
-/// the keyboard continues to intercept all key events even after X input focus
-/// has moved to another window — the focused window never receives keyboard
-/// input. Unmapping the game releases its grab, which is why minimizing or
-/// moving the game away restores normal input.
+/// A plain xcb_set_input_focus is all that is required here. An earlier
+/// revision wrapped this call in a momentary xcb_grab_keyboard/ungrab_keyboard
+/// hoping to break active keyboard grabs held by other clients (e.g. SDL
+/// fullscreen). That was ineffective — XGrabKeyboard returns AlreadyGrabbed
+/// when another client holds the grab, so it never actually steals input — and
+/// it was actively harmful: the transient active grab re-routes every key
+/// event away from our passive key grabs and, when released while the shortcut
+/// key is still physically held, the server drops the pending KeyRelease of
+/// that key (X11 drops KeyRelease events pending at grab deactivation). The
+/// miss then leaves the held-key ledger in input.zig marked as "held", so the
+/// binding's next press is silently suppressed — the "every second keybind
+/// doesn't respond" symptom. Setting input focus alone never interferes with
+/// passive key grabs, so the KeyRelease reliably reaches handleKeyRelease and
+/// the ledger clears correctly.
 inline fn focusNow(conn: core.Connection, win: u32) void {
-    const root = core.getState().root;
-    // Grab keyboard to break any client-held active keyboard grabs. With
-    // owner_events=0 events route to root (the grab window), so no
-    // FocusIn/FocusOut reaches the focus window during this momentary grab.
-    // ASYNC mode keeps both devices unfrozen — we only need the grab side-
-    // effect of releasing any prior grab, not event interception.
-    _ = xcb.xcb_grab_keyboard(conn, 0, root, xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC, 0);
     _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0);
-    _ = xcb.xcb_ungrab_keyboard(conn, 0);
 }
 
 /// Direct write to suppress_reason, for cases where suppression must be

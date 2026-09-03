@@ -726,13 +726,6 @@ pub fn switchTo(ws_idx: u8) void {
     focus_mod.setSuppressReason(.none);
     focus_mod.cancelPointerSync();
 
-    // Fire the pointer query BEFORE the grab so the round trip (client-side
-    // _xcb_conn_wait / poll) happens outside the grab window. The cookie is
-    // consumed INSIDE the grab; by then the reply is already in the XCB
-    // receive buffer (the server processed it between queue and flush), so
-    // consumption is a zero-latency buffer read.
-    const pointer_cookie = xcb.xcb_query_pointer(core.getState().conn, core.getState().root);
-
     // All-view exit is a flag flip (emerges from visibility); temp-window
     // masks do not exist in the model.
     m.all_view_active = false;
@@ -757,17 +750,18 @@ pub fn switchTo(ws_idx: u8) void {
     // sync avoids any stale-revision edge.
     @import("core").bumpFullscreen();
 
-    // Inline the server grab so pointer resolution, model focus, protocol
-    // focus, and geometry all land atomically (Gap 4 atomicity fix).
-    const c = pipeline.grabCtx();
-    c.sink.grabServer();
-    defer c.sink.ungrabAndFlush();
-
-    // Consume the pipelined pointer cookie INSIDE the grab. The round trip
-    // already completed before the grab; this is just a buffer read.
+    // ALL blocking round trips run BEFORE the server grab. Earlier revisions
+    // grabbed the server first and then consumed the pointer reply and ran
+    // prepareFocus/prepareClearFocus (which round-trip input-model resolve).
+    // Every blocking wait while the server is grabbed freezes all input; a
+    // rapid successive keypress (e.g. an immediate switch to the next
+    // workspace) frozen in that window is dropped when the grab releases,
+    // which is exactly the "quick workspace switches sometimes don't register"
+    // symptom. Resolve everything outside the grab so the grab body is pure
+    // fire-and-forget XCB and is held for the minimum possible time.
+    const cs = core.getState();
     const target: ?model_mod.WindowId = blk: {
-        const cs = core.getState();
-        const reply = xcb.xcb_query_pointer_reply(cs.conn, pointer_cookie, null);
+        const reply = xcb.xcb_query_pointer_reply(cs.conn, xcb.xcb_query_pointer(cs.conn, cs.root), null);
         defer if (reply) |r| std.c.free(r);
         if (reply) |r| {
             const child = r.*.child;
@@ -780,6 +774,7 @@ pub fn switchTo(ws_idx: u8) void {
         break :blk model_mod.fallbackFocusCandidate(m, ws_idx);
     };
 
+    // Resolve the focus transition (round trips) outside the grab too.
     const ft: focus.FocusTransition = blk: {
         if (target) |t| {
             model_mod.setFocus(m, t);
@@ -789,6 +784,13 @@ pub fn switchTo(ws_idx: u8) void {
             break :blk focus_mod.prepareClearFocus();
         }
     };
+
+    // Inline the server grab so protocol focus and geometry land atomically
+    // (Gap 4 atomicity fix). Only fire-and-forget XCB runs below, so the grab
+    // is held for microseconds — no blocking wait can freeze a next keypress.
+    const c = pipeline.grabCtx();
+    c.sink.grabServer();
+    defer c.sink.ungrabAndFlush();
 
     focus_mod.applyPendingFocus(ft);
 
