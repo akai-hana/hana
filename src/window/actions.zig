@@ -772,14 +772,18 @@ pub fn switchTo(ws_idx: u8) void {
     // target, which is no worse than before this change.
     const cs = core.getState();
 
-    // X-free model lookup first: the only candidate whose WM_PROTOCOLS query
-    // can be safely pre-fired alongside the pointer query.
+    // X-free model lookup first. take_focus is now cached (see window.zig's
+    // "ICCCM focus property cache" note), so a focus-prep for the fallback
+    // usually needs no round trip at all; only on a rare cache miss do we
+    // pre-fire its WM_PROTOCOLS query so it overlaps the pointer round trip
+    // below, keeping the miss case at a single round trip too.
     const fallback = model_mod.fallbackFocusCandidate(m, ws_idx);
 
-    // Fire both queries up-front, before draining either.
+    // Fire both queries up-front, before draining either (pre-fire only on a
+    // cache miss; the common path is already cached so nothing is wasted).
     const pointer_cookie = xcb.xcb_query_pointer(cs.conn, cs.root);
     const pre_protocols_cookie = if (fallback) |fb|
-        window.fireWMProtocolsQuery(cs.conn, fb)
+        (if (window.isInputModelCached(fb)) null else window.fireWMProtocolsQuery(cs.conn, fb))
     else
         null;
 
