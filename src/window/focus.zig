@@ -136,8 +136,24 @@ pub inline fn setLastEventTime(t: u32) void {
 
 /// Sets X input focus to `win`, always with CurrentTime (0), see
 /// "Timestamp handling" above.
+///
+/// Wraps xcb_set_input_focus with a momentary keyboard grab/ungrab to break
+/// any active keyboard grabs held by other clients (e.g. games using
+/// XGrabKeyboard / SDL fullscreen grab). Without this, a client that grabbed
+/// the keyboard continues to intercept all key events even after X input focus
+/// has moved to another window — the focused window never receives keyboard
+/// input. Unmapping the game releases its grab, which is why minimizing or
+/// moving the game away restores normal input.
 inline fn focusNow(conn: core.Connection, win: u32) void {
+    const root = core.getState().root;
+    // Grab keyboard to break any client-held active keyboard grabs. With
+    // owner_events=0 events route to root (the grab window), so no
+    // FocusIn/FocusOut reaches the focus window during this momentary grab.
+    // ASYNC mode keeps both devices unfrozen — we only need the grab side-
+    // effect of releasing any prior grab, not event interception.
+    _ = xcb.xcb_grab_keyboard(conn, 0, root, xcb.XCB_GRAB_MODE_ASYNC, xcb.XCB_GRAB_MODE_ASYNC, 0);
     _ = xcb.xcb_set_input_focus(conn, xcb.XCB_INPUT_FOCUS_POINTER_ROOT, win, 0);
+    _ = xcb.xcb_ungrab_keyboard(conn, 0);
 }
 
 /// Direct write to suppress_reason, for cases where suppression must be
