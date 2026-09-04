@@ -55,7 +55,7 @@ fn initDefaultBarLayout(allocator: std.mem.Allocator, cfg: *types.Config) !void 
     }
 }
 
-const max_file_bytes = 1024 * 1024;
+pub const max_file_bytes = 1024 * 1024;
 
 /// Initial allocation for the read-with-growth path (stat failed or reported
 /// zero, e.g. procfs/sysfs/pipes). Doubles until the whole file is read.

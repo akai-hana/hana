@@ -1284,7 +1284,7 @@ fn drawNormalMode(
 ) !void {
     const cur_hi = @min(g.vim_state.cursor + 1, g.vim_state.len);
 
-    const style = .{
+    const style: CursorStyle = .{
         .text_left_x = text_left_x,
         .scroll_end_x = scroll_end_x,
         .baseline = baseline,

@@ -381,7 +381,15 @@ pub fn fetchPropertyToBuffer(
 ) !?[]const u8 {
     const reply = collectPropertyReply(
         conn,
-        xcb.xcb_get_property(conn, property_no_delete, window, atom, atom_type, 0, max_property_length),
+        xcb.xcb_get_property(
+            conn,
+            property_no_delete,
+            window,
+            atom,
+            atom_type,
+            0,
+            max_property_length,
+        ),
     ) orelse return null;
     defer std.c.free(reply);
     const r = reply.*;

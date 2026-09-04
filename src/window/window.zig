@@ -488,8 +488,13 @@ fn queryWMProtocolsProps(conn: core.Connection, win: u32) WMProtocolsProps {
     const reply = xcb.xcb_get_property_reply(
         conn,
         xcb.xcb_get_property(
-            conn, property_no_delete, win, protocols_atom,
-            xcb.XCB_ATOM_ATOM, 0, max_property_length,
+            conn,
+            property_no_delete,
+            win,
+            protocols_atom,
+            xcb.XCB_ATOM_ATOM,
+            0,
+            max_property_length,
         ),
         null,
     ) orelse return .{};
@@ -738,7 +743,11 @@ fn findSpawnQueueWorkspace(
     c_net_wm_pid: xcb.xcb_get_property_cookie_t,
 ) ?u8 {
     const win_pid: u32 = pid: {
-        const pid_reply = xcb.xcb_get_property_reply(core.getState().conn, c_net_wm_pid, null) orelse break :pid 0;
+        const pid_reply = xcb.xcb_get_property_reply(
+            core.getState().conn,
+            c_net_wm_pid,
+            null,
+        ) orelse break :pid 0;
         defer std.c.free(pid_reply);
         if (pid_reply.*.format != 32 or pid_reply.*.value_len < 1) break :pid 0;
         break :pid u32Values(pid_reply)[0];
@@ -844,13 +853,29 @@ fn fireAdmissionCookies(conn: core.Connection, win: u32) AdmissionCookies {
     // Workspace resolution cookies (conditional).
     const c_wm_class: ?xcb.xcb_get_property_cookie_t =
         if (cs.config.workspaces.rules.items.len > 0 and utils.getAtomOrZero("WM_CLASS") != 0)
-            xcb.xcb_get_property(conn, property_no_delete, win, utils.getAtomOrZero("WM_CLASS"), xcb.XCB_ATOM_STRING, 0, constants.property_max_length)
+            xcb.xcb_get_property(
+                conn,
+                property_no_delete,
+                win,
+                utils.getAtomOrZero("WM_CLASS"),
+                xcb.XCB_ATOM_STRING,
+                0,
+                constants.property_max_length,
+            )
         else
             null;
 
     const c_net_wm_pid: ?xcb.xcb_get_property_cookie_t =
         if (state.?.spawn_queue.items.len > 0)
-            xcb.xcb_get_property(conn, property_no_delete, win, utils.getAtomOrZero("_NET_WM_PID"), xcb.XCB_ATOM_CARDINAL, 0, 1)
+            xcb.xcb_get_property(
+                conn,
+                property_no_delete,
+                win,
+                utils.getAtomOrZero("_NET_WM_PID"),
+                xcb.XCB_ATOM_CARDINAL,
+                0,
+                1,
+            )
         else
             null;
 
@@ -866,7 +891,13 @@ fn fireAdmissionCookies(conn: core.Connection, win: u32) AdmissionCookies {
     );
     const protocols_cookie = fireWMProtocolsQuery(conn, win) orelse
         xcb.xcb_get_property(
-            conn, property_no_delete, win, 0, xcb.XCB_ATOM_ATOM, 0, max_property_length,
+            conn,
+            property_no_delete,
+            win,
+            0,
+            xcb.XCB_ATOM_ATOM,
+            0,
+            max_property_length,
         );
     const hints_cookie = xcb.xcb_get_property(
         conn,
@@ -1065,7 +1096,9 @@ pub fn adoptRootWindows() !usize {
     const conn = cs.conn;
 
     const tree_reply = xcb.xcb_query_tree_reply(
-        conn, xcb.xcb_query_tree(conn, cs.root), null,
+        conn,
+        xcb.xcb_query_tree(conn, cs.root),
+        null,
     ) orelse return 0;
     defer std.c.free(tree_reply);
     const children = xcb.xcb_query_tree_children(tree_reply);
@@ -1228,8 +1261,11 @@ fn sendConfigureNotify(win: u32, geom: utils.Rect) void {
         .pad1 = 0,
     };
     _ = xcb.xcb_send_event(
-        core.getState().conn, 0, win,
-        xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY, @ptrCast(&ev),
+        core.getState().conn,
+        0,
+        win,
+        xcb.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+        @ptrCast(&ev),
     );
 }
 

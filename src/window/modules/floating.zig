@@ -116,7 +116,12 @@ var g_state: State = .{};
 /// rectangle and border width. Returns the 8-directional direction the cursor
 /// is closest to (n, s, e, w, ne, nw, se, sw), or none if the point is well
 /// inside the window far from any edge.
-fn resizeDirectionFromPoint(cursor_x: i32, cursor_y: i32, rect: utils.Rect, border_width: u32) ResizeDirection {
+fn resizeDirectionFromPoint(
+    cursor_x: i32,
+    cursor_y: i32,
+    rect: utils.Rect,
+    border_width: u32,
+) ResizeDirection {
     const left: i32 = rect.x;
     const top: i32 = rect.y;
     const right: i32 = rect.x + @as(i32, rect.width);
@@ -217,7 +222,13 @@ pub fn startDrag(win: u32, button: u8, x: i16, y: i16) void {
     @import("sync").raiseNow(@import("pipeline").grabCtx(), win);
 }
 
-fn computeMoveRect(drag: DragState, dx: i32, dy: i32, wa: WorkArea, was_pending_float: bool) utils.Rect {
+fn computeMoveRect(
+    drag: DragState,
+    dx: i32,
+    dy: i32,
+    wa: WorkArea,
+    was_pending_float: bool,
+) utils.Rect {
     const snap = drag.snap_px;
     const raw_x: i32 = @as(i32, drag.start_win_x) + dx;
     const raw_y: i32 = @as(i32, drag.start_win_y) + @as(i32, dy);
@@ -360,7 +371,11 @@ pub fn setFloatingRect(m: *model.Model, win: model.WindowId, r: utils.Rect) void
 }
 
 /// Honors a configure request against a floating window record on the model.
-pub fn honorConfigureRequest(m: *model.Model, win: model.WindowId, req: model.ConfigureReq) model.HonorDecision {
+pub fn honorConfigureRequest(
+    m: *model.Model,
+    win: model.WindowId,
+    req: model.ConfigureReq,
+) model.HonorDecision {
     if (build_options.has_minimize) {
         if (@import("minimize").isMinimized(m, win)) return .ignored;
     }

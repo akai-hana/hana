@@ -16,7 +16,12 @@ inline fn moduleFromSrc(src: std.builtin.SourceLocation) []const u8 {
 // Routed through std.log (rather than std.debug.print with hardcoded ANSI
 // codes) so custom log handlers and compile-time log-level filtering still
 // apply.
-inline fn log(comptime log_fn: anytype, comptime fmt: []const u8, module: []const u8, args: anytype) void {
+inline fn log(
+    comptime log_fn: anytype,
+    comptime fmt: []const u8,
+    module: []const u8,
+    args: anytype,
+) void {
     log_fn("[{s}] " ++ fmt, .{module} ++ args);
 }
 

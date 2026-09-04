@@ -27,7 +27,10 @@ fn providerOf(
 
 /// Convenience: returns the current workspace's covering occupant, or null.
 fn currentCoveringOccupant(m: *const model_mod.Model) ?model_mod.WindowId {
-    return if (providerOf(.coveringOccupantOnWs)) |prov| prov.coveringOccupantOnWs.?(m, m.current) else null;
+    return if (providerOf(.coveringOccupantOnWs)) |prov|
+        prov.coveringOccupantOnWs.?(m, m.current)
+    else
+        null;
 }
 
 /// Convenience: true when `win` is the covering (fullscreen) occupant on its
@@ -97,7 +100,8 @@ pub fn minimize(focused: ?model_mod.WindowId) void {
         const win = focused orelse return;
         const m = pipeline.model();
         const was_focused = m.focused == win;
-        const fs_ws_before = if (providerOf(.coveringWsOf)) |prov| prov.coveringWsOf.?(m, win) else null;
+        const fs_ws_before =
+            if (providerOf(.coveringWsOf)) |prov| prov.coveringWsOf.?(m, win) else null;
 
         wm.hideWindow.?(m, win) catch return; // Pre-refusal (CapacityFull)
 
@@ -144,7 +148,11 @@ fn restoreAndFocus(m: *model_mod.Model, win: model_mod.WindowId) void {
     pipeline.reconcileUnderGrabNowWithFocus(.{ .force_restack = true }, ft);
 }
 
-fn armFullscreenBarHideIfNeeded(m: *const model_mod.Model, win: model_mod.WindowId, had_occupant_before: bool) void {
+fn armFullscreenBarHideIfNeeded(
+    m: *const model_mod.Model,
+    win: model_mod.WindowId,
+    had_occupant_before: bool,
+) void {
     if (build_options.has_bar and !had_occupant_before and isCoveringOnWs(m, win)) {
         for (window_mods) |wm| if (wm.armPendingBarHide) |f| f(win);
     }
@@ -185,7 +193,8 @@ pub fn restoreAll() void {
         const had_occupant_before = currentCoveringOccupant(m) != null;
         if (providerOf(.restoreOnWs)) |rp| rp.restoreOnWs.?(m, ws);
         restoreAndFocus(m, target);
-        if (currentCoveringOccupant(m)) |occ| armFullscreenBarHideIfNeeded(m, occ, had_occupant_before);
+        if (currentCoveringOccupant(m)) |occ|
+            armFullscreenBarHideIfNeeded(m, occ, had_occupant_before);
     }
 }
 
@@ -616,7 +625,8 @@ const ViewportContext = struct {
     max_off: i32,
 };
 
-const viewport_inactive: ViewportContext = .{ .active = false, .tiled_count = 0, .slot_w = 0, .max_off = 0 };
+const viewport_inactive: ViewportContext =
+    .{ .active = false, .tiled_count = 0, .slot_w = 0, .max_off = 0 };
 
 /// Viewport context for the active layout, resolved through the layout
 /// metadata: a layout "has a viewport" iff it registers the slotWidth/
@@ -625,7 +635,8 @@ const viewport_inactive: ViewportContext = .{ .active = false, .tiled_count = 0,
 fn viewportContext(m: *const model_mod.Model) ViewportContext {
     if (!build_options.has_tiling) return viewport_inactive;
     const p = &m.ws[m.current].params;
-    const mod: ?@import("plugin").Layout = if (p.kind < tiling_mods.len) tiling_mods[p.kind] else null;
+    const mod: ?@import("plugin").Layout =
+        if (p.kind < tiling_mods.len) tiling_mods[p.kind] else null;
     const md = mod orelse return viewport_inactive;
     if (md.slotWidth == null or md.maxOffset == null) return viewport_inactive;
     const n = model_mod.tiledCountOnWs(m, m.current);
@@ -656,10 +667,11 @@ pub fn seedParamsFromConfig() void {
     // silent: report it and the fallback used.
     const default_kind: u8 = blk: {
         if (tiling.layoutByName(cfg.layout)) |k| break :blk @intCast(k);
-        debug.warn("Config: layout name '{s}' did not resolve to a registered layout; using default layout '{s}'", .{
-            cfg.layout,
-            tiling.moduleName(tiling.defaultKind()),
-        });
+        debug.warn(
+            "Config: layout name '{s}' did not resolve to a registered layout; " ++
+                "using default layout '{s}'",
+            .{ cfg.layout, tiling.moduleName(tiling.defaultKind()) },
+        );
         break :blk tiling.defaultKind();
     };
 
@@ -680,14 +692,20 @@ pub fn seedParamsFromConfig() void {
             if (layout_lookup[id]) |oi| {
                 const o = cfg.workspace_layout_overrides.items[oi];
                 if (o.layout_idx < cfg.layouts.items.len)
-                    kind = @intCast(tiling.layoutByName(cfg.layouts.items[o.layout_idx]) orelse blk: {
-                        debug.warn("Config: workspace {} layout name '{s}' did not resolve to a registered layout; using layout '{s}'", .{
-                            i,
-                            cfg.layouts.items[o.layout_idx],
-                            tiling.moduleName(default_kind),
-                        });
-                        break :blk default_kind;
-                    });
+                    kind = @intCast(
+                        tiling.layoutByName(cfg.layouts.items[o.layout_idx]) orelse blk: {
+                            debug.warn(
+                                "Config: workspace {} layout name '{s}' did not resolve to a " ++
+                                    "registered layout; using layout '{s}'",
+                                .{
+                                    i,
+                                    cfg.layouts.items[o.layout_idx],
+                                    tiling.moduleName(default_kind),
+                                },
+                            );
+                            break :blk default_kind;
+                        },
+                    );
                 override_variant = o.variant;
             }
         }
@@ -698,7 +716,8 @@ pub fn seedParamsFromConfig() void {
         // name. The module's own variant_parse hook interprets the string;
         // an unparseable/unknown string warns (Stage-1 style) and uses 0.
         var value_string: ?[]const u8 = override_variant;
-        const active_mod: ?@import("plugin").Layout = if (kind < tiling_mods.len) tiling_mods[kind] else null;
+        const active_mod: ?@import("plugin").Layout =
+            if (kind < tiling_mods.len) tiling_mods[kind] else null;
         var v_idx: u8 = 0;
         if (active_mod) |md| {
             if (value_string == null) value_string = cfg.variants.get(md.name);
@@ -707,12 +726,20 @@ pub fn seedParamsFromConfig() void {
                     if (vp(vs)) |parsed| {
                         v_idx = parsed;
                     } else if (override_variant != null) {
-                        debug.warn("Config: workspace {d} layout variant '{s}' ignored — not a variant of the active layout", .{ i, vs });
+                        debug.warn(
+                            "Config: workspace {d} layout variant '{s}' ignored — not a variant " ++
+                                "of the active layout",
+                            .{ i, vs },
+                        );
                     } else {
                         debug.warn("Unknown {s} variants '{s}', using default", .{ md.name, vs });
                     }
                 } else if (override_variant != null) {
-                    debug.warn("Config: workspace {d} layout variant ignored — not a variant of the active layout", .{i});
+                    debug.warn(
+                        "Config: workspace {d} layout variant ignored — not a variant " ++
+                            "of the active layout",
+                        .{i},
+                    );
                 }
             }
         }
@@ -770,7 +797,8 @@ pub fn switchTo(ws_idx: u8) void {
     // correct screen claim / workarea for this workspace. Otherwise the bar's
     // deferred visibility update would require a SECOND reconcile on this
     // workspace, retiling Discord's geometry twice and causing a flicker.
-    if (build_options.has_bar) @import("plugins").Surfaces.updateBarVisibilityForWorkspace(@intCast(ws_idx));
+    if (build_options.has_bar)
+        @import("plugins").Surfaces.updateBarVisibilityForWorkspace(@intCast(ws_idx));
     // Bump the core fullscreen fact; the bar's reactive path in updateIfDirty
     // will no-op since the claim is already applied, but keeping the fact in
     // sync avoids any stale-revision edge.

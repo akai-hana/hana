@@ -76,7 +76,8 @@ pub const rectFromXcb = x11wire.rectFromXcb;
 // ---------------------------------------------------------------------------
 // Pure geometry & scaling (xcb-free; safe for model/tiling)
 
-/// Position and dimensions of a managed window, relative to the root window (the total display area).
+/// Position and dimensions of a managed window, relative to the root window
+/// (the total display area).
 pub const Rect = struct {
     x: i16,
     y: i16,

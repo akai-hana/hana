@@ -258,10 +258,15 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) void {
         // Per-key dispatch logs are `.debug` so release WMs (default log
         // level `.info`) compile them out of the hot path; folding them into
         // a summary keeps tracing available without per-key formatting+write.
-        debug.debug("[KEY] mods=0x{x} keysym=0x{x} action={s}", .{ mods, keysym, @tagName(action.*) });
+        debug.debug("[KEY] mods=0x{x} keysym=0x{x} action={s}", .{
+            mods, keysym, @tagName(action.*),
+        });
         if (key_profile.enabled) key_profile.note(utils.monotonicNs() - key_t0);
         executeAction(action);
-    } else if (mods == 0 and keysym >= masks.modifier_keysym_lo and keysym <= masks.modifier_keysym_hi) {
+    } else if (mods == 0 and
+        keysym >= masks.modifier_keysym_lo and
+        keysym <= masks.modifier_keysym_hi)
+    {
         // Bare modifier press (Shift/Ctrl/Alt/Super/Hyper L/R): can never
         // match a binding; staying silent keeps logs free of keystroke noise.
     } else {
@@ -299,7 +304,10 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     // Scroll-wheel binds (buttons 4/5) are viewport actions that don't target
     // a specific window, so they're checked before the managed-window guard
     // that would otherwise discard events fired over the desktop/bar.
-    if (super_held and (event.detail == mouse_button_scroll_up or event.detail == mouse_button_scroll_down)) {
+    if (super_held and
+        (event.detail == mouse_button_scroll_up or
+            event.detail == mouse_button_scroll_down))
+    {
         if (!tryConfigMouseBind(mods, event.detail, 0, event.time))
             replayPointer(event.time);
         return;
@@ -319,8 +327,11 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 
     if (tryConfigMouseBind(mods, event.detail, managed_window, event.time)) return;
 
-    if (event.detail == constants.mouse_button_left or event.detail == constants.mouse_button_right) {
-        if (build_options.has_floating) actions.startDrag(managed_window, event.detail, event.root_x, event.root_y);
+    if (event.detail == constants.mouse_button_left or
+        event.detail == constants.mouse_button_right)
+    {
+        if (build_options.has_floating)
+            actions.startDrag(managed_window, event.detail, event.root_x, event.root_y);
         keepDragGrab(event.time);
         return;
     }
@@ -382,7 +393,8 @@ fn closeWindow(win: u32) void {
     }
 
     const protocols_atom = utils.getAtomCached("WM_PROTOCOLS") catch return forceDestroy(conn, win);
-    const delete_atom = utils.getAtomCached("WM_DELETE_WINDOW") catch return forceDestroy(conn, win);
+    const delete_atom =
+        utils.getAtomCached("WM_DELETE_WINDOW") catch return forceDestroy(conn, win);
 
     sendWmDelete(conn, win, protocols_atom, delete_atom);
 }
@@ -407,7 +419,8 @@ fn executeAction(action: *const types.Action) void {
         .reload_config => restart.requestReload(),
         .reload_hana => restart.requestReexec(),
         .dump_state => dumpState(),
-        .exec => |cmd| spawn.executeShellCommand(cmd) catch |err| debug.err("exec failed: {}", .{err}),
+        .exec => |cmd| spawn.executeShellCommand(cmd) catch |err|
+            debug.err("exec failed: {}", .{err}),
         .sequence => |acts| for (acts) |*a| executeAction(a),
 
         // Fullscreen: keybind path resolves the focused window, then shares
@@ -594,7 +607,10 @@ fn dumpState() void {
         for (0..ws_count) |i|
             debug.info(
                 "  WS{}: {} windows",
-                .{ i + 1, tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(@intCast(i))) },
+                .{
+                    i + 1,
+                    tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(@intCast(i))),
+                },
             );
     }
 

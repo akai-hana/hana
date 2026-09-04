@@ -107,7 +107,12 @@ pub fn removeWindow(window_id: u32) void {
     _ = live().remove(window_id);
 }
 
-fn updateBorderColor(conn: core.Connection, win: u32, color: u32, comptime create_if_missing: bool) bool {
+fn updateBorderColor(
+    conn: core.Connection,
+    win: u32,
+    color: u32,
+    comptime create_if_missing: bool,
+) bool {
     if (create_if_missing) {
         // Bounded by max_entries like every other writer: refuse to grow past
         // the ceiling so WM-churn of distinct windows can't bloat the cache
