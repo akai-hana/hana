@@ -145,7 +145,11 @@ pub fn handleMappingNotify() void {
             // dead with no feedback otherwise, which looks like a config bug.
             var name_buf: [64]u8 = undefined;
             const name = xkbcommon.keysymGetName(kb.keysym, &name_buf);
-            debug.warn("Keybinding mods=0x{x:0>4} keysym={s} (0x{x}) has no keycode in the NEW keymap and was disabled; bindings are re-resolved on MappingNotify", .{ kb.modifiers, name, kb.keysym });
+            debug.warn(
+                "Keybinding mods=0x{x:0>4} keysym={s} (0x{x}) has no keycode in the NEW " ++
+                    "keymap and was disabled; bindings are re-resolved on MappingNotify",
+                .{ kb.modifiers, name, kb.keysym },
+            );
         }
     }
     events.grabKeybindings();
@@ -183,6 +187,39 @@ fn setupGrabs(conn: core.Connection, root: u32) void {
     }
     _ = xcb.xcb_flush(conn);
 }
+
+// Key-dispatch latency instrumentation. Measures the wall-clock time from
+// event receipt (entry to handleKeyPress) to the bound action's dispatch,
+// accumulated over a window so a periodic summary can be logged. Gated by
+// `build_options.profile_key` so release WMs compile it out entirely.
+const key_profile = struct {
+    const enabled = build_options.profile_key;
+    var count: u64 = 0;
+    var total_ns: i128 = 0;
+    var min_ns: i128 = std.math.maxInt(i128);
+    var max_ns: i128 = 0;
+    const window_size: u64 = 200;
+
+    fn note(ns: i128) void {
+        if (ns < min_ns) min_ns = ns;
+        if (ns > max_ns) max_ns = ns;
+        total_ns += ns;
+        count += 1;
+        if (count >= window_size) flush();
+    }
+
+    fn flush() void {
+        const avg: f64 = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(count));
+        debug.info(
+            "[KPROF] receive->action last {} keys: avg={d:.0}ns min={d}ns max={d}ns",
+            .{ count, avg, min_ns, max_ns },
+        );
+        count = 0;
+        total_ns = 0;
+        min_ns = std.math.maxInt(i128);
+        max_ns = 0;
+    }
+};
 
 // Event handlers
 
@@ -231,36 +268,6 @@ pub fn handleKeyPress(event: *const xcb.xcb_key_press_event_t) void {
         debug.debug("[KEY] mods=0x{x} keysym=0x{x} no binding", .{ mods, keysym });
     }
 }
-
-// Key-dispatch latency instrumentation. Measures the wall-clock time from
-// event receipt (entry to handleKeyPress) to the bound action's dispatch,
-// accumulated over a window so a periodic summary can be logged. Gated by
-// `build_options.profile_key` so release WMs compile it out entirely.
-const key_profile = struct {
-    const enabled = build_options.profile_key;
-    var count: u64 = 0;
-    var total_ns: i128 = 0;
-    var min_ns: i128 = std.math.maxInt(i128);
-    var max_ns: i128 = 0;
-    const window_size: u64 = 200;
-
-    fn note(ns: i128) void {
-        if (ns < min_ns) min_ns = ns;
-        if (ns > max_ns) max_ns = ns;
-        total_ns += ns;
-        count += 1;
-        if (count >= window_size) flush();
-    }
-
-    fn flush() void {
-        const avg: f64 = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(count));
-        debug.info("[KPROF] receive->action last {} keys: avg={d:.0}ns min={d}ns max={d}ns", .{ count, avg, min_ns, max_ns });
-        count = 0;
-        total_ns = 0;
-        min_ns = std.math.maxInt(i128);
-        max_ns = 0;
-    }
-};
 
 /// Clears the held-key ledger on KeyRelease; the server reports a grabbed
 /// key's release to the grabbing window, so this is what lets a repeat of the
@@ -543,8 +550,9 @@ fn executeMinimizeAction(action: *const types.Action) void {
     }
 }
 
-/// Dispatches window focus cycling (dwm-style Mod+k / Mod+j).
-/// Snaps the viewport to the newly focused window when it is off-screen. The server grab prevents a partial retile frame.
+/// Dispatches window focus cycling (dwm-style Mod+k / Mod+j). Snaps the
+/// viewport to the newly focused window when it is off-screen. The server grab
+/// prevents a partial retile frame.
 fn executeWindowAction(action: *const types.Action) void {
     switch (action.*) {
         .focus_next_window => {
@@ -584,13 +592,19 @@ fn dumpState() void {
     if (build_options.has_workspaces) {
         const ws_count = tracking.getWorkspaceCount();
         for (0..ws_count) |i|
-            debug.info("  WS{}: {} windows", .{ i + 1, tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(@intCast(i))) });
+            debug.info(
+                "  WS{}: {} windows",
+                .{ i + 1, tracking.countWindowsOnWorkspace(core.WorkspaceId.fromIndex(@intCast(i))) },
+            );
     }
 
     if (build_options.has_tiling and @import("core").tilingEnabled()) {
         debug.info("Tiling enabled: true", .{});
         debug.info("Tiling layout:  {s}", .{tiling.moduleName(pipeline.getCurrentLayout())});
-        debug.info("Tiled windows:  {}", .{@import("model").tiledCountOnWs(pipeline.model(), pipeline.model().current)});
+        debug.info(
+            "Tiled windows:  {}",
+            .{@import("model").tiledCountOnWs(pipeline.model(), pipeline.model().current)},
+        );
     }
 
     debug.info("================================", .{});

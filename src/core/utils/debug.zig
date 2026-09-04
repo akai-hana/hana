@@ -35,26 +35,7 @@ pub inline fn debug(comptime fmt: []const u8, args: anytype) void {
     log(std.log.debug, fmt, moduleFromSrc(@src()), args);
 }
 
-/// Log a structured error with an optional window ID for context.
-/// Use this as the canonical pattern for operation failures:
-///
-///   s.windows.add(win) catch |e| { debug.logError(e, win); return; };
-///   StateManager.init(...) catch |e| { debug.logError(e, null); return; };
-pub inline fn logError(e: anyerror, window: ?u32) void {
-    if (window) |win| {
-        log(std.log.err, "Failed: {} (window: 0x{x})", moduleFromSrc(@src()), .{ e, win });
-    } else {
-        log(std.log.err, "Failed: {}", moduleFromSrc(@src()), .{e});
-    }
-}
-
 /// Log a warning for a best-effort operation whose failure is non-fatal.
-/// Use instead of bare `catch {}` when visibility in debug builds is useful:
-///
-///   self.geometry_cache.put(win, rect) catch |e| debug.warnOnErr(e, "geometry cache");
-///
-/// Truly inconsequential capacity hints (ensureTotalCapacity etc.) may keep
-/// bare `catch {}`; they produce no actionable diagnostic information.
 pub inline fn warnOnErr(e: anyerror, comptime context: []const u8) void {
     log(std.log.warn, "Best-effort op failed (" ++ context ++ "): {}", moduleFromSrc(@src()), .{e});
 }

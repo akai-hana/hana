@@ -1,5 +1,6 @@
 //! Per-window border/hints cache.
-//! Dedupes border color/width for sync and bridges WM_NORMAL_HINTS into the model; geometry lives in the model/sync ledger instead.
+//! Dedupes border color/width for sync and bridges WM_NORMAL_HINTS into the
+//! model; geometry lives in the model/sync ledger instead.
 
 const std = @import("std");
 
