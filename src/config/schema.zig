@@ -20,45 +20,6 @@ fn place(section: []const u8, key: []const u8) Placement {
     return .{ .section = section, .key = key };
 }
 
-// ── Knob shorthand constructors ─────────────────────────────────────────────
-// Every helper returns a comptime Knob so the knobs array stays compact.
-
-fn b(section: []const u8, key: []const u8, target: []const u8) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .b };
-}
-
-fn ki(section: []const u8, key: []const u8, target: []const u8, comptime T: type, comptime min: ?comptime_int, comptime max: ?comptime_int) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .{ .int = .{ .T = T, .min = min, .max = max } } };
-}
-
-fn s(section: []const u8, key: []const u8, target: []const u8, comptime min: f32) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .{ .scalable = min } };
-}
-
-fn sf(section: []const u8, key: []const u8, target: []const u8) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .scalable_free };
-}
-
-fn @"as"(section: []const u8, key: []const u8, target: []const u8) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .auto_scalable };
-}
-
-fn kc(section: []const u8, key: []const u8, target: []const u8) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .color };
-}
-
-fn r(section: []const u8, key: []const u8, target: []const u8) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .ratio };
-}
-
-fn str(section: []const u8, key: []const u8, target: []const u8) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .str };
-}
-
-fn e(section: []const u8, key: []const u8, target: []const u8, comptime T: type, comptime ci: bool) Knob {
-    return .{ .places = &.{place(section, key)}, .target = target, .kind = .{ .enum_read = .{ .T = T, .ci = ci } } };
-}
-
 /// How an enum-valued knob is parsed.
 pub const EnumRead = struct {
     T: type,
@@ -123,90 +84,246 @@ pub const Knob = struct {
 /// colors precede the color_from chain that borrows them as fallbacks.
 pub const knobs = [_]Knob{
     // [drag]
-    b("drag", "enabled", "drag_enabled"),
-    s("drag", "snap_distance", "snap_distance", 0.0),
+    .{ .places = &.{place("drag", "enabled")}, .target = "drag_enabled", .kind = .b },
+    .{
+        .places = &.{place("drag", "snap_distance")},
+        .target = "snap_distance",
+        .kind = .{ .scalable = 0.0 },
+    },
 
     // [fullscreen]
-    b("fullscreen", "enabled", "fullscreen_enabled"),
+    .{ .places = &.{place("fullscreen", "enabled")}, .target = "fullscreen_enabled", .kind = .b },
 
     // [bar.modules.workspaces] | [workspaces]
     .{
-        .places = &.{ place("bar.modules.workspaces", "count"), place("workspaces", "count") },
+        .places = &.{
+            place("bar.modules.workspaces", "count"),
+            place("workspaces", "count"),
+        },
         .target = "workspaces.count",
         .kind = .{ .int = .{ .T = u8, .min = 1, .max = constants.max_workspaces } },
     },
     .{
-        .places = &.{ place("bar.modules.workspaces", "enabled"), place("workspaces", "enabled") },
+        .places = &.{
+            place("bar.modules.workspaces", "enabled"),
+            place("workspaces", "enabled"),
+        },
         .target = "workspaces.enabled",
         .kind = .b,
     },
 
     // [tiling]: gated on the section exactly as parseTiling always was --
     // a lone [tiling.aesthetics] without [tiling] never fed these knobs.
-    .{ .places = &.{place("tiling", "enabled")}, .target = "tiling.enabled", .kind = .b, .requires = "tiling" },
-    .{ .places = &.{place("tiling", "global_layout")}, .target = "tiling.global_layout", .kind = .b, .requires = "tiling" },
-    .{ .places = &.{place("tiling", "min_window_dim")}, .target = "tiling.min_window_dim", .kind = .{ .int = .{ .T = u16, .min = 1 } }, .requires = "tiling" },
+    .{
+        .places = &.{place("tiling", "enabled")},
+        .target = "tiling.enabled",
+        .kind = .b,
+        .requires = "tiling",
+    },
+    .{
+        .places = &.{place("tiling", "global_layout")},
+        .target = "tiling.global_layout",
+        .kind = .b,
+        .requires = "tiling",
+    },
+    .{
+        .places = &.{place("tiling", "min_window_dim")},
+        .target = "tiling.min_window_dim",
+        .kind = .{ .int = .{ .T = u16, .min = 1 } },
+        .requires = "tiling",
+    },
 
     // Aesthetics quartet: [tiling.aesthetics] preferred, flat [tiling]
     // fallback (same key spellings in both).
-    .{ .places = &.{ place("tiling.aesthetics", "gap_width"), place("tiling", "gap_width") }, .target = "tiling.gap_width", .kind = .{ .scalable = 0.0 }, .requires = "tiling" },
-    .{ .places = &.{ place("tiling.aesthetics", "border_width"), place("tiling", "border_width") }, .target = "tiling.border_width", .kind = .{ .scalable = 0.0 }, .requires = "tiling" },
-    .{ .places = &.{ place("tiling.aesthetics", "border_focused"), place("tiling", "border_focused") }, .target = "tiling.border_focused", .kind = .color, .requires = "tiling" },
-    .{ .places = &.{ place("tiling.aesthetics", "border_unfocused"), place("tiling", "border_unfocused") }, .target = "tiling.border_unfocused", .kind = .color, .requires = "tiling" },
+    .{
+        .places = &.{
+            place("tiling.aesthetics", "gap_width"),
+            place("tiling", "gap_width"),
+        },
+        .target = "tiling.gap_width",
+        .kind = .{ .scalable = 0.0 },
+        .requires = "tiling",
+    },
+    .{
+        .places = &.{
+            place("tiling.aesthetics", "border_width"),
+            place("tiling", "border_width"),
+        },
+        .target = "tiling.border_width",
+        .kind = .{ .scalable = 0.0 },
+        .requires = "tiling",
+    },
+    .{
+        .places = &.{
+            place("tiling.aesthetics", "border_focused"),
+            place("tiling", "border_focused"),
+        },
+        .target = "tiling.border_focused",
+        .kind = .color,
+        .requires = "tiling",
+    },
+    .{
+        .places = &.{
+            place("tiling.aesthetics", "border_unfocused"),
+            place("tiling", "border_unfocused"),
+        },
+        .target = "tiling.border_unfocused",
+        .kind = .color,
+        .requires = "tiling",
+    },
 
     // Master-stack trio: the dedicated section's shorter spellings win;
     // flat [tiling] keeps the flat spellings. Section presence -- not key
     // presence -- picks the spelling.
-    .{ .places = &.{ place("tiling.layouts.master-stack", "count"), place("tiling", "master_count") }, .target = "tiling.master_count", .kind = .{ .int = .{ .T = u8, .min = 1 } }, .requires = "tiling" },
-    .{ .places = &.{ place("tiling.layouts.master-stack", "side"), place("tiling", "master_side") }, .target = "tiling.master_side", .kind = .{ .enum_read = .{ .T = types.MasterSide, .ci = true } }, .requires = "tiling" },
+    .{
+        .places = &.{
+            place("tiling.layouts.master-stack", "count"),
+            place("tiling", "master_count"),
+        },
+        .target = "tiling.master_count",
+        .kind = .{ .int = .{ .T = u8, .min = 1 } },
+        .requires = "tiling",
+    },
+    .{
+        .places = &.{
+            place("tiling.layouts.master-stack", "side"),
+            place("tiling", "master_side"),
+        },
+        .target = "tiling.master_side",
+        .kind = .{ .enum_read = .{ .T = types.MasterSide, .ci = true } },
+        .requires = "tiling",
+    },
     // No local bound: validate() owns master_width's ratio/negative policy.
-    .{ .places = &.{ place("tiling.layouts.master-stack", "width"), place("tiling", "master_width") }, .target = "tiling.master_width", .kind = .scalable_free, .requires = "tiling" },
+    .{
+        .places = &.{
+            place("tiling.layouts.master-stack", "width"),
+            place("tiling", "master_width"),
+        },
+        .target = "tiling.master_width",
+        .kind = .scalable_free,
+        .requires = "tiling",
+    },
 
     // [bar]
-    b("bar", "enabled", "bar.enabled"),
-    b("bar", "vim_mode", "bar.vim_mode"),
-    b("bar", "carousel_enabled", "bar.carousel_enabled"),
-    s("bar", "font_size", "bar.font_size", 0.0),
-    s("bar", "segment_spacing", "bar.spacing", 0.0),
-    s("bar", "indicator_size", "bar.indicator_size", 0.0),
-    s("bar", "workspace_tag_width", "bar.workspace_tag_width", 0.0),
+    .{ .places = &.{place("bar", "enabled")}, .target = "bar.enabled", .kind = .b },
+    .{ .places = &.{place("bar", "vim_mode")}, .target = "bar.vim_mode", .kind = .b },
+    .{
+        .places = &.{place("bar", "carousel_enabled")},
+        .target = "bar.carousel_enabled",
+        .kind = .b,
+    },
+    .{
+        .places = &.{place("bar", "font_size")},
+        .target = "bar.font_size",
+        .kind = .{ .scalable = 0.0 },
+    },
+    // segment_spacing feeds BarConfig.spacing.
+    .{
+        .places = &.{place("bar", "segment_spacing")},
+        .target = "bar.spacing",
+        .kind = .{ .scalable = 0.0 },
+    },
+    .{
+        .places = &.{place("bar", "indicator_size")},
+        .target = "bar.indicator_size",
+        .kind = .{ .scalable = 0.0 },
+    },
+    .{
+        .places = &.{place("bar", "workspace_tag_width")},
+        .target = "bar.workspace_tag_width",
+        .kind = .{ .scalable = 0.0 },
+    },
     // height: null = auto-calculate from font metrics alone.
-    @"as"("bar", "height", "bar.height"),
+    .{ .places = &.{place("bar", "height")}, .target = "bar.height", .kind = .auto_scalable },
     // Exact-case enum; an unrecognized spelling silently keeps .top.
-    e("bar", "position", "bar.bar_position", types.BarScreenPosition, false),
-    i("bar", "carousel_speed_px_s", "bar.carousel_speed_px_s", u16, 1, 1000),
+    .{
+        .places = &.{place("bar", "position")},
+        .target = "bar.bar_position",
+        .kind = .{ .enum_read = .{ .T = types.BarScreenPosition } },
+    },
+    .{
+        .places = &.{place("bar", "carousel_speed_px_s")},
+        .target = "bar.carousel_speed_px_s",
+        .kind = .{ .int = .{ .T = u16, .min = 1, .max = 1000 } },
+    },
 
     // Base palette: read before every color_from consumer below.
-    c("bar", "bg", "bar.bg"),
-    c("bar", "fg", "bar.fg"),
-    c("bar", "selected_bg", "bar.selected_bg"),
-    c("bar", "selected_fg", "bar.selected_fg"),
-    c("bar", "accent_color", "bar.accent_color"),
+    .{ .places = &.{place("bar", "bg")}, .target = "bar.bg", .kind = .color },
+    .{ .places = &.{place("bar", "fg")}, .target = "bar.fg", .kind = .color },
+    .{ .places = &.{place("bar", "selected_bg")}, .target = "bar.selected_bg", .kind = .color },
+    .{ .places = &.{place("bar", "selected_fg")}, .target = "bar.selected_fg", .kind = .color },
+    .{ .places = &.{place("bar", "accent_color")}, .target = "bar.accent_color", .kind = .color },
 
-    str("bar", "clock_format", "bar.clock_format"),
-    str("bar", "drun_prompt", "bar.drun_prompt"),
+    .{ .places = &.{place("bar", "clock_format")}, .target = "bar.clock_format", .kind = .str },
+    .{ .places = &.{place("bar", "drun_prompt")}, .target = "bar.drun_prompt", .kind = .str },
     .{
         .places = &.{place("bar", "indicator_location")},
         .target = "bar.indicator_location",
-        .kind = .{ .enum_read = .{ .T = types.IndicatorLocation, .ci = true, .warn = true, .default_label = "up-left" } },
+        .kind = .{ .enum_read = .{
+            .T = types.IndicatorLocation,
+            .ci = true,
+            .warn = true,
+            .default_label = "up-left",
+        } },
     },
-    r("bar", "indicator_padding", "bar.indicator_padding"),
-    r("bar", "transparency", "bar.transparency"),
+    .{
+        .places = &.{place("bar", "indicator_padding")},
+        .target = "bar.indicator_padding",
+        .kind = .ratio,
+    },
+    .{ .places = &.{place("bar", "transparency")}, .target = "bar.transparency", .kind = .ratio },
     // Falls back to the bar-wide fg (its historical default) -- but only
     // when the key is present; absent keeps the field null.
-    .{ .places = &.{place("bar", "indicator_color")}, .target = "bar.indicator_color", .kind = .{ .color_opt = "fg" } },
+    .{
+        .places = &.{place("bar", "indicator_color")},
+        .target = "bar.indicator_color",
+        .kind = .{ .color_opt = "fg" },
+    },
 
     // [bar.colors] chain. Gated on [bar] because parseBar always returned
     // before reaching these when the section was missing entirely. The
     // title accents additionally COPY their fallback when [bar.colors] is
     // absent (they were unconditionally assigned); the drun trio stay null
     // so the read-time fallbacks in BarConfig apply.
-    .{ .places = &.{place("bar.colors", "title")}, .target = "bar.title_accent_color", .kind = .{ .color_from = "accent_color" }, .requires = "bar", .copy_when_absent = true },
-    .{ .places = &.{place("bar.colors", "title_unfocused")}, .target = "bar.title_unfocused_accent", .kind = .{ .color_from = "bg" }, .requires = "bar", .copy_when_absent = true },
-    .{ .places = &.{place("bar.colors", "title_minimized")}, .target = "bar.title_minimized_accent", .kind = .{ .color_from = "accent_color" }, .requires = "bar", .copy_when_absent = true },
-    .{ .places = &.{place("bar.colors", "drun_bg")}, .target = "bar.drun_bg", .kind = .{ .color_from = "bg" }, .requires = "bar" },
-    .{ .places = &.{place("bar.colors", "drun_fg")}, .target = "bar.drun_fg", .kind = .{ .color_from = "fg" }, .requires = "bar" },
-    .{ .places = &.{place("bar.colors", "drun_prompt_color")}, .target = "bar.drun_prompt_color", .kind = .{ .color_from = "accent_color" }, .requires = "bar" },
+    .{
+        .places = &.{place("bar.colors", "title")},
+        .target = "bar.title_accent_color",
+        .kind = .{ .color_from = "accent_color" },
+        .requires = "bar",
+        .copy_when_absent = true,
+    },
+    .{
+        .places = &.{place("bar.colors", "title_unfocused")},
+        .target = "bar.title_unfocused_accent",
+        .kind = .{ .color_from = "bg" },
+        .requires = "bar",
+        .copy_when_absent = true,
+    },
+    .{
+        .places = &.{place("bar.colors", "title_minimized")},
+        .target = "bar.title_minimized_accent",
+        .kind = .{ .color_from = "accent_color" },
+        .requires = "bar",
+        .copy_when_absent = true,
+    },
+    .{
+        .places = &.{place("bar.colors", "drun_bg")},
+        .target = "bar.drun_bg",
+        .kind = .{ .color_from = "bg" },
+        .requires = "bar",
+    },
+    .{
+        .places = &.{place("bar.colors", "drun_fg")},
+        .target = "bar.drun_fg",
+        .kind = .{ .color_from = "fg" },
+        .requires = "bar",
+    },
+    .{
+        .places = &.{place("bar.colors", "drun_prompt_color")},
+        .target = "bar.drun_prompt_color",
+        .kind = .{ .color_from = "accent_color" },
+        .requires = "bar",
+    },
 };
 
 // Type-level access into Config by dotted path.
