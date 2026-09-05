@@ -554,11 +554,9 @@ pub fn swapPrimaryAction(focus_swap: bool) void {
 pub fn moveFocused(delta: i32) void {
     const m = pipeline.model();
     const win = m.focused orelse return;
-    const h = model_mod.findHome(m, win) orelse return;
-    const idx = m.ws[h].tiled_order.indexOfScalar(win) orelse return;
-    const next_i = @as(i64, @intCast(idx)) + delta;
-    if (next_i < 0 or next_i >= m.ws[h].tiled_order.len) return;
-    model_mod.reorderTiled(m, win, @intCast(next_i));
+    // Modulo wrap (dwm stack rotate): stepping past either edge of the home
+    // list's tiled order cycles back around, matching the focus-step parity.
+    model_mod.stepTiled(m, win, delta);
     pipeline.reconcileUnderGrabNow(.{});
 }
 
