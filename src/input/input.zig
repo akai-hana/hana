@@ -192,34 +192,12 @@ fn setupGrabs(conn: core.Connection, root: u32) void {
 // event receipt (entry to handleKeyPress) to the bound action's dispatch,
 // accumulated over a window so a periodic summary can be logged. Gated by
 // `build_options.profile_key` so release WMs compile it out entirely.
-const key_profile = struct {
-    const enabled = build_options.profile_key;
-    var count: u64 = 0;
-    var total_ns: i128 = 0;
-    var min_ns: i128 = std.math.maxInt(i128);
-    var max_ns: i128 = 0;
-    const window_size: u64 = 200;
-
-    fn note(ns: i128) void {
-        if (ns < min_ns) min_ns = ns;
-        if (ns > max_ns) max_ns = ns;
-        total_ns += ns;
-        count += 1;
-        if (count >= window_size) flush();
-    }
-
-    fn flush() void {
-        const avg: f64 = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(count));
-        debug.info(
-            "[KPROF] receive->action last {} keys: avg={d:.0}ns min={d}ns max={d}ns",
-            .{ count, avg, min_ns, max_ns },
-        );
-        count = 0;
-        total_ns = 0;
-        min_ns = std.math.maxInt(i128);
-        max_ns = 0;
-    }
-};
+const key_profile = utils.WindowedProfiler(
+    build_options.profile_key,
+    "KPROF",
+    "[KPROF] receive->action last {} keys: avg={d:.0}ns min={d}ns max={d}ns",
+    debug.info,
+);
 
 // Event handlers
 
@@ -478,10 +456,11 @@ fn executeAction(action: *const types.Action) void {
     }
 }
 
-/// Runs a tiling op under the standard graft scaffolding shared by the four
-/// cycle/step actions: suppress transient focus noise around the mutation,
-/// then re-settle tiling. `op` is an actions fn taking the step direction.
-inline fn tilingOp(comptime op: fn (i32) void, arg: i32) void {
+/// Runs a tiling op under the standard graft scaffolding shared by the
+/// cycle/step/toggle actions: suppress transient focus noise around the
+/// mutation, then re-settle tiling. `op` is an actions fn taking the arg type
+/// the action carries (step direction, or the floating toggle's window id).
+inline fn tilingOp(comptime op: anytype, arg: anytype) void {
     focus.setSuppressReason(.tiling_operation);
     op(arg);
     focus.beginTilingOpSettle();
@@ -491,11 +470,7 @@ inline fn tilingOp(comptime op: fn (i32) void, arg: i32) void {
 /// compositor cannot render a partial retile frame.
 fn executeTilingAction(action: *const types.Action) void {
     switch (action.*) {
-        .toggle_floating_window => if (focus.getFocused()) |win| {
-            focus.setSuppressReason(.tiling_operation);
-            actions.toggleFloating(win);
-            focus.beginTilingOpSettle();
-        },
+        .toggle_floating_window => if (focus.getFocused()) |win| tilingOp(actions.toggleFloating, win),
         .toggle_layout => tilingOp(actions.cycleLayoutKind, 1),
         .toggle_layout_reverse => tilingOp(actions.cycleLayoutKind, -1),
         .cycle_layout_variants => tilingOp(actions.stepVariantDir, 1),

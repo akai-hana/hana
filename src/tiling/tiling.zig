@@ -38,6 +38,16 @@ pub inline fn shrinkClamped(dim: u16, margin: u16, min_dim: u16) u16 {
     return if (dim > margin) dim - margin else min_dim;
 }
 
+/// Full-rect inset by `margin` (shrinkClamped width/height at fixed origin).
+pub inline fn insetRect(x: i32, y: i32, w: u16, h: u16, margin: u16, min_dim: u16) utils.Rect {
+    return .{
+        .x = @intCast(x),
+        .y = @intCast(y),
+        .width = shrinkClamped(w, margin, min_dim),
+        .height = shrinkClamped(h, margin, min_dim),
+    };
+}
+
 /// Clamp a signed y coordinate to a non-negative u16.
 inline fn clampYToU16(y: i32) u16 {
     return @intCast(@max(y, 0));

@@ -167,7 +167,7 @@ fn processIncludes(
     const inc_val = src_doc.get("include") orelse return;
     const includes = inc_val.asArray() orelse return;
     for (includes) |item| {
-        const rel = item.asString() orelse continue;
+        const rel = item.asScalar([]const u8) orelse continue;
         if (!std.mem.endsWith(u8, rel, ".toml")) {
             debug.warn("include '{s}': path must end in .toml; skipping", .{rel});
             continue;
@@ -296,11 +296,13 @@ pub fn loadConfigDefault(allocator: std.mem.Allocator) !types.Config {
 }
 
 /// Validates domain invariants on a freshly loaded config.
+fn invalid(comptime fmt: []const u8, args: anytype) error{ InvalidConfig } {
+    debug.err("Invalid config: " ++ fmt ++ ", keeping old", args);
+    return error.InvalidConfig;
+}
+
 pub fn validate(cfg: *const types.Config) !void {
-    if (cfg.tiling.master_count == 0) {
-        debug.err("Invalid config: master_count must be > 0, keeping old", .{});
-        return error.InvalidConfig;
-    }
+    if (cfg.tiling.master_count == 0) return invalid("master_count must be > 0", .{});
     // master_width is a ScalableValue: percentages validate as a
     // [min_master_width, max_master_width] ratio; pixels only as >= 0, since
     // the screen width for a ratio isn't available here and the runtime clamps:
@@ -308,26 +310,16 @@ pub fn validate(cfg: *const types.Config) !void {
     const mw = cfg.tiling.master_width;
     if (mw.is_percentage) {
         const mw_ratio: f32 = utils.scaling.asRatio(mw);
-        if (mw_ratio < constants.min_master_width or mw_ratio > constants.max_master_width) {
-            debug.err(
-                "Invalid config: master_width {d:.0}% out of " ++
-                    "[{d:.0}%, {d:.0}%], keeping old",
-                .{
-                    mw_ratio * 100.0,
-                    constants.min_master_width * 100.0,
-                    constants.max_master_width * 100.0,
-                },
-            );
-            return error.InvalidConfig;
-        }
+        if (mw_ratio < constants.min_master_width or mw_ratio > constants.max_master_width)
+            return invalid("master_width {d:.0}% out of [{d:.0}%, {d:.0}%]", .{
+                mw_ratio * 100.0,
+                constants.min_master_width * 100.0,
+                constants.max_master_width * 100.0,
+            });
     } else if (mw.value < 0.0) {
-        debug.err("Invalid config: master_width {d}px must be >= 0, keeping old", .{mw.value});
-        return error.InvalidConfig;
+        return invalid("master_width {d}px must be >= 0", .{mw.value});
     }
-    if (cfg.workspaces.count < 1) {
-        debug.err("Invalid config: workspace count must be >= 1, keeping old", .{});
-        return error.InvalidConfig;
-    }
+    if (cfg.workspaces.count < 1) return invalid("workspace count must be >= 1", .{});
 }
 
 /// Reads, parses, and returns the config at `path` (single-file entry point).
@@ -545,12 +537,8 @@ fn expandRangeToken(
         return;
     }
     while (ch <= end) : (ch += 1) {
-        if (entries.items.len >= max_glob_expansion) break;
-        try entries.append(allocator, .{
-            .key = try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ prefix, ch, suffix }),
-            .ws_idx = @intCast(entries.items.len + 1),
-            .owned = true,
-        });
+        var ch_buf: [1]u8 = .{ch};
+        try appendExpandedEntry(allocator, entries, prefix, suffix, &ch_buf);
     }
 }
 
@@ -640,7 +628,7 @@ fn actionFromValue(
                 acts.deinit(allocator);
             }
             for (arr.items) |elem| {
-                const cmd = elem.asString() orelse continue;
+                const cmd = elem.asScalar([]const u8) orelse continue;
                 try acts.append(allocator, try resolveAndParseAction(allocator, cmd, ws_idx, kill));
             }
             if (acts.items.len == 0) {
@@ -682,12 +670,12 @@ fn parseKeybindings(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *t
     var iter = section.orderedIterator();
     while (iter.next()) |entry| {
         if (std.ascii.eqlIgnoreCase(entry.key, "Mod")) {
-            mod_placeholder = entry.value.asString();
+            mod_placeholder = entry.value.asScalar([]const u8);
             section.markConsumed(entry.key);
             continue;
         }
         if (std.ascii.eqlIgnoreCase(entry.key, "kill")) {
-            kill_placeholder = entry.value.asString();
+            kill_placeholder = entry.value.asScalar([]const u8);
             section.markConsumed(entry.key);
             continue;
         }
@@ -882,7 +870,7 @@ fn parseTilingStructures(
     types.freeStrings(&cfg.tiling.layouts, allocator, true);
     cfg.tiling.workspace_layout_overrides.clearRetainingCapacity();
     clearTilingVariants(allocator, cfg);
-    if (section.getArray("layouts")) |arr| {
+    if (section.getAs([]const parser.Value,"layouts")) |arr| {
         try parseLayoutsArray(allocator, arr, cfg);
         if (cfg.tiling.layouts.items.len > 0) cfg.tiling.layout = cfg.tiling.layouts.items[0];
     } else {
@@ -911,12 +899,7 @@ fn parseTilingStructures(
 /// retaining the map's backing storage, so a config reload re-parses a clean
 /// map. See setTilingVariant for why both are heap-dup'd.
 fn clearTilingVariants(allocator: std.mem.Allocator, cfg: *types.Config) void {
-    var it = cfg.tiling.variants.iterator();
-    while (it.next()) |e| {
-        allocator.free(e.key_ptr.*);
-        allocator.free(e.value_ptr.*);
-    }
-    cfg.tiling.variants.clearRetainingCapacity();
+    types.freeStringMap(&cfg.tiling.variants, allocator, true);
 }
 
 /// The flat `[tiling] master_variant/monocle_variant/grid_variant` keys
@@ -962,7 +945,7 @@ fn parseTilingLayoutSubtables(
 ) !void {
     if (doc.getSection("tiling")) |sec| {
         for (flat_variant_keys) |fk| {
-            if (sec.getString(fk.key)) |v|
+            if (sec.getAs([]const u8,fk.key)) |v|
                 try setTilingVariant(allocator, cfg, fk.canon, v);
         }
     }
@@ -996,7 +979,7 @@ fn parseTilingLayoutSubtables(
                     "master-stack.counts",
                     constants.max_workspaces,
                 )) continue;
-                const count_val = p.value.asInt() orelse {
+                const count_val = p.value.asScalar(i64) orelse {
                     debug.warn(
                         "master-stack.counts: non-integer count for workspace {}, skipping",
                         .{ws_1based},
@@ -1018,7 +1001,7 @@ fn parseTilingLayoutSubtables(
         } else if (std.mem.indexOfScalar(u8, tail, '.') == null) {
             // Only direct "tiling.layouts.<name>" keys qualify; canonicalized
             // so master alias spellings resolve the same variant entry.
-            if (entry.value_ptr.getString("variants")) |v|
+            if (entry.value_ptr.getAs([]const u8,"variants")) |v|
                 try setTilingVariant(allocator, cfg, canonicalLayoutName(tail), v);
         }
     }
@@ -1126,7 +1109,7 @@ fn parseLayoutsArray(
 ) !void {
     var i: usize = 0;
     while (i < arr.len) : (i += 1) {
-        const name_str = arr[i].asString() orelse {
+        const name_str = arr[i].asScalar([]const u8) orelse {
             debug.warn("layouts array: expected a string at index {}, skipping", .{i});
             continue;
         };
@@ -1164,7 +1147,7 @@ fn parseLayoutsArray(
         var variants: ?[]const u8 = null;
         var ws_list_str: ?[]const u8 = null;
         if (i + 1 >= arr.len) continue;
-        const peek = arr[i + 1].asString() orelse continue;
+        const peek = arr[i + 1].asScalar([]const u8) orelse continue;
 
         if (isWorkspaceList(peek)) {
             ws_list_str = peek;
@@ -1177,7 +1160,7 @@ fn parseLayoutsArray(
             variants = (try parseLayoutVariant(allocator, cfg, name_lower, peek)) orelse continue;
             i += 1;
             if (i + 1 < arr.len) {
-                if (arr[i + 1].asString()) |peek2| {
+                if (arr[i + 1].asScalar([]const u8)) |peek2| {
                     if (isWorkspaceList(peek2)) {
                         ws_list_str = peek2;
                         i += 1;
@@ -1199,6 +1182,23 @@ fn parseLayoutsArray(
     }
 }
 
+/// Dupe-appends every string element of `items` into `dst`;
+/// non-string entries are skipped (`warn` if set).
+fn appendDupedStrings(
+    allocator: std.mem.Allocator,
+    items: []const parser.Value,
+    dst: *std.ArrayList([]const u8),
+    comptime warn: bool,
+) !void {
+    for (items) |item| {
+        if (item.asScalar([]const u8)) |s| {
+            try dst.append(allocator, try allocator.dupe(u8, s));
+        } else if (comptime warn) {
+            debug.warn("Non-string entry in bar segment list, skipping", .{});
+        }
+    }
+}
+
 /// Bar's NON-scalar structures: fonts, indicator glyph mirroring, workspace
 /// icons, and the bar columns. Every bar SCALAR (flags, scalables, height,
 /// colors incl. the [bar.colors] fallback chains, strings, enums, ratios)
@@ -1206,16 +1206,15 @@ fn parseLayoutsArray(
 /// stays gated on the [bar] section existing.
 fn parseBar(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *types.Config) !void {
     const section = doc.getSection("bar") orelse return;
-    if (section.getArray("fonts")) |arr| {
+    if (section.getAs([]const parser.Value,"fonts")) |arr| {
         types.freeStrings(&cfg.bar.fonts, allocator, true);
-        for (arr) |item| if (item.asString()) |name|
-            try cfg.bar.fonts.append(allocator, try allocator.dupe(u8, name));
+        try appendDupedStrings(allocator, arr, &cfg.bar.fonts, false);
         debug.info("Loaded {} fonts for bar", .{cfg.bar.fonts.items.len});
     }
     // indicator_focused/unfocused: if only one is set, the other mirrors it.
     // A pair interaction, so it stays bespoke rather than joining the table.
-    const raw_focused = section.getString("indicator_focused");
-    const raw_unfocused = section.getString("indicator_unfocused");
+    const raw_focused = section.getAs([]const u8,"indicator_focused");
+    const raw_unfocused = section.getAs([]const u8,"indicator_unfocused");
     const focused_val = raw_focused orelse raw_unfocused;
     const unfocused_val = raw_unfocused orelse raw_focused;
     if (focused_val) |v| try schema.assignStr(allocator, &cfg.bar.indicator_focused, v);
@@ -1230,17 +1229,17 @@ fn parseWorkspaceIcons(
     cfg: *types.Config,
 ) !void {
     types.freeStrings(&cfg.bar.workspace_icons, allocator, true);
-    if (section.getArray("icons")) |arr| {
+    if (section.getAs([]const parser.Value,"icons")) |arr| {
         for (arr) |item| {
-            if (item.asString()) |s| {
+            if (item.asScalar([]const u8)) |s| {
                 try cfg.bar.workspace_icons.append(allocator, try allocator.dupe(u8, s));
-            } else if (item.asInt()) |n| {
+            } else if (item.asScalar(i64)) |n| {
                 var num_buf: [20]u8 = undefined;
                 const s = std.fmt.bufPrint(&num_buf, "{}", .{n}) catch continue;
                 try cfg.bar.workspace_icons.append(allocator, try allocator.dupe(u8, s));
             }
         }
-    } else if (section.getString("icons")) |str| {
+    } else if (section.getAs([]const u8,"icons")) |str| {
         var ch_buf: [1]u8 = undefined;
         for (str) |ch| {
             ch_buf[0] = ch;
@@ -1270,13 +1269,8 @@ fn parseBarLayout(allocator: std.mem.Allocator, doc: *parser.Document, cfg: *typ
     for (positions) |p| {
         const layout_section = doc.getSection(p.name) orelse continue;
         var bar_layout = types.BarLayout{ .position = p.pos, .segments = .empty };
-        if (layout_section.getArray("segments")) |seg_arr|
-            for (seg_arr) |item| {
-                if (item.asString()) |s|
-                    try bar_layout.segments.append(allocator, try allocator.dupe(u8, s))
-                else
-                    debug.warn("Non-string entry in bar segment list, skipping", .{});
-            };
+        if (layout_section.getAs([]const parser.Value,"segments")) |seg_arr|
+            try appendDupedStrings(allocator, seg_arr, &bar_layout.segments, true);
         if (bar_layout.segments.items.len > 0) {
             try cfg.bar.layout.append(allocator, bar_layout);
         } else {
@@ -1342,7 +1336,7 @@ fn tryAddClassRule(
     class_name: []const u8,
     value: parser.Value,
 ) !void {
-    const ws_num = value.asInt() orelse {
+    const ws_num = value.asScalar(i64) orelse {
         debug.warn("Rule for '{s}' has non-integer value, skipping", .{class_name});
         return;
     };
@@ -1375,7 +1369,7 @@ fn parseWorkspaceRuleSection(
         if (!checkWorkspaceBound(ws_num, entry.key, cfg.workspaces.count)) continue;
         if (entry.value.asArray()) |arr| {
             for (arr) |item| {
-                if (item.asString()) |class_name| try addRule(allocator, cfg, class_name, ws_num);
+                if (item.asScalar([]const u8)) |class_name| try addRule(allocator, cfg, class_name, ws_num);
             }
         }
     }

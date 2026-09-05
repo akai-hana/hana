@@ -239,7 +239,7 @@ fn drawFittedTitle(
     text_fg: u32,
     scroll_enabled: bool,
 ) !void {
-    const now = monotonicMs();
+    const now = utils.monotonicMs();
     if (text_w <= geom.avail_w) {
         // Focused cell that no longer overflows: retire any active scroll so
         // the carousel state machine (and with it the poll deadline and the
@@ -310,10 +310,6 @@ inline fn emptyWorkspace(ctx: segmod.TitleRenderContext, count: usize) ?u16 {
     return ctx.start_x + ctx.width;
 }
 
-fn monotonicMs() i64 {
-    return @intCast(utils.monotonicNs() / std.time.ns_per_ms);
-}
-
 // -- Segment hooks -----------------------------------------------------------
 
 fn drawHook(ctx: *anyopaque, x: u16) !u16 {
@@ -352,7 +348,7 @@ fn pollTimeoutMsHook() i32 {
     // the carousel to pause it.
     if (prompt.isActive()) return -1;
     return carousel.pollDeadlineMs(
-        monotonicMs(),
+        utils.monotonicMs(),
         core.getState().config.bar.carousel_enabled,
         refresh.detectedHz(),
     );

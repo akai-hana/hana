@@ -1227,15 +1227,14 @@ fn drawPill(
 
 /// Insert mode: blinking thin caret; the caret position does not consume its
 /// character, and ghost text appears dimmed after the cursor when at end.
+/// Post-cursor text is drawn by the shared tail in drawActive.
 fn drawInsertMode(
     dc: *drawing.DrawContext,
     baseline: u16,
     text_left_x: u16,
     scroll_end_x: u16,
-    ellipsis_end_x: u16,
     px: *i32,
     accent: u32,
-    fg: u32,
 ) !void {
     // Caret geometry was pre-computed in ensureCaretGeom.
     const caret_top = g.cached_caret_top.?;
@@ -1255,30 +1254,19 @@ fn drawInsertMode(
             g.ghost_buf[0..g.ghost_len],
             accent,
         );
-
-    try drawPostSpan(
-        dc,
-        px.*,
-        text_left_x,
-        ellipsis_end_x,
-        baseline,
-        g.vim_state.buf[g.vim_state.cursor..g.vim_state.len],
-        fg,
-    );
 }
 
-/// NORMAL: full-character block cursor.
+/// NORMAL: full-character block cursor. Post-cursor text is drawn by the
+/// shared tail in drawActive.
 fn drawNormalMode(
     dc: *drawing.DrawContext,
     height: u16,
     baseline: u16,
     text_left_x: u16,
     scroll_end_x: u16,
-    ellipsis_end_x: u16,
     px: *i32,
     accent: u32,
     bg: u32,
-    fg: u32,
 ) !void {
     const cur_hi = @min(g.vim_state.cursor + 1, g.vim_state.len);
 
@@ -1299,12 +1287,6 @@ fn drawNormalMode(
         cur_hi,
         g.cached_caret_w,
     );
-
-    const post_text: []const u8 = if (g.vim_state.cursor < g.vim_state.len)
-        g.vim_state.buf[g.vim_state.cursor + 1 .. g.vim_state.len]
-    else
-        "";
-    try drawPostSpan(dc, px.*, text_left_x, ellipsis_end_x, baseline, post_text, fg);
 }
 
 /// Render the active input UI.
@@ -1370,17 +1352,17 @@ fn drawActive(
             fg,
         );
 
-    // Mode-specific text rendering.
+    // Mode-specific caret/ghost rendering; post-cursor text is common to both
+    // (the block cursor advances px past its own character in NORMAL, the
+    // caret consumes none in INSERT), so it is drawn once below.
     switch (g.vim_state.mode) {
         .insert => try drawInsertMode(
             dc,
             baseline,
             text_left_x,
             scroll_end_x,
-            ellipsis_end_x,
             &px,
             accent,
-            fg,
         ),
         else => try drawNormalMode(
             dc,
@@ -1388,13 +1370,17 @@ fn drawActive(
             baseline,
             text_left_x,
             scroll_end_x,
-            ellipsis_end_x,
             &px,
             accent,
             bg,
-            fg,
         ),
     }
+
+    const post_start = if (g.vim_state.mode == .insert)
+        g.vim_state.cursor
+    else
+        @min(g.vim_state.cursor + 1, g.vim_state.len);
+    try drawPostSpan(dc, px, text_left_x, ellipsis_end_x, baseline, g.vim_state.buf[post_start..g.vim_state.len], fg);
 
     // No blitRegion here: the prompt draws as a segment inside performDraw,
     // whose end-of-batch queueBlit copies the whole frame (and the caller

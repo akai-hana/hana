@@ -162,6 +162,7 @@ pub const ReconcileOpts = struct { force_restack: bool = false };
 ///   - bw: the last border width sent for a visible window (0 while parked/never);
 ///   - pixel: the last border pixel sent for a visible window (0 while parked/never).
 const SentEntry = struct {
+    id: model.WindowId = 0,
     rect: utils.Rect = tiling.parked_rect,
     has_rect: bool = false,
     parked: bool = false,
@@ -170,10 +171,8 @@ const SentEntry = struct {
 };
 
 pub const State = struct {
-    /// Ledger of sent state (see SentEntry).
-    sent_keys: [model.store_capacity]model.WindowId = undefined,
-    sent_vals: [model.store_capacity]SentEntry = undefined,
-    sent_count: usize = 0,
+    /// Ledger of sent state (see SentEntry), keyed by `.id`.
+    sent: utils.BoundedList(SentEntry, model.store_capacity) = .{},
 };
 
 /// Owned by the compositor process; re-init() on reconnect.
@@ -187,19 +186,15 @@ pub fn deinit() void {
     init();
 }
 
-/// Slot holding `win` in the compact arrays, or null when absent. Linear scan
-/// over the occupied prefix (see header note on why a hash index is not worth
-/// it at this scale).
+/// Slot holding `win` in the ledger, or null when absent. Linear scan over the
+/// occupied prefix (see header note on why a hash index is not worth it).
 fn sentFind(win: model.WindowId) ?usize {
-    for (0..st.sent_count) |i| {
-        if (st.sent_keys[i] == win) return i;
-    }
-    return null;
+    return st.sent.indexOfById(win);
 }
 
 pub fn sentGet(win: model.WindowId) ?SentEntry {
     const slot = sentFind(win) orelse return null;
-    return st.sent_vals[slot];
+    return st.sent.items[slot];
 }
 
 pub fn sentGetOrPut(win: model.WindowId) !struct {
@@ -207,24 +202,18 @@ pub fn sentGetOrPut(win: model.WindowId) !struct {
     value_ptr: *SentEntry,
 } {
     if (sentFind(win)) |slot| {
-        return .{ .found_existing = true, .value_ptr = &st.sent_vals[slot] };
+        return .{ .found_existing = true, .value_ptr = &st.sent.items[slot] };
     }
-    if (st.sent_count >= model.store_capacity) return error.SentLedgerFull;
-    const idx = st.sent_count;
-    st.sent_count += 1;
-    st.sent_keys[idx] = win;
-    st.sent_vals[idx] = .{};
-    return .{ .found_existing = false, .value_ptr = &st.sent_vals[idx] };
+    if (st.sent.len >= model.store_capacity) return error.SentLedgerFull;
+    const idx = st.sent.len;
+    st.sent.len += 1;
+    st.sent.items[idx] = .{ .id = win };
+    return .{ .found_existing = false, .value_ptr = &st.sent.items[idx] };
 }
 
 pub fn sentSwapRemove(win: model.WindowId) void {
     const slot = sentFind(win) orelse return;
-    const last = st.sent_count - 1;
-    if (slot != last) {
-        st.sent_keys[slot] = st.sent_keys[last];
-        st.sent_vals[slot] = st.sent_vals[last];
-    }
-    st.sent_count = last;
+    st.sent.swapRemove(slot);
 }
 
 /// Drop a window's ledger record (X ids recycle: after a destroy, a new
@@ -241,34 +230,12 @@ pub fn forget(win: model.WindowId) void {
 /// them, since reconcile replays every window's desire each pass). Gated by
 /// `build_options.profile_key` (the same flag as the key-dispatch path) so
 /// release WMs compile it out.
-const retile_prof = struct {
-    const enabled = build_options.profile_key;
-    var count: u64 = 0;
-    var total_ns: i128 = 0;
-    var min_ns: i128 = std.math.maxInt(i128);
-    var max_ns: i128 = 0;
-    const window_size: u64 = 200;
-
-    fn note(ns: i128) void {
-        if (ns < min_ns) min_ns = ns;
-        if (ns > max_ns) max_ns = ns;
-        total_ns += ns;
-        count += 1;
-        if (count >= window_size) flush();
-    }
-
-    fn flush() void {
-        const avg: f64 = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(count));
-        std.log.info(
-            "[RETILE_PROF] last {} grab-retiles: avg={d:.0}ns min={d}ns max={d}ns",
-            .{ count, avg, min_ns, max_ns },
-        );
-        count = 0;
-        total_ns = 0;
-        min_ns = std.math.maxInt(i128);
-        max_ns = 0;
-    }
-};
+const retile_prof = utils.WindowedProfiler(
+    build_options.profile_key,
+    "RETILE_PROF",
+    "[RETILE_PROF] last {} grab-retiles: avg={d:.0}ns min={d}ns max={d}ns",
+    std.log.info,
+);
 
 pub fn reconcileUnderGrab(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
     // grab_server -> reconcile(opts) -> optional top/bar restack ->
@@ -305,8 +272,7 @@ pub fn reconcileDragTick(m: *const model.Model, sink: Sink, win: model.WindowId)
 
     // Update sent ledger so lastRectFor / toggleFloating see the live position.
     const gop = sentGetOrPut(win) catch return;
-    if (!gop.found_existing) gop.value_ptr.* = .{};
-    gop.value_ptr.* = .{ .rect = rect, .has_rect = true, .parked = false };
+    gop.value_ptr.* = .{ .id = win, .rect = rect, .has_rect = true, .parked = false };
 }
 
 pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
@@ -495,11 +461,11 @@ pub fn reconcile(m: *const model.Model, ctx: *Ctx, opts: ReconcileOpts) void {
             std.log.err("sync.reconcile: ledger full; sends applied, record lost", .{});
             continue;
         };
-        if (!g.found_existing) g.value_ptr.* = .{};
         if (parked) {
             g.value_ptr.parked = true;
         } else {
             g.value_ptr.* = .{
+                .id = win,
                 .rect = rect,
                 .has_rect = true,
                 .parked = false,

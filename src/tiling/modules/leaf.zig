@@ -45,12 +45,7 @@ fn tileRegion(
     const border2: u16 = utils.doubledBorder(m);
 
     if (n == 1) {
-        const rect = utils.Rect{
-            .x = @intCast(x),
-            .y = @intCast(y),
-            .width = tiling.shrinkClamped(w, border2, min_dim),
-            .height = tiling.shrinkClamped(h, border2, min_dim),
-        };
+        const rect = tiling.insetRect(x, y, w, h, border2, min_dim);
         // All leaf placements are visible; hints applied by tiling.emitView.
         tiling.emitView(v, out, windows[0], rect, true);
         return;

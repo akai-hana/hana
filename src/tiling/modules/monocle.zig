@@ -18,12 +18,7 @@ pub fn compute(v: tiling.View, out: *tiling.List) void {
     // list tail, so the last-focused window resurfaces on close.
     const top_win = tiling.focusedElse(&v, v.order, v.order[v.order.len - 1]);
 
-    const top_rect = utils.Rect{
-        .x = @intCast(inset),
-        .y = @intCast(tiling.waY(&v) +| inset),
-        .width = tiling.shrinkClamped(v.workarea.width, total_margin, v.env.min_dim),
-        .height = tiling.shrinkClamped(v.workarea.height, total_margin, v.env.min_dim),
-    };
+    const top_rect = tiling.insetRect(inset, tiling.waY(&v) +| inset, v.workarea.width, v.workarea.height, total_margin, v.env.min_dim);
 
     // showOneHideRest: raise/configure `top` on-screen, park every other window.
     tiling.emitView(&v, out, top_win, top_rect, true);

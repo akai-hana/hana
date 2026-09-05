@@ -78,26 +78,11 @@ pub const Value = union(enum) {
             else => @compileError("asScalar: unsupported type " ++ @typeName(T)),
         };
     }
-    pub fn asInt(self: Value) ?i64 {
-        return self.asScalar(i64);
-    }
-    pub fn asBool(self: Value) ?bool {
-        return self.asScalar(bool);
-    }
-    pub fn asString(self: Value) ?[]const u8 {
-        return self.asScalar([]const u8);
-    }
-    pub fn asColor(self: Value) ?u32 {
-        return self.asScalar(u32);
-    }
     pub inline fn asArray(self: Value) ?[]const Value {
         return switch (self) {
             .array => |arr| arr.items,
             else => null,
         };
-    }
-    pub fn asScalable(self: Value) ?ScalableValue {
-        return self.asScalar(ScalableValue);
     }
 
     pub fn deinit(self: *Value, allocator: std.mem.Allocator) void {
@@ -181,35 +166,18 @@ pub const Section = struct {
         return self.pairs.get(key);
     }
 
-    // Generic typed getter: dispatches to the matching `Value.asXxx()` accessor
-    // for the requested type. All five typed getters below are thin wrappers
-    // around this single function so the dispatch logic lives in one place.
+    // Generic typed getter: dispatches to the matching `Value.asScalar`
+    // accessor for the requested type.
     pub fn getAs(self: *Section, comptime T: type, key: []const u8) ?T {
         const v = self.get(key) orelse return null;
         return switch (T) {
-            i64 => v.asInt(),
-            bool => v.asBool(),
-            []const u8 => v.asString(),
+            i64 => v.asScalar(i64),
+            bool => v.asScalar(bool),
+            []const u8 => v.asScalar([]const u8),
             []const Value => v.asArray(),
-            ScalableValue => v.asScalable(),
+            ScalableValue => v.asScalar(ScalableValue),
             else => @compileError("Section.getAs: unsupported type " ++ @typeName(T)),
         };
-    }
-
-    pub fn getInt(self: *Section, key: []const u8) ?i64 {
-        return self.getAs(i64, key);
-    }
-    pub fn getBool(self: *Section, key: []const u8) ?bool {
-        return self.getAs(bool, key);
-    }
-    pub fn getString(self: *Section, key: []const u8) ?[]const u8 {
-        return self.getAs([]const u8, key);
-    }
-    pub fn getArray(self: *Section, key: []const u8) ?[]const Value {
-        return self.getAs([]const Value, key);
-    }
-    pub fn getScalable(self: *Section, key: []const u8) ?ScalableValue {
-        return self.getAs(ScalableValue, key);
     }
 };
 

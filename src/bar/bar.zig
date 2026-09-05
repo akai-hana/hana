@@ -58,7 +58,11 @@ const registry_empty = registry_len == 0;
 const self_ticking_role: ?usize = segmod.findByCapability(&bar_mods, .{ .self_ticking = true });
 const center_slot_role: ?usize = segmod.findByCapability(&bar_mods, .{ .center_slot = true });
 
+/// Registry index for `name`, or null when absent (also when the registry is
+/// empty: `bar_mods` is then a zero-length slice and idByName finds nothing,
+/// so the empty-registry case needs no separate comptime guard at call sites).
 inline fn segId(name: []const u8) ?usize {
+    if (comptime registry_empty) return null;
     return segmod.idByName(&bar_mods, name);
 }
 
@@ -165,10 +169,6 @@ pub fn pollTimeoutMs() i32 {
         }
     }
     return timeout;
-}
-
-fn monotonicMs() i64 {
-    return @intCast(utils.monotonicNs() / std.time.ns_per_ms);
 }
 
 /// Routes a keypress through every module that consumes one (the chrome
@@ -437,7 +437,6 @@ const State = struct {
     }
 
     fn clearSegmentDirty(self: *State, name: []const u8) void {
-        if (comptime registry_empty) return;
         if (segId(name)) |id| self.segment_dirty[id] = false;
     }
 
@@ -446,7 +445,6 @@ const State = struct {
     /// declared contract capability, not a name-keyed lookup.
     fn markDirtySource(self: *State, source: segmod.DirtySourcesSource) void {
         self.is_dirty = true;
-        if (comptime registry_empty) return;
         for (bar_mods, 0..) |m, i| {
             if (segmod.hasSource(m.dirty_sources, source)) self.segment_dirty[i] = true;
         }
@@ -458,7 +456,6 @@ const State = struct {
     /// only advances while the segment is drawn, so change detection must
     /// not skip it). Uniform: resolved by registry, never by segment name.
     fn isSegmentRepaintable(self: *const State, name: []const u8) bool {
-        if (comptime registry_empty) return false;
         const id = segId(name) orelse return false;
         if (self.segment_dirty[id]) return true;
         if (bar_mods[id].needsRepaint) |q| return q();
@@ -484,7 +481,6 @@ const State = struct {
     /// redoing the layout. Called unconditionally for every segment; segments
     /// whose module declares `clickable == false` (the clock) are skipped.
     fn recordClickBound(self: *State, name: []const u8, x: u16, w: u16) void {
-        if (comptime registry_empty) return;
         const id = segId(name) orelse return;
         if (!bar_mods[id].clickable) return;
         if (self.bounds_len >= max_click_bounds) return;
@@ -499,28 +495,18 @@ const State = struct {
         return null;
     }
 
-    /// True when `name` resolves to the segment claiming the reserved center
-    /// slot (name-free; the role is the title capability today).
-    fn isCenterSlot(self: *const State, name: []const u8) bool {
+    /// True when `name` resolves to the segment claiming the registry role
+    /// `role` (name-free; roles are the self-ticking clock and the reserved
+    /// center slot/title capabilities today).
+    fn isRole(self: *const State, name: []const u8, comptime role: ?usize) bool {
         _ = self;
-        if (comptime registry_empty) return false;
         const id = segId(name) orelse return false;
-        return center_slot_role != null and id == center_slot_role.?;
-    }
-
-    /// True when `name` resolves to the self-ticking segment (name-free; the
-    /// role is the clock capability today).
-    fn isSelfTicking(self: *const State, name: []const u8) bool {
-        _ = self;
-        if (comptime registry_empty) return false;
-        const id = segId(name) orelse return false;
-        return self_ticking_role != null and id == self_ticking_role.?;
+        return role != null and id == role.?;
     }
 
     /// Measures a segment's natural (reserved) width via its uniform
     /// naturalWidth hook, or 0 for an unknown/removed segment name.
     fn measureSegmentWidth(self: *State, frame: *const segmod.Frame, name: []const u8) u16 {
-        if (comptime registry_empty) return 0;
         const id = segId(name) orelse return 0;
         if (bar_mods[id].naturalWidth) |nw| return nw(frame, self.clock_width);
         return 0;
@@ -731,6 +717,14 @@ const State = struct {
         }
     }
 
+    /// Pad failed live geometry replies with the off-screen sentinel so a dead
+    /// window sorts last instead of vanishing from the split view.
+    fn padFailedGeoms(self: *State) void {
+        for (self.geoms_buf[0..self.fetched_len]) |*g| {
+            if (g.* == null) g.* = segmod.offscreen_rect;
+        }
+    }
+
     /// Fires the batched title/geometry prefetch asynchronously: issues all
     /// property (+ missing-truth geometry) requests, flushes them, and records
     /// the batch on `pending_prefetch` WITHOUT waiting for any reply. The
@@ -743,7 +737,7 @@ const State = struct {
             return false;
         }
         var pb = segmod.PendingPrefetch.init(self.win.conn, self.render.allocator);
-        pb.fire(self.wins[0..self.wins_len], &self.minimized);
+        pb.fireAsync(self.wins[0..self.wins_len], &self.minimized);
         self.pending_prefetch = pb;
         return true;
     }
@@ -769,11 +763,7 @@ const State = struct {
         )) {
             self.fetched_len = self.wins_len;
             self.pending_prefetch = null;
-            // Pad failed live geometry replies with the off-screen sentinel so
-            // a dead window sorts last instead of vanishing from the split view.
-            for (self.geoms_buf[0..self.fetched_len]) |*g| {
-                if (g.* == null) g.* = segmod.offscreen_rect;
-            }
+            self.padFailedGeoms();
             // A normal-path commit happened outside a render: schedule the
             // fresh frame (the current render was deferred on fire).
             if (!force) self.is_dirty = true;
@@ -798,11 +788,7 @@ const State = struct {
             self.titles_arena.allocator(),
         );
         self.fetched_len = self.wins_len;
-        // Pad failed live geometry replies with the off-screen sentinel so a
-        // dead window sorts last instead of vanishing from the split view.
-        for (self.geoms_buf[0..self.fetched_len]) |*g| {
-            if (g.* == null) g.* = segmod.offscreen_rect;
-        }
+        self.padFailedGeoms();
     }
 
     // -- Drawing ---------------------------------------------------------------
@@ -824,7 +810,6 @@ const State = struct {
     }
 
     fn drawSegment(self: *State, ctx: *segmod.DrawCtx, name: []const u8, x: u16, width: ?u16) !u16 {
-        if (comptime registry_empty) return error.DrewInvalidSegment;
         const id = segId(name) orelse return error.DrewInvalidSegment;
         if (bar_mods[id].draw == null) return error.DrewInvalidSegment;
         // The DrawCtx is shared mutable scratch: pin the reserved width into it
@@ -847,7 +832,7 @@ const State = struct {
         omit_gap_after_title: bool,
         scaled_spacing: u16,
     ) u16 {
-        const omit_gap = omit_gap_after_title and self.isCenterSlot(name);
+        const omit_gap = omit_gap_after_title and self.isRole(name, center_slot_role);
         const x_before = x;
         const drawn_x = self.drawSegmentSafe(ctx, name, x, w);
         const drew = drawn_x != x_before;
@@ -899,7 +884,7 @@ const State = struct {
             right_x -= seg_w;
             if (pending_gap) right_x -= scaled_spacing;
 
-            if (self.isSelfTicking(names[i])) self.clock_x = right_x;
+            if (self.isRole(names[i], self_ticking_role)) self.clock_x = right_x;
             self.recordClickBound(names[i], right_x, seg_w);
 
             if (self.isSegmentRepaintable(names[i])) {
@@ -982,7 +967,7 @@ const State = struct {
                     else
                         0;
                     for (lay.segments.items) |seg| {
-                        const is_center = self.isCenterSlot(seg);
+                        const is_center = self.isRole(seg, center_slot_role);
                         const omit_gap = (lay.position == .center) and is_center;
                         const w = if (is_center)
                             remaining
@@ -992,7 +977,7 @@ const State = struct {
                         // clock_x must be recorded for a self-ticking segment
                         // in ANY cluster (not just right): drawClockOnly relies
                         // on it regardless of where the clock is laid out.
-                        if (self.isSelfTicking(seg)) self.clock_x = x;
+                        if (self.isRole(seg, self_ticking_role)) self.clock_x = x;
                         if (self.isSegmentRepaintable(seg)) {
                             if (!is_full_redraw) {
                                 const clear_w = if (omit_gap) w else w + scaled_spacing;
@@ -1691,7 +1676,6 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
     const h = for (s.bounds[0..s.bounds_len]) |b| {
         if (b.contains(x)) break b;
     } else return;
-    if (comptime registry_empty) return;
     const id = segId(h.name) orelse return;
     if (bar_mods[id].onClick == null) return;
     _ = bar_mods[id].onClick.?(x - h.x, left, right, s, titleClickTrampoline, redrawInsideGrab);
@@ -1708,7 +1692,6 @@ pub fn handleButtonPress(event: *const xcb.xcb_button_press_event_t) void {
 ///   - otherwise -> focuses it
 fn handleTitleClick(s: *State, offset: u16) void {
     if (s.wins_len == 0) return;
-    if (comptime registry_empty) return;
     const center_id = center_slot_role orelse return;
     const tb = s.recordedBound(bar_mods[center_id].name) orelse return;
 
