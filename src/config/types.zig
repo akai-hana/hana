@@ -208,6 +208,15 @@ pub fn lowerStringCI(comptime max_len: usize, str: []const u8) LowerResult(max_l
     return result;
 }
 
+/// Inlined so the lowercased buffer lives in the caller's frame: use the
+/// result immediately (null when `str` is too long).
+pub inline fn lowerSlice(comptime max_len: usize, str: []const u8) ?[]const u8 {
+    return switch (lowerStringCI(max_len, str)) {
+        .too_long => null,
+        .ok => |r| r.slice(),
+    };
+}
+
 /// Case-insensitive enum lookup shared by enums that expose a `string_map` decl.
 /// Lowercases `str` into a 32-byte stack buffer and probes the map.
 /// Returns null when `str` exceeds the buffer or the key is not found.

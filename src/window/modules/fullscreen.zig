@@ -156,6 +156,14 @@ pub fn isFullscreenOnWs(m: *const model.Model, win: model.WindowId, ws: model.WS
     return g_recs.slice()[idx].ws == ws;
 }
 
+/// Occupant-eligibility predicate: the window exists, is present-not-parked,
+/// and visible on `ws`.
+fn presentAndVisible(m: *const model.Model, rec: Rec, ws: model.WSId) bool {
+    const e = m.store.get(rec.win) orelse return false;
+    if (e.presence == .parked) return false;
+    return model.visibleOn(m, rec.win, ws);
+}
+
 /// The first record on `ws` whose window exists, is present-not-parked AND
 /// visible on `ws` (a stray record targeting `ws` whose base is tagged
 /// elsewhere never counts as an occupant -- sync parks such strays instead of
@@ -166,9 +174,7 @@ pub fn isFullscreenOnWs(m: *const model.Model, win: model.WindowId, ws: model.WS
 pub fn fullscreenOccupantOnWs(m: *const model.Model, ws: model.WSId) ?model.WindowId {
     for (g_recs.constSlice()) |rec| {
         if (rec.ws != ws) continue;
-        const e = m.store.get(rec.win) orelse continue;
-        if (e.presence == .parked) continue;
-        if (!model.visibleOn(m, rec.win, ws)) continue;
+        if (!presentAndVisible(m, rec, ws)) continue;
         return rec.win;
     }
     return null;
@@ -183,9 +189,7 @@ pub fn fullscreenOccupied(m: *const model.Model, win: model.WindowId, dest: mode
     for (g_recs.constSlice()) |rec| {
         if (rec.win == win) continue;
         if (rec.ws != dest) continue;
-        const e = m.store.get(rec.win) orelse continue;
-        if (e.presence == .parked) continue;
-        if (!model.visibleOn(m, rec.win, dest)) continue;
+        if (!presentAndVisible(m, rec, dest)) continue;
         return true;
     }
     return false;

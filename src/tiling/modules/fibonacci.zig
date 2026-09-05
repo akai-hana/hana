@@ -50,10 +50,7 @@ pub fn compute(v: tiling.View, out: *tiling.List) void {
             // Raise focusedElse's pick among the overflow set and park the rest.
             const top = tiling.focusedElse(&v, windows[i..], windows[i]);
             tiling.emitView(&v, out, top, top_rect, true);
-            for (windows[i..]) |w| {
-                if (w == top) continue;
-                tiling.emitHidden(out, w);
-            }
+            tiling.showOneHideRest(out, windows[i..], top);
             return;
         }
 
@@ -121,6 +118,5 @@ inline fn splitAndAdvance(
 pub const module: @import("plugin").Layout = .{
     .name = "fibonacci",
     .compute = tiling.computeHook(compute),
-    .variant_count = 1,
     .icon = "[@]",
 };

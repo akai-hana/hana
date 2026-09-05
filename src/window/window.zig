@@ -20,7 +20,9 @@ const pipeline = @import("pipeline");
 const actions = @import("actions");
 const persist = @import("persist");
 
-fn providerOf(
+/// Registry lookup for the hook `field` (see `plugin.providerOf`), null when
+/// no module binds it; shared by the window layer (actions/borders alias this).
+pub fn providerOf(
     comptime field: std.meta.FieldEnum(@import("plugin").WindowModule),
 ) ?@import("plugin").WindowModule {
     return @import("plugin").providerOf(window_mods[0..], field);
@@ -1179,9 +1181,7 @@ pub fn adoptRootWindows() !usize {
 fn unmanageWindow(win: u32) void {
     // Covering truth is model-side (actions.unmanage reads it); the module
     // store is queried through the registry below.
-    if (state.?.cache_ready) {
-        if (state.?.cache_slots.indexOfById(win)) |i| state.?.cache_slots.swapRemove(i);
-    }
+    if (state.?.cache_slots.indexOfById(win)) |i| state.?.cache_slots.swapRemove(i);
 
     // Evict child-cache entries pointing at this toplevel, so a new window
     // reusing the same XID can't be mis-identified as its child on the next

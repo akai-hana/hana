@@ -201,10 +201,6 @@ fn drawMarqueeCell(
     );
 }
 
-fn nowMs() i64 {
-    return @intCast(utils.monotonicNs() / std.time.ns_per_ms);
-}
-
 /// Pixel-perfect tiling: segment i of `count` spans [i*W/count, (i+1)*W/count).
 fn segmentBounds(total_width: u16, i: usize, count: u32) struct { x: u16, w: u16 } {
     const x0: u16 = @intCast(@divFloor(@as(u32, @intCast(i)) * total_width, count));
@@ -243,7 +239,7 @@ fn drawFittedTitle(
     text_fg: u32,
     scroll_enabled: bool,
 ) !void {
-    const now = nowMs();
+    const now = monotonicMs();
     if (text_w <= geom.avail_w) {
         // Focused cell that no longer overflows: retire any active scroll so
         // the carousel state machine (and with it the poll deadline and the

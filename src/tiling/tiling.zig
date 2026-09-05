@@ -59,6 +59,18 @@ pub inline fn waY(v: *const View) u16 {
     return clampYToU16(v.workarea.y);
 }
 
+/// Append one placement (shared append + overflow-assert tail of every emit).
+inline fn appendPlacement(out: *List, win: model.WindowId, rect: utils.Rect, visible: bool) void {
+    const ok = out.append(.{
+        .win = win,
+        .rect = rect,
+        .visible = visible,
+    });
+    if (std.debug.runtime_safety) {
+        std.debug.assert(ok);
+    }
+}
+
 /// Emit a placement with the window's size hints applied to `rect`.
 inline fn emit(
     v: *const View,
@@ -67,21 +79,20 @@ inline fn emit(
     rect: utils.Rect,
     visible: bool,
 ) void {
-    const ok = out.append(.{
-        .win = win,
-        .rect = if (visible) applyHints(rect, v.hints.forWin(win)) else parked_rect,
-        .visible = visible,
-    });
-    if (std.debug.runtime_safety) {
-        std.debug.assert(ok);
-    }
+    appendPlacement(out, win, if (visible) applyHints(rect, v.hints.forWin(win)) else parked_rect, visible);
 }
 
 /// Emit a parked placement (the pushWindowOffscreenAndInvalidate transform).
 inline fn emitParked(out: *List, win: model.WindowId) void {
-    const ok = out.append(.{ .win = win, .rect = parked_rect, .visible = false });
-    if (std.debug.runtime_safety) {
-        std.debug.assert(ok);
+    appendPlacement(out, win, parked_rect, false);
+}
+
+/// Emit every window in `windows` parked except `top` (raised by the caller):
+/// the monocle "show one, hide the rest" and fibonacci overflow-share shapes.
+pub inline fn showOneHideRest(out: *List, windows: []const model.WindowId, top: model.WindowId) void {
+    for (windows) |w| {
+        if (w == top) continue;
+        emitParked(out, w);
     }
 }
 
@@ -167,6 +178,11 @@ pub fn cycleKind(cur: u8, dir: i32, names: []const []const u8) u8 {
 pub fn compute(kind: u8, v: View, out: *List) void {
     out.clear();
     if (kind >= tiling_mods.len) return;
+    // Empty workspace emits nothing; layouts assume a non-empty order (grid
+    // divides by its shape, monocle indexes order[len - 1]), and sync's
+    // per-reconcile compute runs on an empty one, so it is a supported input
+    // short-circuited here once for every module.
+    if (v.order.len == 0) return;
     if (tiling_mods[kind].compute) |f| f(&v, out);
 }
 

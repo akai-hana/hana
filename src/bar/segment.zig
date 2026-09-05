@@ -826,3 +826,16 @@ fn matchCapabilities(m: @import("plugin").Segment, comptime check: anytype) bool
     }
     return ok;
 }
+
+/// Index of the currently active tiling layout in the build-generated layout
+/// registry, or null when tiling is disabled or the tiling subsystem is absent
+/// (all windows float by definition). Bounded to the registry length so the
+/// caller can index `tiling_mods` directly. Shared by the layout/variants bar
+/// segments, which disagree only on what metadata they render from it.
+pub fn currentLayoutKind() ?u8 {
+    if (!core.getState().config.tiling.enabled) return null;
+    if (!build_options.has_tiling) return null;
+    const kind = pipeline.getCurrentLayout();
+    if (kind >= @import("plugin").tiling_mods.len) return null;
+    return kind;
+}

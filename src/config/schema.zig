@@ -424,21 +424,24 @@ fn getColor(section: *parser.Section, key: []const u8, default: u32) u32 {
     return getColorFromValue(key, val, default);
 }
 
-/// Like getInRange, but for ScalableValue fields. Only enforces a lower bound
-/// on the raw `.value` (percentages and absolute pixels share no meaningful
-/// ceiling): enough to reject a negative like `gap_width = -50`. Returns
-/// `default` unclamped, with a warning, matching getInRange.
+/// Reads `section.key` as a ScalableValue, warn-and-return-`default` below
+/// `min`. `fallback_label` names the fallback in the warning ("default" for
+/// ordinary scalables, "auto" for bar.height); callers remap null to their
+/// own default. Only enforces a lower bound on the raw `.value` (percentages
+/// and absolute pixels share no meaningful ceiling): enough to reject a
+/// negative like `gap_width = -50`, matching getInRange.
 fn getScalableInRange(
     section: *parser.Section,
     key: []const u8,
-    default: parser.ScalableValue,
-    comptime min: f32,
-) parser.ScalableValue {
+    default: ?parser.ScalableValue,
+    min: f32,
+    comptime fallback_label: []const u8,
+) ?parser.ScalableValue {
     const val = section.getScalable(key) orelse return default;
     if (val.value < min) {
         debug.warn(
-            "Value for '{s}' ({d}) below minimum ({d}), using default",
-            .{ key, val.value, min },
+            "Value for '{s}' ({d}) below minimum ({d}), using {s}",
+            .{ key, val.value, min, fallback_label },
         );
         return default;
     }
@@ -483,17 +486,6 @@ fn getRatio(section: *parser.Section, key: []const u8, default: f32) f32 {
             .{ key, str, key },
         );
     return default;
-}
-
-/// bar.height's reader: null means auto; an explicit negative warns back to
-/// auto rather than reaching rendering code.
-fn autoScalable(section: *parser.Section, key: []const u8) ?parser.ScalableValue {
-    const h = section.getScalable(key) orelse return null;
-    if (h.value < 0.0) {
-        debug.warn("Value for '{s}' ({d}) below minimum (0), using auto", .{ key, h.value });
-        return null;
-    }
-    return h;
 }
 
 /// Dupes `val` into `*view`, freeing the previous value first. `*view` must
@@ -541,13 +533,15 @@ pub fn applyAll(doc: *parser.Document, allocator: std.mem.Allocator, cfg: *types
                 );
             },
             .scalable => |min| if (hit) |h| {
-                ptr(cfg, k.target).* = getScalableInRange(h.sec, h.key, ptr(cfg, k.target).*, min);
+                ptr(cfg, k.target).* =
+                    getScalableInRange(h.sec, h.key, ptr(cfg, k.target).*, min, "default") orelse
+                    ptr(cfg, k.target).*;
             },
             .scalable_free => if (hit) |h| {
                 if (h.sec.getScalable(h.key)) |v| ptr(cfg, k.target).* = v;
             },
             .auto_scalable => if (hit) |h| {
-                ptr(cfg, k.target).* = autoScalable(h.sec, h.key);
+                ptr(cfg, k.target).* = getScalableInRange(h.sec, h.key, null, 0, "auto");
             },
             .color => if (hit) |h| {
                 ptr(cfg, k.target).* = getColor(h.sec, h.key, ptr(cfg, k.target).*);

@@ -1,12 +1,9 @@
 //! Layout icon bar segment.
 //! Displays the active tiling layout symbol on the status bar.
 
-const core = @import("core");
 const types = @import("types");
 const drawing = @import("drawing");
-const pipeline = @import("pipeline");
 const actions = @import("actions");
-const build_options = @import("build_options");
 const segmod = @import("segment");
 
 // Layout registry (build-generated); the active layout is a `u8` index into
@@ -41,12 +38,8 @@ pub fn invalidate() void {
 /// disabled or the tiling subsystem is absent (all windows float by
 /// definition).
 fn getIcon() []const u8 {
-    if (!core.getState().config.tiling.enabled) return "><>";
-    if (!build_options.has_tiling) return "><>";
-    const kind = pipeline.getCurrentLayout();
-    if (kind < tiling_mods.len) {
-        if (tiling_mods[kind].icon) |ic| return ic;
-    }
+    const kind = segmod.currentLayoutKind() orelse return "><>";
+    if (tiling_mods[kind].icon) |ic| return ic;
     return "><>";
 }
 

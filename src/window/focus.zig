@@ -371,6 +371,17 @@ pub fn prepareClearFocus() FocusTransition {
     return .{ .clear = .{ .old = state.?.last_applied } };
 }
 
+/// Shared shutdown tail of the focus-clear paths (applyPendingFocus's `.clear`
+/// limb and clearFocus): drop applied focus, reset suppression, refocus root.
+fn clearTail() void {
+    state.?.last_applied = null;
+    state.?.suppress_reason = .none;
+    const cs = core.getState();
+    focusNow(cs.conn, cs.root);
+    core.bumpFocus();
+    advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
+}
+
 /// Phase 2: apply a prepared focus transition with fire-and-forget XCB only.
 /// Safe to call inside a server grab (no round trips, no model updates).
 pub fn applyPendingFocus(t: FocusTransition) void {
@@ -404,12 +415,7 @@ pub fn applyPendingFocus(t: FocusTransition) void {
         },
         .clear => |intent| {
             if (intent.old) |old_win| grabButtons(old_win, false);
-            state.?.last_applied = null;
-            state.?.suppress_reason = .none;
-            const cs = core.getState();
-            focusNow(cs.conn, cs.root);
-            core.bumpFocus();
-            advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
+            clearTail();
         },
         .none => {},
     }
@@ -523,12 +529,7 @@ pub fn clearFocus() void {
         grabButtons(old_win, false);
     }
     cancelPendingConfirm();
-    state.?.last_applied = null;
-    state.?.suppress_reason = .none;
-    const cs = core.getState();
-    focusNow(cs.conn, cs.root);
-    core.bumpFocus();
-    advertiseActiveWindow(xcb.XCB_WINDOW_NONE);
+    clearTail();
 }
 
 /// Write `_NET_ACTIVE_WINDOW` to the root window so EWMH clients stay in sync.

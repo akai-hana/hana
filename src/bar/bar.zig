@@ -539,8 +539,9 @@ const State = struct {
 
     /// Builds the title segment's view of the live frame from scratch state.
     /// All backing memory lives on State (titles arena, focused-title buffer),
-    /// valid for the rest of the frame AND for post-draw click handling.
-    fn titleSnapshot(self: *const State) segmod.TitleSnapshot {
+    /// valid for the rest of the frame AND for post-draw click handling. Shared
+    /// by `titleSnapshot` and `fillDrawCtx`, which both carry the slot values.
+    fn loadTitleSnapshot(self: *const State) segmod.TitleSnapshot {
         const wins_slice = self.wins[0..self.wins_len];
         // Title of the minimized window, used in the single-window title case.
         var minimized_title: []const u8 = "";
@@ -557,6 +558,11 @@ const State = struct {
         };
     }
 
+    /// Builds the title segment's view of the live frame from scratch state.
+    fn titleSnapshot(self: *const State) segmod.TitleSnapshot {
+        return self.loadTitleSnapshot();
+    }
+
     /// Fills the shared per-frame DrawCtx the bar hands to every segment's
     /// draw hook, including the title snapshot slots.
     fn fillDrawCtx(self: *State, ctx: *segmod.DrawCtx) void {
@@ -571,17 +577,14 @@ const State = struct {
         // addon that owns it (D12). All hooks null => empty api => scanLiveFrame
         // no-ops, matching prior boot ordering.
         ctx.minimized_api = minimizedApiFromRegistry();
-        const wins_slice = self.wins[0..self.wins_len];
-        var minimized_title: []const u8 = "";
-        if (wins_slice.len > 0 and self.minimized.contains(wins_slice[0]) and self.fetched_len > 0)
-            minimized_title = self.titles_buf[0];
-        ctx.focused_window = focus.getFocused();
-        ctx.focused_title = self.focused_title.items;
-        ctx.minimized_title = minimized_title;
-        ctx.current_ws_wins = wins_slice;
-        ctx.minimized_set = &self.minimized;
-        ctx.titles = self.titles_buf[0..self.fetched_len];
-        ctx.geoms = self.geoms_buf[0..self.fetched_len];
+        const s = self.loadTitleSnapshot();
+        ctx.focused_window = s.focused_window;
+        ctx.focused_title = s.focused_title;
+        ctx.minimized_title = s.minimized_title;
+        ctx.current_ws_wins = s.current_ws_wins;
+        ctx.minimized_set = s.minimized_set;
+        ctx.titles = s.titles;
+        ctx.geoms = s.geoms;
     }
 
     // -- Live-state collection ------------------------------------------------

@@ -1,12 +1,10 @@
 //! Layout variants bar module.
 //! Renders the active tiling layout variant as a short text string in the bar.
 
-const core = @import("core");
 const types = @import("types");
 const drawing = @import("drawing");
 const pipeline = @import("pipeline");
 const actions = @import("actions");
-const build_options = @import("build_options");
 const segmod = @import("segment");
 
 // Layout registry (build-generated); each module carries its own variant
@@ -48,10 +46,7 @@ pub fn consumeRedrawRequest() bool {
 /// Resolves the active layout's variant indicator from metadata, by the
 /// current workspace's variant_idx.
 fn getIndicator() []const u8 {
-    if (!core.getState().config.tiling.enabled) return "";
-    if (!build_options.has_tiling) return "";
-    const kind = pipeline.getCurrentLayout();
-    if (kind >= tiling_mods.len) return "";
+    const kind = segmod.currentLayoutKind() orelse return "";
     const mod = tiling_mods[kind];
     const inds = mod.indicators orelse return "";
     const idx = pipeline.model().ws[pipeline.model().current].params.variant_idx;

@@ -191,7 +191,7 @@ pub fn init() void {
 }
 
 pub fn deinit() void {
-    st = .{};
+    init();
 }
 
 fn bucketOf(win: model.WindowId) usize {
@@ -641,6 +641,14 @@ const Desire = struct {
     is_winner: bool,
 };
 
+/// Park a desire: zero the border width/pixel and set the parked flag.
+/// Shared trailer of the four parked arms of computeDesire.
+fn markParked(bw: *u16, pixel: *u32, parked: *bool) void {
+    bw.* = 0;
+    pixel.* = 0;
+    parked.* = true;
+}
+
 /// Compute the desired state for a single store entry. The `winner` pointer
 /// is mutated when this is the first non-parked entry in store order (fallback
 /// winner election). `ledger` is the pre-send record for orphan keep-last.
@@ -660,9 +668,7 @@ fn computeDesire(
     var parked = false;
 
     if (e.presence == .parked) {
-        bw = 0;
-        pixel = 0;
-        parked = true;
+        markParked(&bw, &pixel, &parked);
     } else if (fs_win != null) {
         if (win == fs_win.?) {
             rect = ctx.screen;
@@ -677,9 +683,7 @@ fn computeDesire(
         // for this workspace (its base isn't visible / its rec targets
         // another ws): parked, matching the coverage scan that skipped it
         // and the covering-parked model arm.
-        bw = 0;
-        pixel = 0;
-        parked = true;
+        markParked(&bw, &pixel, &parked);
     } else switch (e.anchor) {
         .floating => |r| {
             rect = r;
@@ -697,16 +701,12 @@ fn computeDesire(
                 // Park only when nothing was ever sent (first sight /
                 // registered offscreen).
                 if (!ledger.has_rect) {
-                    bw = 0;
-                    pixel = 0;
-                    parked = true;
+                    markParked(&bw, &pixel, &parked);
                 } else {
                     rect = ledger.rect;
                 }
             } else {
-                bw = 0;
-                pixel = 0;
-                parked = true;
+                markParked(&bw, &pixel, &parked);
             }
         },
     }

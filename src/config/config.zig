@@ -2,7 +2,6 @@
 //! Loads, parses, and validates TOML config files.
 
 const std = @import("std");
-const build_options = @import("build_options");
 const constants = @import("constants");
 const core = @import("core");
 const debug = @import("debug");
@@ -63,6 +62,15 @@ const read_growth_initial_bytes = 64 * 1024;
 
 const default_tiling_layout = (types.TilingConfig{}).layout;
 
+/// Dupe-copies `buf[0..len]` into a fresh exact-size buffer and frees `buf`;
+/// the callers' errdefer frees it on the dupe's error path. Never hands back a
+/// subslice of a live allocation (freeing one would be UB).
+fn shrinkOwned(allocator: std.mem.Allocator, buf: []u8, len: usize) ![]u8 {
+    const trimmed = try allocator.dupe(u8, buf[0..len]);
+    allocator.free(buf);
+    return trimmed;
+}
+
 /// Reads `path` into a freshly allocated caller-owned slice;
 /// `error.FileTooLarge` when it exceeds `max_file_bytes`. Allocates the full
 /// ceiling up front and reallocs down; loading is startup/reload-only, so a
@@ -99,13 +107,7 @@ pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         errdefer allocator.free(buf);
         const n = try file.readPositionalAll(io, buf, 0);
         if (n == buf.len) return buf;
-        // Short read (e.g. a pipe reported a nonzero size). Shrinking in
-        // place can fail, and handing back buf[0..n] would make the caller
-        // free a subslice (UB on the GPA). Copy the content into a fresh
-        // exact-size buffer instead; errdefer frees buf on the error path.
-        const trimmed = try allocator.dupe(u8, buf[0..n]);
-        allocator.free(buf);
-        return trimmed;
+        return shrinkOwned(allocator, buf, n);
     }
     // Growth path (stat failed or reported zero). Single ownership throughout:
     // the armed errdefer frees the whole buffer exactly once on every error
@@ -124,12 +126,8 @@ pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     }
     if (total > max_file_bytes) return error.FileTooLarge;
     if (total == buf.len) return buf;
-    // Same subslice-free trick as the direct path: never return buf[0..total]
-    // on a failed shrink. Copy into an exact-size buffer, then free the
-    // growth buffer (errdefer frees it on the dupe's error path).
-    const trimmed = try allocator.dupe(u8, buf[0..total]);
-    allocator.free(buf);
-    return trimmed;
+    // Same shrink trick as the direct path above.
+    return shrinkOwned(allocator, buf, total);
 }
 
 /// Reads and parses the .toml at `path`, returning null for an empty file.
@@ -441,10 +439,8 @@ const mouse_button_map = std.StaticStringMap(u8).initComptime(.{
 });
 
 fn mouseButtonFromName(name: []const u8) ?u8 {
-    return switch (types.lowerStringCI(16, name)) {
-        .too_long => null,
-        .ok => |r| mouse_button_map.get(r.slice()),
-    };
+    const lowered = types.lowerSlice(16, name) orelse return null;
+    return mouse_button_map.get(lowered);
 }
 
 /// D7: mechanically derived from `types.Action`'s tag names, so every action
@@ -638,10 +634,6 @@ fn actionFromValue(
     return switch (value) {
         .array => |arr| {
             if (arr.items.len == 0) return null;
-            if (arr.items.len == 1) {
-                const cmd = arr.items[0].asString() orelse return null;
-                return try resolveAndParseAction(allocator, cmd, ws_idx, kill);
-            }
             var acts: std.ArrayList(types.Action) = .empty;
             errdefer {
                 for (acts.items) |*a| a.deinit(allocator);
@@ -750,12 +742,11 @@ fn parseBindString(str: []const u8) !BindResult {
     while (parts.next()) |part| {
         const trimmed = std.mem.trim(u8, part, " \t");
         // Normalise to lowercase (modifiers are case-insensitive) via the same
-        // bounded helper mouseButtonFromName uses: an overlong token comes
-        // back as `.too_long` instead of overflowing a fixed buffer.
-        const mod: ?u16 = switch (types.lowerStringCI(16, trimmed)) {
-            .too_long => null,
-            .ok => |r| mod_map.get(r.slice()),
-        };
+        // bounded helper mouseButtonFromName uses; overlong tokens → null.
+        const mod: ?u16 = if (types.lowerSlice(16, trimmed)) |lowered|
+            mod_map.get(lowered)
+        else
+            null;
         if (mod) |m| {
             modifiers |= m;
         } else if (mouseButtonFromName(trimmed)) |btn| {
@@ -913,67 +904,7 @@ fn parseTilingStructures(
         );
         cfg.tiling.layout = cfg.tiling.layouts.items[0];
     }
-    try parseTilingVariants(allocator, doc, cfg);
-    try parseMasterStackCounts(allocator, doc, cfg);
-}
-
-/// Per-workspace master count overrides: [tiling.layouts.master-stack.counts]
-/// workspace_number (1-based) = count. Only meaningful when global_layout = false.
-/// The sub-table key is canonicalized (config.canonicalLayoutName) so the
-/// "master-stack"/"master_stack" spellings resolve the same table.
-fn parseMasterStackCounts(
-    allocator: std.mem.Allocator,
-    doc: *parser.Document,
-    cfg: *types.Config,
-) !void {
-    const prefix = "tiling.layouts.";
-    const suffix = ".counts";
-    var iter = doc.sections.iterator();
-    while (iter.next()) |entry| {
-        const sec_name = entry.key_ptr.*;
-        if (!std.mem.startsWith(u8, sec_name, prefix) or
-            !std.mem.endsWith(u8, sec_name, suffix)) continue;
-        const seg = sec_name[prefix.len .. sec_name.len - suffix.len];
-        // Only direct "tiling.layouts.<name>.counts" tables qualify (no
-        // deeper nesting), and only the master family can carry counts.
-        if (seg.len == 0 or std.mem.indexOfScalar(u8, seg, '.') != null) continue;
-        const canon = canonicalLayoutName(seg);
-        if (!std.mem.eql(u8, canon, "master")) continue;
-
-        const counts_sec = entry.value_ptr;
-        cfg.tiling.workspace_master_count_overrides.clearRetainingCapacity();
-        var inner = counts_sec.orderedIterator();
-        while (inner.next()) |p| {
-            counts_sec.markConsumed(p.key);
-            const ws_1based = std.fmt.parseInt(usize, p.key, 10) catch {
-                debug.warn("master-stack.counts: invalid workspace key '{s}', skipping", .{p.key});
-                continue;
-            };
-            if (!checkWorkspaceBound(
-                ws_1based,
-                "master-stack.counts",
-                constants.max_workspaces,
-            )) continue;
-            const count_val = p.value.asInt() orelse {
-                debug.warn(
-                    "master-stack.counts: non-integer count for workspace {}, skipping",
-                    .{ws_1based},
-                );
-                continue;
-            };
-            if (count_val < 0 or count_val > 10) {
-                debug.warn(
-                    "master-stack.counts: count {} for workspace {} out of range [0,10], skipping",
-                    .{ count_val, ws_1based },
-                );
-                continue;
-            }
-            try cfg.tiling.workspace_master_count_overrides.append(allocator, .{
-                .workspace_idx = @intCast(ws_1based - 1),
-                .count = @intCast(count_val),
-            });
-        }
-    }
+    try parseTilingLayoutSubtables(allocator, doc, cfg);
 }
 
 /// Frees every owned entry in tiling.variants (keys and values) while
@@ -1016,16 +947,15 @@ fn setTilingVariant(
     try cfg.tiling.variants.put(allocator, key, val);
 }
 
-/// Records per-layout variant value-strings into `cfg.tiling.variants`,
-/// keyed by the canonical layout name. Two sources, both generic (no typed
-/// per-layout enums):
-///   - flat `[tiling] master_variant/monocle_variant/grid_variant`
-///     keys -> canonical names "master"/"monocle"/"grid";
-///   - `[tiling.layouts.<name>] variants = "..."` sub-tables (the table key
-///     canonicalized so the master alias spellings hit the same entry).
-/// No validity check happens here: a value-string's meaning is owned by the
-/// layout module's `variant_parse` hook, resolved at seed time.
-fn parseTilingVariants(
+/// The `[tiling.layouts.*]` sub-table family, scanned in one pass: a bare
+/// `[tiling.layouts.<name>]` table carries a per-layout `variants` string; a
+/// `[tiling.layouts.<name>.counts]` one carries per-workspace master-count
+/// overrides (workspace_number (1-based) = count; only meaningful with
+/// global_layout = false, and only the master family can carry counts). Keys
+/// canonicalize so master alias spellings resolve the same table; the flat
+/// `[tiling] *_variant` keys feed the map too, and no validity check happens
+/// on variant strings (layout modules own their meaning at seed time).
+fn parseTilingLayoutSubtables(
     allocator: std.mem.Allocator,
     doc: *parser.Document,
     cfg: *types.Config,
@@ -1038,19 +968,59 @@ fn parseTilingVariants(
     }
 
     const prefix = "tiling.layouts.";
+    const suffix = ".counts";
     var iter = doc.sections.iterator();
     while (iter.next()) |entry| {
         const sec_name = entry.key_ptr.*;
         if (!std.mem.startsWith(u8, sec_name, prefix)) continue;
-        // Only direct "tiling.layouts.<name>" sub-table keys qualify; deeper
-        // ones ("<name>.counts") are handled by parseMasterStackCounts. The
-        // key is canonicalized so the master alias spellings resolve the
-        // same variant entry.
         const tail = sec_name[prefix.len..];
-        const seg = if (std.mem.indexOfScalar(u8, tail, '.')) |_| continue else tail;
-        const canon = canonicalLayoutName(seg);
-        if (entry.value_ptr.getString("variants")) |v|
-            try setTilingVariant(allocator, cfg, canon, v);
+        if (std.mem.endsWith(u8, tail, suffix)) {
+            // Only direct "tiling.layouts.<name>.counts" tables qualify (no
+            // deeper nesting), and only the master family can carry counts.
+            const seg = tail[0 .. tail.len - suffix.len];
+            if (seg.len == 0 or std.mem.indexOfScalar(u8, seg, '.') != null) continue;
+            const canon = canonicalLayoutName(seg);
+            if (!std.mem.eql(u8, canon, "master")) continue;
+
+            const counts_sec = entry.value_ptr;
+            cfg.tiling.workspace_master_count_overrides.clearRetainingCapacity();
+            var inner = counts_sec.orderedIterator();
+            while (inner.next()) |p| {
+                counts_sec.markConsumed(p.key);
+                const ws_1based = std.fmt.parseInt(usize, p.key, 10) catch {
+                    debug.warn("master-stack.counts: invalid workspace key '{s}', skipping", .{p.key});
+                    continue;
+                };
+                if (!checkWorkspaceBound(
+                    ws_1based,
+                    "master-stack.counts",
+                    constants.max_workspaces,
+                )) continue;
+                const count_val = p.value.asInt() orelse {
+                    debug.warn(
+                        "master-stack.counts: non-integer count for workspace {}, skipping",
+                        .{ws_1based},
+                    );
+                    continue;
+                };
+                if (count_val < 0 or count_val > 10) {
+                    debug.warn(
+                        "master-stack.counts: count {} for workspace {} out of range [0,10], skipping",
+                        .{ count_val, ws_1based },
+                    );
+                    continue;
+                }
+                try cfg.tiling.workspace_master_count_overrides.append(allocator, .{
+                    .workspace_idx = @intCast(ws_1based - 1),
+                    .count = @intCast(count_val),
+                });
+            }
+        } else if (std.mem.indexOfScalar(u8, tail, '.') == null) {
+            // Only direct "tiling.layouts.<name>" keys qualify; canonicalized
+            // so master alias spellings resolve the same variant entry.
+            if (entry.value_ptr.getString("variants")) |v|
+                try setTilingVariant(allocator, cfg, canonicalLayoutName(tail), v);
+        }
     }
 }
 
@@ -1081,10 +1051,7 @@ const layout_name_grammar = [_][]const u8{
 
 /// Whether `name` is one of the known layout-name spellings (grammar test).
 fn isLayoutName(name: []const u8) bool {
-    const lowered = switch (types.lowerStringCI(32, name)) {
-        .too_long => return false,
-        .ok => |r| r.slice(),
-    };
+    const lowered = types.lowerSlice(32, name) orelse return false;
     for (layout_name_grammar) |known| {
         if (std.mem.eql(u8, lowered, known)) return true;
     }
@@ -1103,13 +1070,12 @@ fn parseLayoutVariant(
     layout_name: []const u8,
     variants_str: []const u8,
 ) !?[]const u8 {
-    const lowered = types.lowerStringCI(32, layout_name);
-    if (lowered == .too_long) {
+    const lowered = types.lowerSlice(32, layout_name) orelse {
         debug.warn("layouts array: layout name '{s}' too long to match against a " ++
             "variant type, ignoring variants '{s}'", .{ layout_name, variants_str });
         return null;
-    }
-    const canon = canonicalLayoutName(lowered.ok.slice());
+    };
+    const canon = canonicalLayoutName(lowered);
     try setTilingVariant(allocator, cfg, canon, variants_str);
     return variants_str;
 }
@@ -1164,16 +1130,13 @@ fn parseLayoutsArray(
             debug.warn("layouts array: expected a string at index {}, skipping", .{i});
             continue;
         };
-        const name_lower = switch (types.lowerStringCI(32, name_str)) {
-            .too_long => {
-                debug.warn(
-                    "layouts array: layout name '{s}' at index {} is longer than the " ++
-                        "32-byte limit, skipping",
-                    .{ name_str, i },
-                );
-                continue;
-            },
-            .ok => |r| r.slice(),
+        const name_lower = types.lowerSlice(32, name_str) orelse {
+            debug.warn(
+                "layouts array: layout name '{s}' at index {} is longer than the " ++
+                    "32-byte limit, skipping",
+                .{ name_str, i },
+            );
+            continue;
         };
         var already_present = false;
         for (cfg.tiling.layouts.items) |existing| {

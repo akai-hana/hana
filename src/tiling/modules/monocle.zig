@@ -1,19 +1,13 @@
 //! Monocle tiling layout. Stacks all windows fullscreen, showing only the
 //! topmost one, with optional gap insets.
 
-const std = @import("std");
 const utils = @import("utils");
-const model = @import("model");
 const tiling = @import("tiling");
 
 /// Compute monocle layout. Origin top-left, y-down. Gaps: full gap on each
 /// screen edge when gaps enabled, else zero. All dimensions are u16 and
 /// shrunk via shrinkClamped (floor clamped to min_dim).
 pub fn compute(v: tiling.View, out: *tiling.List) void {
-    // Empty workspace: the top-window pick indexes order[len - 1], which
-    // would underflow. Emit nothing instead.
-    if (v.order.len == 0) return;
-
     const m = v.env.margins;
     // Core variant index -> gaps-enabled (must equal plugin.gap_mode = 1).
     const gap_variant: u8 = 1;
@@ -33,10 +27,7 @@ pub fn compute(v: tiling.View, out: *tiling.List) void {
 
     // showOneHideRest: raise/configure `top` on-screen, park every other window.
     tiling.emitView(&v, out, top_win, top_rect, true);
-    for (v.order) |win| {
-        if (win == top_win) continue;
-        tiling.emitHidden(out, win);
-    }
+    tiling.showOneHideRest(out, v.order, top_win);
 }
 
 /// This layout's registry contribution: metadata plus the dispatch hook.

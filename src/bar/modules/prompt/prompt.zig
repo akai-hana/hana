@@ -64,13 +64,11 @@ pub const EditorState = struct {
         };
     }
     pub fn reset(es: *EditorState) void {
-        const saved_buf = es.buf;
-        const saved_allocator = es.allocator;
-        const saved_max_input = es.max_input;
-        es.* = .{};
-        es.allocator = saved_allocator;
-        es.max_input = saved_max_input;
-        es.buf = saved_buf;
+        es.* = .{
+            .allocator = es.allocator,
+            .max_input = es.max_input,
+            .buf = es.buf,
+        };
     }
     pub fn deinit(es: *EditorState) void {
         es.allocator.free(es.buf);
@@ -95,7 +93,7 @@ pub fn insertSlice(es: *EditorState, slice: []const u8) void {
     es.cursor += n;
 }
 
-inline fn isPrintableAscii(sym: xcb.xcb_keysym_t) bool {
+pub inline fn isPrintableAscii(sym: xcb.xcb_keysym_t) bool {
     return sym >= 0x20 and sym <= 0x7e;
 }
 
