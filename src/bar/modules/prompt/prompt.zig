@@ -1423,7 +1423,6 @@ pub const module: @import("plugin").Segment = .{
     .onPollWakeup = blinkTick,
     .draw = drawHook,
     .handleKeypress = handlePromptKeypress,
-    .isActive = isActive,
     .consumeRedrawRequest = consumeRedrawRequest,
     .invalidateReloadCaches = invalidateReloadCaches,
 };

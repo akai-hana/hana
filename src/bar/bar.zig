@@ -42,7 +42,8 @@ const segmod = @import("segment");
 const barwin = @import("win");
 
 // Window-addon registry (generated): the fullscreen-hide decision is routed
-// through the coverageOn seam instead of naming the fullscreen module (D12).
+// through the isWindowHidden/collectHiddenSet seams instead of naming the
+// minimize or fullscreen module directly (D12).
 const window_mods = @import("window_modules").modules;
 
 // Registry-resolved segment identity (comptime): the bar locates modules by

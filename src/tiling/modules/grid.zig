@@ -24,7 +24,7 @@ pub fn compute(v: tiling.View, out: *tiling.List) void {
     const wa_y = tiling.waY(&v);
 
     // In relaxed mode a partial last row shares the full screen width.
-    // Core variant index -> relaxed (must equal plugin.relax_mode = 1).
+    // Core variant index -> relaxed (variant 1 of "rigid"/"relaxed").
     const relax_variant: u8 = 1;
     const last_row_count = n % grid.cols;
     const partial_cell_w: u16 = if (v.env.variant_idx == relax_variant and last_row_count != 0)
@@ -78,9 +78,7 @@ pub const module: @import("plugin").Layout = .{
     .name = "grid",
     .compute = tiling.computeHook(compute),
     .variant_count = 2,
-    .has_variants = true,
     .variant_parse = tiling.variantParse(&.{ "rigid", "relaxed" }),
-    .relax_mode = 1,
     .icon = "[+]",
     .indicators = &.{ "[#]", "[~]" },
 };

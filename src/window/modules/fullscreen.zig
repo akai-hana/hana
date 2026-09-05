@@ -3,8 +3,8 @@
 //! module's OWN static store (g_recs), and the model only ever sees the generic
 //! `.covering` presence pattern (or `.parked` while minimized). The module owns
 //! the record (toggle + ws/anchor queries), the persistence seam
-//! (serialize/deserialize), the coverage seam consumed by sync (`coverageOn`),
-//! record cleanup for torn-down windows (`onWindowGone`), and the
+//! (serialize/deserialize), record cleanup for torn-down windows
+//! (`onWindowGone`), and the
 //! protocol-side EWMH `_NET_WM_STATE_FULLSCREEN` advertisement plus the
 //! deferred bar hide/show. The core never names fullscreen.
 //!
@@ -208,11 +208,10 @@ pub fn moveFullscreenTo(m: *const model.Model, win: model.WindowId, ws: model.WS
     eptr.covering_ws = ws;
 }
 
-/// The coverage seam body (plugin.WindowModule.coverageOn) consumed by sync's
-/// reconcile: the first record whose store entry exists, is present-not-parked,
-/// and either targets `ws` directly or is visible on `ws`. This is a faithful
-/// migration of the Tier-1 sync fs-scan into the module: sync asks once per
-/// reconcile and parks everyone else while a covering winner holds the screen.
+/// The first record whose store entry exists, is present-not-parked,
+/// and either targets `ws` directly or is visible on `ws`. A faithful
+/// migration of the old Tier-1 sync fs-scan; kept as a direct helper
+/// (model.coveringOccupantOnWs is the sync-facing query).
 pub fn coverageOn(m: *const model.Model, ws: model.WSId) ?model.WindowId {
     for (g_recs.constSlice()) |rec| {
         const e = m.store.get(rec.win) orelse continue;
@@ -426,7 +425,6 @@ pub const module: @import("plugin").WindowModule = .{
     .setEwmhFullscreenState = setEwmhFullscreenState,
     .armPendingBarHide = armPendingBarHide,
     .armPendingBarShow = armPendingBarShow,
-    .coverageOn = coverageOn,
     .toggleCovering = toggleFullscreen,
     .isCoveringMode = isFullscreenMode,
     .coveringWsOf = fullscreenWsOf,

@@ -144,11 +144,13 @@ pub const Ctx = struct {
 
 pub const ReconcileOpts = struct { force_restack: bool = false };
 
-// The sent ledger uses compact parallel arrays (only get/put/remove/clear; no
-// iteration-order needs, unlike model.Store) backed by an open-addressing hash
-// index, sent_index (window-id -> slot), so reconcile's per-window ledger
-// access is amortized O(1); the arrays stay the source of truth and sent_index
-// tracks every insert and swap-remove.
+// The sent ledger is a compact parallel array (get/put/swap-remove/clear; no
+// iteration-order needs, unlike model.Store). Lookups are a linear scan over
+// the OCCUPIED prefix: the ledger is bounded at model.store_capacity (128) and
+// reconcile replays every window's desire (and thus one get-or-put) per pass,
+// so a hash index over a fixed 128-slot table costs more bookkeeping than it
+// saves. Latency-verified: perf_test "sent ledger" shows the scan is on par
+// with the removed open-addressing index at the realistic 64-window ceiling.
 
 /// What we last sent per window; WRITE-ONLY bookkeeping whose three contract
 /// reads are documented in the header:
@@ -167,20 +169,11 @@ const SentEntry = struct {
     pixel: u32 = 0,
 };
 
-const empty_mark: usize = std.math.maxInt(usize);
-const tomb_mark: usize = empty_mark - 1;
-
 pub const State = struct {
     /// Ledger of sent state (see SentEntry).
     sent_keys: [model.store_capacity]model.WindowId = undefined,
     sent_vals: [model.store_capacity]SentEntry = undefined,
     sent_count: usize = 0,
-    /// O(1) lookup index over the compact ledger: open-addressed hash (linear
-    /// probing) from window-id -> slot into sent_keys/sent_vals. A bucket is
-    /// EMPTY_MARK when free, TOMB_MARK after a removal (re-usable on insert),
-    /// otherwise the slot holding that window. Kept consistent with the
-    /// compact arrays on every insert and swap-remove.
-    sent_index: [model.store_capacity]usize = [_]usize{empty_mark} ** model.store_capacity,
 };
 
 /// Owned by the compositor process; re-init() on reconnect.
@@ -194,77 +187,14 @@ pub fn deinit() void {
     init();
 }
 
-fn bucketOf(win: model.WindowId) usize {
-    return @intCast(win % model.store_capacity);
-}
-
-/// Slot holding `win` in the compact arrays, or null when absent.
+/// Slot holding `win` in the compact arrays, or null when absent. Linear scan
+/// over the occupied prefix (see header note on why a hash index is not worth
+/// it at this scale).
 fn sentFind(win: model.WindowId) ?usize {
-    const cap = model.store_capacity;
-    var h = bucketOf(win);
-    for (0..cap) |_| {
-        const v = st.sent_index[h];
-        if (v == empty_mark) return null;
-        if (v != tomb_mark and st.sent_keys[v] == win) return v;
-        h = (h + 1) % cap;
+    for (0..st.sent_count) |i| {
+        if (st.sent_keys[i] == win) return i;
     }
     return null;
-}
-
-/// Record that `slot` now holds `win`. Call only when `win` has no entry.
-fn sentIndexInsert(win: model.WindowId, slot: usize) void {
-    const cap = model.store_capacity;
-    var h = bucketOf(win);
-    for (0..cap) |_| {
-        const v = st.sent_index[h];
-        if (v == empty_mark or v == tomb_mark) {
-            st.sent_index[h] = slot;
-            return;
-        }
-        h = (h + 1) % cap;
-    }
-    unreachable; // sentIndexInsert only runs below capacity; a bucket is free.
-}
-
-/// Tombstone the index bucket mapping `win` to `slot`.
-fn sentIndexRemove(win: model.WindowId, slot: usize) void {
-    const cap = model.store_capacity;
-    var h = bucketOf(win);
-    for (0..cap) |_| {
-        const v = st.sent_index[h];
-        // Skip tombstones: a tombstone between `win`'s home and its entry is
-        // legitimate (a removal of an interleaved window whose bucket falls
-        // earlier in the probe chain). Stopping on one here would miss `win`'s
-        // bucket entirely and leave a stale slot pointer that shadows the
-        // swap-remove that follows. An EMPTY bucket is the true chain end.
-        if (v == empty_mark) return;
-        if (v == slot and st.sent_keys[slot] == win) {
-            st.sent_index[h] = tomb_mark;
-            return;
-        }
-        h = (h + 1) % cap;
-    }
-}
-
-/// After a swap-remove relocated `win` from `old_slot` to `new_slot`, re-point
-/// its index bucket so lookups still land on the (now moved) compact entry.
-fn sentIndexMove(win: model.WindowId, old_slot: usize, new_slot: usize) void {
-    const cap = model.store_capacity;
-    var h = bucketOf(win);
-    for (0..cap) |_| {
-        const v = st.sent_index[h];
-        // Skip tombstones for the same reason as sentIndexRemove: two windows
-        // can share a home bucket (they differ only mod capacity > cap), and
-        // a removal between them leaves a tombstone that the probe for the
-        // other one must step over. Only an empty bucket is a stop.
-        if (v == empty_mark) break;
-        if (v == old_slot and st.sent_keys[old_slot] == win) {
-            st.sent_index[h] = new_slot;
-            return;
-        }
-        h = (h + 1) % cap;
-    }
-    unreachable; // reached only when sentIndexMove runs for a window absent from the index
 }
 
 pub fn sentGet(win: model.WindowId) ?SentEntry {
@@ -284,19 +214,15 @@ pub fn sentGetOrPut(win: model.WindowId) !struct {
     st.sent_count += 1;
     st.sent_keys[idx] = win;
     st.sent_vals[idx] = .{};
-    sentIndexInsert(win, idx);
     return .{ .found_existing = false, .value_ptr = &st.sent_vals[idx] };
 }
 
 pub fn sentSwapRemove(win: model.WindowId) void {
     const slot = sentFind(win) orelse return;
     const last = st.sent_count - 1;
-    sentIndexRemove(win, slot);
     if (slot != last) {
-        const moved = st.sent_keys[last];
-        st.sent_keys[slot] = moved;
+        st.sent_keys[slot] = st.sent_keys[last];
         st.sent_vals[slot] = st.sent_vals[last];
-        sentIndexMove(moved, last, slot);
     }
     st.sent_count = last;
 }

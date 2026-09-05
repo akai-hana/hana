@@ -9,7 +9,7 @@ const tiling = @import("tiling");
 /// shrunk via shrinkClamped (floor clamped to min_dim).
 pub fn compute(v: tiling.View, out: *tiling.List) void {
     const m = v.env.margins;
-    // Core variant index -> gaps-enabled (must equal plugin.gap_mode = 1).
+    // Core variant index -> gaps-enabled (variant 1 of "gapless"/"gaps").
     const gap_variant: u8 = 1;
     const inset: u16 = if (v.env.variant_idx == gap_variant) m.gap else 0;
     const total_margin = utils.doubledBorder(m) + inset * 2;
@@ -35,8 +35,6 @@ pub const module: @import("plugin").Layout = .{
     .name = "monocle",
     .compute = tiling.computeHook(compute),
     .variant_count = 2,
-    .has_variants = true,
-    .gap_mode = 1,
     .variant_parse = tiling.variantParse(&.{ "gapless", "gaps" }),
     .icon = "[M]",
     .indicators = &.{ "<->", ">-<" },

@@ -426,7 +426,6 @@ pub const module: @import("plugin").Layout = .{
     .name = "master",
     .compute = tiling.computeHook(compute),
     .variant_count = 2,
-    .has_variants = true,
     .fifo_variant = 1,
     .variant_parse = tiling.variantParse(&.{ "lifo", "fifo" }),
     .icon = "[]=",
